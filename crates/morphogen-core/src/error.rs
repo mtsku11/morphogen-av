@@ -6,6 +6,8 @@ pub enum CoreError {
     InvalidProject(String),
     #[error("timeline validation failed: {0}")]
     InvalidTimeline(String),
+    #[error("render queue error: {0}")]
+    InvalidRenderQueue(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]

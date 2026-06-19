@@ -23,7 +23,8 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /tmp/morphogen-render-output` - execute or resume the first queued/running test job into a PNG sequence plus WAV bundle.
 - `cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --max-frames 120 --frame-rate 24` - queue a real two-source frame-sequence displacement job with source/cache provenance.
 - `cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --backend metal` - queue a frame-sequence job that renders on the Metal backend with a per-frame CPU parity check (`--backend` also works on `render-frame-sequence`; defaults to `cpu`).
-- `cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json` - execute the next queued two-source frame-sequence job into a ProRes-ready render bundle.
+- `cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json` - execute the next queued two-source frame-sequence job into a ProRes-ready render bundle. A failure records a durable `failed` status plus reason on the job rather than leaving it `running`.
+- `cargo run -p morphogen-cli -- queue-cancel /tmp/morphogen-frame-queue.json job-0001` - cancel a queued or running job so the runner skips it.
 - `swift build` - build the SwiftUI macOS app shell.
 - `swift test` - run Swift-side macOS app service tests.
 - `swift run MorphogenMacApp` - run the SwiftUI macOS app shell.

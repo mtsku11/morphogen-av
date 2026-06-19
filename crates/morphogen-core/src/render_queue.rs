@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CoreError, RenderJob};
+use crate::{CoreError, RenderJob, RenderJobStatus};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct RenderQueue {
@@ -16,6 +16,28 @@ impl RenderQueue {
 
     pub fn is_empty(&self) -> bool {
         self.jobs.is_empty()
+    }
+
+    /// Cancel a queued or running job by id. Returns an error if the job is
+    /// unknown or already in a terminal state (complete, failed, or cancelled).
+    pub fn cancel_job(&mut self, job_id: &str) -> Result<(), CoreError> {
+        let job = self
+            .jobs
+            .iter_mut()
+            .find(|job| job.id == job_id)
+            .ok_or_else(|| {
+                CoreError::InvalidRenderQueue(format!("no job with id '{job_id}'"))
+            })?;
+
+        if job.status.is_terminal() {
+            return Err(CoreError::InvalidRenderQueue(format!(
+                "job '{job_id}' is already {:?} and cannot be cancelled",
+                job.status
+            )));
+        }
+
+        job.status = RenderJobStatus::Cancelled;
+        Ok(())
     }
 
     pub fn save_json(&self, path: impl AsRef<Path>) -> Result<(), CoreError> {
@@ -68,6 +90,7 @@ mod tests {
             provenance: None,
             status: RenderJobStatus::Queued,
             output: None,
+            failure: None,
         });
 
         queue.save_json(&path).expect("save queue");
@@ -157,11 +180,52 @@ mod tests {
             }),
             status: RenderJobStatus::Queued,
             output: None,
+            failure: None,
         };
 
         let json = serde_json::to_string_pretty(&job).expect("serialize queue job");
         let decoded: RenderJob = serde_json::from_str(&json).expect("deserialize queue job");
 
         assert_eq!(decoded, job);
+    }
+
+    #[test]
+    fn cancel_job_marks_queued_job_cancelled() {
+        let mut queue = RenderQueue::default();
+        queue.enqueue(test_job("job-0001", RenderJobStatus::Queued));
+
+        queue.cancel_job("job-0001").expect("cancel queued job");
+
+        assert_eq!(queue.jobs[0].status, RenderJobStatus::Cancelled);
+    }
+
+    #[test]
+    fn cancel_job_rejects_unknown_and_terminal_jobs() {
+        let mut queue = RenderQueue::default();
+        queue.enqueue(test_job("job-0001", RenderJobStatus::Complete));
+
+        assert!(queue.cancel_job("job-9999").is_err());
+        assert!(queue.cancel_job("job-0001").is_err());
+        assert_eq!(queue.jobs[0].status, RenderJobStatus::Complete);
+    }
+
+    fn test_job(id: &str, status: RenderJobStatus) -> RenderJob {
+        RenderJob {
+            id: id.to_string(),
+            project_path: None,
+            settings: RenderSettings {
+                width: 1920,
+                height: 1080,
+                quality: RenderQuality::HighQualityOffline,
+                export_format: ExportFormat::Png { bit_depth: 16 },
+                temporal_supersampling: 1,
+                deterministic: true,
+            },
+            task: Default::default(),
+            provenance: None,
+            status,
+            output: None,
+            failure: None,
+        }
     }
 }

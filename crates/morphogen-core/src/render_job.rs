@@ -42,6 +42,15 @@ pub struct RenderJob {
     pub status: RenderJobStatus,
     #[serde(default)]
     pub output: Option<RenderJobOutputMetadata>,
+    #[serde(default)]
+    pub failure: Option<RenderJobFailure>,
+}
+
+/// Durable record of why a job failed, persisted in the queue so a failure
+/// survives the process that produced it rather than only surfacing on stderr.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenderJobFailure {
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -119,6 +128,14 @@ pub enum RenderJobStatus {
     Running,
     Complete,
     Failed,
+    Cancelled,
+}
+
+impl RenderJobStatus {
+    /// A job in a terminal state will not be run and cannot be cancelled.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Complete | Self::Failed | Self::Cancelled)
+    }
 }
 
 #[cfg(test)]

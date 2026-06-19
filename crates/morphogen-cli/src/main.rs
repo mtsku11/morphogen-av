@@ -11,9 +11,9 @@ use morphogen_audio::{
 };
 use morphogen_core::{
     AnalysisKind, ExportFormat, Project, RenderBackend, RenderJob,
-    RenderJobAnalysisCacheProvenance, RenderJobOutputMetadata, RenderJobProvenance,
-    RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue,
-    RenderSettings, RenderTimingMetadata, SourceRole,
+    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
+    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
+    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
 };
 use morphogen_media::{extract_audio_wav, extract_video_frames, probe_media, MediaError};
 use morphogen_render::{
@@ -165,6 +165,10 @@ enum Commands {
     },
     QueueRunFrameSequence {
         queue_path: PathBuf,
+    },
+    QueueCancel {
+        queue_path: PathBuf,
+        job_id: String,
     },
     QueueInspect {
         queue_path: PathBuf,
@@ -363,6 +367,7 @@ fn run() -> Result<(), CliError> {
             stop_after_frame,
         } => queue_run_test(&queue_path, &output_dir, stop_after_frame),
         Commands::QueueRunFrameSequence { queue_path } => queue_run_frame_sequence(&queue_path),
+        Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
         Commands::InspectProject { project_path } => inspect_project(&project_path),
     }
@@ -958,6 +963,7 @@ fn queue_add_test(queue_path: &Path, project_path: Option<&Path>) -> Result<(), 
         provenance: None,
         status: RenderJobStatus::Queued,
         output: None,
+        failure: None,
     });
     queue.save_json(queue_path)?;
     println!("queued render job {job_id} in {}", queue_path.display());
@@ -1068,6 +1074,7 @@ fn queue_add_frame_sequence(request: QueueAddFrameSequenceRequest<'_>) -> Result
         }),
         status: RenderJobStatus::Queued,
         output: None,
+        failure: None,
     });
     queue.save_json(queue_path)?;
     println!(
@@ -1167,60 +1174,78 @@ fn queue_run_frame_sequence(queue_path: &Path) -> Result<(), CliError> {
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
 
-    let render_result = render_frame_sequence(FrameSequenceRenderRequest {
-        modulator_dir: Path::new(&modulator_frame_directory),
-        carrier_dir: Path::new(&carrier_frame_directory),
-        output_dir: &frame_dir,
-        amount,
-        flow_cache_dir: flow_cache_directory.as_deref().map(Path::new),
-        max_frames: max_frames.map(|value| value as usize),
-        backend,
-        rms: RmsAmountConfig {
-            wav_path: None,
+    // Run the fallible work in one place so any failure is recorded durably as a
+    // Failed status with a reason rather than leaving the job stuck in Running.
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_frame_sequence(FrameSequenceRenderRequest {
+            modulator_dir: Path::new(&modulator_frame_directory),
+            carrier_dir: Path::new(&carrier_frame_directory),
+            output_dir: &frame_dir,
+            amount,
+            flow_cache_dir: flow_cache_directory.as_deref().map(Path::new),
+            max_frames: max_frames.map(|value| value as usize),
+            backend,
+            rms: RmsAmountConfig {
+                wav_path: None,
+                frame_rate,
+                window_size: 2048,
+                hop_size: 512,
+                amount_scale: 16.0,
+            },
+        })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
             frame_rate,
-            window_size: 2048,
-            hop_size: 512,
-            amount_scale: 16.0,
-        },
-    })?;
-    let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
-        CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
-    })?;
-    let timing = RenderTimingMetadata {
-        frame_rate,
-        frame_count,
-        start_seconds: 0.0,
-        duration_seconds: frame_count as f64 / frame_rate,
-        sample_rate: 48_000,
-        audio_sample_count: 0,
-    };
-    let frame_paths = (0..frame_count)
-        .map(|index| format!("frames/frame_{index:06}.png"))
-        .collect::<Vec<_>>();
-    let metadata = RenderJobOutputMetadata {
-        output_directory: output_dir.to_string_lossy().to_string(),
-        frame_paths: frame_paths.clone(),
-        audio_stem_paths: Vec::new(),
-        timing: timing.clone(),
-    };
-    write_frame_sequence_manifest(
-        &job_id,
-        &output_dir,
-        &frame_paths,
-        &timing,
-        provenance.as_ref(),
-    )?;
-    write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        write_frame_sequence_manifest(
+            &job_id,
+            &output_dir,
+            &frame_paths,
+            &timing,
+            provenance.as_ref(),
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
 
-    queue.jobs[job_index].status = RenderJobStatus::Complete;
-    queue.jobs[job_index].output = Some(metadata);
-    queue.save_json(queue_path)?;
-    println!(
-        "rendered queued frame-sequence job {} to {}",
-        job_id,
-        output_dir.display()
-    );
-    Ok(())
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued frame-sequence job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("frame-sequence job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
 }
 
 fn write_test_render_output_bundle(
@@ -1410,6 +1435,14 @@ fn synthetic_stereo_stem(sample_rate: u32, frames: usize) -> Result<AudioBufferF
     AudioBufferF32::new(2, sample_rate, samples).map_err(CliError::from)
 }
 
+fn queue_cancel(queue_path: &Path, job_id: &str) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    queue.cancel_job(job_id)?;
+    queue.save_json(queue_path)?;
+    println!("cancelled job {job_id} in {}", queue_path.display());
+    Ok(())
+}
+
 fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
     let queue = RenderQueue::load_json(queue_path)?;
     println!("render queue: {} job(s)", queue.jobs.len());
@@ -1442,8 +1475,13 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 )
             })
             .unwrap_or_default();
+        let failure_summary = job
+            .failure
+            .as_ref()
+            .map(|failure| format!(" failure=\"{}\"", failure.message))
+            .unwrap_or_default();
         println!(
-            "  - {} task={} status={:?} size={}x{} project={}{}{}",
+            "  - {} task={} status={:?} size={}x{} project={}{}{}{}",
             job.id,
             task_name,
             job.status,
@@ -1451,7 +1489,8 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             job.settings.height,
             job.project_path.as_deref().unwrap_or("<none>"),
             provenance_summary,
-            output_summary
+            output_summary,
+            failure_summary
         );
     }
     Ok(())

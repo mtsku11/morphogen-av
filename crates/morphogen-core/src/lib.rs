@@ -20,7 +20,7 @@ pub use media::{MediaSource, SourceRole};
 pub use node::{Node, NodeId, NodeKind, SignalType};
 pub use project::{Project, ProjectMetadata};
 pub use render_job::{
-    ExportFormat, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance,
+    ExportFormat, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
     RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
     RenderJobTask, RenderQuality, RenderSettings, RenderTimingMetadata,
 };
