@@ -128,13 +128,16 @@ struct VideoToolboxProResSupport {
 }
 
 enum VideoToolboxProResExportPlanner {
-  static func defaultPlanSummary() -> String {
+  static func defaultPlanSummary(
+    frameRate: Double = 24.0,
+    profile: ProResExportProfile = .proRes422HQ
+  ) -> String {
     do {
       return try makePlan(
         width: 1920,
         height: 1080,
-        frameRate: 24.0,
-        profile: .proRes422HQ
+        frameRate: frameRate,
+        profile: profile
       ).compactSummary
     } catch {
       return "ProRes plan unavailable: \(error.localizedDescription)"

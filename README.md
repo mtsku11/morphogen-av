@@ -30,8 +30,8 @@ This repository is an initial production-quality scaffold with small determinist
 - First-frame AVFoundation decode into a CoreVideo pixel buffer and Metal texture.
 - App-side preview-frame probe that reports decoded frame dimensions, presentation time, Metal texture format, and displays a decoded source thumbnail.
 - VideoToolbox ProRes encoder discovery and export-plan probing in the SwiftUI shell.
-- ProRes 422 HQ `.mov` export from a selected PNG frame directory through AVAssetWriter with VideoToolbox encoder selection.
-- Direct ProRes 422 HQ `.mov` export from the render queue output bundle's `frames/` directory with the first WAV stem muxed as a PCM audio track.
+- Configurable ProRes `.mov` export from a selected PNG frame directory through AVAssetWriter with VideoToolbox encoder selection.
+- Direct configurable ProRes `.mov` export from the render queue output bundle's `frames/` directory with the first WAV stem muxed as a PCM audio track.
 - Dev-only Swift-to-CLI bridge for `init-example`, `inspect-project`, `probe`, and `render-test`.
 
 ## Intentional Placeholders
@@ -153,8 +153,8 @@ Run Swift-side service tests:
 swift test
 ```
 
-The source buttons open native file pickers. Create Test Project writes an example `.morphogen.json` through `morphogen-cli init-example`, Open Project validates a selected project through `morphogen-cli inspect-project`, Probe Sources uses AVFoundation first and falls back to `morphogen-cli probe`, Probe Preview Frames decodes selected source first frames into Metal textures and reports dimensions/timing, Check ProRes probes a VideoToolbox ProRes 422 HQ export plan, Run Queue Test creates and executes a deterministic dev queue bundle at `/tmp/morphogen-render-output/job-0001`, Export Queue ProRes MOV converts that bundle's `frames/` directory into a `.mov` and muxes its first WAV stem without selecting folders manually, Export Frame Directory MOV keeps the lower-level arbitrary PNG sequence exporter available, and the CPU reference render button invokes `morphogen-cli render-test /tmp/morphogen-test.png`. The CLI bridge calls require `cargo` on PATH; FFprobe is optional fallback for media inspection.
+The source buttons open native file pickers. Create Test Project writes an example `.morphogen.json` through `morphogen-cli init-example`, Open Project validates a selected project through `morphogen-cli inspect-project`, Probe Sources uses AVFoundation first and falls back to `morphogen-cli probe`, Probe Preview Frames decodes selected source first frames into Metal textures and reports dimensions/timing, Check ProRes probes the selected VideoToolbox ProRes profile and frame rate, Run Queue Test creates and executes a deterministic dev queue bundle at `/tmp/morphogen-render-output/job-0001`, Export Queue ProRes MOV converts that bundle's `frames/` directory into a `.mov` using the selected ProRes settings and muxes its first WAV stem without selecting folders manually, Export Frame Directory MOV keeps the lower-level arbitrary PNG sequence exporter available, and the CPU reference render button invokes `morphogen-cli render-test /tmp/morphogen-test.png`. The CLI bridge calls require `cargo` on PATH; FFprobe is optional fallback for media inspection.
 
 ## Future Direction
 
-The next engineering task is adding configurable frame-rate/profile controls to the ProRes export panel. Metal is the intended production backend, while CPU rendering remains the deterministic reference path for tests and offline correctness.
+The next engineering tasks are carrying render timing metadata into queue bundles, adding app-side controls for a real two-source frame-sequence render, and wiring the Metal flow-displacement backend into a user-facing validation path. Metal is the intended production backend, while CPU rendering remains the deterministic reference path for tests and offline correctness.

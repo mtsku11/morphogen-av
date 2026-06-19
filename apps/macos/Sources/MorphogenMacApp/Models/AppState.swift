@@ -15,6 +15,16 @@ final class AppState: ObservableObject {
   @Published var sourceBPreviewImage: NSImage?
   @Published var renderQuality: RenderQualityOption = .highQualityOffline
   @Published var exportFormat: ExportFormatOption = .pngSequence
+  @Published var proResFrameRate: ProResFrameRateOption = .fps24 {
+    didSet {
+      refreshProResPlanPreview()
+    }
+  }
+  @Published var proResProfile: ProResExportProfile = .proRes422HQ {
+    didSet {
+      refreshProResPlanPreview()
+    }
+  }
   @Published var projectPath = "No project loaded"
   @Published var projectSummary = "Project schema idle"
   @Published var renderQueueSummary = "No queue output bundle yet"
@@ -199,6 +209,8 @@ final class AppState: ObservableObject {
   }
 
   func checkProResExportPlan() {
+    let selectedFrameRate = proResFrameRate.framesPerSecond
+    let selectedProfile = proResProfile
     statusMessage = "Checking ProRes export support through VideoToolbox..."
 
     DispatchQueue.global(qos: .userInitiated).async {
@@ -206,8 +218,8 @@ final class AppState: ObservableObject {
         let plan = try VideoToolboxProResExportPlanner.makePlan(
           width: 1920,
           height: 1080,
-          frameRate: 24.0,
-          profile: .proRes422HQ
+          frameRate: selectedFrameRate,
+          profile: selectedProfile
         )
         let support = VideoToolboxProResExportPlanner.probeSupport(for: plan)
         let proResEncoderCount = try VideoToolboxProResExportPlanner.availableProResEncoderSummaries().count
@@ -231,6 +243,8 @@ final class AppState: ObservableObject {
   }
 
   func exportProResMovie() {
+    let selectedFrameRate = proResFrameRate.framesPerSecond
+    let selectedProfile = proResProfile
     guard let frameDirectory = ImageSequenceExportPanel.chooseFrameDirectory() else {
       statusMessage = "ProRes export cancelled."
       return
@@ -249,8 +263,8 @@ final class AppState: ObservableObject {
             request: ProResImageSequenceExportRequest(
               frameDirectory: frameDirectory,
               outputURL: outputURL,
-              frameRate: 24.0,
-              profile: .proRes422HQ,
+              frameRate: selectedFrameRate,
+              profile: selectedProfile,
               requiresHardwareEncoder: false
             )
           )
@@ -269,6 +283,8 @@ final class AppState: ObservableObject {
   }
 
   func exportRenderQueueProResMovie() {
+    let selectedFrameRate = proResFrameRate.framesPerSecond
+    let selectedProfile = proResProfile
     let defaultBundleURL = RustBridgePlaceholder.defaultQueuedTestRenderBundleURL()
     let bundleURL = lastRenderQueueBundleURL ?? defaultBundleURL
 
@@ -293,8 +309,8 @@ final class AppState: ObservableObject {
             request: ProResRenderQueueBundleExportRequest(
               bundleURL: bundleURL,
               outputURL: outputURL,
-              frameRate: 24.0,
-              profile: .proRes422HQ,
+              frameRate: selectedFrameRate,
+              profile: selectedProfile,
               requiresHardwareEncoder: false
             )
           )
@@ -399,6 +415,13 @@ final class AppState: ObservableObject {
 
     return lines.prefix(8).joined(separator: " | ")
   }
+
+  private func refreshProResPlanPreview() {
+    proResPlanSummary = VideoToolboxProResExportPlanner.defaultPlanSummary(
+      frameRate: proResFrameRate.framesPerSecond,
+      profile: proResProfile
+    )
+  }
 }
 
 enum RenderQualityOption: String, CaseIterable, Identifiable {
@@ -416,4 +439,35 @@ enum ExportFormatOption: String, CaseIterable, Identifiable {
   case wavStems = "WAV Stems"
 
   var id: String { rawValue }
+}
+
+enum ProResFrameRateOption: String, CaseIterable, Identifiable {
+  case fps12 = "12 fps"
+  case fps23976 = "23.976 fps"
+  case fps24 = "24 fps"
+  case fps25 = "25 fps"
+  case fps2997 = "29.97 fps"
+  case fps30 = "30 fps"
+  case fps60 = "60 fps"
+
+  var id: String { rawValue }
+
+  var framesPerSecond: Double {
+    switch self {
+    case .fps12:
+      return 12.0
+    case .fps23976:
+      return 24_000.0 / 1_001.0
+    case .fps24:
+      return 24.0
+    case .fps25:
+      return 25.0
+    case .fps2997:
+      return 30_000.0 / 1_001.0
+    case .fps30:
+      return 30.0
+    case .fps60:
+      return 60.0
+    }
+  }
 }

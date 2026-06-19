@@ -35,9 +35,9 @@ CoreVideo pixel buffers are the likely bridge between decoded media, preview sur
 
 ## VideoToolbox
 
-VideoToolbox is the long-term path for hardware decode/encode and ProRes-oriented export workflows. The SwiftUI target now has a compile-checked ProRes planning helper that registers professional workflow encoders, lists available ProRes encoders, validates a 1920x1080 ProRes 422 HQ offline export plan, and probes `VTCopySupportedPropertyDictionaryForEncoder`.
+VideoToolbox is the long-term path for hardware decode/encode and ProRes-oriented export workflows. The SwiftUI target now has a compile-checked ProRes planning helper that registers professional workflow encoders, lists available ProRes encoders, validates configurable 1920x1080 ProRes offline export plans, and probes `VTCopySupportedPropertyDictionaryForEncoder`.
 
-The first real exporter feeds deterministic PNG image-sequence frames into an `AVAssetWriterInputPixelBufferAdaptor` and writes a ProRes `.mov` using VideoToolbox encoder specification keys. The early source-pixel-buffer format is `kCVPixelFormatType_32BGRA` for compatibility; later high-quality paths should evaluate direct `VTCompressionSession` control, 10-bit 4:2:2, and half-float RGBA handoff from the Metal/offline render pipeline.
+The first real exporter feeds deterministic PNG image-sequence frames into an `AVAssetWriterInputPixelBufferAdaptor` and writes a configurable ProRes `.mov` using VideoToolbox encoder specification keys. It can also mux the first WAV stem from a render queue bundle. The early source-pixel-buffer format is `kCVPixelFormatType_32BGRA` for compatibility; later high-quality paths should evaluate direct `VTCompressionSession` control, 10-bit 4:2:2, and half-float RGBA handoff from the Metal/offline render pipeline.
 
 ## Accelerate/vDSP
 

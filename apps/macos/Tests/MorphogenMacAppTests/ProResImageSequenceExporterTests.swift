@@ -56,6 +56,23 @@ final class ProResImageSequenceExporterTests: XCTestCase {
     XCTAssertEqual(frames.map(\.lastPathComponent), ["frame_2.png", "frame_10.png"])
   }
 
+  func testProResFrameRateOptionsExposeExactRates() {
+    XCTAssertEqual(ProResFrameRateOption.fps12.framesPerSecond, 12.0)
+    XCTAssertEqual(ProResFrameRateOption.fps23976.framesPerSecond, 24_000.0 / 1_001.0)
+    XCTAssertEqual(ProResFrameRateOption.fps2997.framesPerSecond, 30_000.0 / 1_001.0)
+    XCTAssertEqual(ProResFrameRateOption.fps60.framesPerSecond, 60.0)
+  }
+
+  func testDefaultPlanSummaryUsesSelectedProResSettings() {
+    let summary = VideoToolboxProResExportPlanner.defaultPlanSummary(
+      frameRate: ProResFrameRateOption.fps12.framesPerSecond,
+      profile: .proRes422Proxy
+    )
+
+    XCTAssertTrue(summary.contains("Apple ProRes 422 Proxy"))
+    XCTAssertTrue(summary.contains("@ 12.000 fps"))
+  }
+
   func testExportPNGSequenceWritesTinyProResMovieWhenEncoderIsAvailable() async throws {
     let directory = try makeTemporaryDirectory()
     try writePNGFrame(directory.appendingPathComponent("frame_000000.png"), seed: 0)

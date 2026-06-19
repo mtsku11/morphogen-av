@@ -25,6 +25,24 @@ struct RenderPanelView: View {
         .frame(width: 180)
       }
 
+      HStack(spacing: 16) {
+        Picker("ProRes FPS", selection: $state.proResFrameRate) {
+          ForEach(ProResFrameRateOption.allCases) { option in
+            Text(option.rawValue).tag(option)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 140)
+
+        Picker("ProRes Profile", selection: $state.proResProfile) {
+          ForEach(ProResExportProfile.allCases) { profile in
+            Text(profile.displayName).tag(profile)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 260)
+      }
+
       Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
         GridRow {
           Label("Project", systemImage: "doc.text")

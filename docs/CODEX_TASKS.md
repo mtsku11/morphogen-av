@@ -32,7 +32,10 @@
 - Add a SwiftUI preview surface for the decoded source frame texture.
 - Connect render-queue image-sequence output to the ProRes export flow without manual folder selection.
 - Add audio muxing to the ProRes export path.
+- Add configurable frame-rate/profile controls to the ProRes export panel.
 
 ## Next
 
-1. Add configurable frame-rate/profile controls to the ProRes export panel.
+1. Carry render timing metadata into queue output manifests and default ProRes export FPS from the bundle.
+2. Add SwiftUI controls for a real two-source frame-sequence render job.
+3. Wire the Metal flow-displacement backend into a CLI or SwiftUI validation path.
