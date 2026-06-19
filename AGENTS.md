@@ -10,6 +10,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `cargo run -p morphogen-cli -- init-example /tmp/morphogen-example.morphogen.json` - write an example project.
 - `cargo run -p morphogen-cli -- inspect-project /tmp/morphogen-example.morphogen.json` - validate and summarize a project.
 - `cargo run -p morphogen-cli -- render-test /tmp/morphogen-test.png` - render the synthetic CPU reference PNG.
+- `cargo run -p morphogen-cli -- metal-render-test /tmp/morphogen-metal-test.png` - render the synthetic flow-displacement fixture through Metal on macOS.
 - `cargo run -p morphogen-cli -- render-two-source /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-two-source.png --amount 16` - render a real two-image CPU displacement.
 - `cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --flow-cache-dir /tmp/morphogen-flow-cache --max-frames 120` - render paired extracted frame directories with per-frame flow cache sidecars.
 - `cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --rms-modulator-wav /tmp/source-a.wav --frame-rate 12 --rms-amount-scale 24` - modulate sequence displacement amount from a WAV RMS envelope.

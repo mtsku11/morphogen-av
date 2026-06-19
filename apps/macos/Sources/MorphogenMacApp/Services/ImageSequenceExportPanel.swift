@@ -3,15 +3,35 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum ImageSequenceExportPanel {
-  static func chooseFrameDirectory() -> URL? {
+  static func chooseFrameDirectory(
+    title: String = "Choose PNG Frame Sequence",
+    message: String = "Select a directory containing PNG frames."
+  ) -> URL? {
     let panel = NSOpenPanel()
-    panel.title = "Choose PNG Frame Sequence"
-    panel.message = "Select a directory containing PNG frames."
+    panel.title = title
+    panel.message = message
     panel.prompt = "Choose"
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
     panel.allowsMultipleSelection = false
     panel.resolvesAliases = true
+
+    guard panel.runModal() == .OK else {
+      return nil
+    }
+
+    return panel.url
+  }
+
+  static func chooseFrameSequenceOutputDirectory(
+    defaultName: String = "morphogen-two-source-frames"
+  ) -> URL? {
+    let panel = NSSavePanel()
+    panel.title = "Choose Frame Sequence Output"
+    panel.message = "Choose the output directory path for rendered PNG frames."
+    panel.prompt = "Choose"
+    panel.nameFieldStringValue = defaultName
+    panel.canCreateDirectories = true
 
     guard panel.runModal() == .OK else {
       return nil

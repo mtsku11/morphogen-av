@@ -31,12 +31,23 @@ final class AppState: ObservableObject {
   @Published var proResPlanSummary = VideoToolboxProResExportPlanner.defaultPlanSummary()
   @Published var proResExportSummary = "No ProRes movie exported"
   @Published var previewProbeSummary = "No preview frame decoded"
+  @Published var frameSequenceModulatorPath = "No modulator frame directory selected"
+  @Published var frameSequenceCarrierPath = "No carrier frame directory selected"
+  @Published var frameSequenceOutputPath = "No frame sequence output selected"
+  @Published var frameSequenceSummary = "No two-source frame sequence rendered"
+  @Published var frameSequenceAmount = 16.0
+  @Published var frameSequenceMaxFrames = 120
+  @Published var frameSequenceWritesFlowCache = true
   @Published var statusMessage = "Analysis cache idle. Offline queue empty."
 
   private var sourceAURL: URL?
   private var sourceBURL: URL?
   private var projectURL: URL?
   private var lastRenderQueueBundleURL: URL?
+  private var frameSequenceModulatorURL: URL?
+  private var frameSequenceCarrierURL: URL?
+  private var frameSequenceOutputURL: URL?
+  private var lastFrameSequenceOutputURL: URL?
 
   func setSource(_ role: SourceRole, url: URL) {
     switch role {
@@ -209,6 +220,95 @@ final class AppState: ObservableObject {
     }
   }
 
+  func chooseFrameSequenceModulatorDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source A Frames",
+      message: "Select modulator PNG frames."
+    ) else {
+      statusMessage = "Source A frame selection cancelled."
+      return
+    }
+
+    frameSequenceModulatorURL = url
+    frameSequenceModulatorPath = url.path
+    statusMessage = "Source A frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseFrameSequenceCarrierDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source B Frames",
+      message: "Select carrier PNG frames."
+    ) else {
+      statusMessage = "Source B frame selection cancelled."
+      return
+    }
+
+    frameSequenceCarrierURL = url
+    frameSequenceCarrierPath = url.path
+    statusMessage = "Source B frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseFrameSequenceOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Frame sequence output selection cancelled."
+      return
+    }
+
+    frameSequenceOutputURL = url
+    frameSequenceOutputPath = url.path
+    statusMessage = "Frame sequence output selected: \(url.lastPathComponent)"
+  }
+
+  func runTwoSourceFrameSequenceRender() {
+    guard let modulatorURL = frameSequenceModulatorURL else {
+      statusMessage = "Select Source A frame directory before rendering."
+      return
+    }
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering."
+      return
+    }
+
+    let request = FrameSequenceRenderCommandRequest(
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputDirectoryURL: outputURL,
+      amount: frameSequenceAmount,
+      maxFrames: frameSequenceMaxFrames,
+      frameRate: proResFrameRate.framesPerSecond,
+      flowCacheDirectoryURL: frameSequenceWritesFlowCache
+        ? outputURL.appendingPathComponent("flow-cache", isDirectory: true)
+        : nil
+    )
+
+    statusMessage = "Running two-source frame sequence render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runFrameSequenceRender(request: request)
+        let frameCount = try ProResImageSequenceExporter.collectPNGFrameURLs(
+          in: result.outputDirectoryURL
+        ).count
+        let cacheText = result.flowCacheDirectoryURL.map { ", flow cache \($0.path)" } ?? ""
+        DispatchQueue.main.async {
+          self.lastFrameSequenceOutputURL = result.outputDirectoryURL
+          self.frameSequenceSummary = "\(frameCount) PNG frame(s) at \(result.outputDirectoryURL.path)\(cacheText)"
+          self.proResExportSummary = "Last frame sequence ready for ProRes export: \(result.outputDirectoryURL.path)"
+          self.statusMessage = "Two-source frame sequence render complete: \(result.outputDirectoryURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.frameSequenceSummary = "Two-source frame sequence render failed: \(error.localizedDescription)"
+          self.statusMessage = "Two-source frame sequence render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   func checkProResExportPlan() {
     let selectedFrameRate = proResFrameRate.framesPerSecond
     let selectedProfile = proResProfile
@@ -277,6 +377,48 @@ final class AppState: ObservableObject {
           await MainActor.run {
             self.proResExportSummary = "ProRes export failed: \(error.localizedDescription)"
             self.statusMessage = "ProRes export failed: \(error.localizedDescription)"
+          }
+        }
+      }
+    }
+  }
+
+  func exportLastFrameSequenceProResMovie() {
+    guard let frameDirectory = lastFrameSequenceOutputURL ?? frameSequenceOutputURL else {
+      statusMessage = "Run a two-source frame sequence before exporting its ProRes movie."
+      return
+    }
+
+    let selectedFrameRate = proResFrameRate.framesPerSecond
+    let selectedProfile = proResProfile
+    let defaultMovieName = "\(frameDirectory.lastPathComponent)-prores.mov"
+    guard let outputURL = ImageSequenceExportPanel.chooseMovieSaveLocation(defaultName: defaultMovieName) else {
+      statusMessage = "ProRes export cancelled."
+      return
+    }
+
+    statusMessage = "Exporting two-source frame sequence to ProRes MOV..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      Task {
+        do {
+          let result = try await ProResImageSequenceExporter.exportPNGSequence(
+            request: ProResImageSequenceExportRequest(
+              frameDirectory: frameDirectory,
+              outputURL: outputURL,
+              frameRate: selectedFrameRate,
+              profile: selectedProfile,
+              requiresHardwareEncoder: false
+            )
+          )
+          await MainActor.run {
+            self.proResExportSummary = result.compactSummary
+            self.statusMessage = "Two-source ProRes export complete: \(outputURL.path)"
+          }
+        } catch {
+          await MainActor.run {
+            self.proResExportSummary = "Two-source ProRes export failed: \(error.localizedDescription)"
+            self.statusMessage = "Two-source ProRes export failed: \(error.localizedDescription)"
           }
         }
       }

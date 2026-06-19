@@ -47,6 +47,63 @@ enum RustBridgePlaceholder {
     return try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
   }
 
+  static func runFrameSequenceRender(
+    request: FrameSequenceRenderCommandRequest
+  ) throws -> FrameSequenceRenderCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    let arguments = try renderFrameSequenceArguments(request: request)
+    _ = try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
+    return FrameSequenceRenderCommandResult(
+      modulatorDirectoryURL: request.modulatorDirectoryURL,
+      carrierDirectoryURL: request.carrierDirectoryURL,
+      outputDirectoryURL: request.outputDirectoryURL,
+      flowCacheDirectoryURL: request.flowCacheDirectoryURL
+    )
+  }
+
+  static func renderFrameSequenceArguments(
+    request: FrameSequenceRenderCommandRequest
+  ) throws -> [String] {
+    guard request.amount.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("amount must be finite")
+    }
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive and finite")
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "render-frame-sequence",
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputDirectoryURL.path,
+      "--amount",
+      cliNumber(request.amount),
+      "--frame-rate",
+      cliNumber(request.frameRate)
+    ]
+
+    if let flowCacheDirectoryURL = request.flowCacheDirectoryURL {
+      arguments.append("--flow-cache-dir")
+      arguments.append(flowCacheDirectoryURL.path)
+    }
+
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+
+    return arguments
+  }
+
   static func runFreshQueuedTestRender(projectURL: URL?) throws -> QueuedRenderCommandResult {
     let queueURL = defaultRenderQueueURL()
     let outputRootURL = defaultRenderQueueOutputRootURL()
@@ -181,6 +238,10 @@ enum RustBridgePlaceholder {
     throw RustBridgeError.repoRootNotFound
   }
 
+  private static func cliNumber(_ value: Double) -> String {
+    String(format: "%.6g", locale: Locale(identifier: "en_US_POSIX"), value)
+  }
+
   private static func runCommand(
     arguments: [String],
     currentDirectoryURL: URL
@@ -225,6 +286,23 @@ enum RustBridgePlaceholder {
 
     return result
   }
+}
+
+struct FrameSequenceRenderCommandRequest {
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputDirectoryURL: URL
+  let amount: Double
+  let maxFrames: Int?
+  let frameRate: Double
+  let flowCacheDirectoryURL: URL?
+}
+
+struct FrameSequenceRenderCommandResult {
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputDirectoryURL: URL
+  let flowCacheDirectoryURL: URL?
 }
 
 struct QueuedRenderCommandResult {
@@ -285,6 +363,7 @@ struct RustCommandResult {
 enum RustBridgeError: LocalizedError {
   case repoRootNotFound
   case commandFailed(RustCommandResult)
+  case invalidFrameSequenceRequest(String)
 
   var errorDescription: String? {
     switch self {
@@ -296,6 +375,8 @@ enum RustBridgeError: LocalizedError {
         return "\(result.command) exited with status \(result.exitCode)."
       }
       return "\(result.command) exited with status \(result.exitCode): \(detail)"
+    case .invalidFrameSequenceRequest(let message):
+      return "Invalid frame-sequence render request: \(message)."
     }
   }
 }

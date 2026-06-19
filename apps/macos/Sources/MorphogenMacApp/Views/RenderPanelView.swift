@@ -85,6 +85,30 @@ struct RenderPanelView: View {
             .lineLimit(3)
             .foregroundStyle(.secondary)
         }
+        GridRow {
+          Label("Source A Frames", systemImage: "a.square")
+          Text(state.frameSequenceModulatorPath)
+            .lineLimit(2)
+            .foregroundStyle(.secondary)
+        }
+        GridRow {
+          Label("Source B Frames", systemImage: "b.square")
+          Text(state.frameSequenceCarrierPath)
+            .lineLimit(2)
+            .foregroundStyle(.secondary)
+        }
+        GridRow {
+          Label("Sequence Output", systemImage: "rectangle.stack.badge.play")
+          Text(state.frameSequenceOutputPath)
+            .lineLimit(2)
+            .foregroundStyle(.secondary)
+        }
+        GridRow {
+          Label("Two-Source Render", systemImage: "point.3.connected.trianglepath.dotted")
+          Text(state.frameSequenceSummary)
+            .lineLimit(3)
+            .foregroundStyle(.secondary)
+        }
       }
 
       VStack(alignment: .leading, spacing: 8) {
@@ -125,6 +149,56 @@ struct RenderPanelView: View {
             state.runQueuedTestRender()
           } label: {
             Label("Run Queue Test", systemImage: "list.bullet.rectangle")
+          }
+        }
+
+        HStack {
+          Button {
+            state.chooseFrameSequenceModulatorDirectory()
+          } label: {
+            Label("Source A Frames", systemImage: "a.square")
+          }
+
+          Button {
+            state.chooseFrameSequenceCarrierDirectory()
+          } label: {
+            Label("Source B Frames", systemImage: "b.square")
+          }
+
+          Button {
+            state.chooseFrameSequenceOutputDirectory()
+          } label: {
+            Label("Sequence Output", systemImage: "folder.badge.plus")
+          }
+        }
+
+        HStack(spacing: 16) {
+          Stepper(value: $state.frameSequenceAmount, in: 0...64, step: 1) {
+            Text("Amount \(state.frameSequenceAmount, specifier: "%.0f")")
+          }
+          .frame(width: 140, alignment: .leading)
+
+          Stepper(value: $state.frameSequenceMaxFrames, in: 1...600, step: 1) {
+            Text("Max Frames \(state.frameSequenceMaxFrames)")
+          }
+          .frame(width: 170, alignment: .leading)
+
+          Toggle("Flow Cache", isOn: $state.frameSequenceWritesFlowCache)
+            .toggleStyle(.checkbox)
+            .frame(width: 120, alignment: .leading)
+        }
+
+        HStack {
+          Button {
+            state.runTwoSourceFrameSequenceRender()
+          } label: {
+            Label("Run Two-Source Sequence", systemImage: "play.rectangle.on.rectangle")
+          }
+
+          Button {
+            state.exportLastFrameSequenceProResMovie()
+          } label: {
+            Label("Export Sequence ProRes MOV", systemImage: "film.badge.plus")
           }
         }
 

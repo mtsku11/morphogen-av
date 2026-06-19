@@ -34,9 +34,12 @@
 - Add audio muxing to the ProRes export path.
 - Add configurable frame-rate/profile controls to the ProRes export panel.
 - Carry render timing metadata into queue output manifests and default ProRes export FPS from the bundle.
+- Add SwiftUI controls for a real two-source frame-sequence render job.
+- Wire the Metal flow-displacement backend into a CLI validation path.
+- Broaden render queue metadata beyond the deterministic test job.
 
 ## Next
 
-1. Add SwiftUI controls for a real two-source frame-sequence render job.
-2. Wire the Metal flow-displacement backend into a CLI or SwiftUI validation path.
-3. Broaden render queue metadata beyond the deterministic test job.
+1. Turn the SwiftUI two-source frame-sequence bridge into a persisted render queue job type.
+2. Add first app-side media ingest automation from selected movies into frame/WAV proxy directories.
+3. Add explicit source/cache provenance to persisted frame-sequence queue jobs.

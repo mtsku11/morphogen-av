@@ -10,7 +10,8 @@ use morphogen_audio::{
     AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
 };
 use morphogen_core::{
-    ExportFormat, Project, RenderJob, RenderJobStatus, RenderQuality, RenderQueue, RenderSettings,
+    ExportFormat, Project, RenderJob, RenderJobOutputMetadata, RenderJobStatus, RenderQuality,
+    RenderQueue, RenderSettings, RenderTimingMetadata,
 };
 use morphogen_media::{extract_audio_wav, extract_video_frames, probe_media, MediaError};
 use morphogen_render::{
@@ -76,6 +77,9 @@ enum Commands {
         window: CliWindowFunction,
     },
     RenderTest {
+        output_path: PathBuf,
+    },
+    MetalRenderTest {
         output_path: PathBuf,
     },
     RenderTwoSource {
@@ -174,6 +178,9 @@ enum CliError {
     Audio(#[from] morphogen_audio::AudioError),
     #[error(transparent)]
     Render(#[from] morphogen_render::RenderError),
+    #[cfg(target_os = "macos")]
+    #[error(transparent)]
+    Metal(#[from] morphogen_metal::MetalDispatchError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -226,6 +233,7 @@ fn run() -> Result<(), CliError> {
             window,
         } => cache_onsets(&input_wav, &output_json, fft_size, hop_size, window.into()),
         Commands::RenderTest { output_path } => render_test(&output_path),
+        Commands::MetalRenderTest { output_path } => metal_render_test(&output_path),
         Commands::RenderTwoSource {
             modulator_image,
             carrier_image,
@@ -518,6 +526,33 @@ fn render_test(output_path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+fn metal_render_test(output_path: &Path) -> Result<(), CliError> {
+    #[cfg(target_os = "macos")]
+    {
+        let width = 256;
+        let height = 256;
+        let carrier = synthetic_carrier(width, height)?;
+        let flow = synthetic_flow(width, height)?;
+        let displaced = morphogen_metal::flow_displace_metal(&carrier, &flow, 1.0)?;
+
+        write_parent_dirs(output_path)?;
+        save_png(&displaced, output_path)?;
+        println!(
+            "wrote Metal flow-displace render to {}",
+            output_path.display()
+        );
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = output_path;
+        Err(CliError::Message(
+            "metal-render-test is only available on macOS.".to_string(),
+        ))
+    }
+}
+
 fn render_two_source(
     modulator_image: &Path,
     carrier_image: &Path,
@@ -783,6 +818,7 @@ fn queue_add_test(queue_path: &Path, project_path: Option<&Path>) -> Result<(), 
             deterministic: true,
         },
         status: RenderJobStatus::Queued,
+        output: None,
     });
     queue.save_json(queue_path)?;
     println!("queued render job {job_id} in {}", queue_path.display());
@@ -812,9 +848,10 @@ fn queue_run_test(
 
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
-    let completed = write_test_render_output_bundle(&job_id, &job_output_dir, stop_after_frame)?;
+    let output = write_test_render_output_bundle(&job_id, &job_output_dir, stop_after_frame)?;
+    queue.jobs[job_index].output = Some(output.metadata);
 
-    if completed {
+    if output.complete {
         queue.jobs[job_index].status = RenderJobStatus::Complete;
         queue.save_json(queue_path)?;
 
@@ -838,7 +875,7 @@ fn write_test_render_output_bundle(
     job_id: &str,
     output_dir: &Path,
     stop_after_frame: bool,
-) -> Result<bool, CliError> {
+) -> Result<TestRenderOutput, CliError> {
     const TEST_RENDER_FRAME_RATE: f64 = 24.0;
     const TEST_RENDER_SAMPLE_RATE: u32 = 48_000;
     const TEST_RENDER_FRAME_COUNT: u32 = 1;
@@ -857,6 +894,15 @@ fn write_test_render_output_bundle(
         save_png(&frame, &frame_path)?;
     }
 
+    let timing = RenderTimingMetadata {
+        frame_rate: TEST_RENDER_FRAME_RATE,
+        frame_count: TEST_RENDER_FRAME_COUNT,
+        start_seconds: 0.0,
+        duration_seconds: TEST_RENDER_FRAME_COUNT as f64 / TEST_RENDER_FRAME_RATE,
+        sample_rate: TEST_RENDER_SAMPLE_RATE,
+        audio_sample_count: TEST_RENDER_AUDIO_SAMPLE_COUNT as u64,
+    };
+
     if stop_after_frame {
         write_test_render_checkpoint(
             job_id,
@@ -866,7 +912,15 @@ fn write_test_render_output_bundle(
             &[],
             1,
         )?;
-        return Ok(false);
+        return Ok(TestRenderOutput {
+            complete: false,
+            metadata: RenderJobOutputMetadata {
+                output_directory: output_dir.to_string_lossy().to_string(),
+                frame_paths: vec!["frames/frame_000000.png".to_string()],
+                audio_stem_paths: Vec::new(),
+                timing,
+            },
+        });
     }
 
     let audio_path = audio_dir.join("main.wav");
@@ -881,12 +935,12 @@ fn write_test_render_output_bundle(
         "frames": ["frames/frame_000000.png"],
         "audio_stems": ["audio/main.wav"],
         "timing": {
-            "frame_rate": TEST_RENDER_FRAME_RATE,
-            "frame_count": TEST_RENDER_FRAME_COUNT,
-            "start_seconds": 0.0,
-            "duration_seconds": TEST_RENDER_FRAME_COUNT as f64 / TEST_RENDER_FRAME_RATE,
-            "sample_rate": TEST_RENDER_SAMPLE_RATE,
-            "audio_sample_count": TEST_RENDER_AUDIO_SAMPLE_COUNT
+            "frame_rate": timing.frame_rate,
+            "frame_count": timing.frame_count,
+            "start_seconds": timing.start_seconds,
+            "duration_seconds": timing.duration_seconds,
+            "sample_rate": timing.sample_rate,
+            "audio_sample_count": timing.audio_sample_count
         },
         "deterministic": true
     });
@@ -902,7 +956,20 @@ fn write_test_render_output_bundle(
         &["audio/main.wav"],
         1,
     )?;
-    Ok(true)
+    Ok(TestRenderOutput {
+        complete: true,
+        metadata: RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths: vec!["frames/frame_000000.png".to_string()],
+            audio_stem_paths: vec!["audio/main.wav".to_string()],
+            timing,
+        },
+    })
+}
+
+struct TestRenderOutput {
+    complete: bool,
+    metadata: RenderJobOutputMetadata,
 }
 
 fn write_test_render_checkpoint(
@@ -944,13 +1011,27 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
     let queue = RenderQueue::load_json(queue_path)?;
     println!("render queue: {} job(s)", queue.jobs.len());
     for job in queue.jobs {
+        let output_summary = job
+            .output
+            .as_ref()
+            .map(|output| {
+                format!(
+                    " output={} frames={} stems={} fps={:.3}",
+                    output.output_directory,
+                    output.frame_paths.len(),
+                    output.audio_stem_paths.len(),
+                    output.timing.frame_rate
+                )
+            })
+            .unwrap_or_default();
         println!(
-            "  - {} status={:?} size={}x{} project={}",
+            "  - {} status={:?} size={}x{} project={}{}",
             job.id,
             job.status,
             job.settings.width,
             job.settings.height,
-            job.project_path.as_deref().unwrap_or("<none>")
+            job.project_path.as_deref().unwrap_or("<none>"),
+            output_summary
         );
     }
     Ok(())

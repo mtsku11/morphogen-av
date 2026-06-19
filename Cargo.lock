@@ -416,6 +416,7 @@ dependencies = [
  "morphogen-audio",
  "morphogen-core",
  "morphogen-media",
+ "morphogen-metal",
  "morphogen-render",
  "predicates",
  "serde_json",

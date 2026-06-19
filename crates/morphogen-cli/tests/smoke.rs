@@ -41,6 +41,16 @@ fn render_test_writes_png() {
 }
 
 #[test]
+fn help_lists_metal_render_test_validation_command() {
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("metal-render-test"));
+}
+
+#[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_path = temp_dir.path().join("modulator.png");
@@ -294,6 +304,23 @@ fn render_queue_commands_persist_jobs() {
     assert!(job_output_dir.join("frames/frame_000000.png").exists());
     assert!(!job_output_dir.join("audio/main.wav").exists());
 
+    let checkpointed_queue_json =
+        fs::read_to_string(&queue_path).expect("read checkpointed render queue");
+    let checkpointed_queue: serde_json::Value =
+        serde_json::from_str(&checkpointed_queue_json).expect("parse checkpointed render queue");
+    assert_eq!(
+        checkpointed_queue["jobs"][0]["output"]["frame_paths"],
+        serde_json::json!(["frames/frame_000000.png"])
+    );
+    assert_eq!(
+        checkpointed_queue["jobs"][0]["output"]["audio_stem_paths"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        checkpointed_queue["jobs"][0]["output"]["timing"]["frame_rate"],
+        24.0
+    );
+
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
         .args(["queue-inspect", queue_arg.as_str()])
@@ -323,6 +350,22 @@ fn render_queue_commands_persist_jobs() {
     assert_eq!(manifest["timing"]["frame_count"], 1);
     assert_eq!(manifest["timing"]["sample_rate"], 48_000);
     assert_eq!(manifest["timing"]["audio_sample_count"], 48_000);
+
+    let complete_queue_json = fs::read_to_string(&queue_path).expect("read completed render queue");
+    let complete_queue: serde_json::Value =
+        serde_json::from_str(&complete_queue_json).expect("parse completed render queue");
+    assert_eq!(
+        complete_queue["jobs"][0]["output"]["audio_stem_paths"],
+        serde_json::json!(["audio/main.wav"])
+    );
+    assert_eq!(
+        complete_queue["jobs"][0]["output"]["timing"]["frame_count"],
+        1
+    );
+    assert_eq!(
+        complete_queue["jobs"][0]["output"]["timing"]["audio_sample_count"],
+        48_000
+    );
 
     let reader =
         hound::WavReader::open(job_output_dir.join("audio/main.wav")).expect("open rendered stem");

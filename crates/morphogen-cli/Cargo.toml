@@ -19,6 +19,9 @@ morphogen-render = { path = "../morphogen-render" }
 serde_json.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+morphogen-metal = { path = "../morphogen-metal" }
+
 [dev-dependencies]
 assert_cmd.workspace = true
 hound.workspace = true

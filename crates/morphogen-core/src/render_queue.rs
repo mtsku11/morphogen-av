@@ -61,11 +61,44 @@ mod tests {
                 deterministic: true,
             },
             status: RenderJobStatus::Queued,
+            output: None,
         });
 
         queue.save_json(&path).expect("save queue");
         let decoded = RenderQueue::load_json(&path).expect("load queue");
 
         assert_eq!(decoded, queue);
+    }
+
+    #[test]
+    fn render_queue_loads_jobs_written_before_output_metadata_existed() {
+        let json = r#"
+        {
+          "jobs": [
+            {
+              "id": "job-0001",
+              "project_path": null,
+              "settings": {
+                "width": 1920,
+                "height": 1080,
+                "quality": "high_quality_offline",
+                "export_format": {
+                  "type": "image_sequence",
+                  "extension": "png",
+                  "bit_depth": 16
+                },
+                "temporal_supersampling": 1,
+                "deterministic": true
+              },
+              "status": "queued"
+            }
+          ]
+        }
+        "#;
+
+        let queue: RenderQueue = serde_json::from_str(json).expect("deserialize old queue");
+
+        assert_eq!(queue.jobs.len(), 1);
+        assert!(queue.jobs[0].output.is_none());
     }
 }
