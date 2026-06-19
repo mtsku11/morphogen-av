@@ -1,0 +1,34 @@
+{
+  "description": "Tiny deterministic CPU flow-displacement golden fixture using bilinear center samples and clamped border samples.",
+  "carrier": {
+    "width": 2,
+    "height": 2,
+    "pixels": [
+      [0.0, 0.0, 0.0, 1.0],
+      [1.0, 0.0, 0.0, 1.0],
+      [0.0, 1.0, 0.0, 1.0],
+      [1.0, 1.0, 1.0, 1.0]
+    ]
+  },
+  "flow": {
+    "width": 2,
+    "height": 2,
+    "vectors": [
+      [0.5, 0.5],
+      [1.0, 0.0],
+      [-1.0, 0.0],
+      [-0.5, -0.5]
+    ]
+  },
+  "amount": 1.0,
+  "expected": {
+    "width": 2,
+    "height": 2,
+    "pixels": [
+      [0.5, 0.5, 0.25, 1.0],
+      [1.0, 0.0, 0.0, 1.0],
+      [0.0, 1.0, 0.0, 1.0],
+      [0.5, 0.5, 0.25, 1.0]
+    ]
+  }
+}

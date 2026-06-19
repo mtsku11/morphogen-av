@@ -1,0 +1,52 @@
+#![forbid(unsafe_code)]
+
+pub mod backend;
+pub mod buffer;
+pub mod convolution;
+pub mod descriptors;
+pub mod error;
+pub mod onset;
+pub mod rms;
+pub mod spectral;
+pub mod stft;
+pub mod wav;
+
+pub use buffer::AudioBufferF32;
+pub use descriptors::{AudioAnalysisCache, AudioDescriptorFrame};
+pub use error::AudioError;
+pub use onset::{onset_strength_from_stft, OnsetStrengthCache, OnsetStrengthFrame};
+pub use rms::rms_envelope;
+pub use spectral::spectral_centroid;
+pub use stft::{stft_magnitude_cache, StftAnalysisCache, StftConfig, StftFrame, WindowFunction};
+pub use wav::{load_wav_f32, save_wav_f32};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rms_envelope_calculates_stereo_signal() {
+        let buffer = AudioBufferF32::new(2, 48_000, vec![1.0, -1.0, 1.0, -1.0])
+            .expect("valid stereo buffer");
+        let frames = rms_envelope(&buffer, 2, 2).expect("calculate RMS");
+
+        assert_eq!(frames.len(), 1);
+        assert!((frames[0].rms - 1.0).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn spectral_centroid_detects_nyquist_energy() {
+        let centroid =
+            spectral_centroid(&[1.0, -1.0, 1.0, -1.0], 4).expect("calculate spectral centroid");
+
+        assert!((centroid - 2.0).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn spectral_centroid_of_silence_is_zero() {
+        let centroid =
+            spectral_centroid(&[0.0, 0.0, 0.0, 0.0], 48_000).expect("calculate spectral centroid");
+
+        assert_eq!(centroid, 0.0);
+    }
+}

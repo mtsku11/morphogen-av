@@ -1,0 +1,14 @@
+.DS_Store
+target/
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.log
+*.tmp
+*.png
+!docs/**/*.png
+!tests/fixtures/**/*.png

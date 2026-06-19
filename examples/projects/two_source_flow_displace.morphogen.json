@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "name": "Two Source Flow Displace",
+    "created_by": "morphogen-cli",
+    "notes": "Source A optical flow modulates Source B displacement."
+  },
+  "sources": [
+    {
+      "id": "source-a",
+      "label": "Source A synthetic modulator",
+      "role": "modulator",
+      "uri": "file://replace-with-modulator.mov"
+    },
+    {
+      "id": "source-b",
+      "label": "Source B synthetic carrier",
+      "role": "carrier",
+      "uri": "file://replace-with-carrier.mov"
+    }
+  ],
+  "timeline": {
+    "frame_rate": 24.0,
+    "sample_rate": 48000,
+    "range": {
+      "start_seconds": 0.0,
+      "duration_seconds": 4.0
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "source_a",
+        "label": "Source A",
+        "kind": {
+          "type": "source",
+          "source_id": "source-a",
+          "role": "modulator"
+        }
+      },
+      {
+        "id": "source_b",
+        "label": "Source B",
+        "kind": {
+          "type": "source",
+          "source_id": "source-b",
+          "role": "carrier"
+        }
+      },
+      {
+        "id": "analysis_optical_flow_a",
+        "label": "A optical flow analysis",
+        "kind": {
+          "type": "analysis",
+          "source_node": "source_a",
+          "analysis": "optical_flow"
+        }
+      },
+      {
+        "id": "render_flow_displace",
+        "label": "Flow-displace B",
+        "kind": {
+          "type": "render",
+          "processor": "flow_displace_cpu_reference"
+        }
+      },
+      {
+        "id": "export_image_sequence",
+        "label": "Export image sequence",
+        "kind": {
+          "type": "export",
+          "format": {
+            "type": "image_sequence",
+            "extension": "png",
+            "bit_depth": 16
+          }
+        }
+      }
+    ],
+    "routes": [
+      {
+        "from_node": "analysis_optical_flow_a",
+        "from_output": "flow_xy",
+        "to_node": "render_flow_displace",
+        "to_parameter": "displacement_vector_field",
+        "amount": 1.0
+      }
+    ]
+  },
+  "render_settings": {
+    "width": 1920,
+    "height": 1080,
+    "quality": "high_quality_offline",
+    "export_format": {
+      "type": "image_sequence",
+      "extension": "png",
+      "bit_depth": 16
+    },
+    "temporal_supersampling": 1,
+    "deterministic": true
+  },
+  "cache_manifest": {
+    "version": 1,
+    "entries": [
+      {
+        "id": "cache-optical-flow-source-a",
+        "source_id": "source-a",
+        "kind": "optical_flow",
+        "path": "cache/source-a/optical-flow",
+        "frame_count": null,
+        "sample_count": null
+      }
+    ]
+  }
+}
