@@ -10,7 +10,7 @@ use morphogen_audio::{
     AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
 };
 use morphogen_core::{
-    AnalysisKind, ExportFormat, Project, RenderBackend, RenderJob,
+    AnalysisCacheEntry, AnalysisKind, ExportFormat, MediaProxy, Project, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
@@ -175,6 +175,19 @@ enum Commands {
     },
     InspectProject {
         project_path: PathBuf,
+    },
+    ProjectRegisterProxy {
+        project_path: PathBuf,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long)]
+        frame_dir: PathBuf,
+        #[arg(long)]
+        audio: Option<PathBuf>,
+        /// Analysis-cache reference to record, as `kind=path` (repeatable). Kind is the
+        /// snake_case analysis name, e.g. `audio_rms=cache/source-a/rms.json`.
+        #[arg(long = "analysis-cache")]
+        analysis_cache: Vec<String>,
     },
 }
 
@@ -370,6 +383,19 @@ fn run() -> Result<(), CliError> {
         Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
         Commands::InspectProject { project_path } => inspect_project(&project_path),
+        Commands::ProjectRegisterProxy {
+            project_path,
+            source_id,
+            frame_dir,
+            audio,
+            analysis_cache,
+        } => project_register_proxy(ProjectRegisterProxyRequest {
+            project_path: &project_path,
+            source_id: &source_id,
+            frame_dir: &frame_dir,
+            audio: audio.as_deref(),
+            analysis_cache: &analysis_cache,
+        }),
     }
 }
 
@@ -584,6 +610,85 @@ fn inspect_project(project_path: &Path) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+struct ProjectRegisterProxyRequest<'a> {
+    project_path: &'a Path,
+    source_id: &'a str,
+    frame_dir: &'a Path,
+    audio: Option<&'a Path>,
+    analysis_cache: &'a [String],
+}
+
+fn project_register_proxy(request: ProjectRegisterProxyRequest<'_>) -> Result<(), CliError> {
+    let json = fs::read_to_string(request.project_path)?;
+    let mut project: Project = serde_json::from_str(&json)?;
+
+    let proxy = MediaProxy {
+        frame_directory: request.frame_dir.to_string_lossy().to_string(),
+        audio_path: request
+            .audio
+            .map(|path| path.to_string_lossy().to_string()),
+    };
+
+    let caches = request
+        .analysis_cache
+        .iter()
+        .map(|spec| parse_analysis_cache_spec(spec, request.source_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let cache_count = caches.len();
+
+    project.register_source_proxy(request.source_id, proxy, caches)?;
+    project.validate()?;
+
+    fs::write(request.project_path, serde_json::to_string_pretty(&project)?)?;
+    println!(
+        "registered proxy for source '{}' with {} analysis-cache reference(s) in {}",
+        request.source_id,
+        cache_count,
+        request.project_path.display()
+    );
+    Ok(())
+}
+
+fn parse_analysis_cache_spec(spec: &str, source_id: &str) -> Result<AnalysisCacheEntry, CliError> {
+    let (kind_name, path) = spec.split_once('=').ok_or_else(|| {
+        CliError::Message(format!(
+            "analysis-cache '{spec}' must be in the form kind=path"
+        ))
+    })?;
+    if path.trim().is_empty() {
+        return Err(CliError::Message(format!(
+            "analysis-cache '{spec}' has an empty path"
+        )));
+    }
+    let kind = parse_analysis_kind(kind_name)?;
+
+    Ok(AnalysisCacheEntry {
+        id: format!("cache-{}-{}", kind_name.trim(), source_id),
+        source_id: source_id.to_string(),
+        kind,
+        path: path.to_string(),
+        frame_count: None,
+        sample_count: None,
+    })
+}
+
+fn parse_analysis_kind(name: &str) -> Result<AnalysisKind, CliError> {
+    match name.trim() {
+        "luminance" => Ok(AnalysisKind::Luminance),
+        "edge_map" => Ok(AnalysisKind::EdgeMap),
+        "optical_flow" => Ok(AnalysisKind::OpticalFlow),
+        "depth_map" => Ok(AnalysisKind::DepthMap),
+        "audio_rms" => Ok(AnalysisKind::AudioRms),
+        "spectral_centroid" => Ok(AnalysisKind::SpectralCentroid),
+        "onset_strength" => Ok(AnalysisKind::OnsetStrength),
+        "stft" => Ok(AnalysisKind::Stft),
+        "grain_descriptors" => Ok(AnalysisKind::GrainDescriptors),
+        other => Err(CliError::Message(format!(
+            "unknown analysis kind '{other}'"
+        ))),
+    }
 }
 
 fn render_test(output_path: &Path) -> Result<(), CliError> {

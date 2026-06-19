@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisCacheEntry, AnalysisKind, CacheManifest, CoreError, ExportFormat, MediaSource,
-    ModulationRoute, Node, NodeGraph, NodeId, NodeKind, RenderQuality, RenderSettings, SourceRole,
-    TimeRange, Timeline,
+    AnalysisCacheEntry, AnalysisKind, CacheManifest, CoreError, ExportFormat, MediaProxy,
+    MediaSource, ModulationRoute, Node, NodeGraph, NodeId, NodeKind, RenderQuality, RenderSettings,
+    SourceRole, TimeRange, Timeline,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -33,12 +33,14 @@ impl Project {
             label: "Source A synthetic modulator".to_string(),
             role: SourceRole::Modulator,
             uri: "file://replace-with-modulator.mov".to_string(),
+            proxy: None,
         };
         let source_b = MediaSource {
             id: "source-b".to_string(),
             label: "Source B synthetic carrier".to_string(),
             role: SourceRole::Carrier,
             uri: "file://replace-with-carrier.mov".to_string(),
+            proxy: None,
         };
 
         let graph = NodeGraph {
@@ -214,6 +216,47 @@ impl Project {
         Ok(())
     }
 
+    /// Record ingested proxy media for a source and merge in any analysis-cache
+    /// references it produced. Cache entries with an id that already exists are
+    /// replaced so repeated ingests stay idempotent. Errors if the source is unknown.
+    pub fn register_source_proxy(
+        &mut self,
+        source_id: &str,
+        proxy: MediaProxy,
+        caches: Vec<AnalysisCacheEntry>,
+    ) -> Result<(), CoreError> {
+        if proxy.frame_directory.trim().is_empty() {
+            return Err(CoreError::InvalidProject(
+                "proxy frame_directory must not be empty".to_string(),
+            ));
+        }
+
+        let source = self
+            .sources
+            .iter_mut()
+            .find(|source| source.id == source_id)
+            .ok_or_else(|| {
+                CoreError::InvalidProject(format!(
+                    "cannot register proxy: no source with id '{source_id}'"
+                ))
+            })?;
+        source.proxy = Some(proxy);
+
+        for entry in caches {
+            match self
+                .cache_manifest
+                .entries
+                .iter_mut()
+                .find(|existing| existing.id == entry.id)
+            {
+                Some(existing) => *existing = entry,
+                None => self.cache_manifest.entries.push(entry),
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn summary(&self) -> String {
         format!(
             "{}: {} sources, {} nodes, {} routes, {}x{} {:?}",
@@ -290,4 +333,96 @@ fn validate_route(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_source_proxy_records_proxy_and_merges_caches() {
+        let mut project = Project::example_two_source_flow_displace();
+        let cache_count_before = project.cache_manifest.entries.len();
+
+        project
+            .register_source_proxy(
+                "source-a",
+                MediaProxy {
+                    frame_directory: "proxy/source-a/frames".to_string(),
+                    audio_path: Some("proxy/source-a/audio.wav".to_string()),
+                },
+                vec![AnalysisCacheEntry {
+                    id: "cache-audio-rms-source-a".to_string(),
+                    source_id: "source-a".to_string(),
+                    kind: AnalysisKind::AudioRms,
+                    path: "proxy/source-a/rms.json".to_string(),
+                    frame_count: None,
+                    sample_count: None,
+                }],
+            )
+            .expect("register proxy");
+
+        let source = project
+            .sources
+            .iter()
+            .find(|source| source.id == "source-a")
+            .expect("source-a present");
+        assert_eq!(
+            source.proxy.as_ref().map(|proxy| proxy.frame_directory.as_str()),
+            Some("proxy/source-a/frames")
+        );
+        assert_eq!(project.cache_manifest.entries.len(), cache_count_before + 1);
+        assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn register_source_proxy_replaces_cache_entry_with_same_id() {
+        let mut project = Project::example_two_source_flow_displace();
+        let proxy = MediaProxy {
+            frame_directory: "proxy/source-a/frames".to_string(),
+            audio_path: None,
+        };
+        let entry = AnalysisCacheEntry {
+            id: "cache-stft-source-a".to_string(),
+            source_id: "source-a".to_string(),
+            kind: AnalysisKind::Stft,
+            path: "first.json".to_string(),
+            frame_count: None,
+            sample_count: None,
+        };
+        project
+            .register_source_proxy("source-a", proxy.clone(), vec![entry.clone()])
+            .expect("first register");
+
+        let updated = AnalysisCacheEntry {
+            path: "second.json".to_string(),
+            ..entry
+        };
+        project
+            .register_source_proxy("source-a", proxy, vec![updated])
+            .expect("second register");
+
+        let matching: Vec<_> = project
+            .cache_manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.id == "cache-stft-source-a")
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].path, "second.json");
+    }
+
+    #[test]
+    fn register_source_proxy_rejects_unknown_source() {
+        let mut project = Project::example_two_source_flow_displace();
+        let result = project.register_source_proxy(
+            "source-zzz",
+            MediaProxy {
+                frame_directory: "proxy/frames".to_string(),
+                audio_path: None,
+            },
+            Vec::new(),
+        );
+        assert!(result.is_err());
+    }
 }

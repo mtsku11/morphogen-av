@@ -16,7 +16,7 @@ pub use analysis::AnalysisKind;
 pub use cache::{AnalysisCacheEntry, CacheManifest};
 pub use error::CoreError;
 pub use graph::{ModulationRoute, NodeGraph};
-pub use media::{MediaSource, SourceRole};
+pub use media::{MediaProxy, MediaSource, SourceRole};
 pub use node::{Node, NodeId, NodeKind, SignalType};
 pub use project::{Project, ProjectMetadata};
 pub use render_job::{

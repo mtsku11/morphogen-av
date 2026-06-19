@@ -42,8 +42,8 @@
 - Add explicit source/cache provenance to persisted frame-sequence queue jobs.
 - Route queued frame-sequence flow displacement through the Metal backend with CPU parity checks.
 - Add queue cancellation and durable failure records for frame-sequence jobs.
+- Persist ingested proxy media and analysis-cache references into project files.
 
 ## Next
 
-1. Persist ingested proxy media and analysis-cache references into project files.
-2. Add RMS and STFT analysis cache creation to app-side media ingest.
+1. Add RMS and STFT analysis cache creation to app-side media ingest.
