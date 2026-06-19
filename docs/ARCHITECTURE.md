@@ -56,4 +56,4 @@ The offline render queue is the quality path. It should eventually support:
 
 Realtime preview should reuse the same graph semantics but may use lower resolution, lower precision, or partial cache data.
 
-The current CLI has a deterministic dev queue executor that writes a single-frame PNG sequence, a 32-bit float WAV stem, a resume checkpoint, and an output manifest for the first queued or running test job. This is not the final scheduler, but it proves the intended output bundle shape and checkpoint/resume contract.
+The current CLI has a deterministic dev queue executor that writes a single-frame PNG sequence, a 32-bit float WAV stem, a resume checkpoint, and an output manifest with frame/sample timing metadata for the first queued or running test job. This is not the final scheduler, but it proves the intended output bundle shape, checkpoint/resume contract, and export timing handoff.

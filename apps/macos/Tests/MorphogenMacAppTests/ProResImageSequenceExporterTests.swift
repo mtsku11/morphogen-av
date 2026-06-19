@@ -22,6 +22,14 @@ final class ProResImageSequenceExporterTests: XCTestCase {
       "status": "complete",
       "frames": ["frames/frame_000000.png"],
       "audio_stems": ["audio/main.wav"],
+      "timing": {
+        "frame_rate": 12.0,
+        "frame_count": 1,
+        "start_seconds": 0.0,
+        "duration_seconds": 0.08333333333333333,
+        "sample_rate": 48000,
+        "audio_sample_count": 48000
+      },
       "deterministic": true
     }
     """.write(
@@ -38,7 +46,12 @@ final class ProResImageSequenceExporterTests: XCTestCase {
     XCTAssertEqual(bundle.audioStemCount, 1)
     XCTAssertEqual(bundle.audioStemURLs.map(\.lastPathComponent), ["main.wav"])
     XCTAssertEqual(bundle.status, "complete")
+    XCTAssertEqual(bundle.timing?.frameRate, 12.0)
+    XCTAssertEqual(bundle.timing?.frameCount, 1)
+    XCTAssertEqual(bundle.timing?.sampleRate, 48_000)
+    XCTAssertEqual(bundle.timing?.audioSampleCount, 48_000)
     XCTAssertTrue(bundle.compactSummary.contains("job-0001"))
+    XCTAssertTrue(bundle.compactSummary.contains("12.000 fps"))
   }
 
   func testCollectPNGFrameURLsUsesNaturalSortAndIgnoresNonPNGFiles() throws {
@@ -61,6 +74,9 @@ final class ProResImageSequenceExporterTests: XCTestCase {
     XCTAssertEqual(ProResFrameRateOption.fps23976.framesPerSecond, 24_000.0 / 1_001.0)
     XCTAssertEqual(ProResFrameRateOption.fps2997.framesPerSecond, 30_000.0 / 1_001.0)
     XCTAssertEqual(ProResFrameRateOption.fps60.framesPerSecond, 60.0)
+    XCTAssertEqual(ProResFrameRateOption.matching(12.0), .fps12)
+    XCTAssertEqual(ProResFrameRateOption.matching(30_000.0 / 1_001.0), .fps2997)
+    XCTAssertNil(ProResFrameRateOption.matching(48.0))
   }
 
   func testDefaultPlanSummaryUsesSelectedProResSettings() {

@@ -315,6 +315,15 @@ fn render_queue_commands_persist_jobs() {
     assert!(job_output_dir.join("frames/frame_000000.png").exists());
     assert!(job_output_dir.join("audio/main.wav").exists());
 
+    let manifest_json =
+        fs::read_to_string(job_output_dir.join("manifest.json")).expect("read output manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_json).expect("parse output manifest");
+    assert_eq!(manifest["timing"]["frame_rate"], 24.0);
+    assert_eq!(manifest["timing"]["frame_count"], 1);
+    assert_eq!(manifest["timing"]["sample_rate"], 48_000);
+    assert_eq!(manifest["timing"]["audio_sample_count"], 48_000);
+
     let reader =
         hound::WavReader::open(job_output_dir.join("audio/main.wav")).expect("open rendered stem");
     let spec = reader.spec();

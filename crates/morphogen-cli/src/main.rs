@@ -839,6 +839,11 @@ fn write_test_render_output_bundle(
     output_dir: &Path,
     stop_after_frame: bool,
 ) -> Result<bool, CliError> {
+    const TEST_RENDER_FRAME_RATE: f64 = 24.0;
+    const TEST_RENDER_SAMPLE_RATE: u32 = 48_000;
+    const TEST_RENDER_FRAME_COUNT: u32 = 1;
+    const TEST_RENDER_AUDIO_SAMPLE_COUNT: usize = 48_000;
+
     let frame_dir = output_dir.join("frames");
     let audio_dir = output_dir.join("audio");
     fs::create_dir_all(&frame_dir)?;
@@ -866,7 +871,7 @@ fn write_test_render_output_bundle(
 
     let audio_path = audio_dir.join("main.wav");
     if !audio_path.exists() {
-        let stem = synthetic_stereo_stem(48_000, 48_000)?;
+        let stem = synthetic_stereo_stem(TEST_RENDER_SAMPLE_RATE, TEST_RENDER_AUDIO_SAMPLE_COUNT)?;
         save_wav_f32(&audio_path, &stem)?;
     }
 
@@ -875,6 +880,14 @@ fn write_test_render_output_bundle(
         "status": "complete",
         "frames": ["frames/frame_000000.png"],
         "audio_stems": ["audio/main.wav"],
+        "timing": {
+            "frame_rate": TEST_RENDER_FRAME_RATE,
+            "frame_count": TEST_RENDER_FRAME_COUNT,
+            "start_seconds": 0.0,
+            "duration_seconds": TEST_RENDER_FRAME_COUNT as f64 / TEST_RENDER_FRAME_RATE,
+            "sample_rate": TEST_RENDER_SAMPLE_RATE,
+            "audio_sample_count": TEST_RENDER_AUDIO_SAMPLE_COUNT
+        },
         "deterministic": true
     });
     fs::write(

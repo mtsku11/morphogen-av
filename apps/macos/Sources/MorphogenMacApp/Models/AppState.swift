@@ -195,6 +195,7 @@ final class AppState: ObservableObject {
         let commandResult = try RustBridgePlaceholder.runFreshQueuedTestRender(projectURL: projectURL)
         let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: commandResult.bundleURL)
         DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
           self.lastRenderQueueBundleURL = bundle.bundleURL
           self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
           self.statusMessage = "Queued render output ready: \(bundle.bundleURL.path)"
@@ -283,17 +284,22 @@ final class AppState: ObservableObject {
   }
 
   func exportRenderQueueProResMovie() {
-    let selectedFrameRate = proResFrameRate.framesPerSecond
-    let selectedProfile = proResProfile
     let defaultBundleURL = RustBridgePlaceholder.defaultQueuedTestRenderBundleURL()
     let bundleURL = lastRenderQueueBundleURL ?? defaultBundleURL
 
-    guard FileManager.default.fileExists(atPath: bundleURL.path) else {
+    let inspectedBundle: RenderQueueOutputBundle
+    do {
+      inspectedBundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: bundleURL)
+      applyRenderQueueTimingDefaults(inspectedBundle)
+      renderQueueSummary = "\(inspectedBundle.compactSummary) at \(inspectedBundle.bundleURL.path)"
+    } catch {
       statusMessage = "Run queued test render before exporting its ProRes movie."
-      renderQueueSummary = "No queue output bundle found at \(defaultBundleURL.path)"
+      renderQueueSummary = "No queue output bundle found at \(defaultBundleURL.path): \(error.localizedDescription)"
       return
     }
 
+    let selectedFrameRate = proResFrameRate.framesPerSecond
+    let selectedProfile = proResProfile
     let defaultMovieName = "\(bundleURL.lastPathComponent)-prores.mov"
     guard let outputURL = ImageSequenceExportPanel.chooseMovieSaveLocation(defaultName: defaultMovieName) else {
       statusMessage = "ProRes export cancelled."
@@ -422,6 +428,15 @@ final class AppState: ObservableObject {
       profile: proResProfile
     )
   }
+
+  private func applyRenderQueueTimingDefaults(_ bundle: RenderQueueOutputBundle) {
+    guard let timing = bundle.timing,
+          let frameRateOption = ProResFrameRateOption.matching(timing.frameRate)
+    else {
+      return
+    }
+    proResFrameRate = frameRateOption
+  }
 }
 
 enum RenderQualityOption: String, CaseIterable, Identifiable {
@@ -468,6 +483,15 @@ enum ProResFrameRateOption: String, CaseIterable, Identifiable {
       return 30.0
     case .fps60:
       return 60.0
+    }
+  }
+
+  static func matching(_ frameRate: Double) -> ProResFrameRateOption? {
+    guard frameRate.isFinite && frameRate > 0 else {
+      return nil
+    }
+    return allCases.first { option in
+      abs(option.framesPerSecond - frameRate) < 0.0005
     }
   }
 }

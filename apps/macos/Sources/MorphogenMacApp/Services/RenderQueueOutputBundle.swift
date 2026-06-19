@@ -6,6 +6,7 @@ struct RenderQueueOutputBundle {
   let frameCount: Int
   let audioStemURLs: [URL]
   let status: String?
+  let timing: RenderQueueTimingMetadata?
 
   var audioStemCount: Int {
     audioStemURLs.count
@@ -13,7 +14,28 @@ struct RenderQueueOutputBundle {
 
   var compactSummary: String {
     let statusText = status.map { ", status \($0)" } ?? ""
-    return "\(bundleURL.lastPathComponent): \(frameCount) PNG frame(s), \(audioStemCount) audio stem(s)\(statusText)"
+    let timingText = timing.map { ", \($0.compactSummary)" } ?? ""
+    return "\(bundleURL.lastPathComponent): \(frameCount) PNG frame(s), \(audioStemCount) audio stem(s)\(timingText)\(statusText)"
+  }
+}
+
+struct RenderQueueTimingMetadata: Equatable {
+  let frameRate: Double
+  let frameCount: Int?
+  let startSeconds: Double?
+  let durationSeconds: Double?
+  let sampleRate: Int?
+  let audioSampleCount: Int?
+
+  var compactSummary: String {
+    var parts = [String(format: "%.3f fps", frameRate)]
+    if let durationSeconds {
+      parts.append(String(format: "%.3fs", durationSeconds))
+    }
+    if let sampleRate {
+      parts.append("\(sampleRate) Hz")
+    }
+    return parts.joined(separator: ", ")
   }
 }
 
@@ -58,7 +80,8 @@ enum RenderQueueOutputBundleResolver {
         for: manifest?.audioStemPaths,
         bundleURL: bundleURL
       ),
-      status: manifest?.status
+      status: manifest?.status,
+      timing: manifest?.timing
     )
   }
 
@@ -79,7 +102,111 @@ enum RenderQueueOutputBundleResolver {
       object["audio_stems"],
       manifestURL: manifestURL
     )
-    return RenderQueueManifestInfo(status: status, audioStemPaths: audioStemPaths)
+    let timing = try parseTimingMetadata(object["timing"], manifestURL: manifestURL)
+    return RenderQueueManifestInfo(
+      status: status,
+      audioStemPaths: audioStemPaths,
+      timing: timing
+    )
+  }
+
+  private static func parseTimingMetadata(
+    _ value: Any?,
+    manifestURL: URL
+  ) throws -> RenderQueueTimingMetadata? {
+    guard let value else {
+      return nil
+    }
+    guard let object = value as? [String: Any] else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+
+    let frameRate = try parsePositiveFiniteDouble(
+      object["frame_rate"],
+      manifestURL: manifestURL
+    )
+    return RenderQueueTimingMetadata(
+      frameRate: frameRate,
+      frameCount: try parseOptionalPositiveInt(object["frame_count"], manifestURL: manifestURL),
+      startSeconds: try parseOptionalNonNegativeFiniteDouble(
+        object["start_seconds"],
+        manifestURL: manifestURL
+      ),
+      durationSeconds: try parseOptionalNonNegativeFiniteDouble(
+        object["duration_seconds"],
+        manifestURL: manifestURL
+      ),
+      sampleRate: try parseOptionalPositiveInt(object["sample_rate"], manifestURL: manifestURL),
+      audioSampleCount: try parseOptionalNonNegativeInt(
+        object["audio_sample_count"],
+        manifestURL: manifestURL
+      )
+    )
+  }
+
+  private static func parsePositiveFiniteDouble(
+    _ value: Any?,
+    manifestURL: URL
+  ) throws -> Double {
+    guard let number = value as? NSNumber else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+    let doubleValue = number.doubleValue
+    guard doubleValue.isFinite && doubleValue > 0 else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+    return doubleValue
+  }
+
+  private static func parseOptionalNonNegativeFiniteDouble(
+    _ value: Any?,
+    manifestURL: URL
+  ) throws -> Double? {
+    guard let value else {
+      return nil
+    }
+    guard let number = value as? NSNumber else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+    let doubleValue = number.doubleValue
+    guard doubleValue.isFinite && doubleValue >= 0 else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+    return doubleValue
+  }
+
+  private static func parseOptionalPositiveInt(
+    _ value: Any?,
+    manifestURL: URL
+  ) throws -> Int? {
+    guard let parsed = try parseOptionalNonNegativeInt(value, manifestURL: manifestURL) else {
+      return nil
+    }
+    guard parsed > 0 else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+    return parsed
+  }
+
+  private static func parseOptionalNonNegativeInt(
+    _ value: Any?,
+    manifestURL: URL
+  ) throws -> Int? {
+    guard let value else {
+      return nil
+    }
+    guard let number = value as? NSNumber else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+    let doubleValue = number.doubleValue
+    let intValue = number.intValue
+    guard doubleValue.isFinite,
+          doubleValue >= 0,
+          Double(intValue) == doubleValue
+    else {
+      throw RenderQueueOutputBundleError.malformedManifest(manifestURL)
+    }
+    return intValue
   }
 
   private static func parseAudioStemPaths(
@@ -169,6 +296,7 @@ extension ProResImageSequenceExporter {
 private struct RenderQueueManifestInfo {
   let status: String?
   let audioStemPaths: [String]
+  let timing: RenderQueueTimingMetadata?
 }
 
 enum RenderQueueOutputBundleError: LocalizedError {
