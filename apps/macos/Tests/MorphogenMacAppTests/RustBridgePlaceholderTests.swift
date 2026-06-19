@@ -70,4 +70,26 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.audioExtraction.contains("--sample-rate"))
     XCTAssertTrue(arguments.audioExtraction.contains("48000"))
   }
+
+  func testMediaProxyArgumentsGenerateRMSAndSTFTAnalysisCaches() throws {
+    let request = MediaProxyExtractionCommandRequest(
+      sourceURL: URL(fileURLWithPath: "/tmp/source.mov"),
+      proxyDirectoryURL: URL(fileURLWithPath: "/tmp/proxy/source-a", isDirectory: true),
+      framesPerSecond: 12.0,
+      maxFrames: nil,
+      sampleRate: 48_000
+    )
+
+    let arguments = try RustBridgePlaceholder.mediaProxyExtractionArguments(request: request)
+
+    XCTAssertTrue(arguments.rmsCacheGeneration.contains("cache-rms"))
+    XCTAssertTrue(arguments.rmsCacheGeneration.contains("/tmp/proxy/source-a/audio.wav"))
+    XCTAssertTrue(arguments.rmsCacheGeneration.contains("/tmp/proxy/source-a/analysis/rms.json"))
+    XCTAssertTrue(arguments.rmsCacheGeneration.contains("--window-size"))
+
+    XCTAssertTrue(arguments.stftCacheGeneration.contains("cache-stft"))
+    XCTAssertTrue(arguments.stftCacheGeneration.contains("/tmp/proxy/source-a/audio.wav"))
+    XCTAssertTrue(arguments.stftCacheGeneration.contains("/tmp/proxy/source-a/analysis/stft.json"))
+    XCTAssertTrue(arguments.stftCacheGeneration.contains("--fft-size"))
+  }
 }

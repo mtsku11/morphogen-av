@@ -329,8 +329,8 @@ final class AppState: ObservableObject {
               self.frameSequenceCarrierPath = result.frameDirectoryURL.path
             }
           }
-          self.mediaProxySummary = "\(results.count) source proxy set(s) at \(outputRootURL.path)"
-          self.statusMessage = "Source proxy extraction complete."
+          self.mediaProxySummary = "\(results.count) source proxy set(s) with RMS + STFT analysis caches at \(outputRootURL.path)"
+          self.statusMessage = "Source proxy extraction and analysis caching complete."
         }
       } catch {
         DispatchQueue.main.async {

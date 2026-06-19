@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use image::{ImageBuffer, ImageReader, Rgba};
 use morphogen_audio::{
     load_wav_f32, onset_strength_from_stft, rms_envelope, save_wav_f32, stft_magnitude_cache,
-    AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
+    AudioAnalysisCache, AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
 };
 use morphogen_core::{
     AnalysisCacheEntry, AnalysisKind, ExportFormat, MediaProxy, Project, RenderBackend, RenderJob,
@@ -77,6 +77,14 @@ enum Commands {
         hop_size: usize,
         #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
         window: CliWindowFunction,
+    },
+    CacheRms {
+        input_wav: PathBuf,
+        output_json: PathBuf,
+        #[arg(long, default_value_t = 2048)]
+        window_size: usize,
+        #[arg(long, default_value_t = 512)]
+        hop_size: usize,
     },
     RenderTest {
         output_path: PathBuf,
@@ -290,6 +298,12 @@ fn run() -> Result<(), CliError> {
             hop_size,
             window,
         } => cache_onsets(&input_wav, &output_json, fft_size, hop_size, window.into()),
+        Commands::CacheRms {
+            input_wav,
+            output_json,
+            window_size,
+            hop_size,
+        } => cache_rms(&input_wav, &output_json, window_size, hop_size),
         Commands::RenderTest { output_path } => render_test(&output_path),
         Commands::MetalRenderTest { output_path } => metal_render_test(&output_path),
         Commands::RenderTwoSource {
@@ -561,6 +575,27 @@ fn cache_onsets(
     println!(
         "wrote onset-strength cache with {} frame(s) to {}",
         onsets.frames.len(),
+        output_json.display()
+    );
+    Ok(())
+}
+
+fn cache_rms(
+    input_wav: &Path,
+    output_json: &Path,
+    window_size: usize,
+    hop_size: usize,
+) -> Result<(), CliError> {
+    let buffer = load_wav_f32(input_wav)?;
+    let frames = rms_envelope(&buffer, window_size, hop_size)?;
+    let cache =
+        AudioAnalysisCache::rms_envelope_cache(buffer.sample_rate, window_size, hop_size, frames);
+
+    write_parent_dirs(output_json)?;
+    fs::write(output_json, serde_json::to_string_pretty(&cache)?)?;
+    println!(
+        "wrote RMS envelope cache with {} frame(s) to {}",
+        cache.frames.len(),
         output_json.display()
     );
     Ok(())

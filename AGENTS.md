@@ -18,6 +18,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `cargo run -p morphogen-cli -- export-audio-stem /tmp/source.wav /tmp/stem.wav --gain 1.0` - write a 32-bit float WAV stem through the Rust audio path.
 - `cargo run -p morphogen-cli -- cache-stft /tmp/source.wav /tmp/source-stft.json --fft-size 1024 --hop-size 256 --window hann` - write an inspectable STFT magnitude cache sidecar.
 - `cargo run -p morphogen-cli -- cache-onsets /tmp/source.wav /tmp/source-onsets.json --fft-size 1024 --hop-size 256 --window hann` - write an inspectable onset-strength cache sidecar.
+- `cargo run -p morphogen-cli -- cache-rms /tmp/source.wav /tmp/source-rms.json --window-size 2048 --hop-size 512` - write an inspectable RMS-envelope analysis cache sidecar (also generated automatically during app-side media ingest).
 - `cargo run -p morphogen-cli -- cache-synthetic-flow /tmp/morphogen-flow-cache --width 64 --height 64` - write a versioned flow cache sidecar.
 - `cargo run -p morphogen-cli -- queue-init /tmp/morphogen-render-queue.json` - create a persisted offline render queue.
 - `cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /tmp/morphogen-render-output --stop-after-frame` - checkpoint a queued test job after writing the PNG frame.

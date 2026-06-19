@@ -43,7 +43,8 @@
 - Route queued frame-sequence flow displacement through the Metal backend with CPU parity checks.
 - Add queue cancellation and durable failure records for frame-sequence jobs.
 - Persist ingested proxy media and analysis-cache references into project files.
+- Add RMS and STFT analysis cache creation to app-side media ingest.
 
 ## Next
 
-1. Add RMS and STFT analysis cache creation to app-side media ingest.
+- (none currently queued)

@@ -149,12 +149,17 @@ enum RustBridgePlaceholder {
     let arguments = try mediaProxyExtractionArguments(request: request)
     _ = try runCommand(arguments: arguments.frameExtraction, currentDirectoryURL: repoRoot)
     _ = try runCommand(arguments: arguments.audioExtraction, currentDirectoryURL: repoRoot)
+    _ = try runCommand(arguments: arguments.rmsCacheGeneration, currentDirectoryURL: repoRoot)
+    _ = try runCommand(arguments: arguments.stftCacheGeneration, currentDirectoryURL: repoRoot)
 
+    let analysisDirectoryURL = request.proxyDirectoryURL.appendingPathComponent("analysis", isDirectory: true)
     return MediaProxyExtractionCommandResult(
       sourceURL: request.sourceURL,
       proxyDirectoryURL: request.proxyDirectoryURL,
       frameDirectoryURL: request.proxyDirectoryURL.appendingPathComponent("frames", isDirectory: true),
-      audioWAVURL: request.proxyDirectoryURL.appendingPathComponent("audio.wav")
+      audioWAVURL: request.proxyDirectoryURL.appendingPathComponent("audio.wav"),
+      rmsCacheURL: analysisDirectoryURL.appendingPathComponent("rms.json"),
+      stftCacheURL: analysisDirectoryURL.appendingPathComponent("stft.json")
     )
   }
 
@@ -173,6 +178,9 @@ enum RustBridgePlaceholder {
 
     let frameDirectoryURL = request.proxyDirectoryURL.appendingPathComponent("frames", isDirectory: true)
     let audioWAVURL = request.proxyDirectoryURL.appendingPathComponent("audio.wav")
+    let analysisDirectoryURL = request.proxyDirectoryURL.appendingPathComponent("analysis", isDirectory: true)
+    let rmsCacheURL = analysisDirectoryURL.appendingPathComponent("rms.json")
+    let stftCacheURL = analysisDirectoryURL.appendingPathComponent("stft.json")
     var frameExtraction = [
       "cargo",
       "run",
@@ -205,6 +213,36 @@ enum RustBridgePlaceholder {
         audioWAVURL.path,
         "--sample-rate",
         String(request.sampleRate)
+      ],
+      rmsCacheGeneration: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "cache-rms",
+        audioWAVURL.path,
+        rmsCacheURL.path,
+        "--window-size",
+        "2048",
+        "--hop-size",
+        "512"
+      ],
+      stftCacheGeneration: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "cache-stft",
+        audioWAVURL.path,
+        stftCacheURL.path,
+        "--fft-size",
+        "1024",
+        "--hop-size",
+        "256"
       ]
     )
   }
@@ -430,6 +468,8 @@ struct MediaProxyExtractionCommandRequest {
 struct MediaProxyExtractionArguments {
   let frameExtraction: [String]
   let audioExtraction: [String]
+  let rmsCacheGeneration: [String]
+  let stftCacheGeneration: [String]
 }
 
 struct MediaProxyExtractionCommandResult {
@@ -437,6 +477,8 @@ struct MediaProxyExtractionCommandResult {
   let proxyDirectoryURL: URL
   let frameDirectoryURL: URL
   let audioWAVURL: URL
+  let rmsCacheURL: URL
+  let stftCacheURL: URL
 }
 
 struct QueuedRenderCommandResult {
