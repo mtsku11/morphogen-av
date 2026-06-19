@@ -25,9 +25,7 @@ impl RenderQueue {
             .jobs
             .iter_mut()
             .find(|job| job.id == job_id)
-            .ok_or_else(|| {
-                CoreError::InvalidRenderQueue(format!("no job with id '{job_id}'"))
-            })?;
+            .ok_or_else(|| CoreError::InvalidRenderQueue(format!("no job with id '{job_id}'")))?;
 
         if job.status.is_terminal() {
             return Err(CoreError::InvalidRenderQueue(format!(

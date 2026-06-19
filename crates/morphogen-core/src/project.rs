@@ -368,7 +368,10 @@ mod tests {
             .find(|source| source.id == "source-a")
             .expect("source-a present");
         assert_eq!(
-            source.proxy.as_ref().map(|proxy| proxy.frame_directory.as_str()),
+            source
+                .proxy
+                .as_ref()
+                .map(|proxy| proxy.frame_directory.as_str()),
             Some("proxy/source-a/frames")
         );
         assert_eq!(project.cache_manifest.entries.len(), cache_count_before + 1);

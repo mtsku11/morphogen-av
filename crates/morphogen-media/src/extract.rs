@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Duration};
 
 use crate::{ffmpeg, MediaError};
 
@@ -18,6 +18,20 @@ pub fn extract_audio_wav(
     output_wav: impl AsRef<Path>,
     sample_rate: u32,
 ) -> Result<(), MediaError> {
-    let spec = ffmpeg::extract_audio_wav_command(input, output_wav, sample_rate);
+    extract_audio_wav_with_max_duration(input, output_wav, sample_rate, None)
+}
+
+pub fn extract_audio_wav_with_max_duration(
+    input: impl AsRef<Path>,
+    output_wav: impl AsRef<Path>,
+    sample_rate: u32,
+    max_duration: Option<Duration>,
+) -> Result<(), MediaError> {
+    let spec = ffmpeg::extract_audio_wav_command_with_max_duration(
+        input,
+        output_wav,
+        sample_rate,
+        max_duration,
+    );
     ffmpeg::run_command_status(&spec)
 }

@@ -293,6 +293,7 @@ final class AppState: ObservableObject {
     let outputRootURL = mediaProxyOutputURL
     let frameRate = mediaProxyFrameRate
     let maxFrames = mediaProxyMaxFrames
+    let selectedProjectURL = projectURL
     statusMessage = "Extracting PNG and WAV source proxies through morphogen-cli..."
 
     DispatchQueue.global(qos: .userInitiated).async {
@@ -318,6 +319,19 @@ final class AppState: ObservableObject {
           results.append((role, result))
         }
 
+        var projectSummary: String?
+        if let selectedProjectURL {
+          for (role, result) in results {
+            _ = try RustBridgePlaceholder.registerProjectSourceProxy(
+              projectURL: selectedProjectURL,
+              sourceRole: role,
+              proxy: result
+            )
+          }
+          let inspectResult = try RustBridgePlaceholder.inspectProject(projectURL: selectedProjectURL)
+          projectSummary = Self.compactProjectSummary(inspectResult.summary)
+        }
+
         DispatchQueue.main.async {
           for (role, result) in results {
             switch role {
@@ -329,8 +343,12 @@ final class AppState: ObservableObject {
               self.frameSequenceCarrierPath = result.frameDirectoryURL.path
             }
           }
-          self.mediaProxySummary = "\(results.count) source proxy set(s) with RMS + STFT analysis caches at \(outputRootURL.path)"
-          self.statusMessage = "Source proxy extraction and analysis caching complete."
+          if let projectSummary {
+            self.projectSummary = projectSummary
+          }
+          let projectText = selectedProjectURL == nil ? "" : " and recorded in the project"
+          self.mediaProxySummary = "\(results.count) source proxy set(s) with RMS + STFT analysis caches at \(outputRootURL.path)\(projectText)"
+          self.statusMessage = "Source proxy extraction and analysis caching complete\(projectText)."
         }
       } catch {
         DispatchQueue.main.async {

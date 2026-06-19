@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -15,7 +16,9 @@ use morphogen_core::{
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
 };
-use morphogen_media::{extract_audio_wav, extract_video_frames, probe_media, MediaError};
+use morphogen_media::{
+    extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
+};
 use morphogen_render::{
     flow_displace_cpu, luminance_gradient_flow_cpu, write_flow_cache, FlowField, ImageBufferF32,
     RenderError,
@@ -51,6 +54,8 @@ enum Commands {
         output_wav: PathBuf,
         #[arg(long, default_value_t = 48_000)]
         sample_rate: u32,
+        #[arg(long)]
+        max_duration_seconds: Option<f64>,
     },
     ExportAudioStem {
         input_wav: PathBuf,
@@ -186,8 +191,19 @@ enum Commands {
     },
     ProjectRegisterProxy {
         project_path: PathBuf,
-        #[arg(long)]
-        source_id: String,
+        #[arg(
+            long,
+            conflicts_with = "source_role",
+            required_unless_present = "source_role"
+        )]
+        source_id: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            conflicts_with = "source_id",
+            required_unless_present = "source_id"
+        )]
+        source_role: Option<CliSourceRole>,
         #[arg(long)]
         frame_dir: PathBuf,
         #[arg(long)]
@@ -221,6 +237,21 @@ enum CliRenderBackend {
     #[default]
     Cpu,
     Metal,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSourceRole {
+    Modulator,
+    Carrier,
+}
+
+impl From<CliSourceRole> for SourceRole {
+    fn from(value: CliSourceRole) -> Self {
+        match value {
+            CliSourceRole::Modulator => Self::Modulator,
+            CliSourceRole::Carrier => Self::Carrier,
+        }
+    }
 }
 
 impl From<CliRenderBackend> for RenderBackend {
@@ -278,7 +309,8 @@ fn run() -> Result<(), CliError> {
             input,
             output_wav,
             sample_rate,
-        } => extract_audio(&input, &output_wav, sample_rate),
+            max_duration_seconds,
+        } => extract_audio(&input, &output_wav, sample_rate, max_duration_seconds),
         Commands::ExportAudioStem {
             input_wav,
             output_wav,
@@ -400,12 +432,14 @@ fn run() -> Result<(), CliError> {
         Commands::ProjectRegisterProxy {
             project_path,
             source_id,
+            source_role,
             frame_dir,
             audio,
             analysis_cache,
         } => project_register_proxy(ProjectRegisterProxyRequest {
             project_path: &project_path,
-            source_id: &source_id,
+            source_id: source_id.as_deref(),
+            source_role: source_role.map(Into::into),
             frame_dir: &frame_dir,
             audio: audio.as_deref(),
             analysis_cache: &analysis_cache,
@@ -482,16 +516,31 @@ fn extract_frames(
     }
 }
 
-fn extract_audio(input: &Path, output_wav: &Path, sample_rate: u32) -> Result<(), CliError> {
+fn extract_audio(
+    input: &Path,
+    output_wav: &Path,
+    sample_rate: u32,
+    max_duration_seconds: Option<f64>,
+) -> Result<(), CliError> {
     if sample_rate == 0 {
         return Err(CliError::Message(
             "sample-rate must be greater than zero".to_string(),
         ));
     }
+    let max_duration = max_duration_seconds
+        .map(|duration| {
+            if !duration.is_finite() || duration <= 0.0 {
+                return Err(CliError::Message(
+                    "max-duration-seconds must be a positive finite number".to_string(),
+                ));
+            }
+            Ok(Duration::from_secs_f64(duration))
+        })
+        .transpose()?;
 
     write_parent_dirs(output_wav)?;
 
-    match extract_audio_wav(input, output_wav, sample_rate) {
+    match extract_audio_wav_with_max_duration(input, output_wav, sample_rate, max_duration) {
         Ok(()) => {
             println!(
                 "extracted audio from {} to {}",
@@ -649,7 +698,8 @@ fn inspect_project(project_path: &Path) -> Result<(), CliError> {
 
 struct ProjectRegisterProxyRequest<'a> {
     project_path: &'a Path,
-    source_id: &'a str,
+    source_id: Option<&'a str>,
+    source_role: Option<SourceRole>,
     frame_dir: &'a Path,
     audio: Option<&'a Path>,
     analysis_cache: &'a [String],
@@ -658,32 +708,66 @@ struct ProjectRegisterProxyRequest<'a> {
 fn project_register_proxy(request: ProjectRegisterProxyRequest<'_>) -> Result<(), CliError> {
     let json = fs::read_to_string(request.project_path)?;
     let mut project: Project = serde_json::from_str(&json)?;
+    let source_id = resolve_project_source_id(&project, request.source_id, request.source_role)?;
 
     let proxy = MediaProxy {
         frame_directory: request.frame_dir.to_string_lossy().to_string(),
-        audio_path: request
-            .audio
-            .map(|path| path.to_string_lossy().to_string()),
+        audio_path: request.audio.map(|path| path.to_string_lossy().to_string()),
     };
 
     let caches = request
         .analysis_cache
         .iter()
-        .map(|spec| parse_analysis_cache_spec(spec, request.source_id))
+        .map(|spec| parse_analysis_cache_spec(spec, &source_id))
         .collect::<Result<Vec<_>, _>>()?;
     let cache_count = caches.len();
 
-    project.register_source_proxy(request.source_id, proxy, caches)?;
+    project.register_source_proxy(&source_id, proxy, caches)?;
     project.validate()?;
 
-    fs::write(request.project_path, serde_json::to_string_pretty(&project)?)?;
+    fs::write(
+        request.project_path,
+        serde_json::to_string_pretty(&project)?,
+    )?;
     println!(
         "registered proxy for source '{}' with {} analysis-cache reference(s) in {}",
-        request.source_id,
+        source_id,
         cache_count,
         request.project_path.display()
     );
     Ok(())
+}
+
+fn resolve_project_source_id(
+    project: &Project,
+    source_id: Option<&str>,
+    source_role: Option<SourceRole>,
+) -> Result<String, CliError> {
+    match (source_id, source_role) {
+        (Some(source_id), None) => Ok(source_id.to_string()),
+        (None, Some(source_role)) => {
+            let mut matching_sources = project
+                .sources
+                .iter()
+                .filter(|source| source.role == source_role);
+            let source = matching_sources.next().ok_or_else(|| {
+                CliError::Message(format!(
+                    "project has no {:?} source to register a proxy for",
+                    source_role
+                ))
+            })?;
+            if matching_sources.next().is_some() {
+                return Err(CliError::Message(format!(
+                    "project has multiple {:?} sources; use --source-id",
+                    source_role
+                )));
+            }
+            Ok(source.id.clone())
+        }
+        _ => Err(CliError::Message(
+            "provide exactly one of --source-id or --source-role".to_string(),
+        )),
+    }
 }
 
 fn parse_analysis_cache_spec(spec: &str, source_id: &str) -> Result<AnalysisCacheEntry, CliError> {
@@ -815,9 +899,9 @@ struct FrameSequenceRenderRequest<'a> {
 
 /// Maximum per-channel difference tolerated between the Metal render output and the
 /// CPU reference before a frame-sequence render is rejected. Float32 image values are
-/// in roughly [0, 1]; at this bound the two backends are numerically equivalent and
-/// the 8-bit PNG outputs are visually identical (boundary pixels may differ by 1 LSB).
-const METAL_CPU_PARITY_EPSILON: f32 = 1e-3;
+/// in roughly [0, 1]; one output LSB keeps the exported 8-bit PNGs visually equivalent,
+/// although samples exactly on a quantization boundary may differ by one encoded value.
+const METAL_CPU_PARITY_EPSILON: f32 = 1.0 / 255.0;
 
 struct RmsAmountConfig<'a> {
     wav_path: Option<&'a Path>,

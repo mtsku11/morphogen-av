@@ -509,7 +509,8 @@ fn extraction_commands_are_available_without_running_ffmpeg() {
         .args(["extract-audio", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("--sample-rate"));
+        .stdout(predicate::str::contains("--sample-rate"))
+        .stdout(predicate::str::contains("--max-duration-seconds"));
 }
 
 #[test]
@@ -536,6 +537,21 @@ fn extraction_commands_validate_numeric_arguments_before_ffmpeg() {
         .failure()
         .stderr(predicate::str::contains(
             "sample-rate must be greater than zero",
+        ));
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "extract-audio",
+            "input.mov",
+            "out.wav",
+            "--max-duration-seconds",
+            "0",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "max-duration-seconds must be a positive finite number",
         ));
 }
 
@@ -634,6 +650,159 @@ fn cache_onsets_writes_json_sidecar_from_wav() {
     let json = fs::read_to_string(output_json).expect("read onset cache");
     assert!(json.contains("\"cache_format\": \"onset_strength_v1\""));
     assert!(json.contains("\"strength\""));
+}
+
+#[test]
+fn cache_rms_writes_json_sidecar_from_wav() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let input_wav = temp_dir.path().join("input.wav");
+    let output_json = temp_dir.path().join("cache/rms.json");
+    write_test_wav(&input_wav, &[0.0, 1.0, 0.0, -1.0]);
+    let input_arg = input_wav.to_string_lossy().to_string();
+    let output_arg = output_json.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "cache-rms",
+            input_arg.as_str(),
+            output_arg.as_str(),
+            "--window-size",
+            "2",
+            "--hop-size",
+            "2",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wrote RMS envelope cache"));
+
+    let json = fs::read_to_string(output_json).expect("read RMS cache");
+    assert!(json.contains("\"cache_format\": \"rms_envelope_v1\""));
+    assert!(json.contains("\"sample_rate\": 4"));
+    assert!(json.contains("\"frames\""));
+}
+
+#[test]
+fn project_register_proxy_persists_proxy_and_analysis_cache_references() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let project_path = temp_dir.path().join("project.morphogen.json");
+    let project_arg = project_path.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["init-example", project_arg.as_str()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "project-register-proxy",
+            project_arg.as_str(),
+            "--source-role",
+            "modulator",
+            "--frame-dir",
+            "/tmp/proxy/source-a/frames",
+            "--audio",
+            "/tmp/proxy/source-a/audio.wav",
+            "--analysis-cache",
+            "audio_rms=/tmp/proxy/source-a/analysis/rms.json",
+            "--analysis-cache",
+            "stft=/tmp/proxy/source-a/analysis/stft.json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "registered proxy for source 'source-a'",
+        ));
+
+    let project_json = fs::read_to_string(project_path).expect("read project");
+    let project: serde_json::Value = serde_json::from_str(&project_json).expect("parse project");
+    assert_eq!(
+        project["sources"][0]["proxy"]["frame_directory"],
+        "/tmp/proxy/source-a/frames"
+    );
+    assert_eq!(
+        project["sources"][0]["proxy"]["audio_path"],
+        "/tmp/proxy/source-a/audio.wav"
+    );
+    assert!(project["cache_manifest"]["entries"]
+        .as_array()
+        .expect("cache entries")
+        .iter()
+        .any(|entry| entry["kind"] == "audio_rms"));
+    assert!(project["cache_manifest"]["entries"]
+        .as_array()
+        .expect("cache entries")
+        .iter()
+        .any(|entry| entry["kind"] == "stft"));
+}
+
+#[test]
+fn queue_cancel_marks_a_queued_job_as_cancelled() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-add-test", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-cancel", queue_arg.as_str(), "job-0001"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cancelled job job-0001"));
+
+    let queue_json = fs::read_to_string(queue_path).expect("read queue");
+    let queue: serde_json::Value = serde_json::from_str(&queue_json).expect("parse queue");
+    assert_eq!(queue["jobs"][0]["status"], "cancelled");
+}
+
+#[test]
+fn failed_frame_sequence_job_records_a_durable_failure() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let queue_path = temp_dir.path().join("queue.json");
+    let output_root = temp_dir.path().join("output");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_arg = output_root.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-frame-sequence",
+            queue_arg.as_str(),
+            "/tmp/does-not-exist/modulator",
+            "/tmp/does-not-exist/carrier",
+            output_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-frame-sequence", queue_arg.as_str()])
+        .assert()
+        .failure();
+
+    let queue_json = fs::read_to_string(queue_path).expect("read queue");
+    let queue: serde_json::Value = serde_json::from_str(&queue_json).expect("parse queue");
+    assert_eq!(queue["jobs"][0]["status"], "failed");
+    assert!(queue["jobs"][0]["failure"]["message"]
+        .as_str()
+        .expect("failure message")
+        .contains("No such file"));
 }
 
 fn write_test_wav(path: &Path, samples: &[f32]) {

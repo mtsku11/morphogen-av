@@ -32,7 +32,7 @@ This repository is an initial production-quality scaffold with small determinist
 - App-side preview-frame probe that reports decoded frame dimensions, presentation time, Metal texture format, and displays a decoded source thumbnail.
 - VideoToolbox ProRes encoder discovery and export-plan probing in the SwiftUI shell.
 - Configurable ProRes `.mov` export from a selected PNG frame directory through AVAssetWriter with VideoToolbox encoder selection.
-- SwiftUI controls for extracting selected movies into paired PNG/WAV proxy directories through the dev CLI bridge.
+- SwiftUI controls for extracting selected movies into paired PNG/WAV proxy directories through the dev CLI bridge, then recording their RMS/STFT sidecars on the active project.
 - SwiftUI controls for choosing Source A/Source B frame directories and submitting a real two-source frame-sequence CPU render as a persisted queue job.
 - Queue manifests contain the modulator/carrier directories and the generated flow-cache provenance; completed bundles export directly to configurable ProRes `.mov`.
 - Direct configurable ProRes `.mov` export from the render queue output bundle's `frames/` directory with the first WAV stem muxed as a PCM audio track.
@@ -147,7 +147,7 @@ Extract analysis-friendly proxies with optional external FFmpeg:
 
 ```sh
 cargo run -p morphogen-cli -- extract-frames /path/to/media.mov /tmp/morphogen-frames --fps 12 --max-frames 120
-cargo run -p morphogen-cli -- extract-audio /path/to/media.mov /tmp/morphogen-audio.wav --sample-rate 48000
+cargo run -p morphogen-cli -- extract-audio /path/to/media.mov /tmp/morphogen-audio.wav --sample-rate 48000 --max-duration-seconds 10
 ```
 
 Export a 32-bit float WAV stem through the Rust audio path:
@@ -171,7 +171,7 @@ Run Swift-side service tests:
 swift test
 ```
 
-The source buttons open native file pickers. Create Test Project writes an example `.morphogen.json` through `morphogen-cli init-example`, Open Project validates a selected project through `morphogen-cli inspect-project`, Probe Sources uses AVFoundation first and falls back to `morphogen-cli probe`, and Probe Preview Frames decodes selected source first frames into Metal textures. Proxy Output and Extract Source Proxies use `morphogen-cli extract-frames` and `extract-audio` to write each selected source as PNG frames plus a 32-bit float WAV; those generated frame directories become the Source A and Source B sequence inputs. Run Two-Source Sequence appends a `frame_sequence_flow_displace` job to a persisted queue and executes it into a bundle containing `frames/`, optional `cache/flow/`, manifest, and checkpoint files. Both sequence export actions can write the completed frames to ProRes `.mov`; Export Queue ProRes MOV also understands any audio stems in the bundle. The CLI bridge calls require `cargo` on PATH; FFmpeg is optional but required for media proxy extraction.
+The source buttons open native file pickers. Create Test Project writes an example `.morphogen.json` through `morphogen-cli init-example`, Open Project validates a selected project through `morphogen-cli inspect-project`, Probe Sources uses AVFoundation first and falls back to `morphogen-cli probe`, and Probe Preview Frames decodes selected source first frames into Metal textures. Proxy Output and Extract Source Proxies use `morphogen-cli extract-frames` and `extract-audio` to write each selected source as PNG frames plus a 32-bit float WAV. The WAV duration matches the requested proxy-frame span, keeping the generated RMS/STFT cache size bounded and its timing aligned with the frame sequence; those generated frame directories become the Source A and Source B sequence inputs. Run Two-Source Sequence appends a `frame_sequence_flow_displace` job to a persisted queue and executes it into a bundle containing `frames/`, optional `cache/flow/`, manifest, and checkpoint files. Both sequence export actions can write the completed frames to ProRes `.mov`; Export Queue ProRes MOV also understands any audio stems in the bundle. The CLI bridge calls require `cargo` on PATH; FFmpeg is optional but required for media proxy extraction.
 
 ## Future Direction
 

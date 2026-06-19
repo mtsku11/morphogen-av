@@ -9,7 +9,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `cargo test` - run the Rust workspace tests.
 - `cargo run -p morphogen-cli -- init-example /tmp/morphogen-example.morphogen.json` - write an example project.
 - `cargo run -p morphogen-cli -- inspect-project /tmp/morphogen-example.morphogen.json` - validate and summarize a project.
-- `cargo run -p morphogen-cli -- project-register-proxy /tmp/morphogen-example.morphogen.json --source-id source-a --frame-dir /tmp/proxy/source-a/frames --audio /tmp/proxy/source-a/audio.wav --analysis-cache audio_rms=/tmp/proxy/source-a/rms.json` - record ingested proxy media and analysis-cache references onto a project source (`--analysis-cache kind=path` repeatable; re-registering the same cache id replaces it).
+- `cargo run -p morphogen-cli -- project-register-proxy /tmp/morphogen-example.morphogen.json --source-role modulator --frame-dir /tmp/proxy/source-a/frames --audio /tmp/proxy/source-a/audio.wav --analysis-cache audio_rms=/tmp/proxy/source-a/rms.json` - record ingested proxy media and analysis-cache references onto a project source (`--source-id` is available for projects with multiple sources of a role; `--analysis-cache kind=path` is repeatable and re-registering the same cache id replaces it).
 - `cargo run -p morphogen-cli -- render-test /tmp/morphogen-test.png` - render the synthetic CPU reference PNG.
 - `cargo run -p morphogen-cli -- metal-render-test /tmp/morphogen-metal-test.png` - render the synthetic flow-displacement fixture through Metal on macOS.
 - `cargo run -p morphogen-cli -- render-two-source /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-two-source.png --amount 16` - render a real two-image CPU displacement.

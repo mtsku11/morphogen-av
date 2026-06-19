@@ -7,8 +7,9 @@ pub mod ffmpeg;
 pub mod probe;
 
 pub use error::MediaError;
-pub use extract::{extract_audio_wav, extract_video_frames};
+pub use extract::{extract_audio_wav, extract_audio_wav_with_max_duration, extract_video_frames};
 pub use ffmpeg::{
-    extract_audio_wav_command, extract_video_frames_command, ffprobe_command, CommandSpec,
+    extract_audio_wav_command, extract_audio_wav_command_with_max_duration,
+    extract_video_frames_command, ffprobe_command, CommandSpec,
 };
 pub use probe::{probe_media, MediaProbe, MediaStreamProbe};

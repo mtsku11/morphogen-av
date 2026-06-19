@@ -1,6 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 use crate::MediaError;
@@ -70,20 +71,35 @@ pub fn extract_audio_wav_command(
     output_wav: impl AsRef<Path>,
     sample_rate: u32,
 ) -> CommandSpec {
-    CommandSpec::new(
-        "ffmpeg",
-        vec![
-            "-y".to_string(),
-            "-i".to_string(),
-            input.as_ref().to_string_lossy().to_string(),
-            "-vn".to_string(),
-            "-acodec".to_string(),
-            "pcm_f32le".to_string(),
-            "-ar".to_string(),
-            sample_rate.to_string(),
-            output_wav.as_ref().to_string_lossy().to_string(),
-        ],
-    )
+    extract_audio_wav_command_with_max_duration(input, output_wav, sample_rate, None)
+}
+
+pub fn extract_audio_wav_command_with_max_duration(
+    input: impl AsRef<Path>,
+    output_wav: impl AsRef<Path>,
+    sample_rate: u32,
+    max_duration: Option<Duration>,
+) -> CommandSpec {
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        input.as_ref().to_string_lossy().to_string(),
+    ];
+
+    if let Some(max_duration) = max_duration {
+        args.push("-t".to_string());
+        args.push(format!("{:.6}", max_duration.as_secs_f64()));
+    }
+
+    args.extend([
+        "-vn".to_string(),
+        "-acodec".to_string(),
+        "pcm_f32le".to_string(),
+        "-ar".to_string(),
+        sample_rate.to_string(),
+        output_wav.as_ref().to_string_lossy().to_string(),
+    ]);
+    CommandSpec::new("ffmpeg", args)
 }
 
 pub(crate) fn run_command_stdout(spec: &CommandSpec) -> Result<Vec<u8>, MediaError> {
@@ -148,6 +164,19 @@ mod tests {
         assert!(spec.args.contains(&"pcm_f32le".to_string()));
         assert!(spec.args.contains(&"48000".to_string()));
         assert!(spec.args.contains(&"out.wav".to_string()));
+    }
+
+    #[test]
+    fn audio_extraction_command_can_limit_proxy_duration() {
+        let spec = extract_audio_wav_command_with_max_duration(
+            "in.mov",
+            "out.wav",
+            48_000,
+            Some(Duration::from_secs(10)),
+        );
+
+        assert!(spec.args.contains(&"-t".to_string()));
+        assert!(spec.args.contains(&"10.000000".to_string()));
     }
 
     #[test]

@@ -69,6 +69,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.audioExtraction.contains("/tmp/proxy/source-a/audio.wav"))
     XCTAssertTrue(arguments.audioExtraction.contains("--sample-rate"))
     XCTAssertTrue(arguments.audioExtraction.contains("48000"))
+    XCTAssertTrue(arguments.audioExtraction.contains("--max-duration-seconds"))
+    XCTAssertTrue(arguments.audioExtraction.contains("10"))
   }
 
   func testMediaProxyArgumentsGenerateRMSAndSTFTAnalysisCaches() throws {
@@ -91,5 +93,30 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.stftCacheGeneration.contains("/tmp/proxy/source-a/audio.wav"))
     XCTAssertTrue(arguments.stftCacheGeneration.contains("/tmp/proxy/source-a/analysis/stft.json"))
     XCTAssertTrue(arguments.stftCacheGeneration.contains("--fft-size"))
+  }
+
+  func testProjectProxyRegistrationArgumentsIncludeProxyAndAnalysisPaths() {
+    let proxy = MediaProxyExtractionCommandResult(
+      sourceURL: URL(fileURLWithPath: "/tmp/source.mov"),
+      proxyDirectoryURL: URL(fileURLWithPath: "/tmp/proxy/source-a", isDirectory: true),
+      frameDirectoryURL: URL(fileURLWithPath: "/tmp/proxy/source-a/frames", isDirectory: true),
+      audioWAVURL: URL(fileURLWithPath: "/tmp/proxy/source-a/audio.wav"),
+      rmsCacheURL: URL(fileURLWithPath: "/tmp/proxy/source-a/analysis/rms.json"),
+      stftCacheURL: URL(fileURLWithPath: "/tmp/proxy/source-a/analysis/stft.json")
+    )
+
+    let arguments = RustBridgePlaceholder.projectSourceProxyRegistrationArguments(
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json"),
+      sourceRole: .modulator,
+      proxy: proxy
+    )
+
+    XCTAssertTrue(arguments.contains("project-register-proxy"))
+    XCTAssertTrue(arguments.contains("/tmp/project.morphogen.json"))
+    XCTAssertTrue(arguments.contains("--source-role"))
+    XCTAssertTrue(arguments.contains("modulator"))
+    XCTAssertTrue(arguments.contains("/tmp/proxy/source-a/frames"))
+    XCTAssertTrue(arguments.contains("audio_rms=/tmp/proxy/source-a/analysis/rms.json"))
+    XCTAssertTrue(arguments.contains("stft=/tmp/proxy/source-a/analysis/stft.json"))
   }
 }

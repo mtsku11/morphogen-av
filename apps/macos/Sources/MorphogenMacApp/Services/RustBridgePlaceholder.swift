@@ -163,6 +163,57 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func registerProjectSourceProxy(
+    projectURL: URL,
+    sourceRole: SourceRole,
+    proxy: MediaProxyExtractionCommandResult
+  ) throws -> RustCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    return try runCommand(
+      arguments: projectSourceProxyRegistrationArguments(
+        projectURL: projectURL,
+        sourceRole: sourceRole,
+        proxy: proxy
+      ),
+      currentDirectoryURL: repoRoot
+    )
+  }
+
+  static func projectSourceProxyRegistrationArguments(
+    projectURL: URL,
+    sourceRole: SourceRole,
+    proxy: MediaProxyExtractionCommandResult
+  ) -> [String] {
+    let sourceRoleArgument: String
+    switch sourceRole {
+    case .modulator:
+      sourceRoleArgument = "modulator"
+    case .carrier:
+      sourceRoleArgument = "carrier"
+    }
+
+    return [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "project-register-proxy",
+      projectURL.path,
+      "--source-role",
+      sourceRoleArgument,
+      "--frame-dir",
+      proxy.frameDirectoryURL.path,
+      "--audio",
+      proxy.audioWAVURL.path,
+      "--analysis-cache",
+      "audio_rms=\(proxy.rmsCacheURL.path)",
+      "--analysis-cache",
+      "stft=\(proxy.stftCacheURL.path)"
+    ]
+  }
+
   static func mediaProxyExtractionArguments(
     request: MediaProxyExtractionCommandRequest
   ) throws -> MediaProxyExtractionArguments {
@@ -199,21 +250,27 @@ enum RustBridgePlaceholder {
       frameExtraction.append(String(maxFrames))
     }
 
+    var audioExtraction = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "extract-audio",
+      request.sourceURL.path,
+      audioWAVURL.path,
+      "--sample-rate",
+      String(request.sampleRate)
+    ]
+    if let maxFrames = request.maxFrames {
+      audioExtraction.append("--max-duration-seconds")
+      audioExtraction.append(cliNumber(Double(maxFrames) / request.framesPerSecond))
+    }
+
     return MediaProxyExtractionArguments(
       frameExtraction: frameExtraction,
-      audioExtraction: [
-        "cargo",
-        "run",
-        "--quiet",
-        "-p",
-        "morphogen-cli",
-        "--",
-        "extract-audio",
-        request.sourceURL.path,
-        audioWAVURL.path,
-        "--sample-rate",
-        String(request.sampleRate)
-      ],
+      audioExtraction: audioExtraction,
       rmsCacheGeneration: [
         "cargo",
         "run",
