@@ -40,6 +40,23 @@ enum ImageSequenceExportPanel {
     return panel.url
   }
 
+  static func chooseMediaProxyOutputDirectory(
+    defaultName: String = "morphogen-media-proxies"
+  ) -> URL? {
+    let panel = NSSavePanel()
+    panel.title = "Choose Media Proxy Output"
+    panel.message = "Choose where extracted PNG frame and WAV proxies are written."
+    panel.prompt = "Choose"
+    panel.nameFieldStringValue = defaultName
+    panel.canCreateDirectories = true
+
+    guard panel.runModal() == .OK else {
+      return nil
+    }
+
+    return panel.url
+  }
+
   static func chooseMovieSaveLocation(defaultName: String = "morphogen-prores.mov") -> URL? {
     let panel = NSSavePanel()
     panel.title = "Export ProRes Movie"

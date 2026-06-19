@@ -37,9 +37,13 @@
 - Add SwiftUI controls for a real two-source frame-sequence render job.
 - Wire the Metal flow-displacement backend into a CLI validation path.
 - Broaden render queue metadata beyond the deterministic test job.
+- Turn the SwiftUI two-source frame-sequence bridge into a persisted render queue job type.
+- Add first app-side media ingest automation from selected movies into frame/WAV proxy directories.
+- Add explicit source/cache provenance to persisted frame-sequence queue jobs.
 
 ## Next
 
-1. Turn the SwiftUI two-source frame-sequence bridge into a persisted render queue job type.
-2. Add first app-side media ingest automation from selected movies into frame/WAV proxy directories.
-3. Add explicit source/cache provenance to persisted frame-sequence queue jobs.
+1. Add queue cancellation and durable failure records for frame-sequence jobs.
+2. Persist ingested proxy media and analysis-cache references into project files.
+3. Add RMS and STFT analysis cache creation to app-side media ingest.
+4. Route queued frame-sequence flow displacement through the Metal backend with CPU parity checks.

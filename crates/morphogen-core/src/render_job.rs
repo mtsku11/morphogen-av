@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::{AnalysisKind, SourceRole};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RenderSettings {
     pub width: u32,
@@ -33,9 +35,50 @@ pub struct RenderJob {
     pub id: String,
     pub project_path: Option<String>,
     pub settings: RenderSettings,
+    #[serde(default)]
+    pub task: RenderJobTask,
+    #[serde(default)]
+    pub provenance: Option<RenderJobProvenance>,
     pub status: RenderJobStatus,
     #[serde(default)]
     pub output: Option<RenderJobOutputMetadata>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RenderJobTask {
+    #[default]
+    TestRender,
+    FrameSequenceFlowDisplace {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        flow_cache_directory: Option<String>,
+        amount: f32,
+        max_frames: Option<u32>,
+        frame_rate: f64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RenderJobProvenance {
+    pub sources: Vec<RenderJobSourceProvenance>,
+    #[serde(default)]
+    pub analysis_caches: Vec<RenderJobAnalysisCacheProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenderJobSourceProvenance {
+    pub source_id: String,
+    pub role: SourceRole,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenderJobAnalysisCacheProvenance {
+    pub kind: AnalysisKind,
+    pub path: String,
+    pub producer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

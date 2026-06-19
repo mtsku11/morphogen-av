@@ -28,6 +28,19 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultFrameSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-frame-sequence-queue.json"
+    )
+  }
+
+  static func defaultMediaProxyRootURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-media-proxies",
+      isDirectory: true
+    )
+  }
+
   static func defaultQueuedTestRenderBundleURL() -> URL {
     defaultRenderQueueOutputRootURL().appendingPathComponent("job-0001", isDirectory: true)
   }
@@ -47,22 +60,42 @@ enum RustBridgePlaceholder {
     return try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
   }
 
-  static func runFrameSequenceRender(
-    request: FrameSequenceRenderCommandRequest
-  ) throws -> FrameSequenceRenderCommandResult {
+  static func runQueuedFrameSequenceRender(
+    request: FrameSequenceRenderQueueCommandRequest
+  ) throws -> FrameSequenceRenderQueueCommandResult {
     let repoRoot = try resolveRepoRoot()
-    let arguments = try renderFrameSequenceArguments(request: request)
-    _ = try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
-    return FrameSequenceRenderCommandResult(
-      modulatorDirectoryURL: request.modulatorDirectoryURL,
-      carrierDirectoryURL: request.carrierDirectoryURL,
-      outputDirectoryURL: request.outputDirectoryURL,
-      flowCacheDirectoryURL: request.flowCacheDirectoryURL
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddFrameSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-frame-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FrameSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
     )
   }
 
-  static func renderFrameSequenceArguments(
-    request: FrameSequenceRenderCommandRequest
+  static func queueAddFrameSequenceArguments(
+    request: FrameSequenceRenderQueueCommandRequest
   ) throws -> [String] {
     guard request.amount.isFinite else {
       throw RustBridgeError.invalidFrameSequenceRequest("amount must be finite")
@@ -81,19 +114,19 @@ enum RustBridgePlaceholder {
       "-p",
       "morphogen-cli",
       "--",
-      "render-frame-sequence",
+      "queue-add-frame-sequence",
+      request.queueURL.path,
       request.modulatorDirectoryURL.path,
       request.carrierDirectoryURL.path,
-      request.outputDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
       "--amount",
       cliNumber(request.amount),
       "--frame-rate",
       cliNumber(request.frameRate)
     ]
 
-    if let flowCacheDirectoryURL = request.flowCacheDirectoryURL {
-      arguments.append("--flow-cache-dir")
-      arguments.append(flowCacheDirectoryURL.path)
+    if !request.writesFlowCache {
+      arguments.append("--no-flow-cache")
     }
 
     if let maxFrames = request.maxFrames {
@@ -101,7 +134,79 @@ enum RustBridgePlaceholder {
       arguments.append(String(maxFrames))
     }
 
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
     return arguments
+  }
+
+  static func extractMediaProxies(
+    request: MediaProxyExtractionCommandRequest
+  ) throws -> MediaProxyExtractionCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    let arguments = try mediaProxyExtractionArguments(request: request)
+    _ = try runCommand(arguments: arguments.frameExtraction, currentDirectoryURL: repoRoot)
+    _ = try runCommand(arguments: arguments.audioExtraction, currentDirectoryURL: repoRoot)
+
+    return MediaProxyExtractionCommandResult(
+      sourceURL: request.sourceURL,
+      proxyDirectoryURL: request.proxyDirectoryURL,
+      frameDirectoryURL: request.proxyDirectoryURL.appendingPathComponent("frames", isDirectory: true),
+      audioWAVURL: request.proxyDirectoryURL.appendingPathComponent("audio.wav")
+    )
+  }
+
+  static func mediaProxyExtractionArguments(
+    request: MediaProxyExtractionCommandRequest
+  ) throws -> MediaProxyExtractionArguments {
+    guard request.framesPerSecond.isFinite && request.framesPerSecond > 0 else {
+      throw RustBridgeError.invalidMediaProxyRequest("frame rate must be positive and finite")
+    }
+    guard request.sampleRate > 0 else {
+      throw RustBridgeError.invalidMediaProxyRequest("sample rate must be greater than zero")
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidMediaProxyRequest("max frame count must be greater than zero")
+    }
+
+    let frameDirectoryURL = request.proxyDirectoryURL.appendingPathComponent("frames", isDirectory: true)
+    let audioWAVURL = request.proxyDirectoryURL.appendingPathComponent("audio.wav")
+    var frameExtraction = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "extract-frames",
+      request.sourceURL.path,
+      frameDirectoryURL.path,
+      "--fps",
+      cliNumber(request.framesPerSecond)
+    ]
+    if let maxFrames = request.maxFrames {
+      frameExtraction.append("--max-frames")
+      frameExtraction.append(String(maxFrames))
+    }
+
+    return MediaProxyExtractionArguments(
+      frameExtraction: frameExtraction,
+      audioExtraction: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "extract-audio",
+        request.sourceURL.path,
+        audioWAVURL.path,
+        "--sample-rate",
+        String(request.sampleRate)
+      ]
+    )
   }
 
   static func runFreshQueuedTestRender(projectURL: URL?) throws -> QueuedRenderCommandResult {
@@ -219,6 +324,14 @@ enum RustBridgePlaceholder {
     return try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
   }
 
+  private static func queuedJobID(from result: RustCommandResult) throws -> String {
+    let tokens = result.summary.split(whereSeparator: { $0.isWhitespace })
+    guard let jobID = tokens.first(where: { $0.hasPrefix("job-") }) else {
+      throw RustBridgeError.invalidQueueResponse(result.summary)
+    }
+    return String(jobID)
+  }
+
   private static func resolveRepoRoot() throws -> URL {
     var candidate = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 
@@ -288,21 +401,42 @@ enum RustBridgePlaceholder {
   }
 }
 
-struct FrameSequenceRenderCommandRequest {
+struct FrameSequenceRenderQueueCommandRequest {
+  let queueURL: URL
   let modulatorDirectoryURL: URL
   let carrierDirectoryURL: URL
-  let outputDirectoryURL: URL
+  let outputRootDirectoryURL: URL
   let amount: Double
   let maxFrames: Int?
   let frameRate: Double
-  let flowCacheDirectoryURL: URL?
+  let writesFlowCache: Bool
+  let projectURL: URL?
 }
 
-struct FrameSequenceRenderCommandResult {
-  let modulatorDirectoryURL: URL
-  let carrierDirectoryURL: URL
-  let outputDirectoryURL: URL
-  let flowCacheDirectoryURL: URL?
+struct FrameSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct MediaProxyExtractionCommandRequest {
+  let sourceURL: URL
+  let proxyDirectoryURL: URL
+  let framesPerSecond: Double
+  let maxFrames: Int?
+  let sampleRate: Int
+}
+
+struct MediaProxyExtractionArguments {
+  let frameExtraction: [String]
+  let audioExtraction: [String]
+}
+
+struct MediaProxyExtractionCommandResult {
+  let sourceURL: URL
+  let proxyDirectoryURL: URL
+  let frameDirectoryURL: URL
+  let audioWAVURL: URL
 }
 
 struct QueuedRenderCommandResult {
@@ -364,6 +498,8 @@ enum RustBridgeError: LocalizedError {
   case repoRootNotFound
   case commandFailed(RustCommandResult)
   case invalidFrameSequenceRequest(String)
+  case invalidMediaProxyRequest(String)
+  case invalidQueueResponse(String)
 
   var errorDescription: String? {
     switch self {
@@ -377,6 +513,10 @@ enum RustBridgeError: LocalizedError {
       return "\(result.command) exited with status \(result.exitCode): \(detail)"
     case .invalidFrameSequenceRequest(let message):
       return "Invalid frame-sequence render request: \(message)."
+    case .invalidMediaProxyRequest(let message):
+      return "Invalid media proxy request: \(message)."
+    case .invalidQueueResponse(let response):
+      return "Could not read the queued job ID from morphogen-cli output: \(response)"
     }
   }
 }

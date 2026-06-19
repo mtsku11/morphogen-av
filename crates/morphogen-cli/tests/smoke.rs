@@ -326,7 +326,9 @@ fn render_queue_commands_persist_jobs() {
         .args(["queue-inspect", queue_arg.as_str()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("job-0001 status=Running"));
+        .stdout(predicate::str::contains(
+            "job-0001 task=test_render status=Running",
+        ));
 
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
@@ -379,7 +381,118 @@ fn render_queue_commands_persist_jobs() {
         .args(["queue-inspect", queue_arg.as_str()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("job-0001 status=Complete"));
+        .stdout(predicate::str::contains(
+            "job-0001 task=test_render status=Complete",
+        ));
+}
+
+#[test]
+fn frame_sequence_queue_job_persists_provenance_and_writes_bundle_output() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let queue_path = temp_dir.path().join("queue.json");
+    let output_root = temp_dir.path().join("queue-output");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let modulator_arg = modulator_dir.join(frame_name).to_string_lossy().to_string();
+        let carrier_arg = carrier_dir.join(frame_name).to_string_lossy().to_string();
+
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", modulator_arg.as_str()])
+            .assert()
+            .success();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", carrier_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_root.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-frame-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--amount",
+            "8",
+            "--max-frames",
+            "2",
+            "--frame-rate",
+            "12",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued frame-sequence render job job-0001",
+        ));
+
+    let queued_json = fs::read_to_string(&queue_path).expect("read queued render job");
+    let queued: serde_json::Value = serde_json::from_str(&queued_json).expect("parse queue json");
+    assert_eq!(
+        queued["jobs"][0]["task"]["type"],
+        "frame_sequence_flow_displace"
+    );
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["sources"][0]["role"],
+        "modulator"
+    );
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"][0]["kind"],
+        "optical_flow"
+    );
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-frame-sequence", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued frame-sequence job job-0001",
+        ));
+
+    let bundle_dir = output_root.join("job-0001");
+    assert!(bundle_dir.join("frames/frame_000000.png").exists());
+    assert!(bundle_dir.join("frames/frame_000001.png").exists());
+    assert!(bundle_dir
+        .join("cache/flow/frame_000000/manifest.json")
+        .exists());
+
+    let manifest_json =
+        fs::read_to_string(bundle_dir.join("manifest.json")).expect("read frame bundle manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_json).expect("parse frame bundle manifest");
+    assert_eq!(manifest["task"], "frame_sequence_flow_displace");
+    assert_eq!(manifest["timing"]["frame_rate"], 12.0);
+    assert_eq!(manifest["timing"]["frame_count"], 2);
+    assert_eq!(
+        manifest["provenance"]["analysis_caches"][0]["producer"],
+        "luminance_gradient_cpu_v1"
+    );
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-inspect", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "job-0001 task=frame_sequence_flow_displace status=Complete",
+        ))
+        .stdout(predicate::str::contains("sources=2 caches=1"));
 }
 
 #[test]

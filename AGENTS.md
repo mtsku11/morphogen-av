@@ -21,6 +21,8 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `cargo run -p morphogen-cli -- queue-init /tmp/morphogen-render-queue.json` - create a persisted offline render queue.
 - `cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /tmp/morphogen-render-output --stop-after-frame` - checkpoint a queued test job after writing the PNG frame.
 - `cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /tmp/morphogen-render-output` - execute or resume the first queued/running test job into a PNG sequence plus WAV bundle.
+- `cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --max-frames 120 --frame-rate 24` - queue a real two-source frame-sequence displacement job with source/cache provenance.
+- `cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json` - execute the next queued two-source frame-sequence job into a ProRes-ready render bundle.
 - `swift build` - build the SwiftUI macOS app shell.
 - `swift test` - run Swift-side macOS app service tests.
 - `swift run MorphogenMacApp` - run the SwiftUI macOS app shell.
@@ -42,6 +44,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `crates/morphogen-cli/src/main.rs` - first working engine validation path.
 - `apps/macos/Sources/MorphogenMacApp/` - native SwiftUI shell.
 - `apps/macos/Sources/MorphogenMacApp/Services/RustBridgePlaceholder.swift` - dev-only Swift-to-CLI bridge.
+- `apps/macos/Sources/MorphogenMacApp/Models/AppState.swift` - source proxy extraction and persisted two-source queue submission.
 - `apps/macos/Sources/MorphogenMacApp/Services/MediaFilePicker.swift` - AppKit file picking used by source slots.
 - `apps/macos/Sources/MorphogenMacApp/Services/AppleMediaProbePlaceholder.swift` - AVFoundation media probing with FFprobe fallback from app state.
 - `apps/macos/Sources/MorphogenMacApp/Services/CoreVideoMetalTextureBridge.swift` - CoreVideo pixel-buffer to Metal texture bridge helper.

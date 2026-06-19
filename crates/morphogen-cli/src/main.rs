@@ -10,8 +10,9 @@ use morphogen_audio::{
     AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
 };
 use morphogen_core::{
-    ExportFormat, Project, RenderJob, RenderJobOutputMetadata, RenderJobStatus, RenderQuality,
-    RenderQueue, RenderSettings, RenderTimingMetadata,
+    AnalysisKind, ExportFormat, Project, RenderJob, RenderJobAnalysisCacheProvenance,
+    RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
+    RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
 };
 use morphogen_media::{extract_audio_wav, extract_video_frames, probe_media, MediaError};
 use morphogen_render::{
@@ -135,11 +136,30 @@ enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    QueueAddFrameSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 16.0)]
+        amount: f32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        no_flow_cache: bool,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueRunTest {
         queue_path: PathBuf,
         output_dir: PathBuf,
         #[arg(long)]
         stop_after_frame: bool,
+    },
+    QueueRunFrameSequence {
+        queue_path: PathBuf,
     },
     QueueInspect {
         queue_path: PathBuf,
@@ -273,7 +293,8 @@ fn run() -> Result<(), CliError> {
                 hop_size: rms_hop_size,
                 amount_scale: rms_amount_scale,
             },
-        }),
+        })
+        .map(|_| ()),
         Commands::CacheSyntheticFlow {
             output_dir,
             width,
@@ -290,11 +311,33 @@ fn run() -> Result<(), CliError> {
             queue_path,
             project_path,
         } => queue_add_test(&queue_path, project_path.as_deref()),
+        Commands::QueueAddFrameSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            amount,
+            max_frames,
+            frame_rate,
+            no_flow_cache,
+            project_path,
+        } => queue_add_frame_sequence(QueueAddFrameSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            amount,
+            max_frames,
+            frame_rate,
+            write_flow_cache: !no_flow_cache,
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueRunTest {
             queue_path,
             output_dir,
             stop_after_frame,
         } => queue_run_test(&queue_path, &output_dir, stop_after_frame),
+        Commands::QueueRunFrameSequence { queue_path } => queue_run_frame_sequence(&queue_path),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
         Commands::InspectProject { project_path } => inspect_project(&project_path),
     }
@@ -607,7 +650,9 @@ struct RmsAmountConfig<'a> {
     amount_scale: f32,
 }
 
-fn render_frame_sequence(request: FrameSequenceRenderRequest<'_>) -> Result<(), CliError> {
+fn render_frame_sequence(
+    request: FrameSequenceRenderRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
     let FrameSequenceRenderRequest {
         modulator_dir,
         carrier_dir,
@@ -708,7 +753,11 @@ fn render_frame_sequence(request: FrameSequenceRenderRequest<'_>) -> Result<(), 
         carrier_dir.display(),
         output_dir.display()
     );
-    Ok(())
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+struct FrameSequenceRenderResult {
+    frame_count: usize,
 }
 
 struct RmsAmountModulation {
@@ -817,11 +866,123 @@ fn queue_add_test(queue_path: &Path, project_path: Option<&Path>) -> Result<(), 
             temporal_supersampling: 1,
             deterministic: true,
         },
+        task: RenderJobTask::TestRender,
+        provenance: None,
         status: RenderJobStatus::Queued,
         output: None,
     });
     queue.save_json(queue_path)?;
     println!("queued render job {job_id} in {}", queue_path.display());
+    Ok(())
+}
+
+struct QueueAddFrameSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    amount: f32,
+    max_frames: Option<u32>,
+    frame_rate: f64,
+    write_flow_cache: bool,
+    project_path: Option<&'a Path>,
+}
+
+fn queue_add_frame_sequence(request: QueueAddFrameSequenceRequest<'_>) -> Result<(), CliError> {
+    let QueueAddFrameSequenceRequest {
+        queue_path,
+        modulator_dir,
+        carrier_dir,
+        output_root_dir,
+        amount,
+        max_frames,
+        frame_rate,
+        write_flow_cache,
+        project_path,
+    } = request;
+
+    if !amount.is_finite() {
+        return Err(CliError::Message("amount must be finite".to_string()));
+    }
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let flow_cache_directory = write_flow_cache
+        .then(|| job_output_dir.join("cache").join("flow"))
+        .map(|path| path.to_string_lossy().to_string());
+
+    let analysis_caches = flow_cache_directory
+        .as_ref()
+        .map(|path| {
+            vec![RenderJobAnalysisCacheProvenance {
+                kind: AnalysisKind::OpticalFlow,
+                path: path.clone(),
+                producer: "luminance_gradient_cpu_v1".to_string(),
+            }]
+        })
+        .unwrap_or_default();
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 16,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceFlowDisplace {
+            modulator_frame_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            flow_cache_directory,
+            amount,
+            max_frames,
+            frame_rate,
+        },
+        provenance: Some(RenderJobProvenance {
+            sources: vec![
+                RenderJobSourceProvenance {
+                    source_id: "source-a-frames".to_string(),
+                    role: SourceRole::Modulator,
+                    path: modulator_dir.to_string_lossy().to_string(),
+                },
+                RenderJobSourceProvenance {
+                    source_id: "source-b-frames".to_string(),
+                    role: SourceRole::Carrier,
+                    path: carrier_dir.to_string_lossy().to_string(),
+                },
+            ],
+            analysis_caches,
+        }),
+        status: RenderJobStatus::Queued,
+        output: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued frame-sequence render job {job_id} in {}",
+        queue_path.display()
+    );
     Ok(())
 }
 
@@ -868,6 +1029,104 @@ fn queue_run_test(
             job_output_dir.display()
         );
     }
+    Ok(())
+}
+
+fn queue_run_frame_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceFlowDisplace { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running frame-sequence jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceFlowDisplace {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        flow_cache_directory,
+        amount,
+        max_frames,
+        frame_rate,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a frame-sequence render".to_string(),
+        ));
+    };
+
+    let output_dir = PathBuf::from(output_directory);
+    let frame_dir = output_dir.join("frames");
+
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let render_result = render_frame_sequence(FrameSequenceRenderRequest {
+        modulator_dir: Path::new(&modulator_frame_directory),
+        carrier_dir: Path::new(&carrier_frame_directory),
+        output_dir: &frame_dir,
+        amount,
+        flow_cache_dir: flow_cache_directory.as_deref().map(Path::new),
+        max_frames: max_frames.map(|value| value as usize),
+        rms: RmsAmountConfig {
+            wav_path: None,
+            frame_rate,
+            window_size: 2048,
+            hop_size: 512,
+            amount_scale: 16.0,
+        },
+    })?;
+    let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+        CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+    })?;
+    let timing = RenderTimingMetadata {
+        frame_rate,
+        frame_count,
+        start_seconds: 0.0,
+        duration_seconds: frame_count as f64 / frame_rate,
+        sample_rate: 48_000,
+        audio_sample_count: 0,
+    };
+    let frame_paths = (0..frame_count)
+        .map(|index| format!("frames/frame_{index:06}.png"))
+        .collect::<Vec<_>>();
+    let metadata = RenderJobOutputMetadata {
+        output_directory: output_dir.to_string_lossy().to_string(),
+        frame_paths: frame_paths.clone(),
+        audio_stem_paths: Vec::new(),
+        timing: timing.clone(),
+    };
+    write_frame_sequence_manifest(
+        &job_id,
+        &output_dir,
+        &frame_paths,
+        &timing,
+        provenance.as_ref(),
+    )?;
+    write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+
+    queue.jobs[job_index].status = RenderJobStatus::Complete;
+    queue.jobs[job_index].output = Some(metadata);
+    queue.save_json(queue_path)?;
+    println!(
+        "rendered queued frame-sequence job {} to {}",
+        job_id,
+        output_dir.display()
+    );
     Ok(())
 }
 
@@ -994,6 +1253,57 @@ fn write_test_render_checkpoint(
     Ok(())
 }
 
+fn write_frame_sequence_manifest(
+    job_id: &str,
+    output_dir: &Path,
+    frame_paths: &[String],
+    timing: &RenderTimingMetadata,
+    provenance: Option<&RenderJobProvenance>,
+) -> Result<(), CliError> {
+    let manifest = serde_json::json!({
+        "job_id": job_id,
+        "status": "complete",
+        "task": "frame_sequence_flow_displace",
+        "frames": frame_paths,
+        "audio_stems": [],
+        "timing": {
+            "frame_rate": timing.frame_rate,
+            "frame_count": timing.frame_count,
+            "start_seconds": timing.start_seconds,
+            "duration_seconds": timing.duration_seconds,
+            "sample_rate": timing.sample_rate,
+            "audio_sample_count": timing.audio_sample_count
+        },
+        "provenance": provenance,
+        "deterministic": true
+    });
+    fs::write(
+        output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
+fn write_frame_sequence_checkpoint(
+    job_id: &str,
+    output_dir: &Path,
+    frame_paths: &[String],
+    next_frame_index: u32,
+) -> Result<(), CliError> {
+    let checkpoint = serde_json::json!({
+        "job_id": job_id,
+        "status": "complete",
+        "completed_frames": frame_paths,
+        "completed_audio_stems": [],
+        "next_frame_index": next_frame_index
+    });
+    fs::write(
+        output_dir.join("checkpoint.json"),
+        serde_json::to_string_pretty(&checkpoint)?,
+    )?;
+    Ok(())
+}
+
 fn synthetic_stereo_stem(sample_rate: u32, frames: usize) -> Result<AudioBufferF32, CliError> {
     let mut samples = Vec::with_capacity(frames.saturating_mul(2));
     for frame in 0..frames {
@@ -1011,6 +1321,21 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
     let queue = RenderQueue::load_json(queue_path)?;
     println!("render queue: {} job(s)", queue.jobs.len());
     for job in queue.jobs {
+        let task_name = match job.task {
+            RenderJobTask::TestRender => "test_render",
+            RenderJobTask::FrameSequenceFlowDisplace { .. } => "frame_sequence_flow_displace",
+        };
+        let provenance_summary = job
+            .provenance
+            .as_ref()
+            .map(|provenance| {
+                format!(
+                    " sources={} caches={}",
+                    provenance.sources.len(),
+                    provenance.analysis_caches.len()
+                )
+            })
+            .unwrap_or_default();
         let output_summary = job
             .output
             .as_ref()
@@ -1025,12 +1350,14 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             })
             .unwrap_or_default();
         println!(
-            "  - {} status={:?} size={}x{} project={}{}",
+            "  - {} task={} status={:?} size={}x{} project={}{}{}",
             job.id,
+            task_name,
             job.status,
             job.settings.width,
             job.settings.height,
             job.project_path.as_deref().unwrap_or("<none>"),
+            provenance_summary,
             output_summary
         );
     }

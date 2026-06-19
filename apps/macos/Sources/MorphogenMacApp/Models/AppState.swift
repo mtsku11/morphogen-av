@@ -38,6 +38,10 @@ final class AppState: ObservableObject {
   @Published var frameSequenceAmount = 16.0
   @Published var frameSequenceMaxFrames = 120
   @Published var frameSequenceWritesFlowCache = true
+  @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
+  @Published var mediaProxySummary = "No source proxies extracted"
+  @Published var mediaProxyFrameRate = 12.0
+  @Published var mediaProxyMaxFrames = 120
   @Published var statusMessage = "Analysis cache idle. Offline queue empty."
 
   private var sourceAURL: URL?
@@ -48,6 +52,7 @@ final class AppState: ObservableObject {
   private var frameSequenceCarrierURL: URL?
   private var frameSequenceOutputURL: URL?
   private var lastFrameSequenceOutputURL: URL?
+  private var mediaProxyOutputURL = RustBridgePlaceholder.defaultMediaProxyRootURL()
 
   func setSource(_ role: SourceRole, url: URL) {
     switch role {
@@ -259,6 +264,83 @@ final class AppState: ObservableObject {
     statusMessage = "Frame sequence output selected: \(url.lastPathComponent)"
   }
 
+  func chooseMediaProxyOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseMediaProxyOutputDirectory() else {
+      statusMessage = "Media proxy output selection cancelled."
+      return
+    }
+
+    mediaProxyOutputURL = url
+    mediaProxyOutputPath = url.path
+    statusMessage = "Media proxy output selected: \(url.lastPathComponent)"
+  }
+
+  func extractSelectedSourceProxies() {
+    let selectedSources = [
+      (SourceRole.modulator, sourceAURL),
+      (SourceRole.carrier, sourceBURL)
+    ].compactMap { role, url -> (SourceRole, URL)? in
+      guard let url else {
+        return nil
+      }
+      return (role, url)
+    }
+    guard !selectedSources.isEmpty else {
+      statusMessage = "Select Source A or Source B before extracting proxies."
+      return
+    }
+
+    let outputRootURL = mediaProxyOutputURL
+    let frameRate = mediaProxyFrameRate
+    let maxFrames = mediaProxyMaxFrames
+    statusMessage = "Extracting PNG and WAV source proxies through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        var results: [(SourceRole, MediaProxyExtractionCommandResult)] = []
+        for (role, sourceURL) in selectedSources {
+          let proxyName: String
+          switch role {
+          case .modulator:
+            proxyName = "source-a"
+          case .carrier:
+            proxyName = "source-b"
+          }
+          let result = try RustBridgePlaceholder.extractMediaProxies(
+            request: MediaProxyExtractionCommandRequest(
+              sourceURL: sourceURL,
+              proxyDirectoryURL: outputRootURL.appendingPathComponent(proxyName, isDirectory: true),
+              framesPerSecond: frameRate,
+              maxFrames: maxFrames,
+              sampleRate: 48_000
+            )
+          )
+          results.append((role, result))
+        }
+
+        DispatchQueue.main.async {
+          for (role, result) in results {
+            switch role {
+            case .modulator:
+              self.frameSequenceModulatorURL = result.frameDirectoryURL
+              self.frameSequenceModulatorPath = result.frameDirectoryURL.path
+            case .carrier:
+              self.frameSequenceCarrierURL = result.frameDirectoryURL
+              self.frameSequenceCarrierPath = result.frameDirectoryURL.path
+            }
+          }
+          self.mediaProxySummary = "\(results.count) source proxy set(s) at \(outputRootURL.path)"
+          self.statusMessage = "Source proxy extraction complete."
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.mediaProxySummary = "Media proxy extraction failed: \(error.localizedDescription)"
+          self.statusMessage = "Media proxy extraction failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   func runTwoSourceFrameSequenceRender() {
     guard let modulatorURL = frameSequenceModulatorURL else {
       statusMessage = "Select Source A frame directory before rendering."
@@ -273,32 +355,33 @@ final class AppState: ObservableObject {
       return
     }
 
-    let request = FrameSequenceRenderCommandRequest(
+    let request = FrameSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultFrameSequenceRenderQueueURL(),
       modulatorDirectoryURL: modulatorURL,
       carrierDirectoryURL: carrierURL,
-      outputDirectoryURL: outputURL,
+      outputRootDirectoryURL: outputURL,
       amount: frameSequenceAmount,
       maxFrames: frameSequenceMaxFrames,
       frameRate: proResFrameRate.framesPerSecond,
-      flowCacheDirectoryURL: frameSequenceWritesFlowCache
-        ? outputURL.appendingPathComponent("flow-cache", isDirectory: true)
-        : nil
+      writesFlowCache: frameSequenceWritesFlowCache,
+      projectURL: projectURL
     )
 
-    statusMessage = "Running two-source frame sequence render through morphogen-cli..."
+    statusMessage = "Queueing two-source frame sequence render through morphogen-cli..."
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
-        let result = try RustBridgePlaceholder.runFrameSequenceRender(request: request)
-        let frameCount = try ProResImageSequenceExporter.collectPNGFrameURLs(
-          in: result.outputDirectoryURL
-        ).count
-        let cacheText = result.flowCacheDirectoryURL.map { ", flow cache \($0.path)" } ?? ""
+        let result = try RustBridgePlaceholder.runQueuedFrameSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        let cacheText = request.writesFlowCache ? ", flow cache persisted" : ""
         DispatchQueue.main.async {
-          self.lastFrameSequenceOutputURL = result.outputDirectoryURL
-          self.frameSequenceSummary = "\(frameCount) PNG frame(s) at \(result.outputDirectoryURL.path)\(cacheText)"
-          self.proResExportSummary = "Last frame sequence ready for ProRes export: \(result.outputDirectoryURL.path)"
-          self.statusMessage = "Two-source frame sequence render complete: \(result.outputDirectoryURL.path)"
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.frameSequenceSummary = "\(bundle.frameCount) PNG frame(s) at \(bundle.frameDirectory.path)\(cacheText)"
+          self.proResExportSummary = "Queued frame sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Two-source frame sequence render complete: \(bundle.bundleURL.path)"
         }
       } catch {
         DispatchQueue.main.async {

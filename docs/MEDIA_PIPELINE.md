@@ -26,7 +26,7 @@ The long-term Mac backend should use:
 
 ## Probe and Extraction
 
-Media probe collects stream, duration, resolution, sample rate, and codec information. The SwiftUI shell uses AVFoundation for source probing and falls back to FFprobe through the CLI bridge when needed. A first-frame AVFoundation decode helper can produce a BGRA CoreVideo pixel buffer and hand it to the Metal texture bridge for future previews. Extraction workflows create analysis-friendly proxies: image sequences for visual analysis and WAV files for portable audio descriptors.
+Media probe collects stream, duration, resolution, sample rate, and codec information. The SwiftUI shell uses AVFoundation for source probing and falls back to FFprobe through the CLI bridge when needed. A first-frame AVFoundation decode helper can produce a BGRA CoreVideo pixel buffer and hand it to the Metal texture bridge for future previews. The app's Proxy Output and Extract Source Proxies controls call the CLI's optional FFmpeg helpers to create one PNG frame directory and 32-bit float WAV per selected source; successful frame directories feed the persisted two-source queue job. Extraction workflows create analysis-friendly proxies: image sequences for visual analysis and WAV files for portable audio descriptors.
 
 ## Analysis Cache
 

@@ -98,9 +98,21 @@ struct RenderPanelView: View {
             .foregroundStyle(.secondary)
         }
         GridRow {
-          Label("Sequence Output", systemImage: "rectangle.stack.badge.play")
+          Label("Sequence Output Root", systemImage: "rectangle.stack.badge.play")
           Text(state.frameSequenceOutputPath)
             .lineLimit(2)
+            .foregroundStyle(.secondary)
+        }
+        GridRow {
+          Label("Media Proxy Output", systemImage: "externaldrive.badge.plus")
+          Text(state.mediaProxyOutputPath)
+            .lineLimit(2)
+            .foregroundStyle(.secondary)
+        }
+        GridRow {
+          Label("Media Proxy Ingest", systemImage: "arrow.down.to.line.compact")
+          Text(state.mediaProxySummary)
+            .lineLimit(3)
             .foregroundStyle(.secondary)
         }
         GridRow {
@@ -150,6 +162,32 @@ struct RenderPanelView: View {
           } label: {
             Label("Run Queue Test", systemImage: "list.bullet.rectangle")
           }
+        }
+
+        HStack {
+          Button {
+            state.chooseMediaProxyOutputDirectory()
+          } label: {
+            Label("Proxy Output", systemImage: "folder.badge.plus")
+          }
+
+          Button {
+            state.extractSelectedSourceProxies()
+          } label: {
+            Label("Extract Source Proxies", systemImage: "arrow.down.to.line.compact")
+          }
+        }
+
+        HStack(spacing: 16) {
+          Stepper(value: $state.mediaProxyFrameRate, in: 1...60, step: 1) {
+            Text("Proxy FPS \(state.mediaProxyFrameRate, specifier: "%.0f")")
+          }
+          .frame(width: 140, alignment: .leading)
+
+          Stepper(value: $state.mediaProxyMaxFrames, in: 1...600, step: 1) {
+            Text("Proxy Max \(state.mediaProxyMaxFrames)")
+          }
+          .frame(width: 170, alignment: .leading)
         }
 
         HStack {

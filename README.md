@@ -10,7 +10,7 @@ The long-term goal is an audiovisual modular synthesizer where compatible analys
 
 ## Current Status
 
-This repository is an initial production-quality scaffold with small deterministic vertical slices. The Rust CLI can create an example project, inspect project JSON, probe media through optional FFprobe, extract proxy media, render a synthetic PNG, render the synthetic flow-displacement fixture through Metal on macOS, render real still-image and frame-sequence A-modulates-B displacement through the CPU reference pipeline, modulate visual displacement amount from an audio RMS envelope, write 32-bit float WAV stems, write flow-analysis cache sidecars, write STFT magnitude and onset-strength JSON sidecars, persist a simple offline render queue, and execute or resume a deterministic queued test job into an image-sequence plus WAV bundle with timing metadata. The Metal crate can compile and submit the flow-displacement kernel on macOS when a Metal device is available. The SwiftUI app shell can select source files, probe media through AVFoundation with FFprobe fallback, choose two PNG frame directories for a real A-modulates-B frame-sequence render, check a VideoToolbox ProRes export plan, run the dev queue test job, adopt queue bundle timing as the default ProRes frame rate, export the queue output bundle directly to ProRes `.mov` with its first WAV stem muxed as audio, export the last two-source frame sequence or arbitrary PNG frame directories to ProRes `.mov`, decode selected source first frames into Metal textures for preview diagnostics, display decoded source thumbnails, and invoke the local CLI for dev-only project creation/loading and CPU reference rendering.
+This repository is an initial production-quality scaffold with small deterministic vertical slices. The Rust CLI can create and inspect project JSON, probe and extract proxy media through optional FFmpeg tools, render synthetic and real A-modulates-B CPU displacement, produce reusable analysis sidecars, persist an offline render queue, and execute either a test bundle or a real two-source frame-sequence bundle with timing and source/cache provenance. The Metal crate can compile and submit the flow-displacement kernel on macOS when a Metal device is available. The SwiftUI app shell can select movie sources, extract them to PNG/WAV proxies, submit the proxy frames as a persisted queue job, inspect decoded source previews, and export completed queue bundles to ProRes `.mov`.
 
 ## What Works Now
 
@@ -32,10 +32,11 @@ This repository is an initial production-quality scaffold with small determinist
 - App-side preview-frame probe that reports decoded frame dimensions, presentation time, Metal texture format, and displays a decoded source thumbnail.
 - VideoToolbox ProRes encoder discovery and export-plan probing in the SwiftUI shell.
 - Configurable ProRes `.mov` export from a selected PNG frame directory through AVAssetWriter with VideoToolbox encoder selection.
-- SwiftUI controls for choosing Source A/Source B frame directories and running the real two-source frame-sequence CPU render through the dev CLI bridge.
-- Direct configurable ProRes `.mov` export from the last two-source frame-sequence output.
+- SwiftUI controls for extracting selected movies into paired PNG/WAV proxy directories through the dev CLI bridge.
+- SwiftUI controls for choosing Source A/Source B frame directories and submitting a real two-source frame-sequence CPU render as a persisted queue job.
+- Queue manifests contain the modulator/carrier directories and the generated flow-cache provenance; completed bundles export directly to configurable ProRes `.mov`.
 - Direct configurable ProRes `.mov` export from the render queue output bundle's `frames/` directory with the first WAV stem muxed as a PCM audio track.
-- Dev-only Swift-to-CLI bridge for `init-example`, `inspect-project`, `probe`, `render-test`, and frame-sequence rendering.
+- Dev-only Swift-to-CLI bridge for project commands, media proxy extraction, queue submission, and CPU reference rendering.
 
 ## Intentional Placeholders
 
@@ -128,6 +129,14 @@ cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /t
 cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /tmp/morphogen-render-output
 ```
 
+Queue a real two-source frame-sequence render into a ProRes-ready bundle:
+
+```sh
+cargo run -p morphogen-cli -- queue-init /tmp/morphogen-frame-queue.json
+cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --max-frames 120 --frame-rate 24
+cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json
+```
+
 Probe media with optional external FFprobe:
 
 ```sh
@@ -162,8 +171,8 @@ Run Swift-side service tests:
 swift test
 ```
 
-The source buttons open native file pickers. Create Test Project writes an example `.morphogen.json` through `morphogen-cli init-example`, Open Project validates a selected project through `morphogen-cli inspect-project`, Probe Sources uses AVFoundation first and falls back to `morphogen-cli probe`, Probe Preview Frames decodes selected source first frames into Metal textures and reports dimensions/timing, Source A Frames/Source B Frames/Sequence Output configure a real frame-sequence render through `morphogen-cli render-frame-sequence`, Export Sequence ProRes MOV converts the last two-source sequence into a `.mov` using the selected ProRes settings, Check ProRes probes the selected VideoToolbox ProRes profile and frame rate, Run Queue Test creates and executes a deterministic dev queue bundle at `/tmp/morphogen-render-output/job-0001` and applies the bundle frame rate to the ProRes FPS picker when it matches a supported option, Export Queue ProRes MOV converts that bundle's `frames/` directory into a `.mov` using the selected ProRes settings and muxes its first WAV stem without selecting folders manually, Export Frame Directory MOV keeps the lower-level arbitrary PNG sequence exporter available, and the CPU reference render button invokes `morphogen-cli render-test /tmp/morphogen-test.png`. The CLI bridge calls require `cargo` on PATH; FFprobe is optional fallback for media inspection.
+The source buttons open native file pickers. Create Test Project writes an example `.morphogen.json` through `morphogen-cli init-example`, Open Project validates a selected project through `morphogen-cli inspect-project`, Probe Sources uses AVFoundation first and falls back to `morphogen-cli probe`, and Probe Preview Frames decodes selected source first frames into Metal textures. Proxy Output and Extract Source Proxies use `morphogen-cli extract-frames` and `extract-audio` to write each selected source as PNG frames plus a 32-bit float WAV; those generated frame directories become the Source A and Source B sequence inputs. Run Two-Source Sequence appends a `frame_sequence_flow_displace` job to a persisted queue and executes it into a bundle containing `frames/`, optional `cache/flow/`, manifest, and checkpoint files. Both sequence export actions can write the completed frames to ProRes `.mov`; Export Queue ProRes MOV also understands any audio stems in the bundle. The CLI bridge calls require `cargo` on PATH; FFmpeg is optional but required for media proxy extraction.
 
 ## Future Direction
 
-The next engineering tasks are broadening queue metadata beyond the deterministic test job, turning the frame-sequence bridge into a persisted queue job type, and adding first real media-ingest automation from selected movies. Metal is the intended production backend, while CPU rendering remains the deterministic reference path for tests and offline correctness.
+The next engineering work is to make the queue scheduler handle cancellation/failure states, connect ingested proxy source metadata back into project files, and move the real frame-sequence kernel onto Metal. Metal is the intended production backend, while CPU rendering remains the deterministic reference path for tests and offline correctness.
