@@ -57,7 +57,18 @@ pub enum RenderJobTask {
         amount: f32,
         max_frames: Option<u32>,
         frame_rate: f64,
+        #[serde(default)]
+        backend: RenderBackend,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderBackend {
+    #[default]
+    Cpu,
+    /// Render on the Metal compute backend, gated by a per-frame CPU parity check.
+    Metal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -108,4 +119,29 @@ pub enum RenderJobStatus {
     Running,
     Complete,
     Failed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_sequence_task_without_backend_field_defaults_to_cpu() {
+        let json = r#"{
+            "type": "frame_sequence_flow_displace",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "flow_cache_directory": null,
+            "amount": 16.0,
+            "max_frames": null,
+            "frame_rate": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize legacy task");
+        let RenderJobTask::FrameSequenceFlowDisplace { backend, .. } = task else {
+            panic!("expected frame-sequence task");
+        };
+        assert_eq!(backend, RenderBackend::Cpu);
+    }
 }

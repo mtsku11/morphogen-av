@@ -10,9 +10,10 @@ use morphogen_audio::{
     AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
 };
 use morphogen_core::{
-    AnalysisKind, ExportFormat, Project, RenderJob, RenderJobAnalysisCacheProvenance,
-    RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
-    RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
+    AnalysisKind, ExportFormat, Project, RenderBackend, RenderJob,
+    RenderJobAnalysisCacheProvenance, RenderJobOutputMetadata, RenderJobProvenance,
+    RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue,
+    RenderSettings, RenderTimingMetadata, SourceRole,
 };
 use morphogen_media::{extract_audio_wav, extract_video_frames, probe_media, MediaError};
 use morphogen_render::{
@@ -112,6 +113,8 @@ enum Commands {
         rms_hop_size: usize,
         #[arg(long, default_value_t = 16.0)]
         rms_amount_scale: f32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     CacheSyntheticFlow {
         output_dir: PathBuf,
@@ -149,6 +152,8 @@ enum Commands {
         frame_rate: f64,
         #[arg(long)]
         no_flow_cache: bool,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -182,6 +187,22 @@ impl From<CliWindowFunction> for WindowFunction {
             CliWindowFunction::Hann => Self::Hann,
             CliWindowFunction::Hamming => Self::Hamming,
             CliWindowFunction::Rectangular => Self::Rectangular,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliRenderBackend {
+    #[default]
+    Cpu,
+    Metal,
+}
+
+impl From<CliRenderBackend> for RenderBackend {
+    fn from(value: CliRenderBackend) -> Self {
+        match value {
+            CliRenderBackend::Cpu => Self::Cpu,
+            CliRenderBackend::Metal => Self::Metal,
         }
     }
 }
@@ -279,6 +300,7 @@ fn run() -> Result<(), CliError> {
             rms_window_size,
             rms_hop_size,
             rms_amount_scale,
+            backend,
         } => render_frame_sequence(FrameSequenceRenderRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -286,6 +308,7 @@ fn run() -> Result<(), CliError> {
             amount,
             flow_cache_dir: flow_cache_dir.as_deref(),
             max_frames,
+            backend: backend.into(),
             rms: RmsAmountConfig {
                 wav_path: rms_modulator_wav.as_deref(),
                 frame_rate,
@@ -320,6 +343,7 @@ fn run() -> Result<(), CliError> {
             max_frames,
             frame_rate,
             no_flow_cache,
+            backend,
             project_path,
         } => queue_add_frame_sequence(QueueAddFrameSequenceRequest {
             queue_path: &queue_path,
@@ -330,6 +354,7 @@ fn run() -> Result<(), CliError> {
             max_frames,
             frame_rate,
             write_flow_cache: !no_flow_cache,
+            backend: backend.into(),
             project_path: project_path.as_deref(),
         }),
         Commands::QueueRunTest {
@@ -639,8 +664,15 @@ struct FrameSequenceRenderRequest<'a> {
     amount: f32,
     flow_cache_dir: Option<&'a Path>,
     max_frames: Option<usize>,
+    backend: RenderBackend,
     rms: RmsAmountConfig<'a>,
 }
+
+/// Maximum per-channel difference tolerated between the Metal render output and the
+/// CPU reference before a frame-sequence render is rejected. Float32 image values are
+/// in roughly [0, 1]; at this bound the two backends are numerically equivalent and
+/// the 8-bit PNG outputs are visually identical (boundary pixels may differ by 1 LSB).
+const METAL_CPU_PARITY_EPSILON: f32 = 1e-3;
 
 struct RmsAmountConfig<'a> {
     wav_path: Option<&'a Path>,
@@ -660,6 +692,7 @@ fn render_frame_sequence(
         amount,
         flow_cache_dir,
         max_frames,
+        backend,
         rms,
     } = request;
 
@@ -717,7 +750,7 @@ fn render_frame_sequence(
             .as_ref()
             .map(|modulation| modulation.amount_for_frame(index, amount))
             .unwrap_or(amount);
-        let displaced = flow_displace_cpu(&carrier, &flow, frame_amount)?;
+        let displaced = render_displacement_frame(&carrier, &flow, frame_amount, backend)?;
         let output_path = output_dir.join(format!("frame_{index:06}.png"));
         save_png(&displaced, &output_path)?;
 
@@ -747,13 +780,68 @@ fn render_frame_sequence(
         );
     }
     println!(
-        "rendered frame sequence with {} frame(s) from {} modulating {} to {}",
+        "rendered frame sequence with {} frame(s) on the {} backend from {} modulating {} to {}",
         frame_count,
+        render_backend_label(backend),
         modulator_dir.display(),
         carrier_dir.display(),
         output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+fn render_backend_label(backend: RenderBackend) -> &'static str {
+    match backend {
+        RenderBackend::Cpu => "CPU",
+        RenderBackend::Metal => "Metal",
+    }
+}
+
+/// Render one displacement frame on the requested backend. The Metal path is gated by a
+/// per-frame parity check against the CPU reference so a divergent GPU result fails the
+/// render rather than silently writing wrong pixels.
+fn render_displacement_frame(
+    carrier: &ImageBufferF32,
+    flow: &FlowField,
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(flow_displace_cpu(carrier, flow, amount)?),
+        RenderBackend::Metal => render_displacement_frame_metal(carrier, flow, amount),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_displacement_frame_metal(
+    carrier: &ImageBufferF32,
+    flow: &FlowField,
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::flow_displace_metal(carrier, flow, amount)?;
+    let cpu = flow_displace_cpu(carrier, flow, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU outputs have mismatched dimensions; cannot verify parity".to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_displacement_frame_metal(
+    _carrier: &ImageBufferF32,
+    _flow: &FlowField,
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal render backend is only available on macOS".to_string(),
+    ))
 }
 
 struct FrameSequenceRenderResult {
@@ -885,6 +973,7 @@ struct QueueAddFrameSequenceRequest<'a> {
     max_frames: Option<u32>,
     frame_rate: f64,
     write_flow_cache: bool,
+    backend: RenderBackend,
     project_path: Option<&'a Path>,
 }
 
@@ -898,6 +987,7 @@ fn queue_add_frame_sequence(request: QueueAddFrameSequenceRequest<'_>) -> Result
         max_frames,
         frame_rate,
         write_flow_cache,
+        backend,
         project_path,
     } = request;
 
@@ -959,6 +1049,7 @@ fn queue_add_frame_sequence(request: QueueAddFrameSequenceRequest<'_>) -> Result
             amount,
             max_frames,
             frame_rate,
+            backend,
         },
         provenance: Some(RenderJobProvenance {
             sources: vec![
@@ -1062,6 +1153,7 @@ fn queue_run_frame_sequence(queue_path: &Path) -> Result<(), CliError> {
         amount,
         max_frames,
         frame_rate,
+        backend,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1082,6 +1174,7 @@ fn queue_run_frame_sequence(queue_path: &Path) -> Result<(), CliError> {
         amount,
         flow_cache_dir: flow_cache_directory.as_deref().map(Path::new),
         max_frames: max_frames.map(|value| value as usize),
+        backend,
         rms: RmsAmountConfig {
             wav_path: None,
             frame_rate,

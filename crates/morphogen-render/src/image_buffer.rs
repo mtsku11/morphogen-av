@@ -54,6 +54,26 @@ impl ImageBufferF32 {
         let index = y as usize * self.width as usize + x as usize;
         self.pixels.get(index).copied()
     }
+
+    /// Largest absolute per-channel difference against another buffer of the same
+    /// dimensions. Returns `None` when the two buffers are not directly comparable.
+    /// Used to gate the Metal render backend against the CPU reference.
+    pub fn max_channel_difference(&self, other: &Self) -> Option<f32> {
+        if self.width != other.width || self.height != other.height {
+            return None;
+        }
+
+        let mut max_difference = 0.0_f32;
+        for (lhs, rhs) in self.pixels.iter().zip(&other.pixels) {
+            for channel in 0..4 {
+                let difference = (lhs[channel] - rhs[channel]).abs();
+                if difference > max_difference {
+                    max_difference = difference;
+                }
+            }
+        }
+        Some(max_difference)
+    }
 }
 
 fn pixel_count(width: u32, height: u32) -> Result<usize, RenderError> {
@@ -68,4 +88,29 @@ fn pixel_count(width: u32, height: u32) -> Result<usize, RenderError> {
         .ok_or_else(|| {
             RenderError::InvalidImageBuffer("image dimensions are too large".to_string())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_channel_difference_reports_largest_channel_delta() {
+        let a = ImageBufferF32::new(1, 2, vec![[0.0, 0.0, 0.0, 1.0], [0.25, 0.5, 0.0, 1.0]])
+            .expect("buffer a");
+        let b = ImageBufferF32::new(1, 2, vec![[0.0, 0.0, 0.0, 1.0], [0.25, 0.9, 0.0, 1.0]])
+            .expect("buffer b");
+
+        let difference = a.max_channel_difference(&b).expect("comparable buffers");
+        assert!((difference - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn max_channel_difference_rejects_mismatched_dimensions() {
+        let a = ImageBufferF32::new(1, 1, vec![[0.0, 0.0, 0.0, 1.0]]).expect("buffer a");
+        let b = ImageBufferF32::new(2, 1, vec![[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]])
+            .expect("buffer b");
+
+        assert_eq!(a.max_channel_difference(&b), None);
+    }
 }

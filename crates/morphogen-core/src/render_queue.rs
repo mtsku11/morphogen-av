@@ -41,9 +41,9 @@ impl RenderQueue {
 mod tests {
     use super::*;
     use crate::{
-        AnalysisKind, ExportFormat, RenderJobAnalysisCacheProvenance, RenderJobProvenance,
-        RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality, RenderSettings,
-        SourceRole,
+        AnalysisKind, ExportFormat, RenderBackend, RenderJobAnalysisCacheProvenance,
+        RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask,
+        RenderQuality, RenderSettings, SourceRole,
     };
 
     #[test]
@@ -134,6 +134,7 @@ mod tests {
                 amount: 12.0,
                 max_frames: Some(48),
                 frame_rate: 24.0,
+                backend: RenderBackend::Cpu,
             },
             provenance: Some(RenderJobProvenance {
                 sources: vec![
