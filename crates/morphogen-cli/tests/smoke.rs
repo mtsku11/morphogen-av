@@ -227,6 +227,160 @@ fn render_frame_sequence_can_modulate_amount_from_rms_wav() {
 }
 
 #[test]
+fn render_feedback_sequence_checkpoints_and_resumes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let resumed_output_dir = temp_dir.path().join("resumed-output");
+    let uninterrupted_output_dir = temp_dir.path().join("uninterrupted-output");
+    let reset_output_dir = temp_dir.path().join("reset-output");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let modulator_arg = modulator_dir.join(frame_name).to_string_lossy().to_string();
+        let carrier_arg = carrier_dir.join(frame_name).to_string_lossy().to_string();
+
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", modulator_arg.as_str()])
+            .assert()
+            .success();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", carrier_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let resumed_arg = resumed_output_dir.to_string_lossy().to_string();
+    let uninterrupted_arg = uninterrupted_output_dir.to_string_lossy().to_string();
+    let reset_arg = reset_output_dir.to_string_lossy().to_string();
+    let feedback_args = [
+        "render-feedback-sequence",
+        modulator_arg.as_str(),
+        carrier_arg.as_str(),
+        resumed_arg.as_str(),
+        "--carrier-amount",
+        "8",
+        "--feedback-amount",
+        "12",
+        "--feedback-mix",
+        "0.7",
+        "--decay",
+        "0.95",
+        "--max-frames",
+        "3",
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(feedback_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed flow-feedback sequence after frame 0",
+        ));
+
+    let partial_checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_output_dir.join("checkpoint.json"))
+            .expect("read partial checkpoint"),
+    )
+    .expect("parse partial checkpoint");
+    assert_eq!(partial_checkpoint["task"], "frame_sequence_flow_feedback");
+    assert_eq!(partial_checkpoint["status"], "running");
+    assert_eq!(partial_checkpoint["next_frame_index"], 1);
+    assert!(resumed_output_dir
+        .join("state/feedback_frame_000000.rgba32f")
+        .exists());
+    assert!(resumed_output_dir.join("frames/frame_000000.png").exists());
+    assert!(!resumed_output_dir.join("manifest.json").exists());
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(feedback_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered flow-feedback sequence with 3 frame(s)",
+        ));
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            uninterrupted_arg.as_str(),
+            "--carrier-amount",
+            "8",
+            "--feedback-amount",
+            "12",
+            "--feedback-mix",
+            "0.7",
+            "--decay",
+            "0.95",
+            "--max-frames",
+            "3",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            reset_arg.as_str(),
+            "--carrier-amount",
+            "8",
+            "--feedback-amount",
+            "12",
+            "--feedback-mix",
+            "0.7",
+            "--decay",
+            "0.95",
+            "--max-frames",
+            "3",
+            "--reset-at-frame",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    let final_checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_output_dir.join("checkpoint.json"))
+            .expect("read final checkpoint"),
+    )
+    .expect("parse final checkpoint");
+    assert_eq!(final_checkpoint["status"], "complete");
+    assert_eq!(final_checkpoint["next_frame_index"], 3);
+    assert_eq!(final_checkpoint["contract"]["settings"]["iterations"], 1);
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_output_dir.join("manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_flow_feedback");
+    assert_eq!(manifest["frames"].as_array().expect("frames").len(), 3);
+    assert_eq!(
+        fs::read(resumed_output_dir.join("frames/frame_000002.png")).expect("resumed frame"),
+        fs::read(uninterrupted_output_dir.join("frames/frame_000002.png"))
+            .expect("uninterrupted frame")
+    );
+    assert_eq!(
+        fs::read(reset_output_dir.join("frames/frame_000001.png")).expect("reset frame"),
+        fs::read(reset_output_dir.join("frames/frame_000000.png")).expect("frame zero")
+    );
+    let reset_manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(reset_output_dir.join("manifest.json")).expect("read reset manifest"),
+    )
+    .expect("parse reset manifest");
+    assert_eq!(reset_manifest["feedback_contract"]["reset_at_frame"], 1);
+}
+
+#[test]
 fn cache_synthetic_flow_writes_manifest_and_frame() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let cache_dir = temp_dir.path().join("synthetic-flow-cache");
@@ -493,6 +647,107 @@ fn frame_sequence_queue_job_persists_provenance_and_writes_bundle_output() {
             "job-0001 task=frame_sequence_flow_displace status=Complete",
         ))
         .stdout(predicate::str::contains("sources=2 caches=1"));
+}
+
+#[test]
+fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let queue_path = temp_dir.path().join("queue.json");
+    let output_root = temp_dir.path().join("queue-output");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let modulator_arg = modulator_dir.join(frame_name).to_string_lossy().to_string();
+        let carrier_arg = carrier_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", modulator_arg.as_str()])
+            .assert()
+            .success();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", carrier_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-feedback-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--carrier-amount",
+            "8",
+            "--feedback-amount",
+            "12",
+            "--feedback-mix",
+            "0.7",
+            "--decay",
+            "0.95",
+            "--max-frames",
+            "2",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued flow-feedback render job job-0001",
+        ));
+
+    let queued: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queued feedback job"))
+            .expect("parse queue json");
+    assert_eq!(
+        queued["jobs"][0]["task"]["type"],
+        "frame_sequence_flow_feedback"
+    );
+    assert_eq!(queued["jobs"][0]["task"]["feedback_mix"], 0.7);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-feedback-sequence", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued flow-feedback job job-0001",
+        ));
+
+    let bundle_dir = output_root.join("job-0001");
+    assert!(bundle_dir.join("frames/frame_000000.png").exists());
+    assert!(bundle_dir.join("frames/frame_000001.png").exists());
+    assert!(bundle_dir
+        .join("state/feedback_frame_000001.rgba32f")
+        .exists());
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle_dir.join("manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_flow_feedback");
+    let decay = manifest["feedback_contract"]["settings"]["decay"]
+        .as_f64()
+        .expect("feedback decay");
+    assert!((decay - 0.95).abs() < 0.000_001);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-inspect", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "job-0001 task=frame_sequence_flow_feedback status=Complete",
+        ));
 }
 
 #[test]

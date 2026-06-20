@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The current phase is early media-ingest development: preserve the architecture for a native Rust core, Metal renderer, analysis cache, SwiftUI node graph UI, and deterministic offline render queue while extending the small working CPU reference render path.
+Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The completed flow-feedback vertical slice repeatedly advects and blends Source B from Source A through deterministic CPU and Metal renderers. The current direction is to replace its luminance-gradient signal with cached temporal optical flow, then expose the proven contract in the SwiftUI shell.
 
 ## Key Commands
 
@@ -15,6 +15,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `cargo run -p morphogen-cli -- render-two-source /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-two-source.png --amount 16` - render a real two-image CPU displacement.
 - `cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --flow-cache-dir /tmp/morphogen-flow-cache --max-frames 120` - render paired extracted frame directories with per-frame flow cache sidecars.
 - `cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --rms-modulator-wav /tmp/source-a.wav --frame-rate 12 --rms-amount-scale 24` - modulate sequence displacement amount from a WAV RMS envelope.
+- `cargo run -p morphogen-cli -- render-feedback-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --carrier-amount 12 --feedback-amount 24 --feedback-mix 0.72 --decay 0.995 --max-frames 120 --frame-rate 24 --backend metal` - render deterministic A-modulates-B temporal feedback; `--stop-after-frame` proves resume and `--reset-at-frame 48` restarts feedback at a selected output frame.
 - `cargo run -p morphogen-cli -- export-audio-stem /tmp/source.wav /tmp/stem.wav --gain 1.0` - write a 32-bit float WAV stem through the Rust audio path.
 - `cargo run -p morphogen-cli -- cache-stft /tmp/source.wav /tmp/source-stft.json --fft-size 1024 --hop-size 256 --window hann` - write an inspectable STFT magnitude cache sidecar.
 - `cargo run -p morphogen-cli -- cache-onsets /tmp/source.wav /tmp/source-onsets.json --fft-size 1024 --hop-size 256 --window hann` - write an inspectable onset-strength cache sidecar.
@@ -26,6 +27,8 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --max-frames 120 --frame-rate 24` - queue a real two-source frame-sequence displacement job with source/cache provenance.
 - `cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --backend metal` - queue a frame-sequence job that renders on the Metal backend with a per-frame CPU parity check (`--backend` also works on `render-frame-sequence`; defaults to `cpu`).
 - `cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json` - execute the next queued two-source frame-sequence job into a ProRes-ready render bundle. A failure records a durable `failed` status plus reason on the job rather than leaving it `running`.
+- `cargo run -p morphogen-cli -- queue-add-feedback-sequence /tmp/morphogen-feedback-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --carrier-amount 12 --feedback-amount 24 --feedback-mix 0.72 --decay 0.995 --backend metal` - persist a resumable temporal feedback job with source/cache provenance.
+- `cargo run -p morphogen-cli -- queue-run-feedback-sequence /tmp/morphogen-feedback-queue.json` - execute the next queued feedback job into a ProRes-ready bundle with a verified float state checkpoint.
 - `cargo run -p morphogen-cli -- queue-cancel /tmp/morphogen-frame-queue.json job-0001` - cancel a queued or running job so the runner skips it.
 - `swift build` - build the SwiftUI macOS app shell.
 - `swift test` - run Swift-side macOS app service tests.
@@ -37,6 +40,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `crates/morphogen-core/src/graph.rs` - node graph and modulation route model.
 - `crates/morphogen-core/src/timeline.rs` - frame/time/sample alignment helpers.
 - `crates/morphogen-render/src/cpu_reference.rs` - deterministic CPU reference render operations.
+- `crates/morphogen-render/src/feedback_state.rs` - versioned, checksummed RGBA32F feedback-state checkpoints.
 - `crates/morphogen-render/src/flow_cache.rs` - versioned single-frame flow-analysis sidecar format.
 - `crates/morphogen-render/src/luminance_flow.rs` - first deterministic modulator-derived flow signal.
 - `crates/morphogen-render/src/sampler.rs` - bilinear sampling and border behavior.
@@ -57,6 +61,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 - `apps/macos/Sources/MorphogenMacApp/Services/RenderQueueOutputBundle.swift` - Swift-side resolver that maps render queue bundles to ProRes-ready frame sequences and WAV stems.
 - `apps/macos/Sources/MorphogenMacApp/Services/VideoToolboxProResExportPlan.swift` - VideoToolbox ProRes encoder discovery and export-plan spike.
 - `apps/macos/Sources/MorphogenMacApp/Services/ProResImageSequenceExporter.swift` - PNG image-sequence to ProRes `.mov` export through AVAssetWriter with VideoToolbox encoder selection and optional WAV audio muxing.
+- `docs/FLOW_FEEDBACK_MILESTONE.md` - active temporal feedback render contract, sequence, and acceptance criteria.
 - `apps/macos/Sources/MorphogenMacApp/Services/ProjectFilePanel.swift` - AppKit project open/save panels used by the SwiftUI shell.
 - `docs/CODEX_TASKS.md` - ordered follow-up backlog.
 
@@ -75,4 +80,5 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The cu
 1. `README.md`
 2. `docs/ARCHITECTURE.md`
 3. `docs/CODEX_TASKS.md`
-4. Relevant crate or app files for the task at hand.
+4. `docs/FLOW_FEEDBACK_MILESTONE.md` when extending the temporal feedback contract.
+5. Relevant crate or app files for the task at hand.

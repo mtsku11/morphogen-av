@@ -20,9 +20,11 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
-    flow_displace_cpu, luminance_gradient_flow_cpu, write_flow_cache, FlowField, ImageBufferF32,
-    RenderError,
+    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, luminance_gradient_flow_cpu,
+    read_flow_feedback_state, write_flow_cache, write_flow_feedback_state, FlowFeedbackSettings,
+    FlowFeedbackStateDescriptor, FlowField, ImageBufferF32, RenderError,
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -129,6 +131,33 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    RenderFeedbackSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 12.0)]
+        carrier_amount: f32,
+        #[arg(long, default_value_t = 24.0)]
+        feedback_amount: f32,
+        #[arg(long, default_value_t = 0.72)]
+        feedback_mix: f32,
+        #[arg(long, default_value_t = 0.995)]
+        decay: f32,
+        #[arg(long, default_value_t = 1)]
+        iterations: u32,
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
+        #[arg(long)]
+        max_frames: Option<usize>,
+        #[arg(long)]
+        reset_at_frame: Option<usize>,
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        stop_after_frame: bool,
+    },
     CacheSyntheticFlow {
         output_dir: PathBuf,
         #[arg(long, default_value_t = 64)]
@@ -170,6 +199,34 @@ enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    QueueAddFeedbackSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 12.0)]
+        carrier_amount: f32,
+        #[arg(long, default_value_t = 24.0)]
+        feedback_amount: f32,
+        #[arg(long, default_value_t = 0.72)]
+        feedback_mix: f32,
+        #[arg(long, default_value_t = 0.995)]
+        decay: f32,
+        #[arg(long, default_value_t = 1)]
+        iterations: u32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        reset_at_frame: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        no_flow_cache: bool,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueRunTest {
         queue_path: PathBuf,
         output_dir: PathBuf,
@@ -177,6 +234,9 @@ enum Commands {
         stop_after_frame: bool,
     },
     QueueRunFrameSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunFeedbackSequence {
         queue_path: PathBuf,
     },
     QueueCancel {
@@ -381,6 +441,42 @@ fn run() -> Result<(), CliError> {
             },
         })
         .map(|_| ()),
+        Commands::RenderFeedbackSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            carrier_amount,
+            feedback_amount,
+            feedback_mix,
+            decay,
+            iterations,
+            flow_cache_dir,
+            max_frames,
+            reset_at_frame,
+            frame_rate,
+            backend,
+            stop_after_frame,
+        } => render_feedback_sequence(FeedbackSequenceRenderRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            flow_cache_dir: flow_cache_dir.as_deref(),
+            max_frames,
+            reset_at_frame,
+            frame_rate,
+            settings: FlowFeedbackSettings {
+                carrier_amount,
+                feedback_amount,
+                feedback_mix,
+                decay,
+                iterations,
+            },
+            backend: backend.into(),
+            job_id: "direct-feedback-sequence",
+            provenance: None,
+            stop_after_frame,
+        })
+        .map(|_| ()),
         Commands::CacheSyntheticFlow {
             output_dir,
             width,
@@ -420,12 +516,50 @@ fn run() -> Result<(), CliError> {
             backend: backend.into(),
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddFeedbackSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            carrier_amount,
+            feedback_amount,
+            feedback_mix,
+            decay,
+            iterations,
+            max_frames,
+            reset_at_frame,
+            frame_rate,
+            no_flow_cache,
+            backend,
+            project_path,
+        } => queue_add_feedback_sequence(QueueAddFeedbackSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            settings: FlowFeedbackSettings {
+                carrier_amount,
+                feedback_amount,
+                feedback_mix,
+                decay,
+                iterations,
+            },
+            max_frames,
+            reset_at_frame,
+            frame_rate,
+            write_flow_cache: !no_flow_cache,
+            backend: backend.into(),
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueRunTest {
             queue_path,
             output_dir,
             stop_after_frame,
         } => queue_run_test(&queue_path, &output_dir, stop_after_frame),
         Commands::QueueRunFrameSequence { queue_path } => queue_run_frame_sequence(&queue_path),
+        Commands::QueueRunFeedbackSequence { queue_path } => {
+            queue_run_feedback_sequence(&queue_path)
+        }
         Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
         Commands::InspectProject { project_path } => inspect_project(&project_path),
@@ -1077,6 +1211,531 @@ struct FrameSequenceRenderResult {
     frame_count: usize,
 }
 
+const FLOW_FEEDBACK_RENDER_CONTRACT_VERSION: u32 = 1;
+const LUMINANCE_FLOW_ALGORITHM: &str = "luminance_gradient_cpu_v1";
+
+struct FeedbackSequenceRenderRequest<'a> {
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_dir: &'a Path,
+    flow_cache_dir: Option<&'a Path>,
+    max_frames: Option<usize>,
+    reset_at_frame: Option<usize>,
+    frame_rate: f64,
+    settings: FlowFeedbackSettings,
+    backend: RenderBackend,
+    job_id: &'a str,
+    provenance: Option<&'a RenderJobProvenance>,
+    stop_after_frame: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct FeedbackSequenceSourceFingerprint {
+    directory: String,
+    frame_count: u32,
+    checksum: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct FeedbackSequenceContract {
+    version: u32,
+    flow_algorithm: String,
+    modulator: FeedbackSequenceSourceFingerprint,
+    carrier: FeedbackSequenceSourceFingerprint,
+    settings: FlowFeedbackSettings,
+    backend: RenderBackend,
+    reset_at_frame: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FeedbackSequenceCheckpoint {
+    version: u32,
+    task: String,
+    job_id: String,
+    status: String,
+    next_frame_index: u32,
+    state_path: Option<String>,
+    state: Option<FlowFeedbackStateDescriptor>,
+    contract: FeedbackSequenceContract,
+    provenance: RenderJobProvenance,
+}
+
+fn render_feedback_sequence(
+    request: FeedbackSequenceRenderRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    let FeedbackSequenceRenderRequest {
+        modulator_dir,
+        carrier_dir,
+        output_dir,
+        flow_cache_dir,
+        max_frames,
+        reset_at_frame,
+        frame_rate,
+        settings,
+        backend,
+        job_id,
+        provenance,
+        stop_after_frame,
+    } = request;
+
+    settings.validate()?;
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(modulator_dir)?;
+    let carrier_frames = collect_image_frames(carrier_dir)?;
+    if modulator_frames.is_empty() {
+        return Err(CliError::Message(format!(
+            "no supported image frames found in {}",
+            modulator_dir.display()
+        )));
+    }
+    if carrier_frames.is_empty() {
+        return Err(CliError::Message(format!(
+            "no supported image frames found in {}",
+            carrier_dir.display()
+        )));
+    }
+
+    let paired_count = modulator_frames.len().min(carrier_frames.len());
+    let frame_count = max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    let frame_count_u32 = u32::try_from(frame_count).map_err(|_| {
+        CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+    })?;
+    let reset_at_frame = reset_at_frame
+        .map(|frame| {
+            u32::try_from(frame).map_err(|_| {
+                CliError::Message("reset-at-frame must be less than u32::MAX".to_string())
+            })
+        })
+        .transpose()?;
+    if matches!(reset_at_frame, Some(frame) if frame >= frame_count_u32) {
+        return Err(CliError::Message(
+            "reset-at-frame must refer to a rendered frame".to_string(),
+        ));
+    }
+    let contract = FeedbackSequenceContract {
+        version: FLOW_FEEDBACK_RENDER_CONTRACT_VERSION,
+        flow_algorithm: LUMINANCE_FLOW_ALGORITHM.to_string(),
+        modulator: feedback_source_fingerprint(modulator_dir, &modulator_frames)?,
+        carrier: feedback_source_fingerprint(carrier_dir, &carrier_frames)?,
+        settings,
+        backend,
+        reset_at_frame,
+    };
+    let provenance = provenance.cloned().unwrap_or_else(|| {
+        feedback_sequence_provenance(modulator_dir, carrier_dir, flow_cache_dir)
+    });
+
+    let frame_dir = output_dir.join("frames");
+    fs::create_dir_all(&frame_dir)?;
+    if let Some(cache_root) = flow_cache_dir {
+        fs::create_dir_all(cache_root)?;
+    }
+
+    let (start_frame, mut previous_output, mut latest_state_path) =
+        load_feedback_resume_state(output_dir, job_id, &contract, &provenance, frame_count_u32)?;
+    for index in start_frame..frame_count {
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let carrier = load_image_f32(&carrier_frames[index])?;
+        let flow = luminance_gradient_flow_cpu(&modulator, carrier.width, carrier.height)?;
+        let history = (Some(index as u32) != reset_at_frame)
+            .then_some(previous_output.as_ref())
+            .flatten();
+        let output = render_feedback_frame(&carrier, history, &flow, settings, backend)?;
+        let output_path = frame_dir.join(format!("frame_{index:06}.png"));
+        save_png(&output, &output_path)?;
+        if let Some(cache_root) = flow_cache_dir {
+            let frame_cache_dir = cache_root.join(format!("frame_{index:06}"));
+            write_flow_cache(frame_cache_dir, &flow, LUMINANCE_FLOW_ALGORITHM)?;
+        }
+
+        let frame_index = u32::try_from(index).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let state_path = feedback_state_path(output_dir, frame_index);
+        let state_path_relative = feedback_state_relative_path(frame_index);
+        let descriptor = write_flow_feedback_state(&state_path, &output)?;
+        write_feedback_checkpoint(
+            output_dir,
+            FeedbackCheckpointWrite {
+                job_id,
+                status: "running",
+                next_frame_index: frame_index.checked_add(1).ok_or_else(|| {
+                    CliError::Message(
+                        "frame sequence contains more than u32::MAX frames".to_string(),
+                    )
+                })?,
+                state_path: Some(&state_path_relative),
+                state: Some(descriptor),
+                contract: &contract,
+                provenance: &provenance,
+            },
+        )?;
+        previous_output = Some(output);
+        latest_state_path = Some(state_path_relative);
+
+        if stop_after_frame {
+            println!(
+                "checkpointed flow-feedback sequence after frame {} in {}",
+                index,
+                output_dir.display()
+            );
+            return Ok(FrameSequenceRenderResult {
+                frame_count: index + 1,
+            });
+        }
+    }
+
+    let final_state_path = latest_state_path.as_deref().ok_or_else(|| {
+        CliError::Message("feedback render completed without a float state checkpoint".to_string())
+    })?;
+    let state_path = feedback_state_path_from_checkpoint(output_dir, final_state_path)?;
+    let (final_state, _) = read_flow_feedback_state(&state_path)?;
+    write_feedback_checkpoint(
+        output_dir,
+        FeedbackCheckpointWrite {
+            job_id,
+            status: "complete",
+            next_frame_index: frame_count_u32,
+            state_path: Some(final_state_path),
+            state: Some(final_state),
+            contract: &contract,
+            provenance: &provenance,
+        },
+    )?;
+
+    let frame_paths = (0..frame_count_u32)
+        .map(|index| format!("frames/frame_{index:06}.png"))
+        .collect::<Vec<_>>();
+    let timing = RenderTimingMetadata {
+        frame_rate,
+        frame_count: frame_count_u32,
+        start_seconds: 0.0,
+        duration_seconds: frame_count as f64 / frame_rate,
+        sample_rate: 48_000,
+        audio_sample_count: 0,
+    };
+    write_feedback_sequence_manifest(
+        job_id,
+        output_dir,
+        &frame_paths,
+        &timing,
+        &contract,
+        &provenance,
+        final_state_path,
+    )?;
+
+    if modulator_frames.len() != carrier_frames.len() {
+        println!(
+            "source frame counts differ: {} modulator frame(s), {} carrier frame(s); rendered common prefix",
+            modulator_frames.len(),
+            carrier_frames.len()
+        );
+    }
+    if let Some(cache_root) = flow_cache_dir {
+        println!(
+            "wrote per-frame luminance flow caches to {}",
+            cache_root.display()
+        );
+    }
+    println!(
+        "rendered flow-feedback sequence with {} frame(s) on the {} backend from {} modulating {} to {}",
+        frame_count,
+        render_backend_label(backend),
+        modulator_dir.display(),
+        carrier_dir.display(),
+        output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+fn render_feedback_frame(
+    carrier: &ImageBufferF32,
+    previous_output: Option<&ImageBufferF32>,
+    flow: &FlowField,
+    settings: FlowFeedbackSettings,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(flow_feedback_frame_cpu(
+            carrier,
+            previous_output,
+            flow,
+            settings,
+        )?),
+        RenderBackend::Metal => {
+            render_feedback_frame_metal(carrier, previous_output, flow, settings)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_feedback_frame_metal(
+    carrier: &ImageBufferF32,
+    previous_output: Option<&ImageBufferF32>,
+    flow: &FlowField,
+    settings: FlowFeedbackSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::flow_feedback_metal(carrier, previous_output, flow, settings)?;
+    let cpu = flow_feedback_frame_cpu(carrier, previous_output, flow, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU outputs have mismatched dimensions; cannot verify parity".to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal feedback render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_feedback_frame_metal(
+    _carrier: &ImageBufferF32,
+    _previous_output: Option<&ImageBufferF32>,
+    _flow: &FlowField,
+    _settings: FlowFeedbackSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal render backend is only available on macOS".to_string(),
+    ))
+}
+
+fn feedback_sequence_provenance(
+    modulator_dir: &Path,
+    carrier_dir: &Path,
+    flow_cache_dir: Option<&Path>,
+) -> RenderJobProvenance {
+    RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-frames".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: flow_cache_dir
+            .map(|path| {
+                vec![RenderJobAnalysisCacheProvenance {
+                    kind: AnalysisKind::OpticalFlow,
+                    path: path.to_string_lossy().to_string(),
+                    producer: LUMINANCE_FLOW_ALGORITHM.to_string(),
+                }]
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn feedback_source_fingerprint(
+    directory: &Path,
+    frames: &[PathBuf],
+) -> Result<FeedbackSequenceSourceFingerprint, CliError> {
+    let frame_count = u32::try_from(frames.len()).map_err(|_| {
+        CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+    })?;
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    for frame in frames {
+        update_fnv1a(
+            &mut checksum,
+            frame.file_name().unwrap_or_default().as_encoded_bytes(),
+        );
+        update_fnv1a(&mut checksum, &[0]);
+        update_fnv1a(&mut checksum, &fs::read(frame)?);
+    }
+    Ok(FeedbackSequenceSourceFingerprint {
+        directory: directory.to_string_lossy().to_string(),
+        frame_count,
+        checksum: format!("fnv1a64:{checksum:016x}"),
+    })
+}
+
+fn update_fnv1a(checksum: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *checksum ^= u64::from(*byte);
+        *checksum = checksum.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
+fn load_feedback_resume_state(
+    output_dir: &Path,
+    job_id: &str,
+    expected_contract: &FeedbackSequenceContract,
+    expected_provenance: &RenderJobProvenance,
+    frame_count: u32,
+) -> Result<(usize, Option<ImageBufferF32>, Option<String>), CliError> {
+    let checkpoint_path = output_dir.join("checkpoint.json");
+    if !checkpoint_path.exists() {
+        return Ok((0, None, None));
+    }
+
+    let checkpoint: FeedbackSequenceCheckpoint =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path)?)?;
+    if checkpoint.version != FLOW_FEEDBACK_RENDER_CONTRACT_VERSION
+        || checkpoint.task != "frame_sequence_flow_feedback"
+        || checkpoint.job_id != job_id
+    {
+        return Err(CliError::Message(format!(
+            "feedback checkpoint at {} is incompatible with this render",
+            checkpoint_path.display()
+        )));
+    }
+    if checkpoint.contract != *expected_contract || checkpoint.provenance != *expected_provenance {
+        return Err(CliError::Message(
+            "feedback checkpoint input provenance or settings changed; start with a new output directory"
+                .to_string(),
+        ));
+    }
+    if checkpoint.next_frame_index > frame_count {
+        return Err(CliError::Message(
+            "feedback checkpoint advances beyond the current frame sequence".to_string(),
+        ));
+    }
+    let start_frame = checkpoint.next_frame_index as usize;
+    if start_frame == 0 {
+        return Ok((0, None, None));
+    }
+
+    let expected_state = checkpoint.state.ok_or_else(|| {
+        CliError::Message(
+            "feedback checkpoint is missing its previous float output state".to_string(),
+        )
+    })?;
+    let relative_state_path = checkpoint.state_path.ok_or_else(|| {
+        CliError::Message("feedback checkpoint is missing its state path".to_string())
+    })?;
+    let state_path = feedback_state_path_from_checkpoint(output_dir, &relative_state_path)?;
+    let (actual_state, state) = read_flow_feedback_state(&state_path)?;
+    if actual_state != expected_state {
+        return Err(CliError::Message(format!(
+            "feedback state at {} does not match its checkpoint",
+            state_path.display()
+        )));
+    }
+    let previous_frame_path = output_dir
+        .join("frames")
+        .join(format!("frame_{:06}.png", start_frame - 1));
+    if !previous_frame_path.exists() {
+        return Err(CliError::Message(format!(
+            "feedback checkpoint is missing exported frame {}",
+            previous_frame_path.display()
+        )));
+    }
+    Ok((start_frame, Some(state), Some(relative_state_path)))
+}
+
+struct FeedbackCheckpointWrite<'a> {
+    job_id: &'a str,
+    status: &'a str,
+    next_frame_index: u32,
+    state_path: Option<&'a str>,
+    state: Option<FlowFeedbackStateDescriptor>,
+    contract: &'a FeedbackSequenceContract,
+    provenance: &'a RenderJobProvenance,
+}
+
+fn write_feedback_checkpoint(
+    output_dir: &Path,
+    checkpoint: FeedbackCheckpointWrite<'_>,
+) -> Result<(), CliError> {
+    let checkpoint = FeedbackSequenceCheckpoint {
+        version: FLOW_FEEDBACK_RENDER_CONTRACT_VERSION,
+        task: "frame_sequence_flow_feedback".to_string(),
+        job_id: checkpoint.job_id.to_string(),
+        status: checkpoint.status.to_string(),
+        next_frame_index: checkpoint.next_frame_index,
+        state_path: checkpoint.state_path.map(str::to_string),
+        state: checkpoint.state,
+        contract: checkpoint.contract.clone(),
+        provenance: checkpoint.provenance.clone(),
+    };
+    write_feedback_json_atomically(
+        &output_dir.join("checkpoint.json"),
+        &serde_json::to_string_pretty(&checkpoint)?,
+    )?;
+    Ok(())
+}
+
+fn write_feedback_sequence_manifest(
+    job_id: &str,
+    output_dir: &Path,
+    frame_paths: &[String],
+    timing: &RenderTimingMetadata,
+    contract: &FeedbackSequenceContract,
+    provenance: &RenderJobProvenance,
+    state_path: &str,
+) -> Result<(), CliError> {
+    let manifest = serde_json::json!({
+        "job_id": job_id,
+        "status": "complete",
+        "task": "frame_sequence_flow_feedback",
+        "frames": frame_paths,
+        "audio_stems": [],
+        "timing": {
+            "frame_rate": timing.frame_rate,
+            "frame_count": timing.frame_count,
+            "start_seconds": timing.start_seconds,
+            "duration_seconds": timing.duration_seconds,
+            "sample_rate": timing.sample_rate,
+            "audio_sample_count": timing.audio_sample_count
+        },
+        "feedback_contract": contract,
+        "feedback_state_path": state_path,
+        "provenance": provenance,
+        "deterministic": true
+    });
+    write_feedback_json_atomically(
+        &output_dir.join("manifest.json"),
+        &serde_json::to_string_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
+fn feedback_state_relative_path(frame_index: u32) -> String {
+    format!("state/feedback_frame_{frame_index:06}.rgba32f")
+}
+
+fn feedback_state_path_from_checkpoint(
+    output_dir: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, CliError> {
+    let relative_path = Path::new(relative_path);
+    if relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(CliError::Message(
+            "feedback checkpoint state path must be relative to its output directory".to_string(),
+        ));
+    }
+    Ok(output_dir.join(relative_path))
+}
+
+fn write_feedback_json_atomically(path: &Path, content: &str) -> Result<(), CliError> {
+    let temporary_path = path.with_extension("json.tmp");
+    fs::write(&temporary_path, content)?;
+    fs::rename(temporary_path, path)?;
+    Ok(())
+}
+
 struct RmsAmountModulation {
     descriptors: Vec<AudioDescriptorFrame>,
     frame_rate: f64,
@@ -1308,6 +1967,106 @@ fn queue_add_frame_sequence(request: QueueAddFrameSequenceRequest<'_>) -> Result
     Ok(())
 }
 
+struct QueueAddFeedbackSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    settings: FlowFeedbackSettings,
+    max_frames: Option<u32>,
+    reset_at_frame: Option<u32>,
+    frame_rate: f64,
+    write_flow_cache: bool,
+    backend: RenderBackend,
+    project_path: Option<&'a Path>,
+}
+
+fn queue_add_feedback_sequence(
+    request: QueueAddFeedbackSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddFeedbackSequenceRequest {
+        queue_path,
+        modulator_dir,
+        carrier_dir,
+        output_root_dir,
+        settings,
+        max_frames,
+        reset_at_frame,
+        frame_rate,
+        write_flow_cache,
+        backend,
+        project_path,
+    } = request;
+
+    settings.validate()?;
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let flow_cache_directory = write_flow_cache
+        .then(|| job_output_dir.join("cache").join("flow"))
+        .map(|path| path.to_string_lossy().to_string());
+    let provenance = feedback_sequence_provenance(
+        modulator_dir,
+        carrier_dir,
+        flow_cache_directory.as_deref().map(Path::new),
+    );
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 16,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceFlowFeedback {
+            modulator_frame_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            flow_cache_directory,
+            carrier_amount: settings.carrier_amount,
+            feedback_amount: settings.feedback_amount,
+            feedback_mix: settings.feedback_mix,
+            decay: settings.decay,
+            iterations: settings.iterations,
+            max_frames,
+            reset_at_frame,
+            frame_rate,
+            backend,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued flow-feedback render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
 fn queue_run_test(
     queue_path: &Path,
     output_dir: &Path,
@@ -1467,6 +2226,123 @@ fn queue_run_frame_sequence(queue_path: &Path) -> Result<(), CliError> {
             });
             queue.save_json(queue_path)?;
             eprintln!("frame-sequence job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
+fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceFlowFeedback { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running flow-feedback jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone().ok_or_else(|| {
+        CliError::Message("flow-feedback queue job is missing source/cache provenance".to_string())
+    })?;
+    let RenderJobTask::FrameSequenceFlowFeedback {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        flow_cache_directory,
+        carrier_amount,
+        feedback_amount,
+        feedback_mix,
+        decay,
+        iterations,
+        max_frames,
+        reset_at_frame,
+        frame_rate,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a flow-feedback render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_feedback_sequence(FeedbackSequenceRenderRequest {
+            modulator_dir: Path::new(&modulator_frame_directory),
+            carrier_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir,
+            flow_cache_dir: flow_cache_directory.as_deref().map(Path::new),
+            max_frames: max_frames.map(|value| value as usize),
+            reset_at_frame: reset_at_frame.map(|value| value as usize),
+            frame_rate,
+            settings: FlowFeedbackSettings {
+                carrier_amount,
+                feedback_amount,
+                feedback_mix,
+                decay,
+                iterations,
+            },
+            backend,
+            job_id: &job_id,
+            provenance: Some(&provenance),
+            stop_after_frame: false,
+        })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued flow-feedback job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("flow-feedback job {job_id} failed: {error}");
             Err(error)
         }
     }
@@ -1674,6 +2550,7 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
         let task_name = match job.task {
             RenderJobTask::TestRender => "test_render",
             RenderJobTask::FrameSequenceFlowDisplace { .. } => "frame_sequence_flow_displace",
+            RenderJobTask::FrameSequenceFlowFeedback { .. } => "frame_sequence_flow_feedback",
         };
         let provenance_summary = job
             .provenance

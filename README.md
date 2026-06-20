@@ -10,7 +10,7 @@ The long-term goal is an audiovisual modular synthesizer where compatible analys
 
 ## Current Status
 
-This repository is an initial production-quality scaffold with small deterministic vertical slices. The Rust CLI can create and inspect project JSON, probe and extract proxy media through optional FFmpeg tools, render synthetic and real A-modulates-B CPU displacement, produce reusable analysis sidecars, persist an offline render queue, and execute either a test bundle or a real two-source frame-sequence bundle with timing and source/cache provenance. The Metal crate can compile and submit the flow-displacement kernel on macOS when a Metal device is available. The SwiftUI app shell can select movie sources, extract them to PNG/WAV proxies, submit the proxy frames as a persisted queue job, inspect decoded source previews, and export completed queue bundles to ProRes `.mov`.
+This repository is an initial production-quality scaffold with deterministic vertical slices. The Rust CLI can create and inspect project JSON, probe and extract proxy media through optional FFmpeg tools, render synthetic and real A-modulates-B displacement and temporal-feedback sequences, produce reusable analysis sidecars, and persist resumable offline render queues with timing and source/cache provenance. The Metal crate compiles and submits flow displacement plus the one-pass feedback/advection kernel on macOS, gated against the CPU reference. The SwiftUI app shell can select movie sources, extract them to PNG/WAV proxies, submit the proxy frames as a persisted queue job, inspect decoded source previews, and export completed queue bundles to ProRes `.mov`.
 
 ## What Works Now
 
@@ -19,6 +19,7 @@ This repository is an initial production-quality scaffold with small determinist
 - Optional external FFmpeg/FFprobe command wrappers in `morphogen-media`.
 - Portable audio buffer, WAV loading/export, RMS envelope, spectral centroid, STFT magnitude cache, and onset-strength scaffolding in `morphogen-audio`.
 - Float RGBA CPU image buffers, flow fields, bilinear sampling, luminance-gradient flow generation, flow displacement, and versioned flow cache sidecars in `morphogen-render`.
+- Deterministic temporal flow feedback with explicit frame-zero/reset semantics, CPU/Metal parity, and resumable RGBA32F state checkpoints.
 - A checked-in tiny golden fixture for CPU flow-displacement output.
 - Metal backend placeholders plus a first flow-displacement compute kernel in `morphogen-metal`.
 - Rust-side Metal dispatch planning, shader preflight, and macOS runtime submission for the flow-displacement kernel.
@@ -137,6 +138,19 @@ cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queu
 cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json
 ```
 
+Render a temporal feedback bundle. The output contains `frames/`, generated flow-cache sidecars, `checkpoint.json`, and immutable unquantized `state/feedback_frame_*.rgba32f` resume buffers:
+
+```sh
+cargo run -p morphogen-cli -- render-feedback-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --carrier-amount 12 --feedback-amount 24 --feedback-mix 0.72 --decay 0.995 --max-frames 120 --frame-rate 24 --backend metal
+```
+
+`--stop-after-frame` writes a resumable checkpoint; rerun the same command to continue. `--reset-at-frame 48` makes that output frame use the documented frame-zero behavior before feedback continues. The queue variant persists the same contract:
+
+```sh
+cargo run -p morphogen-cli -- queue-add-feedback-sequence /tmp/morphogen-feedback-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --backend metal
+cargo run -p morphogen-cli -- queue-run-feedback-sequence /tmp/morphogen-feedback-queue.json
+```
+
 Probe media with optional external FFprobe:
 
 ```sh
@@ -175,4 +189,4 @@ The source buttons open native file pickers. Create Test Project writes an examp
 
 ## Future Direction
 
-The next engineering work is to make the queue scheduler handle cancellation/failure states, connect ingested proxy source metadata back into project files, and move the real frame-sequence kernel onto Metal. Metal is the intended production backend, while CPU rendering remains the deterministic reference path for tests and offline correctness.
+The first deterministic flow-feedback milestone is complete: Source A's luminance-gradient signal repeatedly moves and blends Source B with the previous output frame, with CPU/Metal parity and float-state resume. The next quality step is to replace that spatial gradient with a cached, deterministic temporal optical-flow analysis while preserving the same temporal render contract. Details are in [Flow Feedback Milestone](docs/FLOW_FEEDBACK_MILESTONE.md).

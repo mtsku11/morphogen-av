@@ -8,6 +8,10 @@ pub enum RenderError {
     InvalidFlowField(String),
     #[error("invalid flow cache: {0}")]
     InvalidFlowCache(String),
+    #[error("invalid flow feedback settings: {0}")]
+    InvalidFlowFeedbackSettings(String),
+    #[error("invalid flow feedback state: {0}")]
+    InvalidFlowFeedbackState(String),
     #[error("render inputs are incompatible: {0}")]
     IncompatibleInputs(String),
     #[error("I/O error: {0}")]

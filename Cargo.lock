@@ -419,6 +419,7 @@ dependencies = [
  "morphogen-metal",
  "morphogen-render",
  "predicates",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",

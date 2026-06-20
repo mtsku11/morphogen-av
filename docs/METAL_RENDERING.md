@@ -30,7 +30,14 @@ On macOS, `flow_displace_metal` compiles the checked-in shader source, creates s
 
 ## Advection and Feedback
 
-Feedback stages will combine previous output frames, current carrier frames, and modulator-derived velocity fields. These need explicit cache and frame provenance rules because temporal effects can hide nondeterminism.
+Flow feedback is now a CPU/Metal temporal render path with one shared contract:
+
+- frame zero outputs the flow-displaced carrier with no prior feedback state;
+- each later frame advects the previous unquantized output through the current A-derived field;
+- the renderer blends that history with the current displaced carrier using explicit feedback and decay parameters;
+- the queue persists the float previous-output buffer after every completed frame, so resume never depends on a quantized PNG.
+
+`advect_feedback.metal` samples the current carrier with `carrier_amount`, samples the previous output with `feedback_amount`, applies `decay`, then blends the two with `feedback_mix`. Frame zero reuses the existing Metal flow-displacement kernel, because there is no history texture. The runtime compiles with fast math disabled and compares every Metal frame to the CPU reference before writing its export image. The MVP validates `iterations == 1`; future multi-iteration behavior must add explicit ping-pong texture semantics before it is enabled. Realtime preview may reduce resolution, but it must not change state-update ordering.
 
 ## Image Pyramids and Optical Flow
 

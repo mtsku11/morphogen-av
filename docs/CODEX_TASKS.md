@@ -44,7 +44,20 @@
 - Add queue cancellation and durable failure records for frame-sequence jobs.
 - Persist ingested proxy media and analysis-cache references into project files.
 - Add RMS and STFT analysis cache creation to app-side media ingest.
+- Add a serializable `flow_feedback` render-node and `frame_sequence_flow_feedback` render-job task.
+- Implement CPU float feedback with explicit frame-zero, reset, and prior-output semantics.
+- Persist versioned, checksummed RGBA32F feedback state after every frame and prove exact resume output.
+- Add deterministic CLI feedback rendering and queued ProRes-ready feedback bundles.
+- Implement `advect_feedback.metal` and gate every Metal output frame against the CPU reference.
 
 ## Next
 
-- (none currently queued)
+### Flow Feedback and Advection Milestone
+
+The next effect is not another independent processor. It is a stateful temporal render primitive that the later datamosh, optical-flow, and video-vocoder work can reuse. The authoritative contract and acceptance criteria are in `docs/FLOW_FEEDBACK_MILESTONE.md`.
+
+1. Add a real temporal optical-flow analysis cache, then replace the luminance-gradient signal in the feedback job without changing its render-state contract.
+2. Expose feedback amount, decay, iterations, reset behavior, and CPU/Metal backend choice in the SwiftUI render panel.
+3. Add a first quality-controlled feedback preset library for aggressive degradation, stable trails, and reset-driven cuts.
+4. Add higher-precision feedback exports and temporal supersampling without changing checkpoint semantics.
+5. Only then resume independent effect families such as video vocoder, granular mosaicing, and codec-aware datamosh.

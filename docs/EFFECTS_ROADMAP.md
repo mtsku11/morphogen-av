@@ -1,22 +1,22 @@
 # Effects Roadmap
 
-## Optical-Flow Advection
-
-- Modulator input: Source A video frames.
-- Carrier input: Source B video frames.
-- Output: carrier pixels advected through A-derived flow.
-- Cached analysis: optical flow fields, image pyramids.
-- First MVP version: synthetic or cached flow displaces carrier frames.
-- Future high-quality version: multiscale deterministic optical flow with temporal smoothing and Metal acceleration.
-
-## Flow Feedback
+## Flow Feedback and Advection (Next Milestone)
 
 - Modulator input: Source A motion fields or luminance gradients.
 - Carrier input: Source B and previous output frame.
 - Output: feedback trails pushed by modulator motion.
-- Cached analysis: flow fields, masks, frame provenance.
-- First MVP version: one feedback buffer and synthetic flow.
-- Future high-quality version: float feedback chains with temporal supersampling.
+- Cached analysis: flow fields and masks; render checkpoints hold the previous float output state.
+- First MVP version: one feedback buffer, the current luminance-gradient field, fixed frame order, verified float checkpoints, reset frames, and CPU/Metal parity.
+- Future high-quality version: real temporal optical flow, float feedback chains, temporal supersampling, and higher-precision image export.
+
+## Optical-Flow Advection
+
+- Modulator input: Source A video frames.
+- Carrier input: Source B video frames or a flow-feedback state.
+- Output: carrier pixels advected through A-derived flow.
+- Cached analysis: dense optical flow fields and image pyramids.
+- First MVP version: replace the current spatial luminance-gradient signal in feedback with a deterministic two-frame flow estimator.
+- Future high-quality version: multiscale optical flow with temporal smoothing and Metal acceleration.
 
 ## Video Vocoder
 

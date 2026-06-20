@@ -2,16 +2,26 @@ use metal::{
     CompileOptions, Device, MTLCommandBufferStatus, MTLPixelFormat, MTLRegion, MTLSize,
     MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
 };
-use morphogen_render::{FlowField, ImageBufferF32};
+use morphogen_render::{FlowFeedbackSettings, FlowField, ImageBufferF32};
 
 use crate::{
-    FlowDisplaceDispatchPlan, MetalDispatchError, FLOW_DISPLACE_KERNEL_NAME,
-    FLOW_DISPLACE_SHADER_SOURCE,
+    FlowDisplaceDispatchPlan, MetalDispatchError, ADVECT_FEEDBACK_KERNEL_NAME,
+    ADVECT_FEEDBACK_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
 };
 
 #[repr(C)]
 struct FlowDisplaceParams {
     amount: f32,
+    width: u32,
+    height: u32,
+}
+
+#[repr(C)]
+struct AdvectFeedbackParams {
+    carrier_amount: f32,
+    feedback_amount: f32,
+    feedback_mix: f32,
+    decay: f32,
     width: u32,
     height: u32,
 }
@@ -84,6 +94,125 @@ pub fn flow_displace_metal(
         0,
         std::mem::size_of::<FlowDisplaceParams>() as u64,
         (&params as *const FlowDisplaceParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
+pub fn flow_feedback_metal(
+    carrier: &ImageBufferF32,
+    previous_output: Option<&ImageBufferF32>,
+    flow: &FlowField,
+    settings: FlowFeedbackSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    settings
+        .validate()
+        .map_err(|error| MetalDispatchError::InvalidFeedbackSettings(error.to_string()))?;
+    if carrier.width != flow.width || carrier.height != flow.height {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "carrier is {}x{}, flow is {}x{}",
+            carrier.width, carrier.height, flow.width, flow.height
+        )));
+    }
+    let Some(previous_output) = previous_output else {
+        return flow_displace_metal(carrier, flow, settings.carrier_amount);
+    };
+    if previous_output.width != carrier.width || previous_output.height != carrier.height {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "previous output is {}x{}, carrier is {}x{}",
+            previous_output.width, previous_output.height, carrier.width, carrier.height
+        )));
+    }
+
+    let plan =
+        FlowDisplaceDispatchPlan::new(carrier.width, carrier.height, settings.carrier_amount)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(ADVECT_FEEDBACK_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(ADVECT_FEEDBACK_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let carrier_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let previous_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let flow_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RG32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&carrier_texture, carrier)?;
+    upload_rgba_f32_texture(&previous_texture, previous_output)?;
+    upload_rg_f32_texture(&flow_texture, flow)?;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&carrier_texture));
+    encoder.set_texture(1, Some(&previous_texture));
+    encoder.set_texture(2, Some(&flow_texture));
+    encoder.set_texture(3, Some(&output_texture));
+    let params = AdvectFeedbackParams {
+        carrier_amount: settings.carrier_amount,
+        feedback_amount: settings.feedback_amount,
+        feedback_mix: settings.feedback_mix,
+        decay: settings.decay,
+        width: plan.width,
+        height: plan.height,
+    };
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<AdvectFeedbackParams>() as u64,
+        (&params as *const AdvectFeedbackParams).cast(),
     );
     encoder.dispatch_thread_groups(
         MTLSize::new(
@@ -238,7 +367,9 @@ fn checked_image_bytes(height: u32, bytes_per_row: usize) -> Result<usize, Metal
 
 #[cfg(test)]
 mod tests {
-    use morphogen_render::{flow_displace_cpu, FlowField, ImageBufferF32};
+    use morphogen_render::{
+        flow_displace_cpu, flow_feedback_frame_cpu, FlowFeedbackSettings, FlowField, ImageBufferF32,
+    };
 
     use super::*;
 
@@ -279,6 +410,53 @@ mod tests {
                 return;
             }
             Err(error) => panic!("metal render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 0.000_01);
+    }
+
+    #[test]
+    fn metal_flow_feedback_matches_cpu_reference_on_tiny_fixture() {
+        let carrier = ImageBufferF32::new(
+            3,
+            1,
+            vec![
+                [0.1, 0.0, 0.0, 1.0],
+                [0.5, 0.0, 0.0, 1.0],
+                [0.9, 0.0, 0.0, 1.0],
+            ],
+        )
+        .expect("carrier");
+        let previous = ImageBufferF32::new(
+            3,
+            1,
+            vec![
+                [0.2, 0.0, 0.0, 1.0],
+                [0.4, 0.0, 0.0, 1.0],
+                [0.8, 0.0, 0.0, 1.0],
+            ],
+        )
+        .expect("previous");
+        let flow = FlowField::new(3, 1, vec![[0.5, 0.0]; 3]).expect("flow");
+        let settings = FlowFeedbackSettings {
+            carrier_amount: 0.5,
+            feedback_amount: 0.75,
+            feedback_mix: 0.6,
+            decay: 0.9,
+            iterations: 1,
+        };
+
+        let cpu = flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, settings)
+            .expect("cpu render");
+        let gpu = match flow_feedback_metal(&carrier, Some(&previous), &flow, settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal feedback parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal feedback render failed: {error}"),
         };
 
         assert_image_near(&gpu, &cpu, 0.000_01);

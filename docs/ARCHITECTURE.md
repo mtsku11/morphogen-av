@@ -19,6 +19,8 @@ The first implementation lives in Rust. The macOS app will call into it through 
 
 Project validation now checks known node-port signal types for modulation routes, so an optical-flow vector field can modulate a displacement vector field while scalar envelopes, spectra, images, and grain indexes are rejected for incompatible parameters.
 
+Stateful temporal render nodes must declare their frame-zero behavior, the exact prior-frame state they consume, and the checkpoint representation needed to resume at a later frame. A render must resume from an unquantized internal state buffer, never from a display PNG, so CPU and Metal jobs remain frame-addressable and reproducible.
+
 ## 2. Metal GPU System
 
 Metal is the production GPU backend for Apple Silicon. The initial repo includes `.metal` shader skeletons and Rust placeholder modules for device, pipeline, and texture ownership.
@@ -56,4 +58,4 @@ The offline render queue is the quality path. It should eventually support:
 
 Realtime preview should reuse the same graph semantics but may use lower resolution, lower precision, or partial cache data.
 
-The current CLI has a deterministic dev queue executor that writes a single-frame PNG sequence, a 32-bit float WAV stem, a resume checkpoint, and an output manifest with frame/sample timing metadata for the first queued or running test job. It also persists that output directory, completed artifact paths, and timing contract on the render job after each checkpoint. A second `frame_sequence_flow_displace` job type renders paired source frame directories into a `frames/` bundle, persists modulator/carrier paths plus flow-cache algorithm provenance, and writes the same manifest/checkpoint contract for direct ProRes export. This is not the final scheduler, but it proves the intended output bundle shape, provenance handoff, and export timing handoff.
+The current CLI has a deterministic dev queue executor that writes a single-frame PNG sequence, a 32-bit float WAV stem, a resume checkpoint, and an output manifest with frame/sample timing metadata for the first queued or running test job. `frame_sequence_flow_displace` renders paired source frames into a ProRes-ready `frames/` bundle with flow-cache provenance. `frame_sequence_flow_feedback` adds frame-addressable temporal state: after every completed frame it writes `checkpoint.json` plus a checksummed unquantized RGBA32F previous-output buffer. Its contract includes input frame fingerprints, render settings, reset frame, and analysis provenance, so changed inputs or settings reject stale state rather than silently resuming. This is not the final scheduler, but it proves the intended output bundle shape, provenance handoff, and temporal resume semantics.

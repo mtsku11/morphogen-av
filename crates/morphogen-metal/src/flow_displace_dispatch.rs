@@ -2,6 +2,8 @@ use thiserror::Error;
 
 pub const FLOW_DISPLACE_KERNEL_NAME: &str = "flow_displace";
 pub const FLOW_DISPLACE_SHADER_SOURCE: &str = include_str!("../shaders/flow_displace.metal");
+pub const ADVECT_FEEDBACK_KERNEL_NAME: &str = "advect_feedback";
+pub const ADVECT_FEEDBACK_SHADER_SOURCE: &str = include_str!("../shaders/advect_feedback.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -50,6 +52,12 @@ pub enum MetalDispatchError {
     MissingKernelEntryPoint,
     #[error("flow_displace.metal does not contain the expected texture binding layout")]
     MissingTextureBindingLayout,
+    #[error("advect_feedback.metal does not contain the expected kernel entry point")]
+    MissingFeedbackKernelEntryPoint,
+    #[error("advect_feedback.metal does not contain the expected texture binding layout")]
+    MissingFeedbackTextureBindingLayout,
+    #[error("invalid flow feedback settings: {0}")]
+    InvalidFeedbackSettings(String),
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -112,6 +120,25 @@ pub fn validate_flow_displace_shader_source() -> Result<(), MetalDispatchError> 
     Ok(())
 }
 
+pub fn validate_advect_feedback_shader_source() -> Result<(), MetalDispatchError> {
+    if !ADVECT_FEEDBACK_SHADER_SOURCE.contains("kernel void advect_feedback") {
+        return Err(MetalDispatchError::MissingFeedbackKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::sample> currentCarrier [[texture(0)]]",
+        "texture2d<float, access::sample> previousOutput [[texture(1)]]",
+        "texture2d<float, access::read> velocityField [[texture(2)]]",
+        "texture2d<float, access::write> output [[texture(3)]]",
+    ] {
+        if !ADVECT_FEEDBACK_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingFeedbackTextureBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -168,5 +195,10 @@ mod tests {
                 TextureRole::OutputRgbaFloatWrite,
             ]
         );
+    }
+
+    #[test]
+    fn checked_in_feedback_shader_has_expected_bindings() {
+        validate_advect_feedback_shader_source().expect("feedback shader preflight");
     }
 }

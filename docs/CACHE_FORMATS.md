@@ -57,6 +57,10 @@ Audio/video grain start times, durations, descriptors, media provenance, and cac
 
 Render settings, frame ranges, output targets, cache dependencies, resume checkpoints, and status.
 
+## Temporal Feedback Checkpoints
+
+Feedback state is render state, not reusable analysis. The implemented feedback bundle writes `checkpoint.json` beside immutable `state/feedback_frame_*.rgba32f` files after every frame. The checkpoint references the last acknowledged state file, so an interrupted write cannot replace the state required by the prior checkpoint. The JSON checkpoint contains contract version, next frame index, node settings, reset frame, input frame checksums, source/cache provenance, state path, and state descriptor. The binary state file stores `MGFDBK01`, little-endian version, width, height, FNV-1a-64 checksum, then unquantized row-major RGBA32F pixels. PNG or ProRes outputs are export artifacts and are never read back to resume a deterministic job. A changed input fingerprint, settings value, analysis producer, or state checksum rejects the checkpoint.
+
 ## Frame Provenance
 
 Frame-level records of source inputs, analysis cache versions, node graph hash, and render kernel versions. This is important for reproducibility and debugging.

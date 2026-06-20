@@ -69,6 +69,23 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    FrameSequenceFlowFeedback {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        flow_cache_directory: Option<String>,
+        carrier_amount: f32,
+        feedback_amount: f32,
+        feedback_mix: f32,
+        decay: f32,
+        iterations: u32,
+        max_frames: Option<u32>,
+        #[serde(default)]
+        reset_at_frame: Option<u32>,
+        frame_rate: f64,
+        #[serde(default)]
+        backend: RenderBackend,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,5 +177,30 @@ mod tests {
             panic!("expected frame-sequence task");
         };
         assert_eq!(backend, RenderBackend::Cpu);
+    }
+
+    #[test]
+    fn feedback_task_serializes_temporal_parameters() {
+        let task = RenderJobTask::FrameSequenceFlowFeedback {
+            modulator_frame_directory: "/tmp/mod".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            flow_cache_directory: Some("/tmp/out/cache/flow".to_string()),
+            carrier_amount: 12.0,
+            feedback_amount: 24.0,
+            feedback_mix: 0.72,
+            decay: 0.995,
+            iterations: 1,
+            max_frames: Some(48),
+            reset_at_frame: Some(12),
+            frame_rate: 24.0,
+            backend: RenderBackend::Cpu,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize feedback task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize feedback task");
+
+        assert_eq!(decoded, task);
     }
 }

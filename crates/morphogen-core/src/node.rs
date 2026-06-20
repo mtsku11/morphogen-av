@@ -121,6 +121,7 @@ fn render_output_signal(processor: &str, output: &str) -> Option<SignalType> {
         ("flow_displace_cpu_reference", "image") => Some(SignalType::RgbaImage),
         ("flow_displace", "image") => Some(SignalType::RgbaImage),
         ("flow_displace_metal", "image") => Some(SignalType::RgbaImage),
+        ("flow_feedback", "image") => Some(SignalType::RgbaImage),
         _ => None,
     }
 }
@@ -135,6 +136,33 @@ fn render_parameter_signal(processor: &str, parameter: &str) -> Option<SignalTyp
         ("flow_displace_cpu_reference", "displacement_amount") => Some(SignalType::ScalarControl),
         ("flow_displace", "displacement_amount") => Some(SignalType::ScalarControl),
         ("flow_displace_metal", "displacement_amount") => Some(SignalType::ScalarControl),
+        ("flow_feedback", "displacement_vector_field") => Some(SignalType::VectorField2D),
+        ("flow_feedback", "carrier_amount") => Some(SignalType::ScalarControl),
+        ("flow_feedback", "feedback_amount") => Some(SignalType::ScalarControl),
+        ("flow_feedback", "feedback_mix") => Some(SignalType::ScalarControl),
+        ("flow_feedback", "decay") => Some(SignalType::ScalarControl),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flow_feedback_declares_its_typed_ports() {
+        let node = NodeKind::Render {
+            processor: "flow_feedback".to_string(),
+        };
+
+        assert_eq!(node.output_signal("image"), Some(SignalType::RgbaImage));
+        assert_eq!(
+            node.parameter_signal("displacement_vector_field"),
+            Some(SignalType::VectorField2D)
+        );
+        assert_eq!(
+            node.parameter_signal("feedback_mix"),
+            Some(SignalType::ScalarControl)
+        );
     }
 }
