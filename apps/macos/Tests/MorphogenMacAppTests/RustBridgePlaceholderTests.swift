@@ -50,6 +50,76 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertThrowsError(try RustBridgePlaceholder.queueAddFrameSequenceArguments(request: request))
   }
 
+  func testQueuedFeedbackSequenceArgumentsIncludeFlowControls() throws {
+    let request = FeedbackSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      carrierAmount: 1.5,
+      feedbackAmount: 2.0,
+      feedbackMix: 0.72,
+      decay: 0.995,
+      iterations: 1,
+      outputBitDepth: .png16,
+      temporalSupersampling: 2,
+      maxFrames: 48,
+      resetAtFrame: 24,
+      frameRate: 24.0,
+      writesFlowCache: true,
+      backend: .metal,
+      flowSource: .opticalFlow,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request)
+
+    XCTAssertEqual(arguments.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-feedback-sequence"])
+    XCTAssertTrue(arguments.contains("--carrier-amount"))
+    XCTAssertTrue(arguments.contains("1.5"))
+    XCTAssertTrue(arguments.contains("--feedback-amount"))
+    XCTAssertTrue(arguments.contains("2"))
+    XCTAssertTrue(arguments.contains("--feedback-mix"))
+    XCTAssertTrue(arguments.contains("0.72"))
+    XCTAssertTrue(arguments.contains("--decay"))
+    XCTAssertTrue(arguments.contains("0.995"))
+    XCTAssertTrue(arguments.contains("--iterations"))
+    XCTAssertTrue(arguments.contains("--output-bit-depth"))
+    XCTAssertTrue(arguments.contains("16"))
+    XCTAssertTrue(arguments.contains("--temporal-supersampling"))
+    XCTAssertTrue(arguments.contains("--reset-at-frame"))
+    XCTAssertTrue(arguments.contains("24"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
+    XCTAssertTrue(arguments.contains("--flow-source"))
+    XCTAssertTrue(arguments.contains("optical-flow"))
+  }
+
+  func testQueuedFeedbackSequenceArgumentsRejectUnsupportedIterations() {
+    let request = FeedbackSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      carrierAmount: 1.5,
+      feedbackAmount: 2.0,
+      feedbackMix: 0.72,
+      decay: 0.995,
+      iterations: 2,
+      outputBitDepth: .png8,
+      temporalSupersampling: 1,
+      maxFrames: nil,
+      resetAtFrame: nil,
+      frameRate: 24.0,
+      writesFlowCache: true,
+      backend: .cpu,
+      flowSource: .opticalFlow,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request))
+  }
+
   func testMediaProxyArgumentsIncludeFrameAndAudioExtraction() throws {
     let request = MediaProxyExtractionCommandRequest(
       sourceURL: URL(fileURLWithPath: "/tmp/source.mov"),

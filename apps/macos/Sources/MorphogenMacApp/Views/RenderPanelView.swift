@@ -121,6 +121,12 @@ struct RenderPanelView: View {
             .lineLimit(3)
             .foregroundStyle(.secondary)
         }
+        GridRow {
+          Label("Flow Feedback", systemImage: "arrow.triangle.2.circlepath")
+          Text(state.feedbackSummary)
+            .lineLimit(3)
+            .foregroundStyle(.secondary)
+        }
       }
 
       VStack(alignment: .leading, spacing: 8) {
@@ -237,6 +243,103 @@ struct RenderPanelView: View {
             state.exportLastFrameSequenceProResMovie()
           } label: {
             Label("Export Sequence ProRes MOV", systemImage: "film.badge.plus")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Temporal Flow Feedback")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Picker("Preset", selection: $state.feedbackPreset) {
+              ForEach(FeedbackPresetOption.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+              }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 190)
+
+            Picker("Flow Source", selection: $state.feedbackFlowSource) {
+              ForEach(FeedbackFlowSourceOption.allCases) { source in
+                Text(source.rawValue).tag(source)
+              }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 180)
+
+            Picker("Backend", selection: $state.feedbackBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+
+            Picker("Iterations", selection: $state.feedbackIterations) {
+              Text("1").tag(1)
+            }
+            .pickerStyle(.menu)
+            .frame(width: 100)
+
+            Picker("Output", selection: $state.feedbackOutputBitDepth) {
+              ForEach(FeedbackOutputBitDepthOption.allCases) { bitDepth in
+                Text(bitDepth.rawValue).tag(bitDepth)
+              }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 130)
+
+            Picker("Temporal Samples", selection: $state.feedbackTemporalSupersampling) {
+              Text("1x").tag(1)
+              Text("2x").tag(2)
+              Text("4x").tag(4)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 170)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.feedbackCarrierAmount, in: 0...8, step: 0.25) {
+              Text("Carrier \(state.feedbackCarrierAmount, specifier: "%.2f")")
+            }
+            .frame(width: 155, alignment: .leading)
+
+            Stepper(value: $state.feedbackAmount, in: 0...12, step: 0.25) {
+              Text("Feedback \(state.feedbackAmount, specifier: "%.2f")")
+            }
+            .frame(width: 165, alignment: .leading)
+
+            Stepper(value: $state.feedbackMix, in: 0...1, step: 0.01) {
+              Text("Mix \(state.feedbackMix, specifier: "%.2f")")
+            }
+            .frame(width: 125, alignment: .leading)
+
+            Stepper(value: $state.feedbackDecay, in: 0...1, step: 0.001) {
+              Text("Decay \(state.feedbackDecay, specifier: "%.3f")")
+            }
+            .frame(width: 145, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Toggle("Write Flow Cache", isOn: $state.feedbackWritesFlowCache)
+              .toggleStyle(.checkbox)
+
+            Toggle("Reset Feedback", isOn: $state.feedbackResetEnabled)
+              .toggleStyle(.checkbox)
+
+            Stepper(value: $state.feedbackResetAtFrame, in: 0...state.frameSequenceMaxFrames - 1) {
+              Text("Reset Frame \(state.feedbackResetAtFrame)")
+            }
+            .disabled(!state.feedbackResetEnabled)
+            .frame(width: 160, alignment: .leading)
+
+            Button {
+              state.runFlowFeedbackSequenceRender()
+            } label: {
+              Label("Run Flow Feedback", systemImage: "arrow.triangle.2.circlepath")
+            }
           }
         }
 

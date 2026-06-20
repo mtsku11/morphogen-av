@@ -18,8 +18,8 @@ This repository is an initial production-quality scaffold with deterministic ver
 - Typed node-port compatibility checks for known analysis outputs and render parameters in `morphogen-core`.
 - Optional external FFmpeg/FFprobe command wrappers in `morphogen-media`.
 - Portable audio buffer, WAV loading/export, RMS envelope, spectral centroid, STFT magnitude cache, and onset-strength scaffolding in `morphogen-audio`.
-- Float RGBA CPU image buffers, flow fields, bilinear sampling, luminance-gradient flow generation, flow displacement, and versioned flow cache sidecars in `morphogen-render`.
-- Deterministic temporal flow feedback with explicit frame-zero/reset semantics, CPU/Metal parity, and resumable RGBA32F state checkpoints.
+- Float RGBA CPU image buffers, flow fields, bilinear sampling, luminance-gradient flow generation, temporal pyramidal Lucas-Kanade flow with forward/backward confidence, flow displacement, and versioned reusable flow cache sidecars in `morphogen-render`.
+- Deterministic temporal flow feedback with explicit frame-zero/reset semantics, CPU/Metal parity, resumable RGBA32F state checkpoints, 8/16-bit PNG exports, and export-only flow-guided temporal supersampling.
 - A checked-in tiny golden fixture for CPU flow-displacement output.
 - Metal backend placeholders plus a first flow-displacement compute kernel in `morphogen-metal`.
 - Rust-side Metal dispatch planning, shader preflight, and macOS runtime submission for the flow-displacement kernel.
@@ -35,6 +35,7 @@ This repository is an initial production-quality scaffold with deterministic ver
 - Configurable ProRes `.mov` export from a selected PNG frame directory through AVAssetWriter with VideoToolbox encoder selection.
 - SwiftUI controls for extracting selected movies into paired PNG/WAV proxy directories through the dev CLI bridge, then recording their RMS/STFT sidecars on the active project.
 - SwiftUI controls for choosing Source A/Source B frame directories and submitting a real two-source frame-sequence CPU render as a persisted queue job.
+- SwiftUI flow-feedback controls for amount, decay, reset behavior, source, backend, and a first stable/aggressive/reset-driven preset library backed by persisted queue jobs.
 - Queue manifests contain the modulator/carrier directories and the generated flow-cache provenance; completed bundles export directly to configurable ProRes `.mov`.
 - Direct configurable ProRes `.mov` export from the render queue output bundle's `frames/` directory with the first WAV stem muxed as a PCM audio track.
 - Dev-only Swift-to-CLI bridge for project commands, media proxy extraction, queue submission, and CPU reference rendering.
@@ -44,9 +45,9 @@ This repository is an initial production-quality scaffold with deterministic ver
 - The SwiftUI shell does not link Rust directly yet; it can invoke the local CLI during development.
 - Metal runtime integration is wired into a CLI validation command but not into the SwiftUI shell yet.
 - The source preview surface is a first-frame diagnostic thumbnail, not a realtime timeline or node-graph preview yet.
-- Real optical flow, depth, masks, EXR output, and production render-queue execution are future work.
+- Occlusion-aware flow masks, depth, EXR output, and production render-queue execution are future work.
 - FFmpeg is optional and external; if it is missing, media commands return a clear error.
-- Arbitrary frame-directory VideoToolbox export is still video-only; multi-stem muxing and high-bit-depth pixel-buffer paths are future work.
+- The 16-bit PNG feedback sequence is an archival output; the current VideoToolbox ProRes handoff draws into an 8-bit pixel buffer. Multi-stem muxing and high-bit-depth pixel-buffer paths are future work.
 
 ## Prerequisites
 
@@ -141,10 +142,10 @@ cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queu
 Render a temporal feedback bundle. The output contains `frames/`, generated flow-cache sidecars, `checkpoint.json`, and immutable unquantized `state/feedback_frame_*.rgba32f` resume buffers:
 
 ```sh
-cargo run -p morphogen-cli -- render-feedback-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --carrier-amount 12 --feedback-amount 24 --feedback-mix 0.72 --decay 0.995 --max-frames 120 --frame-rate 24 --backend metal
+cargo run -p morphogen-cli -- render-feedback-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --flow-source optical-flow --carrier-amount 1.5 --feedback-amount 2 --feedback-mix 0.72 --decay 0.995 --output-bit-depth 16 --temporal-supersampling 2 --max-frames 120 --frame-rate 24 --backend metal
 ```
 
-`--stop-after-frame` writes a resumable checkpoint; rerun the same command to continue. `--reset-at-frame 48` makes that output frame use the documented frame-zero behavior before feedback continues. The queue variant persists the same contract:
+Add `--flow-cache-dir /tmp/morphogen-optical-flow-cache` to reuse validated temporal fields on later renders. `--output-bit-depth` accepts `8` or `16`; `--temporal-supersampling` integrates centered samples along the current flow for the exported PNG without changing the one-state-update-per-frame checkpoint contract. `--stop-after-frame` writes a resumable checkpoint; rerun the same command to continue. `--reset-at-frame 48` makes that output frame use the documented frame-zero behavior before feedback continues. The queue variant persists the same contract:
 
 ```sh
 cargo run -p morphogen-cli -- queue-add-feedback-sequence /tmp/morphogen-feedback-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --backend metal
@@ -189,4 +190,4 @@ The source buttons open native file pickers. Create Test Project writes an examp
 
 ## Future Direction
 
-The first deterministic flow-feedback milestone is complete: Source A's luminance-gradient signal repeatedly moves and blends Source B with the previous output frame, with CPU/Metal parity and float-state resume. The next quality step is to replace that spatial gradient with a cached, deterministic temporal optical-flow analysis while preserving the same temporal render contract. Details are in [Flow Feedback Milestone](docs/FLOW_FEEDBACK_MILESTONE.md).
+The first deterministic flow-feedback milestone is complete: Source A's temporal pyramidal Lucas-Kanade vector field repeatedly moves and blends Source B with the previous output frame, with CPU/Metal parity, reusable validated sidecars, forward/backward reliability checks, and float-state resume. The next step is exposing that proven contract through SwiftUI controls and effect presets. Details are in [Flow Feedback Milestone](docs/FLOW_FEEDBACK_MILESTONE.md).

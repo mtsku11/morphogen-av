@@ -101,6 +101,54 @@ pub fn flow_feedback_frame_cpu(
     })
 }
 
+/// Applies centered flow-guided temporal integration to an exported frame
+/// without changing the feedback state that produced it. `samples == 1`
+/// returns the original float frame exactly, preserving the checkpoint path.
+pub fn flow_temporal_supersample_cpu(
+    image: &ImageBufferF32,
+    flow: &FlowField,
+    amount: f32,
+    samples: u32,
+) -> Result<ImageBufferF32, RenderError> {
+    if image.width != flow.width || image.height != flow.height {
+        return Err(RenderError::IncompatibleInputs(format!(
+            "image is {}x{}, flow is {}x{}",
+            image.width, image.height, flow.width, flow.height
+        )));
+    }
+    if !amount.is_finite() {
+        return Err(RenderError::InvalidFlowFeedbackSettings(
+            "temporal supersampling amount must be finite".to_string(),
+        ));
+    }
+    if samples == 0 {
+        return Err(RenderError::InvalidFlowFeedbackSettings(
+            "temporal supersampling must use at least one sample".to_string(),
+        ));
+    }
+    if samples == 1 {
+        return Ok(image.clone());
+    }
+
+    ImageBufferF32::from_fn(image.width, image.height, |x, y| {
+        let vector = flow.vector(x, y).unwrap_or([0.0, 0.0]);
+        let mut accumulated = [0.0; 4];
+        for sample_index in 0..samples {
+            let shutter_offset = (sample_index as f32 + 0.5) / samples as f32 - 0.5;
+            let sample = sample_bilinear_clamped(
+                image,
+                x as f32 + vector[0] * amount * shutter_offset,
+                y as f32 + vector[1] * amount * shutter_offset,
+            );
+            for channel in 0..4 {
+                accumulated[channel] += sample[channel];
+            }
+        }
+        let inverse_sample_count = 1.0 / samples as f32;
+        accumulated.map(|value| value * inverse_sample_count)
+    })
+}
+
 fn mix_rgba(a: [f32; 4], b: [f32; 4], amount: f32) -> [f32; 4] {
     [
         a[0] + (b[0] - a[0]) * amount,

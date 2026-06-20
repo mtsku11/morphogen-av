@@ -34,6 +34,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultFeedbackSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-feedback-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -94,6 +100,40 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func runQueuedFeedbackSequenceRender(
+    request: FeedbackSequenceRenderQueueCommandRequest
+  ) throws -> FeedbackSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddFeedbackSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-feedback-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FeedbackSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
   static func queueAddFrameSequenceArguments(
     request: FrameSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -134,6 +174,99 @@ enum RustBridgePlaceholder {
       arguments.append(String(maxFrames))
     }
 
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func queueAddFeedbackSequenceArguments(
+    request: FeedbackSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    for (name, value) in [
+      ("carrier amount", request.carrierAmount),
+      ("feedback amount", request.feedbackAmount),
+      ("feedback mix", request.feedbackMix),
+      ("decay", request.decay),
+      ("frame rate", request.frameRate)
+    ] {
+      guard value.isFinite else {
+        throw RustBridgeError.invalidFrameSequenceRequest("\(name) must be finite")
+      }
+    }
+    guard (0...1).contains(request.feedbackMix) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("feedback mix must be between zero and one")
+    }
+    guard request.decay >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("decay must be greater than or equal to zero")
+    }
+    guard request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive")
+    }
+    guard request.iterations == 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "the first flow-feedback renderer supports exactly one iteration"
+      )
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+    guard request.temporalSupersampling > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "temporal supersampling must use at least one sample"
+      )
+    }
+    if let resetAtFrame = request.resetAtFrame, resetAtFrame < 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("reset frame must not be negative")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-feedback-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--carrier-amount",
+      cliNumber(request.carrierAmount),
+      "--feedback-amount",
+      cliNumber(request.feedbackAmount),
+      "--feedback-mix",
+      cliNumber(request.feedbackMix),
+      "--decay",
+      cliNumber(request.decay),
+      "--iterations",
+      String(request.iterations),
+      "--output-bit-depth",
+      request.outputBitDepth.cliValue,
+      "--temporal-supersampling",
+      String(request.temporalSupersampling),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--backend",
+      request.backend.cliValue,
+      "--flow-source",
+      request.flowSource.cliValue
+    ]
+
+    if !request.writesFlowCache {
+      arguments.append("--no-flow-cache")
+    }
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let resetAtFrame = request.resetAtFrame {
+      arguments.append("--reset-at-frame")
+      arguments.append(String(resetAtFrame))
+    }
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -509,6 +642,33 @@ struct FrameSequenceRenderQueueCommandRequest {
 }
 
 struct FrameSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct FeedbackSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let carrierAmount: Double
+  let feedbackAmount: Double
+  let feedbackMix: Double
+  let decay: Double
+  let iterations: Int
+  let outputBitDepth: FeedbackOutputBitDepthOption
+  let temporalSupersampling: Int
+  let maxFrames: Int?
+  let resetAtFrame: Int?
+  let frameRate: Double
+  let writesFlowCache: Bool
+  let backend: FeedbackRenderBackendOption
+  let flowSource: FeedbackFlowSourceOption
+  let projectURL: URL?
+}
+
+struct FeedbackSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

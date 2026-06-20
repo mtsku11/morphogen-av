@@ -4,14 +4,15 @@ Cache files are reusable sidecars derived from source media, analysis settings, 
 
 ## Optical Flow Fields
 
-Dense per-frame vector fields with width, height, coordinate convention, frame index, source timing, and algorithm version.
+Dense per-frame vector fields with width, height, coordinate convention, frame index, source timing, algorithm version, and input fingerprint.
 
 The first implemented cache format is a single-frame `flow_field_f32` directory written by `morphogen-render`:
 
-- `manifest.json` stores `version`, `kind`, `algorithm`, `width`, `height`, coordinate-space notes, vector-unit notes, and frame file records.
+- `manifest.json` stores `version`, `kind`, `algorithm`, `width`, `height`, coordinate-space notes, vector-unit notes, vector convention, optional source fingerprint, and frame file records.
 - `frame_000000.flowf32` stores `MGFLW001`, little-endian `u32` width/height, then little-endian `f32` x/y vectors in row-major order.
-- Coordinates are output pixel coordinates. Vectors are pixel offsets before the render node's `amount` scale is applied.
-- The current CLI can write synthetic swirl flow caches, luminance-gradient flow caches, and frame-sequence cache roots where each rendered frame has a `frame_000000/`, `frame_000001/`, etc. subdirectory containing a v1 single-frame cache. Multi-frame source timing and provenance are next.
+- Coordinates are output pixel coordinates. Vectors are pixel offsets before the render node's `amount` scale is applied. The `backward_sampling_offset` convention means the renderer adds the vector to the output coordinate before sampling; temporal forward motion is inverted when it is written to this format.
+- Version 2 sidecars support an optional source fingerprint. Feedback jobs reuse a temporal field only when that fingerprint, algorithm, dimensions, and vector convention match the active render contract. Pyramidal Lucas-Kanade (`pyramidal_lucas_kanade_cpu_v1`) keeps this same payload and writes only vectors that passed its transient forward/backward confidence check; the confidence maps remain available to analysis nodes but are not serialized in the first cache format. Legacy v1 sidecars remain readable but are regenerated for temporal feedback.
+- The current CLI can write synthetic swirl flow caches, luminance-gradient flow caches, and frame-sequence cache roots where each rendered frame has a `frame_000000/`, `frame_000001/`, etc. subdirectory containing a single-frame cache.
 
 ## Masks
 
@@ -59,7 +60,7 @@ Render settings, frame ranges, output targets, cache dependencies, resume checkp
 
 ## Temporal Feedback Checkpoints
 
-Feedback state is render state, not reusable analysis. The implemented feedback bundle writes `checkpoint.json` beside immutable `state/feedback_frame_*.rgba32f` files after every frame. The checkpoint references the last acknowledged state file, so an interrupted write cannot replace the state required by the prior checkpoint. The JSON checkpoint contains contract version, next frame index, node settings, reset frame, input frame checksums, source/cache provenance, state path, and state descriptor. The binary state file stores `MGFDBK01`, little-endian version, width, height, FNV-1a-64 checksum, then unquantized row-major RGBA32F pixels. PNG or ProRes outputs are export artifacts and are never read back to resume a deterministic job. A changed input fingerprint, settings value, analysis producer, or state checksum rejects the checkpoint.
+Feedback state is render state, not reusable analysis. The implemented feedback bundle writes `checkpoint.json` beside immutable `state/feedback_frame_*.rgba32f` files after every frame. The checkpoint references the last acknowledged state file, so an interrupted write cannot replace the state required by the prior checkpoint. The JSON checkpoint contains contract version, next frame index, node settings, reset frame, output bit depth, temporal sample count, input frame checksums, source/cache provenance, state path, and state descriptor. The binary state file stores `MGFDBK01`, little-endian version, width, height, FNV-1a-64 checksum, then unquantized row-major RGBA32F pixels. PNG or ProRes outputs are export artifacts and are never read back to resume a deterministic job. Feedback PNG exports support 8-bit and 16-bit output; temporal supersampling filters only the export, never its stored float state. A changed input fingerprint, settings value, analysis producer, export setting, or state checksum rejects the checkpoint.
 
 ## Frame Provenance
 

@@ -31,7 +31,7 @@ The CPU renderer remains the reference implementation. GPU kernels must match th
 
 Analysis is reusable sidecar data. Planned cache types include optical flow, masks, depth maps, audio RMS envelopes, STFT frames, onset maps, spectral descriptors, grain indexes, and future motion-vector data.
 
-The cache manifest is part of project-level orchestration but cache files should remain regenerable from source media and analysis settings.
+The cache manifest is part of project-level orchestration but cache files should remain regenerable from source media and analysis settings. Temporal optical-flow sidecars carry their algorithm, output dimensions, sampling convention, and source fingerprint; renderers may reuse only a matching sidecar and regenerate stale analysis deterministically.
 
 ## 4. Node Graph UI
 

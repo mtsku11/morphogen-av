@@ -20,7 +20,7 @@ The Metal backend should provide:
 
 ## Flow Displacement
 
-Flow displacement samples the carrier at coordinates offset by a vector field derived from the modulator. The CPU and Metal implementations should agree on coordinate conventions and border behavior.
+Flow displacement samples the carrier at coordinates offset by a vector field derived from the modulator. A flow vector is a `backward_sampling_offset`: it is added to the output coordinate before sampling. Temporal Lucas-Kanade analysis converts its forward motion estimate into this convention and scales it into output pixels before the shared CPU/Metal displacement path consumes it. The CPU and Metal implementations should agree on coordinate conventions and border behavior.
 
 `crates/morphogen-metal/shaders/flow_displace.metal` now contains the first concrete compute kernel body. It expects a carrier texture, an RG32F flow texture in output pixel coordinates, an output texture, and an `amount` parameter. It mirrors the CPU reference behavior by reading one flow vector per output pixel, sampling the carrier with linear filtering, and clamping at texture borders.
 
@@ -41,8 +41,8 @@ Flow feedback is now a CPU/Metal temporal render path with one shared contract:
 
 ## Image Pyramids and Optical Flow
 
-Image pyramids support multiscale analysis such as coarse-to-fine optical flow. The first serious optical-flow implementation should probably be a classical deterministic method before optional neural flow backends are considered.
+The current optical-flow source is deterministic coarse-to-fine pyramidal Lucas-Kanade. It uses iterative warping at each level and forward/backward confidence checks before emitting the renderer's backward-sampling field; this remains a testable CPU reference before a Metal analysis implementation. A future quality pass can add robust weighting and use confidence maps for explicit occlusion masks. Horn-Schunck can later be an intentionally smooth optional field, but it is not the production replacement because its global regularization blurs motion boundaries and does not solve large displacement alone. Optional neural backends can be evaluated later.
 
 ## Offline vs Preview
 
-Offline renders prioritize quality, determinism, float precision, and resumability. Realtime preview may use lower resolution, fewer iterations, or cached approximations, but must preserve graph semantics.
+Offline renders prioritize quality, determinism, float precision, and resumability. Feedback's 8/16-bit PNG export can optionally use CPU flow-guided temporal integration after the CPU/Metal state parity gate; its RGBA32F checkpoint remains the unfiltered canonical state. The current ProRes handoff still converts image sequences through an 8-bit pixel buffer, so a 16-bit PNG sequence is the archival output until a high-bit-depth VideoToolbox path lands. Realtime preview may use lower resolution, fewer iterations, or cached approximations, but must preserve graph semantics.

@@ -10,17 +10,26 @@ pub mod luminance_flow;
 pub mod optical_flow;
 pub mod sampler;
 
-pub use cpu_reference::{flow_displace_cpu, flow_feedback_frame_cpu, FlowFeedbackSettings};
+pub use cpu_reference::{
+    flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu, FlowFeedbackSettings,
+};
 pub use error::RenderError;
 pub use feedback_state::{
     feedback_state_path, read_flow_feedback_state, write_flow_feedback_state,
     FlowFeedbackStateDescriptor, FLOW_FEEDBACK_STATE_VERSION,
 };
 pub use flow::FlowField;
-pub use flow_cache::{read_flow_cache, write_flow_cache, FlowCacheFrame, FlowCacheManifest};
+pub use flow_cache::{
+    read_flow_cache, write_flow_cache, write_flow_cache_with_source_fingerprint, FlowCacheFrame,
+    FlowCacheManifest, FLOW_VECTOR_CONVENTION,
+};
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
-pub use optical_flow::{lucas_kanade_flow_cpu, LUCAS_KANADE_WINDOW_RADIUS};
+pub use optical_flow::{
+    lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu, FlowConfidenceMap,
+    PyramidalLucasKanadeEstimate, LUCAS_KANADE_WINDOW_RADIUS, PYRAMIDAL_LUCAS_KANADE_MAX_LEVELS,
+    PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
+};
 pub use sampler::sample_bilinear_clamped;
 
 #[cfg(test)]
@@ -146,6 +155,40 @@ mod tests {
             &frame_one,
             &ImageBufferF32::new(1, 1, vec![[0.45, 0.0, 0.0, 0.75]]).expect("expected"),
             0.000_001,
+        );
+    }
+
+    #[test]
+    fn temporal_supersampling_blurs_along_the_current_flow_without_mutating_input() {
+        let image = ImageBufferF32::new(
+            3,
+            1,
+            vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        )
+        .expect("image");
+        let flow = FlowField::new(3, 1, vec![[1.0, 0.0]; 3]).expect("flow");
+
+        let integrated =
+            flow_temporal_supersample_cpu(&image, &flow, 1.0, 2).expect("temporal integration");
+
+        assert_eq!(image.pixel(1, 0), Some([1.0, 0.0, 0.0, 1.0]));
+        let center = integrated.pixel(1, 0).expect("center pixel");
+        assert!((center[0] - 0.75).abs() < 0.000_001);
+        assert_eq!(center[3], 1.0);
+    }
+
+    #[test]
+    fn one_temporal_sample_returns_the_exact_float_image() {
+        let image = ImageBufferF32::new(1, 1, vec![[0.123_456, 0.5, 0.75, 1.0]]).expect("image");
+        let flow = FlowField::new(1, 1, vec![[0.0, 0.0]]).expect("flow");
+
+        assert_eq!(
+            flow_temporal_supersample_cpu(&image, &flow, 4.0, 1).expect("one sample"),
+            image
         );
     }
 

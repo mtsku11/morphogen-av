@@ -6,6 +6,9 @@ use crate::RenderError;
 pub struct FlowField {
     pub width: u32,
     pub height: u32,
+    /// Sampling offsets added to each output pixel coordinate before reading a
+    /// carrier or feedback image. Temporal optical flow is converted from
+    /// forward motion into this backward-sampling convention at analysis time.
     pub vectors: Vec<[f32; 2]>,
 }
 

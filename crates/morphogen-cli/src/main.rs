@@ -20,10 +20,11 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
-    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, lucas_kanade_flow_cpu,
-    luminance_gradient_flow_cpu, read_flow_feedback_state, write_flow_cache,
+    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
+    luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
+    read_flow_feedback_state, write_flow_cache, write_flow_cache_with_source_fingerprint,
     write_flow_feedback_state, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
-    ImageBufferF32, RenderError, LUCAS_KANADE_WINDOW_RADIUS,
+    ImageBufferF32, RenderError, FLOW_VECTOR_CONVENTION, LUCAS_KANADE_WINDOW_RADIUS,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -146,6 +147,10 @@ enum Commands {
         decay: f32,
         #[arg(long, default_value_t = 1)]
         iterations: u32,
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
+        #[arg(long, default_value_t = 1)]
+        temporal_supersampling: u32,
         #[arg(long)]
         flow_cache_dir: Option<PathBuf>,
         #[arg(long)]
@@ -217,6 +222,10 @@ enum Commands {
         decay: f32,
         #[arg(long, default_value_t = 1)]
         iterations: u32,
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
+        #[arg(long, default_value_t = 1)]
+        temporal_supersampling: u32,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]
@@ -471,6 +480,8 @@ fn run() -> Result<(), CliError> {
             feedback_mix,
             decay,
             iterations,
+            output_bit_depth,
+            temporal_supersampling,
             flow_cache_dir,
             max_frames,
             reset_at_frame,
@@ -493,6 +504,8 @@ fn run() -> Result<(), CliError> {
                 decay,
                 iterations,
             },
+            output_bit_depth,
+            temporal_supersampling,
             backend: backend.into(),
             flow_source: flow_source.into(),
             job_id: "direct-feedback-sequence",
@@ -549,6 +562,8 @@ fn run() -> Result<(), CliError> {
             feedback_mix,
             decay,
             iterations,
+            output_bit_depth,
+            temporal_supersampling,
             max_frames,
             reset_at_frame,
             frame_rate,
@@ -568,6 +583,8 @@ fn run() -> Result<(), CliError> {
                 decay,
                 iterations,
             },
+            output_bit_depth,
+            temporal_supersampling,
             max_frames,
             reset_at_frame,
             frame_rate,
@@ -1236,9 +1253,9 @@ struct FrameSequenceRenderResult {
     frame_count: usize,
 }
 
-const FLOW_FEEDBACK_RENDER_CONTRACT_VERSION: u32 = 1;
+const FLOW_FEEDBACK_RENDER_CONTRACT_VERSION: u32 = 2;
 const LUMINANCE_FLOW_ALGORITHM: &str = "luminance_gradient_cpu_v1";
-const OPTICAL_FLOW_ALGORITHM: &str = "lucas_kanade_cpu_v1";
+const OPTICAL_FLOW_ALGORITHM: &str = "pyramidal_lucas_kanade_cpu_v1";
 
 /// The recorded analysis-algorithm identifier for a flow source. This string is
 /// part of the feedback render contract, so changing the flow source invalidates
@@ -1250,6 +1267,27 @@ fn flow_source_algorithm(flow_source: FlowSource) -> &'static str {
     }
 }
 
+fn read_cached_temporal_flow(
+    cache_directory: &Path,
+    algorithm: &str,
+    source_fingerprint: &str,
+    width: u32,
+    height: u32,
+) -> Result<Option<FlowField>, CliError> {
+    if !cache_directory.join("manifest.json").is_file() {
+        return Ok(None);
+    }
+
+    let (manifest, flow) = read_flow_cache(cache_directory)?;
+    let is_current = manifest.algorithm == algorithm
+        && manifest.width == width
+        && manifest.height == height
+        && manifest.vector_convention == FLOW_VECTOR_CONVENTION
+        && manifest.source_fingerprint.as_deref() == Some(source_fingerprint);
+
+    Ok(is_current.then_some(flow))
+}
+
 struct FeedbackSequenceRenderRequest<'a> {
     modulator_dir: &'a Path,
     carrier_dir: &'a Path,
@@ -1259,6 +1297,8 @@ struct FeedbackSequenceRenderRequest<'a> {
     reset_at_frame: Option<usize>,
     frame_rate: f64,
     settings: FlowFeedbackSettings,
+    output_bit_depth: u8,
+    temporal_supersampling: u32,
     backend: RenderBackend,
     flow_source: FlowSource,
     job_id: &'a str,
@@ -1280,6 +1320,8 @@ struct FeedbackSequenceContract {
     modulator: FeedbackSequenceSourceFingerprint,
     carrier: FeedbackSequenceSourceFingerprint,
     settings: FlowFeedbackSettings,
+    output_bit_depth: u8,
+    temporal_supersampling: u32,
     backend: RenderBackend,
     reset_at_frame: Option<u32>,
 }
@@ -1309,6 +1351,8 @@ fn render_feedback_sequence(
         reset_at_frame,
         frame_rate,
         settings,
+        output_bit_depth,
+        temporal_supersampling,
         backend,
         flow_source,
         job_id,
@@ -1318,6 +1362,7 @@ fn render_feedback_sequence(
 
     let flow_algorithm = flow_source_algorithm(flow_source);
     settings.validate()?;
+    validate_feedback_export_settings(output_bit_depth, temporal_supersampling)?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
             "frame-rate must be a positive finite number".to_string(),
@@ -1369,6 +1414,8 @@ fn render_feedback_sequence(
         modulator: feedback_source_fingerprint(modulator_dir, &modulator_frames)?,
         carrier: feedback_source_fingerprint(carrier_dir, &carrier_frames)?,
         settings,
+        output_bit_depth,
+        temporal_supersampling,
         backend,
         reset_at_frame,
     };
@@ -1384,40 +1431,93 @@ fn render_feedback_sequence(
 
     let (start_frame, mut previous_output, mut latest_state_path) =
         load_feedback_resume_state(output_dir, job_id, &contract, &provenance, frame_count_u32)?;
+    let mut reused_optical_flow_cache_count = 0usize;
+    let mut generated_optical_flow_cache_count = 0usize;
     for index in start_frame..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
-        let flow = match flow_source {
-            FlowSource::Luminance => {
-                luminance_gradient_flow_cpu(&modulator, carrier.width, carrier.height)?
-            }
+        let is_reset_frame = Some(index as u32) == reset_at_frame;
+        let (flow, generated_temporal_flow_cache, reused_temporal_flow_cache) = match flow_source {
+            FlowSource::Luminance => (
+                luminance_gradient_flow_cpu(&modulator, carrier.width, carrier.height)?,
+                false,
+                false,
+            ),
             FlowSource::OpticalFlow => {
-                // Temporal flow needs a predecessor; frame zero (and any frame
-                // following a reset) has no implicit previous image, so it
-                // renders the carrier with a zero field, matching the contract.
-                if index == 0 {
-                    FlowField::from_fn(carrier.width, carrier.height, |_, _| [0.0, 0.0])?
+                // Frame zero and explicit resets have no temporal history, so
+                // both the history and field are reset together.
+                if index == 0 || is_reset_frame {
+                    (
+                        FlowField::from_fn(carrier.width, carrier.height, |_, _| [0.0, 0.0])?,
+                        false,
+                        false,
+                    )
                 } else {
-                    let previous_modulator = load_image_f32(&modulator_frames[index - 1])?;
-                    lucas_kanade_flow_cpu(
-                        &previous_modulator,
-                        &modulator,
-                        carrier.width,
-                        carrier.height,
-                        LUCAS_KANADE_WINDOW_RADIUS,
-                    )?
+                    let cache_directory =
+                        flow_cache_dir.map(|root| root.join(format!("frame_{index:06}")));
+                    if let Some(flow) = cache_directory
+                        .as_deref()
+                        .map(|directory| {
+                            read_cached_temporal_flow(
+                                directory,
+                                flow_algorithm,
+                                &contract.modulator.checksum,
+                                carrier.width,
+                                carrier.height,
+                            )
+                        })
+                        .transpose()?
+                        .flatten()
+                    {
+                        (flow, false, true)
+                    } else {
+                        let previous_modulator = load_image_f32(&modulator_frames[index - 1])?;
+                        (
+                            pyramidal_lucas_kanade_flow_cpu(
+                                &previous_modulator,
+                                &modulator,
+                                carrier.width,
+                                carrier.height,
+                                LUCAS_KANADE_WINDOW_RADIUS,
+                            )?
+                            .flow,
+                            cache_directory.is_some(),
+                            false,
+                        )
+                    }
                 }
             }
         };
-        let history = (Some(index as u32) != reset_at_frame)
+        reused_optical_flow_cache_count += usize::from(reused_temporal_flow_cache);
+        generated_optical_flow_cache_count += usize::from(generated_temporal_flow_cache);
+        let history = (!is_reset_frame)
             .then_some(previous_output.as_ref())
             .flatten();
         let output = render_feedback_frame(&carrier, history, &flow, settings, backend)?;
+        let export_frame = flow_temporal_supersample_cpu(
+            &output,
+            &flow,
+            settings.feedback_amount,
+            temporal_supersampling,
+        )?;
         let output_path = frame_dir.join(format!("frame_{index:06}.png"));
-        save_png(&output, &output_path)?;
+        save_png_with_bit_depth(&export_frame, &output_path, output_bit_depth)?;
         if let Some(cache_root) = flow_cache_dir {
             let frame_cache_dir = cache_root.join(format!("frame_{index:06}"));
-            write_flow_cache(frame_cache_dir, &flow, flow_algorithm)?;
+            match flow_source {
+                FlowSource::Luminance => {
+                    write_flow_cache(frame_cache_dir, &flow, flow_algorithm)?;
+                }
+                FlowSource::OpticalFlow if generated_temporal_flow_cache => {
+                    write_flow_cache_with_source_fingerprint(
+                        frame_cache_dir,
+                        &flow,
+                        flow_algorithm,
+                        Some(&contract.modulator.checksum),
+                    )?;
+                }
+                FlowSource::OpticalFlow => {}
+            }
         }
 
         let frame_index = u32::try_from(index).map_err(|_| {
@@ -1486,15 +1586,17 @@ fn render_feedback_sequence(
         sample_rate: 48_000,
         audio_sample_count: 0,
     };
-    write_feedback_sequence_manifest(
+    write_feedback_sequence_manifest(FeedbackSequenceManifestWrite {
         job_id,
         output_dir,
-        &frame_paths,
-        &timing,
-        &contract,
-        &provenance,
-        final_state_path,
-    )?;
+        frame_paths: &frame_paths,
+        timing: &timing,
+        contract: &contract,
+        provenance: &provenance,
+        state_path: final_state_path,
+        output_bit_depth,
+        temporal_supersampling,
+    })?;
 
     if modulator_frames.len() != carrier_frames.len() {
         println!(
@@ -1508,6 +1610,11 @@ fn render_feedback_sequence(
             "wrote per-frame {flow_algorithm} flow caches to {}",
             cache_root.display()
         );
+        if matches!(flow_source, FlowSource::OpticalFlow) {
+            println!(
+                "reused {reused_optical_flow_cache_count} and generated {generated_optical_flow_cache_count} temporal optical-flow cache frame(s)"
+            );
+        }
     }
     println!(
         "rendered flow-feedback sequence with {} frame(s) on the {} backend from {} modulating {} to {}",
@@ -1734,15 +1841,32 @@ fn write_feedback_checkpoint(
     Ok(())
 }
 
+struct FeedbackSequenceManifestWrite<'a> {
+    job_id: &'a str,
+    output_dir: &'a Path,
+    frame_paths: &'a [String],
+    timing: &'a RenderTimingMetadata,
+    contract: &'a FeedbackSequenceContract,
+    provenance: &'a RenderJobProvenance,
+    state_path: &'a str,
+    output_bit_depth: u8,
+    temporal_supersampling: u32,
+}
+
 fn write_feedback_sequence_manifest(
-    job_id: &str,
-    output_dir: &Path,
-    frame_paths: &[String],
-    timing: &RenderTimingMetadata,
-    contract: &FeedbackSequenceContract,
-    provenance: &RenderJobProvenance,
-    state_path: &str,
+    request: FeedbackSequenceManifestWrite<'_>,
 ) -> Result<(), CliError> {
+    let FeedbackSequenceManifestWrite {
+        job_id,
+        output_dir,
+        frame_paths,
+        timing,
+        contract,
+        provenance,
+        state_path,
+        output_bit_depth,
+        temporal_supersampling,
+    } = request;
     let manifest = serde_json::json!({
         "job_id": job_id,
         "status": "complete",
@@ -1759,6 +1883,11 @@ fn write_feedback_sequence_manifest(
         },
         "feedback_contract": contract,
         "feedback_state_path": state_path,
+        "export": {
+            "format": "png",
+            "bit_depth": output_bit_depth,
+            "temporal_supersampling": temporal_supersampling
+        },
         "provenance": provenance,
         "deterministic": true
     });
@@ -1766,6 +1895,23 @@ fn write_feedback_sequence_manifest(
         &output_dir.join("manifest.json"),
         &serde_json::to_string_pretty(&manifest)?,
     )?;
+    Ok(())
+}
+
+fn validate_feedback_export_settings(
+    output_bit_depth: u8,
+    temporal_supersampling: u32,
+) -> Result<(), CliError> {
+    if !matches!(output_bit_depth, 8 | 16) {
+        return Err(CliError::Message(
+            "output-bit-depth must be either 8 or 16 for PNG feedback exports".to_string(),
+        ));
+    }
+    if temporal_supersampling == 0 {
+        return Err(CliError::Message(
+            "temporal-supersampling must be at least one".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -2034,6 +2180,8 @@ struct QueueAddFeedbackSequenceRequest<'a> {
     carrier_dir: &'a Path,
     output_root_dir: &'a Path,
     settings: FlowFeedbackSettings,
+    output_bit_depth: u8,
+    temporal_supersampling: u32,
     max_frames: Option<u32>,
     reset_at_frame: Option<u32>,
     frame_rate: f64,
@@ -2052,6 +2200,8 @@ fn queue_add_feedback_sequence(
         carrier_dir,
         output_root_dir,
         settings,
+        output_bit_depth,
+        temporal_supersampling,
         max_frames,
         reset_at_frame,
         frame_rate,
@@ -2062,6 +2212,7 @@ fn queue_add_feedback_sequence(
     } = request;
 
     settings.validate()?;
+    validate_feedback_export_settings(output_bit_depth, temporal_supersampling)?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
             "frame-rate must be a positive finite number".to_string(),
@@ -2098,9 +2249,9 @@ fn queue_add_feedback_sequence(
             quality: RenderQuality::HighQualityOffline,
             export_format: ExportFormat::ImageSequence {
                 extension: "png".to_string(),
-                bit_depth: 16,
+                bit_depth: output_bit_depth,
             },
-            temporal_supersampling: 1,
+            temporal_supersampling,
             deterministic: true,
         },
         task: RenderJobTask::FrameSequenceFlowFeedback {
@@ -2317,9 +2468,9 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
         })?;
 
     let job_id = queue.jobs[job_index].id.clone();
-    let provenance = queue.jobs[job_index].provenance.clone().ok_or_else(|| {
-        CliError::Message("flow-feedback queue job is missing source/cache provenance".to_string())
-    })?;
+    let output_bit_depth = feedback_output_bit_depth(&queue.jobs[job_index].settings)?;
+    let temporal_supersampling = queue.jobs[job_index].settings.temporal_supersampling;
+    validate_feedback_export_settings(output_bit_depth, temporal_supersampling)?;
     let RenderJobTask::FrameSequenceFlowFeedback {
         modulator_frame_directory,
         carrier_frame_directory,
@@ -2342,7 +2493,14 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
         ));
     };
     let output_dir = PathBuf::from(output_directory);
+    let provenance = feedback_sequence_provenance(
+        Path::new(&modulator_frame_directory),
+        Path::new(&carrier_frame_directory),
+        flow_cache_directory.as_deref().map(Path::new),
+        flow_source_algorithm(flow_source),
+    );
 
+    queue.jobs[job_index].provenance = Some(provenance.clone());
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
 
@@ -2362,6 +2520,8 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
                 decay,
                 iterations,
             },
+            output_bit_depth,
+            temporal_supersampling,
             backend,
             flow_source,
             job_id: &job_id,
@@ -2412,6 +2572,19 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
             eprintln!("flow-feedback job {job_id} failed: {error}");
             Err(error)
         }
+    }
+}
+
+fn feedback_output_bit_depth(settings: &RenderSettings) -> Result<u8, CliError> {
+    match &settings.export_format {
+        ExportFormat::ImageSequence {
+            extension,
+            bit_depth,
+        } if extension.eq_ignore_ascii_case("png") => Ok(*bit_depth),
+        _ => Err(CliError::Message(
+            "flow-feedback queue jobs currently require a PNG image-sequence export format"
+                .to_string(),
+        )),
     }
 }
 
@@ -2723,6 +2896,20 @@ fn normalized_coordinate(value: u32, extent: u32) -> f32 {
     value as f32 / (extent - 1) as f32
 }
 
+fn save_png_with_bit_depth(
+    image: &ImageBufferF32,
+    output_path: &Path,
+    bit_depth: u8,
+) -> Result<(), CliError> {
+    match bit_depth {
+        8 => save_png(image, output_path),
+        16 => save_png_16(image, output_path),
+        _ => Err(CliError::Message(
+            "PNG bit depth must be either 8 or 16".to_string(),
+        )),
+    }
+}
+
 fn save_png(image: &ImageBufferF32, output_path: &Path) -> Result<(), CliError> {
     let mut rgba: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(image.width, image.height);
 
@@ -2748,8 +2935,37 @@ fn save_png(image: &ImageBufferF32, output_path: &Path) -> Result<(), CliError> 
     Ok(())
 }
 
+fn save_png_16(image: &ImageBufferF32, output_path: &Path) -> Result<(), CliError> {
+    let mut rgba: ImageBuffer<Rgba<u16>, Vec<u16>> = ImageBuffer::new(image.width, image.height);
+
+    for y in 0..image.height {
+        for x in 0..image.width {
+            let pixel = image
+                .pixel(x, y)
+                .ok_or_else(|| CliError::Message(format!("missing pixel at {},{}", x, y)))?;
+            rgba.put_pixel(
+                x,
+                y,
+                Rgba([
+                    float_to_u16(pixel[0]),
+                    float_to_u16(pixel[1]),
+                    float_to_u16(pixel[2]),
+                    float_to_u16(pixel[3]),
+                ]),
+            );
+        }
+    }
+
+    rgba.save(output_path)?;
+    Ok(())
+}
+
 fn float_to_u8(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn float_to_u16(value: f32) -> u16 {
+    (value.clamp(0.0, 1.0) * u16::MAX as f32).round() as u16
 }
 
 fn write_parent_dirs(path: &Path) -> Result<(), std::io::Error> {

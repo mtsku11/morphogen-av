@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{FlowField, RenderError};
 
-const FLOW_CACHE_VERSION: u32 = 1;
+const FLOW_CACHE_VERSION: u32 = 2;
 const FLOW_FRAME_MAGIC: &[u8; 8] = b"MGFLW001";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
 const FRAME_FILE_NAME: &str = "frame_000000.flowf32";
+pub const FLOW_VECTOR_CONVENTION: &str = "backward_sampling_offset";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FlowCacheManifest {
@@ -21,6 +22,10 @@ pub struct FlowCacheManifest {
     pub height: u32,
     pub coordinate_space: String,
     pub vector_units: String,
+    #[serde(default)]
+    pub vector_convention: String,
+    #[serde(default)]
+    pub source_fingerprint: Option<String>,
     pub frames: Vec<FlowCacheFrame>,
 }
 
@@ -34,6 +39,15 @@ pub fn write_flow_cache(
     directory: impl AsRef<Path>,
     flow: &FlowField,
     algorithm: impl Into<String>,
+) -> Result<FlowCacheManifest, RenderError> {
+    write_flow_cache_with_source_fingerprint(directory, flow, algorithm, None)
+}
+
+pub fn write_flow_cache_with_source_fingerprint(
+    directory: impl AsRef<Path>,
+    flow: &FlowField,
+    algorithm: impl Into<String>,
+    source_fingerprint: Option<&str>,
 ) -> Result<FlowCacheManifest, RenderError> {
     let directory = directory.as_ref();
     fs::create_dir_all(directory)?;
@@ -52,6 +66,8 @@ pub fn write_flow_cache(
         height: flow.height,
         coordinate_space: "output_pixel_coordinates".to_string(),
         vector_units: "pixels_before_amount_scale".to_string(),
+        vector_convention: FLOW_VECTOR_CONVENTION.to_string(),
+        source_fingerprint: source_fingerprint.map(str::to_string),
         frames: vec![frame],
     };
 
@@ -79,7 +95,7 @@ pub fn read_flow_cache(
 }
 
 fn validate_manifest(manifest: &FlowCacheManifest) -> Result<(), RenderError> {
-    if manifest.version != FLOW_CACHE_VERSION {
+    if !(1..=FLOW_CACHE_VERSION).contains(&manifest.version) {
         return Err(RenderError::InvalidFlowCache(format!(
             "unsupported flow cache version {}",
             manifest.version
@@ -98,7 +114,7 @@ fn validate_manifest(manifest: &FlowCacheManifest) -> Result<(), RenderError> {
     }
     if manifest.frames.len() != 1 {
         return Err(RenderError::InvalidFlowCache(
-            "version 1 flow caches must contain exactly one frame".to_string(),
+            "single-frame flow caches must contain exactly one frame".to_string(),
         ));
     }
     Ok(())
@@ -227,6 +243,55 @@ mod tests {
 
         assert_eq!(manifest, decoded_manifest);
         assert_eq!(decoded_manifest.algorithm, "test_algorithm_v1");
+        assert_eq!(decoded_manifest.vector_convention, FLOW_VECTOR_CONVENTION);
+        assert_eq!(decoded_manifest.source_fingerprint, None);
+        assert_eq!(decoded_flow, flow);
+    }
+
+    #[test]
+    fn flow_cache_persists_source_fingerprint() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let flow = FlowField::new(1, 1, vec![[0.0, 0.0]]).expect("flow");
+
+        write_flow_cache_with_source_fingerprint(
+            temp_dir.path(),
+            &flow,
+            "lucas_kanade_cpu_v2",
+            Some("fnv1a64:1234"),
+        )
+        .expect("write cache");
+        let (manifest, _) = read_flow_cache(temp_dir.path()).expect("read cache");
+
+        assert_eq!(manifest.source_fingerprint.as_deref(), Some("fnv1a64:1234"));
+    }
+
+    #[test]
+    fn version_one_cache_without_new_metadata_remains_readable() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let flow = FlowField::new(1, 1, vec![[0.25, -0.5]]).expect("flow");
+        write_flow_frame(temp_dir.path().join(FRAME_FILE_NAME), &flow).expect("write frame");
+        let manifest = serde_json::json!({
+            "version": 1,
+            "kind": "flow_field_f32",
+            "algorithm": "luminance_gradient_cpu_v1",
+            "width": 1,
+            "height": 1,
+            "coordinate_space": "output_pixel_coordinates",
+            "vector_units": "pixels_before_amount_scale",
+            "frames": [{ "frame_index": 0, "path": FRAME_FILE_NAME }]
+        });
+        fs::write(
+            temp_dir.path().join(MANIFEST_FILE_NAME),
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let (decoded_manifest, decoded_flow) =
+            read_flow_cache(temp_dir.path()).expect("read cache");
+
+        assert_eq!(decoded_manifest.version, 1);
+        assert!(decoded_manifest.vector_convention.is_empty());
+        assert_eq!(decoded_manifest.source_fingerprint, None);
         assert_eq!(decoded_flow, flow);
     }
 
@@ -241,6 +306,8 @@ mod tests {
             height: 1,
             coordinate_space: "output_pixel_coordinates".to_string(),
             vector_units: "pixels_before_amount_scale".to_string(),
+            vector_convention: FLOW_VECTOR_CONVENTION.to_string(),
+            source_fingerprint: None,
             frames: vec![FlowCacheFrame {
                 frame_index: 0,
                 path: "/tmp/frame.flowf32".to_string(),

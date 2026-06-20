@@ -38,6 +38,24 @@ final class AppState: ObservableObject {
   @Published var frameSequenceAmount = 16.0
   @Published var frameSequenceMaxFrames = 120
   @Published var frameSequenceWritesFlowCache = true
+  @Published var feedbackPreset: FeedbackPresetOption = .stableTrails {
+    didSet {
+      applyFeedbackPreset(feedbackPreset)
+    }
+  }
+  @Published var feedbackCarrierAmount = 1.0
+  @Published var feedbackAmount = 1.5
+  @Published var feedbackMix = 0.68
+  @Published var feedbackDecay = 0.99
+  @Published var feedbackIterations = 1
+  @Published var feedbackOutputBitDepth: FeedbackOutputBitDepthOption = .png16
+  @Published var feedbackTemporalSupersampling = 1
+  @Published var feedbackFlowSource: FeedbackFlowSourceOption = .opticalFlow
+  @Published var feedbackBackend: FeedbackRenderBackendOption = .metal
+  @Published var feedbackWritesFlowCache = true
+  @Published var feedbackResetEnabled = false
+  @Published var feedbackResetAtFrame = 48
+  @Published var feedbackSummary = "No temporal flow-feedback sequence rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
   @Published var mediaProxyFrameRate = 12.0
@@ -410,6 +428,86 @@ final class AppState: ObservableObject {
     }
   }
 
+  func runFlowFeedbackSequenceRender() {
+    guard let modulatorURL = frameSequenceModulatorURL else {
+      statusMessage = "Select Source A frame directory before rendering flow feedback."
+      return
+    }
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering flow feedback."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering flow feedback."
+      return
+    }
+
+    let request = FeedbackSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultFeedbackSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      carrierAmount: feedbackCarrierAmount,
+      feedbackAmount: feedbackAmount,
+      feedbackMix: feedbackMix,
+      decay: feedbackDecay,
+      iterations: feedbackIterations,
+      outputBitDepth: feedbackOutputBitDepth,
+      temporalSupersampling: feedbackTemporalSupersampling,
+      maxFrames: frameSequenceMaxFrames,
+      resetAtFrame: feedbackResetEnabled ? feedbackResetAtFrame : nil,
+      frameRate: proResFrameRate.framesPerSecond,
+      writesFlowCache: feedbackWritesFlowCache,
+      backend: feedbackBackend,
+      flowSource: feedbackFlowSource,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing temporal flow-feedback render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedFeedbackSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        let resetText = request.resetAtFrame.map { ", reset at frame \($0)" } ?? ""
+        let cacheText = request.writesFlowCache ? ", flow cache persisted" : ""
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.feedbackSummary = "\(bundle.frameCount) \(request.outputBitDepth.rawValue) feedback frame(s), \(request.temporalSupersampling)x temporal samples at \(bundle.frameDirectory.path)\(cacheText)\(resetText)"
+          self.proResExportSummary = "Queued flow-feedback sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Temporal flow-feedback render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.feedbackSummary = "Temporal flow-feedback render failed: \(error.localizedDescription)"
+          self.statusMessage = "Temporal flow-feedback render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func applyFeedbackPreset(_ preset: FeedbackPresetOption) {
+    guard let settings = preset.settings else {
+      return
+    }
+
+    feedbackCarrierAmount = settings.carrierAmount
+    feedbackAmount = settings.feedbackAmount
+    feedbackMix = settings.feedbackMix
+    feedbackDecay = settings.decay
+    feedbackFlowSource = settings.flowSource
+    feedbackBackend = settings.backend
+    feedbackWritesFlowCache = settings.writesFlowCache
+    feedbackResetEnabled = settings.resetAtFrame != nil
+    if let resetAtFrame = settings.resetAtFrame {
+      feedbackResetAtFrame = min(resetAtFrame, frameSequenceMaxFrames - 1)
+    }
+    statusMessage = "Applied flow-feedback preset: \(preset.rawValue)."
+  }
+
   func checkProResExportPlan() {
     let selectedFrameRate = proResFrameRate.framesPerSecond
     let selectedProfile = proResProfile
@@ -697,6 +795,114 @@ enum ExportFormatOption: String, CaseIterable, Identifiable {
   case wavStems = "WAV Stems"
 
   var id: String { rawValue }
+}
+
+enum FeedbackFlowSourceOption: String, CaseIterable, Identifiable {
+  case opticalFlow = "Optical Flow"
+  case luminance = "Luminance Gradient"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .opticalFlow:
+      return "optical-flow"
+    case .luminance:
+      return "luminance"
+    }
+  }
+}
+
+enum FeedbackRenderBackendOption: String, CaseIterable, Identifiable {
+  case cpu = "CPU Reference"
+  case metal = "Metal"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .cpu:
+      return "cpu"
+    case .metal:
+      return "metal"
+    }
+  }
+}
+
+enum FeedbackOutputBitDepthOption: String, CaseIterable, Identifiable {
+  case png8 = "PNG 8-bit"
+  case png16 = "PNG 16-bit"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .png8:
+      return "8"
+    case .png16:
+      return "16"
+    }
+  }
+}
+
+struct FeedbackPresetSettings: Equatable {
+  let carrierAmount: Double
+  let feedbackAmount: Double
+  let feedbackMix: Double
+  let decay: Double
+  let flowSource: FeedbackFlowSourceOption
+  let backend: FeedbackRenderBackendOption
+  let writesFlowCache: Bool
+  let resetAtFrame: Int?
+}
+
+enum FeedbackPresetOption: String, CaseIterable, Identifiable {
+  case stableTrails = "Stable Trails"
+  case aggressiveDegradation = "Aggressive Degradation"
+  case resetDrivenCuts = "Reset-Driven Cuts"
+  case custom = "Custom"
+
+  var id: String { rawValue }
+
+  var settings: FeedbackPresetSettings? {
+    switch self {
+    case .stableTrails:
+      return FeedbackPresetSettings(
+        carrierAmount: 1.0,
+        feedbackAmount: 1.5,
+        feedbackMix: 0.68,
+        decay: 0.99,
+        flowSource: .opticalFlow,
+        backend: .metal,
+        writesFlowCache: true,
+        resetAtFrame: nil
+      )
+    case .aggressiveDegradation:
+      return FeedbackPresetSettings(
+        carrierAmount: 2.5,
+        feedbackAmount: 7.0,
+        feedbackMix: 0.92,
+        decay: 0.998,
+        flowSource: .opticalFlow,
+        backend: .metal,
+        writesFlowCache: true,
+        resetAtFrame: nil
+      )
+    case .resetDrivenCuts:
+      return FeedbackPresetSettings(
+        carrierAmount: 1.25,
+        feedbackAmount: 3.5,
+        feedbackMix: 0.84,
+        decay: 0.99,
+        flowSource: .opticalFlow,
+        backend: .metal,
+        writesFlowCache: true,
+        resetAtFrame: 48
+      )
+    case .custom:
+      return nil
+    }
+  }
 }
 
 enum ProResFrameRateOption: String, CaseIterable, Identifiable {

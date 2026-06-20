@@ -1,6 +1,8 @@
 use std::{fs, path::Path};
 
 use assert_cmd::Command;
+use image::{ImageBuffer, Rgba};
+use morphogen_render::read_flow_cache;
 use predicates::prelude::*;
 
 #[test]
@@ -401,9 +403,9 @@ fn feedback_flow_source_selects_recorded_algorithm() {
     let carrier_arg = carrier_dir.to_string_lossy().to_string();
 
     for (flow_source, expected_algorithm) in [
-        (None, "lucas_kanade_cpu_v1"),
+        (None, "pyramidal_lucas_kanade_cpu_v1"),
         (Some("luminance"), "luminance_gradient_cpu_v1"),
-        (Some("optical-flow"), "lucas_kanade_cpu_v1"),
+        (Some("optical-flow"), "pyramidal_lucas_kanade_cpu_v1"),
     ] {
         let output_dir = temp_dir
             .path()
@@ -437,6 +439,188 @@ fn feedback_flow_source_selects_recorded_algorithm() {
             "flow_source {flow_source:?} should record {expected_algorithm}"
         );
     }
+}
+
+#[test]
+fn optical_flow_feedback_uses_validated_caches_and_zeroes_reset_frames() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let cache_dir = temp_dir.path().join("flow-cache");
+    let first_output_dir = temp_dir.path().join("first-output");
+    let cached_output_dir = temp_dir.path().join("cached-output");
+    let reset_output_dir = temp_dir.path().join("reset-output");
+    let stale_output_dir = temp_dir.path().join("stale-output");
+
+    for (index, shift) in [0, 1, 2].into_iter().enumerate() {
+        let frame_name = format!("frame_{index:06}.png");
+        write_translated_texture(&modulator_dir.join(&frame_name), 24, 16, shift);
+        write_horizontal_carrier(&carrier_dir.join(frame_name), 47, 16);
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let cache_arg = cache_dir.to_string_lossy().to_string();
+    let first_output_arg = first_output_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            first_output_arg.as_str(),
+            "--flow-cache-dir",
+            cache_arg.as_str(),
+            "--carrier-amount",
+            "1",
+            "--feedback-amount",
+            "0",
+            "--feedback-mix",
+            "0",
+            "--decay",
+            "1",
+            "--max-frames",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "reused 0 and generated 2 temporal optical-flow cache frame(s)",
+        ));
+
+    let (manifest, flow) = read_flow_cache(cache_dir.join("frame_000001")).expect("flow cache");
+    assert_eq!(manifest.algorithm, "pyramidal_lucas_kanade_cpu_v1");
+    assert!(manifest.source_fingerprint.is_some());
+    let vector = flow.vector(24, 8).expect("center flow vector");
+    assert!(vector[0] < -1.2 && vector[0] > -2.8, "u was {}", vector[0]);
+
+    let carrier = image::open(carrier_dir.join("frame_000001.png"))
+        .expect("carrier image")
+        .to_rgba8();
+    let first_output = image::open(first_output_dir.join("frames/frame_000001.png"))
+        .expect("first output image")
+        .to_rgba8();
+    assert!(
+        first_output.get_pixel(24, 8)[0] < carrier.get_pixel(24, 8)[0],
+        "backward flow should sample from the carrier's left side"
+    );
+
+    let cached_output_arg = cached_output_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            cached_output_arg.as_str(),
+            "--flow-cache-dir",
+            cache_arg.as_str(),
+            "--carrier-amount",
+            "1",
+            "--feedback-amount",
+            "0",
+            "--feedback-mix",
+            "0",
+            "--decay",
+            "1",
+            "--max-frames",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "reused 2 and generated 0 temporal optical-flow cache frame(s)",
+        ));
+
+    let reset_output_arg = reset_output_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            reset_output_arg.as_str(),
+            "--flow-cache-dir",
+            cache_arg.as_str(),
+            "--carrier-amount",
+            "1",
+            "--feedback-amount",
+            "0",
+            "--feedback-mix",
+            "0",
+            "--decay",
+            "1",
+            "--max-frames",
+            "3",
+            "--reset-at-frame",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "reused 1 and generated 0 temporal optical-flow cache frame(s)",
+        ));
+
+    let reset_output = image::open(reset_output_dir.join("frames/frame_000001.png"))
+        .expect("reset output image")
+        .to_rgba8();
+    assert_eq!(reset_output, carrier);
+
+    write_translated_texture(&modulator_dir.join("frame_000002.png"), 24, 16, 3);
+    let stale_output_arg = stale_output_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            stale_output_arg.as_str(),
+            "--flow-cache-dir",
+            cache_arg.as_str(),
+            "--carrier-amount",
+            "1",
+            "--feedback-amount",
+            "0",
+            "--feedback-mix",
+            "0",
+            "--decay",
+            "1",
+            "--max-frames",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "reused 0 and generated 2 temporal optical-flow cache frame(s)",
+        ));
+}
+
+fn write_translated_texture(path: &Path, width: u32, height: u32, shift_x: i32) {
+    let parent = path.parent().expect("parent directory");
+    fs::create_dir_all(parent).expect("create frame directory");
+    let image = ImageBuffer::from_fn(width, height, |x, y| {
+        let fx = x as f32 - shift_x as f32;
+        let fy = y as f32;
+        let value = 128.0
+            + 45.0 * (0.55 * fx).sin()
+            + 45.0 * (0.39 * fy).sin()
+            + 25.0 * (0.31 * (fx + fy)).sin();
+        let channel = value.round().clamp(0.0, 255.0) as u8;
+        Rgba([channel, channel, channel, 255])
+    });
+    image.save(path).expect("save translated texture");
+}
+
+fn write_horizontal_carrier(path: &Path, width: u32, height: u32) {
+    let parent = path.parent().expect("parent directory");
+    fs::create_dir_all(parent).expect("create frame directory");
+    let image = ImageBuffer::from_fn(width, height, |x, y| {
+        let red = (x * 5).min(255) as u8;
+        let green = (y * 11).min(255) as u8;
+        Rgba([red, green, 0, 255])
+    });
+    image.save(path).expect("save carrier");
 }
 
 #[test]
@@ -758,6 +942,10 @@ fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
             "0.95",
             "--max-frames",
             "2",
+            "--output-bit-depth",
+            "16",
+            "--temporal-supersampling",
+            "2",
         ])
         .assert()
         .success()
@@ -773,6 +961,23 @@ fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
         "frame_sequence_flow_feedback"
     );
     assert_eq!(queued["jobs"][0]["task"]["feedback_mix"], 0.7);
+    assert_eq!(queued["jobs"][0]["settings"]["temporal_supersampling"], 2);
+    assert_eq!(
+        queued["jobs"][0]["settings"]["export_format"]["bit_depth"],
+        16
+    );
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"][0]["producer"],
+        "pyramidal_lucas_kanade_cpu_v1"
+    );
+    let mut legacy_provenance_queue = queued;
+    legacy_provenance_queue["jobs"][0]["provenance"]["analysis_caches"][0]["producer"] =
+        serde_json::Value::String("lucas_kanade_cpu_v1".to_string());
+    fs::write(
+        &queue_path,
+        serde_json::to_string_pretty(&legacy_provenance_queue).expect("serialize legacy queue"),
+    )
+    .expect("write legacy queue");
 
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
@@ -794,10 +999,33 @@ fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
     )
     .expect("parse manifest");
     assert_eq!(manifest["task"], "frame_sequence_flow_feedback");
+    assert_eq!(manifest["export"]["format"], "png");
+    assert_eq!(manifest["export"]["bit_depth"], 16);
+    assert_eq!(manifest["export"]["temporal_supersampling"], 2);
+    assert_eq!(manifest["feedback_contract"]["output_bit_depth"], 16);
+    assert_eq!(manifest["feedback_contract"]["temporal_supersampling"], 2);
+    let output_color = image::ImageReader::open(bundle_dir.join("frames/frame_000001.png"))
+        .expect("open 16-bit output")
+        .decode()
+        .expect("decode 16-bit output")
+        .color();
+    assert_eq!(output_color, image::ColorType::Rgba16);
     let decay = manifest["feedback_contract"]["settings"]["decay"]
         .as_f64()
         .expect("feedback decay");
     assert!((decay - 0.95).abs() < 0.000_001);
+    assert_eq!(
+        manifest["provenance"]["analysis_caches"][0]["producer"],
+        "pyramidal_lucas_kanade_cpu_v1"
+    );
+
+    let completed_queue: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read completed queue"))
+            .expect("parse completed queue");
+    assert_eq!(
+        completed_queue["jobs"][0]["provenance"]["analysis_caches"][0]["producer"],
+        "pyramidal_lucas_kanade_cpu_v1"
+    );
 
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")

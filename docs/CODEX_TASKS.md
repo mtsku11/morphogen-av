@@ -57,8 +57,9 @@
 
 The next effect is not another independent processor. It is a stateful temporal render primitive that the later datamosh, optical-flow, and video-vocoder work can reuse. The authoritative contract and acceptance criteria are in `docs/FLOW_FEEDBACK_MILESTONE.md`.
 
-1. Done: added a temporal Lucas-Kanade optical-flow analysis (`lucas_kanade_cpu_v1`) and made it the feedback job's default flow source via `--flow-source`, without changing the render-state contract. Switching sources invalidates checkpoints through the contract's recorded `flow_algorithm`.
-2. Expose feedback amount, decay, iterations, reset behavior, flow source, and CPU/Metal backend choice in the SwiftUI render panel.
-3. Add a first quality-controlled feedback preset library for aggressive degradation, stable trails, and reset-driven cuts.
-4. Add higher-precision feedback exports and temporal supersampling without changing checkpoint semantics.
-5. Only then resume independent effect families such as video vocoder, granular mosaicing, and codec-aware datamosh.
+1. Done: added a temporal Lucas-Kanade optical-flow analysis (`lucas_kanade_cpu_v2`) and made it the feedback job's default flow source via `--flow-source`, without changing the render-state contract. It uses explicit backward-sampling vectors, output-coordinate scaling, reset-frame zero fields, and validated reusable sidecars.
+2. Done: replaced the single-scale solver with deterministic coarse-to-fine pyramidal Lucas-Kanade (`pyramidal_lucas_kanade_cpu_v1`), iterative warped refinement, and forward/backward confidence maps. The reusable flow-field sidecar remains cache format v2; the new algorithm identifier invalidates pre-refinement caches and checkpoints.
+3. Done: expose feedback amount, decay, the current one-iteration contract, reset behavior, flow source, and CPU/Metal backend choice in the SwiftUI render panel through a persisted feedback queue bridge.
+4. Done: add a first quality-controlled feedback preset library for aggressive degradation, stable trails, and reset-driven cuts.
+5. Done: add 16-bit PNG feedback exports and flow-guided temporal supersampling as an export-only pass; the checkpoint remains the exact once-per-frame RGBA32F feedback state.
+6. Only then resume independent effect families such as video vocoder, granular mosaicing, and codec-aware datamosh.
