@@ -2,6 +2,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::{sample_bilinear_clamped, FlowField, ImageBufferF32, RenderError};
 
+/// Selects how the carrier's high-frequency detail is re-injected when
+/// `structure_mix != 0`.
+///
+/// The serde default is [`StructureMode::SingleScale`] so settings serialized
+/// before multiscale existed keep their exact meaning, and the Metal parity
+/// path (which only implements single-scale) is unaffected.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StructureMode {
+    /// One full-resolution high-pass band (carrier minus a radius-2 binomial
+    /// low-pass), re-injected uniformly. This is the original behavior and the
+    /// only mode with a Metal parity implementation.
+    #[default]
+    SingleScale,
+    /// Three full-resolution detail bands, each gated by a structure mask
+    /// derived from the morphed (advected) frame so re-seeded detail follows
+    /// the evolving geometry rather than the static carrier grid. CPU-only.
+    Multiscale,
+}
+
+/// Lower bound on the structure mask so flat morphed regions still regenerate
+/// some detail instead of washing fully to fog.
+const STRUCTURE_MASK_FLOOR: f32 = 0.25;
+/// Maps morphed-frame gradient magnitude into the `[0, 1]` mask response before
+/// the floor is applied.
+const STRUCTURE_MASK_GAIN: f32 = 6.0;
+
 /// Parameters for the first temporal feedback contract. The MVP deliberately
 /// supports one history-advection pass; later multi-iteration behavior must be
 /// introduced with explicit CPU and Metal semantics.
@@ -20,6 +47,11 @@ pub struct FlowFeedbackSettings {
     /// behavior exactly; it defaults to zero for legacy queue files.
     #[serde(default)]
     pub structure_mix: f32,
+    /// How the re-injected detail is decomposed and masked. Defaults to
+    /// [`StructureMode::SingleScale`] (the original, Metal-backed behavior);
+    /// [`StructureMode::Multiscale`] is the CPU-only high-quality path.
+    #[serde(default)]
+    pub structure_mode: StructureMode,
 }
 
 impl FlowFeedbackSettings {
@@ -105,14 +137,20 @@ pub fn flow_feedback_frame_cpu(
 
     let advected_history = flow_displace_cpu(previous_output, flow, settings.feedback_amount)?;
 
-    // Structure-preserving morph: re-inject the carrier's high-frequency band
-    // (carrier minus its low-pass) on top of the additive feedback result. The
-    // high-pass band has near-zero mean, so it regenerates detail/edges without
-    // re-asserting the carrier's flat composition or pulling the frame back to
-    // the original layout. `structure_mix == 0.0` skips it entirely and is
-    // bitwise-identical to the original additive-feedback output.
-    let low_pass = if settings.structure_mix != 0.0 {
-        Some(low_pass_blur(&displaced_carrier)?)
+    // Structure-preserving morph: re-inject the carrier's high-frequency detail
+    // on top of the additive feedback result so detail keeps regenerating
+    // instead of washing to fog at high feedback_mix. The re-injection field has
+    // near-zero mean, so it restores edges/grain without re-asserting the
+    // carrier's flat composition or pulling the frame back to its layout.
+    // `structure_mix == 0.0` skips it entirely and is bitwise-identical to the
+    // original additive-feedback output.
+    let reinjection = if settings.structure_mix != 0.0 {
+        Some(match settings.structure_mode {
+            StructureMode::SingleScale => single_scale_structure_field(&displaced_carrier)?,
+            StructureMode::Multiscale => {
+                multiscale_structure_field(&displaced_carrier, &advected_history)?
+            }
+        })
     } else {
         None
     };
@@ -125,19 +163,108 @@ pub fn flow_feedback_frame_cpu(
             scale_rgba(history_pixel, settings.decay),
             settings.feedback_mix,
         );
-        match &low_pass {
+        match &reinjection {
             None => base,
-            Some(low_pass) => {
-                let low_pixel = low_pass.pixel(x, y).unwrap_or([0.0; 4]);
+            Some(field) => {
+                let detail = field.pixel(x, y).unwrap_or([0.0; 4]);
                 [
-                    base[0] + settings.structure_mix * (carrier_pixel[0] - low_pixel[0]),
-                    base[1] + settings.structure_mix * (carrier_pixel[1] - low_pixel[1]),
-                    base[2] + settings.structure_mix * (carrier_pixel[2] - low_pixel[2]),
-                    base[3] + settings.structure_mix * (carrier_pixel[3] - low_pixel[3]),
+                    base[0] + settings.structure_mix * detail[0],
+                    base[1] + settings.structure_mix * detail[1],
+                    base[2] + settings.structure_mix * detail[2],
+                    base[3] + settings.structure_mix * detail[3],
                 ]
             }
         }
     })
+}
+
+/// Single-scale re-injection field: the carrier's high-frequency band, defined
+/// as the displaced carrier minus its radius-2 binomial low-pass. Computing the
+/// difference once here is bitwise-identical to the original inline form.
+fn single_scale_structure_field(
+    displaced_carrier: &ImageBufferF32,
+) -> Result<ImageBufferF32, RenderError> {
+    let low_pass = low_pass_blur(displaced_carrier)?;
+    ImageBufferF32::from_fn(displaced_carrier.width, displaced_carrier.height, |x, y| {
+        let carrier_pixel = displaced_carrier.pixel(x, y).unwrap_or([0.0; 4]);
+        let low_pixel = low_pass.pixel(x, y).unwrap_or([0.0; 4]);
+        [
+            carrier_pixel[0] - low_pixel[0],
+            carrier_pixel[1] - low_pixel[1],
+            carrier_pixel[2] - low_pixel[2],
+            carrier_pixel[3] - low_pixel[3],
+        ]
+    })
+}
+
+/// Multiscale re-injection field: three full-resolution detail bands of the
+/// displaced carrier, each gated by a structure mask taken from the morphed
+/// (advected) frame. The bands are a non-decimated Burt-Adelson stack —
+/// repeated binomial blurs, differenced into finest/mid/coarse bands — so detail
+/// stays at carrier resolution with no upsampling artifacts. Each band is
+/// modulated by a mask at the matching scale (sharp for fine detail, blurred for
+/// coarse), so re-seeded detail concentrates along the evolving geometry rather
+/// than on the static carrier grid.
+fn multiscale_structure_field(
+    displaced_carrier: &ImageBufferF32,
+    advected_history: &ImageBufferF32,
+) -> Result<ImageBufferF32, RenderError> {
+    let blur0 = low_pass_blur(displaced_carrier)?;
+    let blur1 = low_pass_blur(&blur0)?;
+    let blur2 = low_pass_blur(&blur1)?;
+
+    // One mask per band scale, derived from the morphed geometry.
+    let mask_fine = structure_edge_mask(advected_history)?;
+    let mask_mid = low_pass_blur(&mask_fine)?;
+    let mask_coarse = low_pass_blur(&mask_mid)?;
+
+    ImageBufferF32::from_fn(displaced_carrier.width, displaced_carrier.height, |x, y| {
+        let carrier_pixel = displaced_carrier.pixel(x, y).unwrap_or([0.0; 4]);
+        let blur0_pixel = blur0.pixel(x, y).unwrap_or([0.0; 4]);
+        let blur1_pixel = blur1.pixel(x, y).unwrap_or([0.0; 4]);
+        let blur2_pixel = blur2.pixel(x, y).unwrap_or([0.0; 4]);
+        let fine = mask_fine.pixel(x, y).unwrap_or([0.0; 4]);
+        let mid = mask_mid.pixel(x, y).unwrap_or([0.0; 4]);
+        let coarse = mask_coarse.pixel(x, y).unwrap_or([0.0; 4]);
+
+        let mut detail = [0.0f32; 4];
+        for channel in 0..4 {
+            let band_fine = carrier_pixel[channel] - blur0_pixel[channel];
+            let band_mid = blur0_pixel[channel] - blur1_pixel[channel];
+            let band_coarse = blur1_pixel[channel] - blur2_pixel[channel];
+            detail[channel] =
+                band_fine * fine[channel] + band_mid * mid[channel] + band_coarse * coarse[channel];
+        }
+        detail
+    })
+}
+
+/// Per-pixel structure mask in `[STRUCTURE_MASK_FLOOR, 1]`, broadcast to RGBA.
+/// The response follows the luminance gradient magnitude of the morphed frame,
+/// lifted by a floor so flat regions keep regenerating some detail, then
+/// smoothed by one binomial blur to suppress single-pixel speckle.
+fn structure_edge_mask(image: &ImageBufferF32) -> Result<ImageBufferF32, RenderError> {
+    let width = image.width as i32;
+    let height = image.height as i32;
+    let luminance = |x: i32, y: i32| {
+        let px = x.clamp(0, width - 1) as u32;
+        let py = y.clamp(0, height - 1) as u32;
+        let pixel = image.pixel(px, py).unwrap_or([0.0; 4]);
+        0.299 * pixel[0] + 0.587 * pixel[1] + 0.114 * pixel[2]
+    };
+
+    let raw = ImageBufferF32::from_fn(image.width, image.height, |x, y| {
+        let xi = x as i32;
+        let yi = y as i32;
+        let gradient_x = luminance(xi + 1, yi) - luminance(xi - 1, yi);
+        let gradient_y = luminance(xi, yi + 1) - luminance(xi, yi - 1);
+        let magnitude = (gradient_x * gradient_x + gradient_y * gradient_y).sqrt();
+        let edge = (magnitude * STRUCTURE_MASK_GAIN).clamp(0.0, 1.0);
+        let mask = STRUCTURE_MASK_FLOOR + (1.0 - STRUCTURE_MASK_FLOOR) * edge;
+        [mask, mask, mask, mask]
+    })?;
+
+    low_pass_blur(&raw)
 }
 
 /// Deterministic separable binomial blur (radius 2, weights [1,4,6,4,1]/16)

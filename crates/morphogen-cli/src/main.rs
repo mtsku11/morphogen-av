@@ -27,8 +27,8 @@ use morphogen_render::{
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
     FlowFeedbackStateDescriptor, FlowField, GranularMosaicSettings, ImageBufferF32, RenderError,
-    FLOW_VECTOR_CONVENTION, GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
-    GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS,
+    StructureMode, FLOW_VECTOR_CONVENTION, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -189,6 +189,8 @@ enum Commands {
         iterations: u32,
         #[arg(long, default_value_t = 0.0)]
         structure_mix: f32,
+        #[arg(long, value_enum, default_value_t = CliStructureMode::SingleScale)]
+        structure_mode: CliStructureMode,
         #[arg(long, default_value_t = 8)]
         output_bit_depth: u8,
         #[arg(long, default_value_t = 1)]
@@ -424,6 +426,22 @@ impl From<CliFlowSource> for FlowSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliStructureMode {
+    #[default]
+    SingleScale,
+    Multiscale,
+}
+
+impl From<CliStructureMode> for StructureMode {
+    fn from(value: CliStructureMode) -> Self {
+        match value {
+            CliStructureMode::SingleScale => Self::SingleScale,
+            CliStructureMode::Multiscale => Self::Multiscale,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error("{0}")]
@@ -601,6 +619,7 @@ fn run() -> Result<(), CliError> {
             decay,
             iterations,
             structure_mix,
+            structure_mode,
             output_bit_depth,
             temporal_supersampling,
             flow_cache_dir,
@@ -625,6 +644,7 @@ fn run() -> Result<(), CliError> {
                 decay,
                 iterations,
                 structure_mix,
+                structure_mode: structure_mode.into(),
             },
             output_bit_depth,
             temporal_supersampling,
@@ -706,6 +726,10 @@ fn run() -> Result<(), CliError> {
                 decay,
                 iterations,
                 structure_mix,
+                // Multiscale structure mode is exposed only on the direct CPU
+                // render path for now; the persisted queue keeps single-scale
+                // (backlog: Structure-Preserving Morph task 5 follow-up).
+                structure_mode: StructureMode::SingleScale,
             },
             output_bit_depth,
             temporal_supersampling,
@@ -3270,6 +3294,10 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
                 decay,
                 iterations,
                 structure_mix,
+                // Persisted queue jobs render single-scale structure (backlog:
+                // Structure-Preserving Morph task 5 follow-up exposes multiscale
+                // once it has a Metal parity path).
+                structure_mode: StructureMode::SingleScale,
             },
             output_bit_depth,
             temporal_supersampling,

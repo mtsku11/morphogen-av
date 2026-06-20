@@ -13,7 +13,8 @@ pub mod optical_flow;
 pub mod sampler;
 
 pub use cpu_reference::{
-    flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu, FlowFeedbackSettings,
+    flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
+    FlowFeedbackSettings, StructureMode,
 };
 pub use error::RenderError;
 pub use feedback_state::{
@@ -134,6 +135,7 @@ mod tests {
             decay: 0.0,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
 
         let feedback = flow_feedback_frame_cpu(&carrier, None, &flow, settings).expect("frame");
@@ -156,6 +158,7 @@ mod tests {
             decay: 0.5,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
 
         let frame_zero =
@@ -217,6 +220,7 @@ mod tests {
             decay: 0.9,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
         let carriers = [
             [0.2, 0.0, 0.0, 1.0],
@@ -314,6 +318,7 @@ mod tests {
             decay: 0.9,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
 
         let without = flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, base).expect("a");
@@ -344,6 +349,7 @@ mod tests {
             decay: 0.9,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
 
         let without = flow_feedback_frame_cpu(&carrier, None, &flow, base).expect("a");
@@ -375,6 +381,7 @@ mod tests {
             decay: 1.0,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
 
         let plain = flow_feedback_frame_cpu(&carrier, Some(&washed), &flow, base).expect("plain");
@@ -411,6 +418,7 @@ mod tests {
             decay: 1.0,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
         let structured = FlowFeedbackSettings {
             structure_mix: 0.6,
@@ -421,7 +429,8 @@ mod tests {
         let mut structured_state: Option<ImageBufferF32> = None;
         for _ in 0..12 {
             plain_state = Some(
-                flow_feedback_frame_cpu(&carrier, plain_state.as_ref(), &flow, base).expect("plain"),
+                flow_feedback_frame_cpu(&carrier, plain_state.as_ref(), &flow, base)
+                    .expect("plain"),
             );
             structured_state = Some(
                 flow_feedback_frame_cpu(&carrier, structured_state.as_ref(), &flow, structured)
@@ -434,6 +443,137 @@ mod tests {
         assert!(
             structured_tv > plain_tv * 3.0,
             "structured morph should resist washout: plain_tv={plain_tv}, structured_tv={structured_tv}"
+        );
+    }
+
+    #[test]
+    fn multiscale_structure_mode_leaves_the_zero_mix_path_untouched() {
+        // structure_mix == 0 must short-circuit before any mode-specific work, so
+        // single-scale and multiscale produce the identical (unmodified) frame.
+        let carrier = checkerboard(8);
+        let previous = ImageBufferF32::new(8, 8, vec![[0.3, 0.3, 0.3, 1.0]; 64]).expect("previous");
+        let flow = FlowField::new(8, 8, vec![[0.2, 0.1]; 64]).expect("flow");
+        let single = FlowFeedbackSettings {
+            carrier_amount: 1.0,
+            feedback_amount: 1.0,
+            feedback_mix: 0.7,
+            decay: 0.9,
+            iterations: 1,
+            structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
+        };
+        let multi = FlowFeedbackSettings {
+            structure_mode: StructureMode::Multiscale,
+            ..single
+        };
+
+        let from_single =
+            flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, single).expect("single");
+        let from_multi =
+            flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, multi).expect("multi");
+
+        assert_eq!(from_single, from_multi);
+    }
+
+    #[test]
+    fn multiscale_structure_mode_resists_washout_across_a_sequence() {
+        // Same washout stress as the single-scale test: the multiscale path must
+        // also keep regenerating detail instead of collapsing to flat fog.
+        let carrier = checkerboard(16);
+        let flow = FlowField::new(16, 16, vec![[0.3, 0.0]; 256]).expect("flow");
+        let plain = FlowFeedbackSettings {
+            carrier_amount: 0.0,
+            feedback_amount: 1.0,
+            feedback_mix: 0.99,
+            decay: 1.0,
+            iterations: 1,
+            structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
+        };
+        let multi = FlowFeedbackSettings {
+            structure_mix: 0.8,
+            structure_mode: StructureMode::Multiscale,
+            ..plain
+        };
+
+        let mut plain_state: Option<ImageBufferF32> = None;
+        let mut multi_state: Option<ImageBufferF32> = None;
+        for _ in 0..12 {
+            plain_state = Some(
+                flow_feedback_frame_cpu(&carrier, plain_state.as_ref(), &flow, plain)
+                    .expect("plain"),
+            );
+            multi_state = Some(
+                flow_feedback_frame_cpu(&carrier, multi_state.as_ref(), &flow, multi)
+                    .expect("multi"),
+            );
+        }
+
+        let plain_tv = total_variation(&plain_state.expect("plain final"));
+        let multi_tv = total_variation(&multi_state.expect("multi final"));
+        assert!(
+            multi_tv > plain_tv * 3.0,
+            "multiscale morph should resist washout: plain_tv={plain_tv}, multi_tv={multi_tv}"
+        );
+    }
+
+    #[test]
+    fn multiscale_mask_concentrates_detail_on_morphed_structure() {
+        // The structure mask is taken from the morphed (advected) history. Where
+        // that history is flat, re-injection is held near the floor; where it has
+        // an edge, re-injection runs at full strength. So a history with a single
+        // strong edge must re-seed more carrier detail near that edge than far
+        // from it. carrier_amount/feedback_amount are zero so neither input moves
+        // and the only difference between regions is the mask response.
+        let carrier = checkerboard(16);
+        // Previous frame: left half dark, right half bright -> one vertical edge
+        // down the middle column.
+        let previous = ImageBufferF32::from_fn(16, 16, |x, _| {
+            let value = if x < 8 { 0.1 } else { 0.9 };
+            [value, value, value, 1.0]
+        })
+        .expect("previous");
+        let flow = FlowField::new(16, 16, vec![[0.0, 0.0]; 256]).expect("flow");
+        let plain = FlowFeedbackSettings {
+            carrier_amount: 0.0,
+            feedback_amount: 0.0,
+            feedback_mix: 0.97,
+            decay: 1.0,
+            iterations: 1,
+            structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
+        };
+        let multi = FlowFeedbackSettings {
+            structure_mix: 0.8,
+            structure_mode: StructureMode::Multiscale,
+            ..plain
+        };
+
+        let plain_frame =
+            flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, plain).expect("plain");
+        let multi_frame =
+            flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, multi).expect("multi");
+
+        // Re-injected detail = multiscale frame minus the plain (un-re-injected)
+        // frame. Measure its magnitude in a column near the morphed edge vs. a
+        // column in the flat far region.
+        let injected_energy = |column: u32| {
+            let mut total = 0.0;
+            for y in 0..16 {
+                for channel in 0..3 {
+                    let injected = multi_frame.pixel(column, y).expect("multi")[channel]
+                        - plain_frame.pixel(column, y).expect("plain")[channel];
+                    total += injected.abs();
+                }
+            }
+            total
+        };
+
+        let near_edge = injected_energy(7);
+        let far_from_edge = injected_energy(1);
+        assert!(
+            near_edge > far_from_edge,
+            "mask should bias re-injection toward the morphed edge: near={near_edge}, far={far_from_edge}"
         );
     }
 }

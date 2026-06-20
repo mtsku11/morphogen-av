@@ -4,6 +4,7 @@ use metal::{
 };
 use morphogen_render::{
     FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
+    StructureMode,
 };
 
 use crate::{
@@ -143,6 +144,11 @@ pub fn flow_feedback_metal(
     settings
         .validate()
         .map_err(|error| MetalDispatchError::InvalidFeedbackSettings(error.to_string()))?;
+    if settings.structure_mode == StructureMode::Multiscale {
+        return Err(MetalDispatchError::InvalidFeedbackSettings(
+            "multiscale structure mode is CPU-only; use --backend cpu".to_string(),
+        ));
+    }
     if carrier.width != flow.width || carrier.height != flow.height {
         return Err(MetalDispatchError::IncompatibleInputs(format!(
             "carrier is {}x{}, flow is {}x{}",
@@ -509,6 +515,7 @@ mod tests {
     use morphogen_render::{
         flow_displace_cpu, flow_feedback_frame_cpu, granular_mosaic_with_selection_cpu,
         FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
+        StructureMode,
     };
 
     use super::*;
@@ -585,6 +592,7 @@ mod tests {
             decay: 0.9,
             iterations: 1,
             structure_mix: 0.0,
+            structure_mode: StructureMode::SingleScale,
         };
 
         let cpu = flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, settings)
@@ -622,10 +630,11 @@ mod tests {
             decay: 0.95,
             iterations: 1,
             structure_mix: 0.7,
+            structure_mode: StructureMode::SingleScale,
         };
 
-        let cpu =
-            flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, settings).expect("cpu render");
+        let cpu = flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, settings)
+            .expect("cpu render");
         let gpu = match flow_feedback_metal(&carrier, Some(&previous), &flow, settings) {
             Ok(image) => image,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -638,6 +647,32 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_feedback_rejects_multiscale_structure_mode() {
+        // The Metal shader only implements single-scale structure re-injection,
+        // so multiscale must be rejected before dispatch rather than silently
+        // rendering the wrong (single-scale) result. This guard needs no GPU.
+        let carrier = ImageBufferF32::new(2, 2, vec![[0.5, 0.5, 0.5, 1.0]; 4]).expect("carrier");
+        let previous = ImageBufferF32::new(2, 2, vec![[0.2, 0.2, 0.2, 1.0]; 4]).expect("previous");
+        let flow = FlowField::new(2, 2, vec![[0.1, 0.0]; 4]).expect("flow");
+        let settings = FlowFeedbackSettings {
+            carrier_amount: 1.0,
+            feedback_amount: 1.0,
+            feedback_mix: 0.7,
+            decay: 0.9,
+            iterations: 1,
+            structure_mix: 0.6,
+            structure_mode: StructureMode::Multiscale,
+        };
+
+        let error = flow_feedback_metal(&carrier, Some(&previous), &flow, settings)
+            .expect_err("multiscale must be rejected on the Metal backend");
+        assert!(
+            matches!(error, MetalDispatchError::InvalidFeedbackSettings(_)),
+            "expected InvalidFeedbackSettings, got {error:?}"
+        );
     }
 
     #[test]
