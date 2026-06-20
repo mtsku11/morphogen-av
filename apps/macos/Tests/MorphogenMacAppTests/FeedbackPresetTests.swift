@@ -11,6 +11,7 @@ final class FeedbackPresetTests: XCTestCase {
     XCTAssertEqual(settings?.decay, 0.998)
     XCTAssertEqual(settings?.flowSource, .opticalFlow)
     XCTAssertEqual(settings?.backend, .metal)
+    XCTAssertEqual(settings?.structureMix, 0.0)
     XCTAssertNil(settings?.resetAtFrame)
   }
 
@@ -19,6 +20,17 @@ final class FeedbackPresetTests: XCTestCase {
 
     XCTAssertEqual(settings?.resetAtFrame, 48)
     XCTAssertTrue(settings?.writesFlowCache == true)
+  }
+
+  func testStructuredMorphReinjectsStructureAtHighMix() {
+    let settings = FeedbackPresetOption.structuredMorph.settings
+
+    XCTAssertEqual(settings?.feedbackMix, 0.97)
+    XCTAssertEqual(settings?.decay, 0.97)
+    XCTAssertEqual(settings?.structureMix, 0.6)
+    XCTAssertEqual(settings?.flowSource, .opticalFlow)
+    XCTAssertEqual(settings?.backend, .metal)
+    XCTAssertNil(settings?.resetAtFrame)
   }
 
   func testCustomPresetLeavesExistingValuesUntouched() {

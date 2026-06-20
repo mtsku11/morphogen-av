@@ -61,6 +61,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       feedbackMix: 0.72,
       decay: 0.995,
       iterations: 1,
+      structureMix: 0.6,
       outputBitDepth: .png16,
       temporalSupersampling: 2,
       maxFrames: 48,
@@ -83,6 +84,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("0.72"))
     XCTAssertTrue(arguments.contains("--decay"))
     XCTAssertTrue(arguments.contains("0.995"))
+    XCTAssertTrue(arguments.contains("--structure-mix"))
+    XCTAssertTrue(arguments.contains("0.6"))
     XCTAssertTrue(arguments.contains("--iterations"))
     XCTAssertTrue(arguments.contains("--output-bit-depth"))
     XCTAssertTrue(arguments.contains("16"))
@@ -106,6 +109,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       feedbackMix: 0.72,
       decay: 0.995,
       iterations: 2,
+      structureMix: 0.0,
       outputBitDepth: .png8,
       temporalSupersampling: 1,
       maxFrames: nil,

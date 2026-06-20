@@ -87,6 +87,12 @@ pub enum RenderJobTask {
         backend: RenderBackend,
         #[serde(default)]
         flow_source: FlowSource,
+        /// Structure-preserving morph strength: re-injects the displaced
+        /// carrier's high-frequency band each frame so detail keeps
+        /// regenerating instead of washing to fog at high `feedback_mix`.
+        /// Defaults to 0.0 (disabled) so legacy jobs keep their meaning.
+        #[serde(default)]
+        structure_mix: f32,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
@@ -227,6 +233,7 @@ mod tests {
             frame_rate: 24.0,
             backend: RenderBackend::Cpu,
             flow_source: FlowSource::OpticalFlow,
+            structure_mix: 0.6,
         };
 
         let json = serde_json::to_string(&task).expect("serialize feedback task");
@@ -254,10 +261,16 @@ mod tests {
         }"#;
 
         let task: RenderJobTask = serde_json::from_str(json).expect("deserialize legacy task");
-        let RenderJobTask::FrameSequenceFlowFeedback { flow_source, .. } = task else {
+        let RenderJobTask::FrameSequenceFlowFeedback {
+            flow_source,
+            structure_mix,
+            ..
+        } = task
+        else {
             panic!("expected feedback task");
         };
         assert_eq!(flow_source, FlowSource::Luminance);
+        assert_eq!(structure_mix, 0.0);
     }
 
     #[test]

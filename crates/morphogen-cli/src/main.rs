@@ -264,6 +264,8 @@ enum Commands {
         decay: f32,
         #[arg(long, default_value_t = 1)]
         iterations: u32,
+        #[arg(long, default_value_t = 0.0)]
+        structure_mix: f32,
         #[arg(long, default_value_t = 8)]
         output_bit_depth: u8,
         #[arg(long, default_value_t = 1)]
@@ -682,6 +684,7 @@ fn run() -> Result<(), CliError> {
             feedback_mix,
             decay,
             iterations,
+            structure_mix,
             output_bit_depth,
             temporal_supersampling,
             max_frames,
@@ -702,10 +705,7 @@ fn run() -> Result<(), CliError> {
                 feedback_mix,
                 decay,
                 iterations,
-                // Structure-preserving morph is exposed only on the direct
-                // render path for now; the persisted queue job does not yet
-                // carry it (backlog: Structure-Preserving Morph task 4).
-                structure_mix: 0.0,
+                structure_mix,
             },
             output_bit_depth,
             temporal_supersampling,
@@ -2891,6 +2891,7 @@ fn queue_add_feedback_sequence(
             frame_rate,
             backend,
             flow_source,
+            structure_mix: settings.structure_mix,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -3234,6 +3235,7 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
         frame_rate,
         backend,
         flow_source,
+        structure_mix,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3267,9 +3269,7 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
                 feedback_mix,
                 decay,
                 iterations,
-                // Persisted queue jobs do not carry structure_mix yet (backlog:
-                // Structure-Preserving Morph task 4).
-                structure_mix: 0.0,
+                structure_mix,
             },
             output_bit_depth,
             temporal_supersampling,

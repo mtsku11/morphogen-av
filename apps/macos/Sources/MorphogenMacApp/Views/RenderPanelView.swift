@@ -320,6 +320,11 @@ struct RenderPanelView: View {
               Text("Decay \(state.feedbackDecay, specifier: "%.3f")")
             }
             .frame(width: 145, alignment: .leading)
+
+            Stepper(value: $state.feedbackStructureMix, in: 0...2, step: 0.05) {
+              Text("Structure \(state.feedbackStructureMix, specifier: "%.2f")")
+            }
+            .frame(width: 165, alignment: .leading)
           }
 
           HStack(spacing: 16) {

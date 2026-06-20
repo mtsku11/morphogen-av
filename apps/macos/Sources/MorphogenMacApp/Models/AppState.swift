@@ -48,6 +48,7 @@ final class AppState: ObservableObject {
   @Published var feedbackMix = 0.68
   @Published var feedbackDecay = 0.99
   @Published var feedbackIterations = 1
+  @Published var feedbackStructureMix = 0.0
   @Published var feedbackOutputBitDepth: FeedbackOutputBitDepthOption = .png16
   @Published var feedbackTemporalSupersampling = 1
   @Published var feedbackFlowSource: FeedbackFlowSourceOption = .opticalFlow
@@ -452,6 +453,7 @@ final class AppState: ObservableObject {
       feedbackMix: feedbackMix,
       decay: feedbackDecay,
       iterations: feedbackIterations,
+      structureMix: feedbackStructureMix,
       outputBitDepth: feedbackOutputBitDepth,
       temporalSupersampling: feedbackTemporalSupersampling,
       maxFrames: frameSequenceMaxFrames,
@@ -498,6 +500,7 @@ final class AppState: ObservableObject {
     feedbackAmount = settings.feedbackAmount
     feedbackMix = settings.feedbackMix
     feedbackDecay = settings.decay
+    feedbackStructureMix = settings.structureMix
     feedbackFlowSource = settings.flowSource
     feedbackBackend = settings.backend
     feedbackWritesFlowCache = settings.writesFlowCache
@@ -850,6 +853,7 @@ struct FeedbackPresetSettings: Equatable {
   let feedbackAmount: Double
   let feedbackMix: Double
   let decay: Double
+  let structureMix: Double
   let flowSource: FeedbackFlowSourceOption
   let backend: FeedbackRenderBackendOption
   let writesFlowCache: Bool
@@ -860,6 +864,7 @@ enum FeedbackPresetOption: String, CaseIterable, Identifiable {
   case stableTrails = "Stable Trails"
   case aggressiveDegradation = "Aggressive Degradation"
   case resetDrivenCuts = "Reset-Driven Cuts"
+  case structuredMorph = "Structured Morph"
   case custom = "Custom"
 
   var id: String { rawValue }
@@ -872,6 +877,7 @@ enum FeedbackPresetOption: String, CaseIterable, Identifiable {
         feedbackAmount: 1.5,
         feedbackMix: 0.68,
         decay: 0.99,
+        structureMix: 0.0,
         flowSource: .opticalFlow,
         backend: .metal,
         writesFlowCache: true,
@@ -883,6 +889,7 @@ enum FeedbackPresetOption: String, CaseIterable, Identifiable {
         feedbackAmount: 7.0,
         feedbackMix: 0.92,
         decay: 0.998,
+        structureMix: 0.0,
         flowSource: .opticalFlow,
         backend: .metal,
         writesFlowCache: true,
@@ -894,10 +901,27 @@ enum FeedbackPresetOption: String, CaseIterable, Identifiable {
         feedbackAmount: 3.5,
         feedbackMix: 0.84,
         decay: 0.99,
+        structureMix: 0.0,
         flowSource: .opticalFlow,
         backend: .metal,
         writesFlowCache: true,
         resetAtFrame: 48
+      )
+    case .structuredMorph:
+      // "Beyond recognition" as a structured morph: high feedback-mix so the
+      // carrier stops re-asserting its composition, but structure re-injection
+      // keeps regenerating high-frequency detail instead of washing to fog.
+      // Settings follow the empirical lever sweep (mix ~0.97, decay ~0.97).
+      return FeedbackPresetSettings(
+        carrierAmount: 2.5,
+        feedbackAmount: 7.0,
+        feedbackMix: 0.97,
+        decay: 0.97,
+        structureMix: 0.6,
+        flowSource: .opticalFlow,
+        backend: .metal,
+        writesFlowCache: true,
+        resetAtFrame: nil
       )
     case .custom:
       return nil

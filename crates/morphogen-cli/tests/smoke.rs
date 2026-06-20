@@ -1179,6 +1179,8 @@ fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
             "0.7",
             "--decay",
             "0.95",
+            "--structure-mix",
+            "0.6",
             "--max-frames",
             "2",
             "--output-bit-depth",
@@ -1200,6 +1202,7 @@ fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
         "frame_sequence_flow_feedback"
     );
     assert_eq!(queued["jobs"][0]["task"]["feedback_mix"], 0.7);
+    assert_eq!(queued["jobs"][0]["task"]["structure_mix"], 0.6);
     assert_eq!(queued["jobs"][0]["settings"]["temporal_supersampling"], 2);
     assert_eq!(
         queued["jobs"][0]["settings"]["export_format"]["bit_depth"],

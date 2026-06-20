@@ -190,6 +190,7 @@ enum RustBridgePlaceholder {
       ("feedback amount", request.feedbackAmount),
       ("feedback mix", request.feedbackMix),
       ("decay", request.decay),
+      ("structure mix", request.structureMix),
       ("frame rate", request.frameRate)
     ] {
       guard value.isFinite else {
@@ -201,6 +202,11 @@ enum RustBridgePlaceholder {
     }
     guard request.decay >= 0 else {
       throw RustBridgeError.invalidFrameSequenceRequest("decay must be greater than or equal to zero")
+    }
+    guard request.structureMix >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "structure mix must be greater than or equal to zero"
+      )
     }
     guard request.frameRate > 0 else {
       throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive")
@@ -244,6 +250,8 @@ enum RustBridgePlaceholder {
       cliNumber(request.decay),
       "--iterations",
       String(request.iterations),
+      "--structure-mix",
+      cliNumber(request.structureMix),
       "--output-bit-depth",
       request.outputBitDepth.cliValue,
       "--temporal-supersampling",
@@ -657,6 +665,7 @@ struct FeedbackSequenceRenderQueueCommandRequest {
   let feedbackMix: Double
   let decay: Double
   let iterations: Int
+  let structureMix: Double
   let outputBitDepth: FeedbackOutputBitDepthOption
   let temporalSupersampling: Int
   let maxFrames: Int?
