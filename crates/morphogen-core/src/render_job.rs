@@ -88,6 +88,20 @@ pub enum RenderJobTask {
         #[serde(default)]
         flow_source: FlowSource,
     },
+    FrameSequenceGranularMosaic {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        grain_cache_directory: Option<String>,
+        grain_size: u32,
+        rearrangement: f32,
+        variation: f32,
+        seed: u64,
+        max_frames: Option<u32>,
+        frame_rate: f64,
+        #[serde(default)]
+        backend: RenderBackend,
+    },
 }
 
 /// Selects the vector field that drives flow displacement and feedback.
@@ -244,5 +258,28 @@ mod tests {
             panic!("expected feedback task");
         };
         assert_eq!(flow_source, FlowSource::Luminance);
+    }
+
+    #[test]
+    fn granular_mosaic_task_serializes_render_settings() {
+        let task = RenderJobTask::FrameSequenceGranularMosaic {
+            modulator_frame_directory: "/tmp/mod".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            grain_cache_directory: Some("/tmp/out/cache/grains".to_string()),
+            grain_size: 24,
+            rearrangement: 1.0,
+            variation: 0.35,
+            seed: 42,
+            max_frames: Some(48),
+            frame_rate: 24.0,
+            backend: RenderBackend::Metal,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize granular task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize granular task");
+
+        assert_eq!(decoded, task);
     }
 }

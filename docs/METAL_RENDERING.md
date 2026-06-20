@@ -39,6 +39,12 @@ Flow feedback is now a CPU/Metal temporal render path with one shared contract:
 
 `advect_feedback.metal` samples the current carrier with `carrier_amount`, samples the previous output with `feedback_amount`, applies `decay`, then blends the two with `feedback_mix`. Frame zero reuses the existing Metal flow-displacement kernel, because there is no history texture. The runtime compiles with fast math disabled and compares every Metal frame to the CPU reference before writing its export image. The MVP validates `iterations == 1`; future multi-iteration behavior must add explicit ping-pong texture semantics before it is enabled. Realtime preview may reduce resolution, but it must not change state-update ordering.
 
+## Granular Mosaic
+
+`granular_mosaic.metal` receives the float Source B carrier texture and the CPU-generated row-major grain-selection index map. It maps every output pixel to its selected carrier tile, blends original and selected coordinates by `rearrangement`, then uses the same linear, clamp-to-edge sampling convention as the CPU renderer. Descriptor analysis and Source A luma matching remain on the CPU in this milestone, preserving the validated cache contract.
+
+`granular_mosaic_metal` checks the selection map dimensions and indices before submission, compiles with fast math disabled, and returns a float image for comparison. The granular CLI paths accept `--backend metal`; each rendered frame is compared to `granular_mosaic_with_selection_cpu` at the established float tolerance before any PNG is written.
+
 ## Image Pyramids and Optical Flow
 
 The current optical-flow source is deterministic coarse-to-fine pyramidal Lucas-Kanade. It uses iterative warping at each level and forward/backward confidence checks before emitting the renderer's backward-sampling field; this remains a testable CPU reference before a Metal analysis implementation. A future quality pass can add robust weighting and use confidence maps for explicit occlusion masks. Horn-Schunck can later be an intentionally smooth optional field, but it is not the production replacement because its global regularization blurs motion boundaries and does not solve large displacement alone. Optional neural backends can be evaluated later.

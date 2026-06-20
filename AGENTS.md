@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The completed flow-feedback vertical slice repeatedly advects and blends Source B from Source A through deterministic CPU and Metal renderers. Pyramidal Lucas-Kanade optical flow is now a cached, deterministic feedback source; the current direction is SwiftUI controls for the proven contract.
+Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The completed flow-feedback vertical slice repeatedly advects and blends Source B from Source A through deterministic CPU and Metal renderers. The active independent-effect milestone is granular mosaicing: Source A luma selects cached fixed-size Source B grains through a deterministic CPU reference path.
 
 ## Key Commands
 
@@ -13,6 +13,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The co
 - `cargo run -p morphogen-cli -- render-test /tmp/morphogen-test.png` - render the synthetic CPU reference PNG.
 - `cargo run -p morphogen-cli -- metal-render-test /tmp/morphogen-metal-test.png` - render the synthetic flow-displacement fixture through Metal on macOS.
 - `cargo run -p morphogen-cli -- render-two-source /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-two-source.png --amount 16` - render a real two-image CPU displacement.
+- `cargo run -p morphogen-cli -- render-granular-mosaic-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-granular-output --grain-size 24 --rearrangement 1 --variation 0.35 --seed 42 --grain-cache-dir /tmp/morphogen-grain-cache --max-frames 120 --backend metal` - render a deterministic A-luma-controlled visual grain sequence with validated reusable descriptor/selection sidecars and CPU parity-gated Metal output.
 - `cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --flow-cache-dir /tmp/morphogen-flow-cache --max-frames 120` - render paired extracted frame directories with per-frame flow cache sidecars.
 - `cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --rms-modulator-wav /tmp/source-a.wav --frame-rate 12 --rms-amount-scale 24` - modulate sequence displacement amount from a WAV RMS envelope.
 - `cargo run -p morphogen-cli -- render-feedback-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --flow-source optical-flow --carrier-amount 1.5 --feedback-amount 2 --feedback-mix 0.72 --decay 0.995 --output-bit-depth 16 --temporal-supersampling 2 --max-frames 120 --frame-rate 24 --backend metal` - render deterministic A-modulates-B temporal feedback; `--stop-after-frame` proves resume and `--reset-at-frame 48` restarts feedback at a selected output frame.
@@ -28,6 +29,8 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The co
 - `cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --max-frames 120 --frame-rate 24` - queue a real two-source frame-sequence displacement job with source/cache provenance.
 - `cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --backend metal` - queue a frame-sequence job that renders on the Metal backend with a per-frame CPU parity check (`--backend` also works on `render-frame-sequence`; defaults to `cpu`).
 - `cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json` - execute the next queued two-source frame-sequence job into a ProRes-ready render bundle. A failure records a durable `failed` status plus reason on the job rather than leaving it `running`.
+- `cargo run -p morphogen-cli -- queue-add-granular-mosaic-sequence /tmp/morphogen-granular-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-granular-output --grain-size 24 --rearrangement 1 --variation 0.35 --seed 42 --max-frames 120 --frame-rate 24 --backend metal` - persist a ProRes-ready granular image-sequence job with grain-cache provenance and a CPU parity-gated Metal backend.
+- `cargo run -p morphogen-cli -- queue-run-granular-mosaic-sequence /tmp/morphogen-granular-queue.json` - execute the next queued granular mosaic job.
 - `cargo run -p morphogen-cli -- queue-add-feedback-sequence /tmp/morphogen-feedback-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --carrier-amount 1.5 --feedback-amount 2 --feedback-mix 0.72 --decay 0.995 --backend metal --flow-source optical-flow` - persist a resumable temporal feedback job with source/cache provenance (`--flow-source` defaults to `optical-flow`; queue jobs serialized before optical flow existed default to `luminance` for backward compatibility).
 - `cargo run -p morphogen-cli -- queue-run-feedback-sequence /tmp/morphogen-feedback-queue.json` - execute the next queued feedback job into a ProRes-ready bundle with a verified float state checkpoint.
 - `cargo run -p morphogen-cli -- queue-cancel /tmp/morphogen-frame-queue.json job-0001` - cancel a queued or running job so the runner skips it.
@@ -41,6 +44,8 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The co
 - `crates/morphogen-core/src/graph.rs` - node graph and modulation route model.
 - `crates/morphogen-core/src/timeline.rs` - frame/time/sample alignment helpers.
 - `crates/morphogen-render/src/cpu_reference.rs` - deterministic CPU reference render operations.
+- `crates/morphogen-render/src/granular_mosaic.rs` - deterministic Source A luma to Source B grain-selection renderer.
+- `crates/morphogen-render/src/grain_cache.rs` - validated grain descriptor and selection cache sidecars.
 - `crates/morphogen-render/src/feedback_state.rs` - versioned, checksummed RGBA32F feedback-state checkpoints.
 - `crates/morphogen-render/src/flow_cache.rs` - versioned single-frame flow-analysis sidecar format.
 - `crates/morphogen-render/src/luminance_flow.rs` - first deterministic modulator-derived flow signal.
@@ -63,6 +68,7 @@ Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. The co
 - `apps/macos/Sources/MorphogenMacApp/Services/VideoToolboxProResExportPlan.swift` - VideoToolbox ProRes encoder discovery and export-plan spike.
 - `apps/macos/Sources/MorphogenMacApp/Services/ProResImageSequenceExporter.swift` - PNG image-sequence to ProRes `.mov` export through AVAssetWriter with VideoToolbox encoder selection and optional WAV audio muxing.
 - `docs/FLOW_FEEDBACK_MILESTONE.md` - active temporal feedback render contract, sequence, and acceptance criteria.
+- `docs/GRANULAR_MOSAIC_MILESTONE.md` - active granular render contract and follow-up sequence.
 - `apps/macos/Sources/MorphogenMacApp/Services/ProjectFilePanel.swift` - AppKit project open/save panels used by the SwiftUI shell.
 - `docs/CODEX_TASKS.md` - ordered follow-up backlog.
 

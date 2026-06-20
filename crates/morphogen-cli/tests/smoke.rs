@@ -100,6 +100,135 @@ fn render_two_source_writes_png_from_real_image_inputs() {
 }
 
 #[test]
+fn render_granular_mosaic_writes_image_and_frame_sequence() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_path = temp_dir.path().join("modulator.png");
+    let carrier_path = temp_dir.path().join("carrier.png");
+    let output_path = temp_dir.path().join("mosaic.png");
+    let grain_cache_dir = temp_dir.path().join("grain-cache");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let output_dir = temp_dir.path().join("mosaic-frames");
+
+    let modulator = ImageBuffer::from_fn(4, 2, |x, _| {
+        let value = x as u8 * 85;
+        Rgba([value, value, value, u8::MAX])
+    });
+    let carrier = ImageBuffer::from_fn(4, 2, |x, y| {
+        Rgba([x as u8 * 60, y as u8 * 120, (x + y) as u8 * 40, u8::MAX])
+    });
+    modulator.save(&modulator_path).expect("write modulator");
+    carrier.save(&carrier_path).expect("write carrier");
+    fs::create_dir_all(&modulator_dir).expect("create modulator frames");
+    fs::create_dir_all(&carrier_dir).expect("create carrier frames");
+    modulator
+        .save(modulator_dir.join("frame_000001.png"))
+        .expect("write sequence modulator");
+    carrier
+        .save(carrier_dir.join("frame_000001.png"))
+        .expect("write sequence carrier");
+
+    let modulator_arg = modulator_path.to_string_lossy().to_string();
+    let carrier_arg = carrier_path.to_string_lossy().to_string();
+    let output_arg = output_path.to_string_lossy().to_string();
+    let grain_cache_arg = grain_cache_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-granular-mosaic",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--grain-size",
+            "1",
+            "--rearrangement",
+            "1",
+            "--variation",
+            "0",
+            "--grain-cache-dir",
+            grain_cache_arg.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rendered granular mosaic"));
+    assert!(output_path.exists());
+    assert!(grain_cache_dir.join("grain_descriptors.json").exists());
+    assert!(grain_cache_dir.join("grain_selection.json").exists());
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-granular-mosaic",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--grain-size",
+            "1",
+            "--rearrangement",
+            "1",
+            "--variation",
+            "0",
+            "--grain-cache-dir",
+            grain_cache_arg.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reused granular descriptor"));
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-granular-mosaic",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--grain-size",
+            "1",
+            "--rearrangement",
+            "1",
+            "--variation",
+            "0.5",
+            "--grain-cache-dir",
+            grain_cache_arg.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "reused granular descriptor cache and generated selection cache",
+        ));
+
+    let modulator_dir_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_dir_arg = carrier_dir.to_string_lossy().to_string();
+    let output_dir_arg = output_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-granular-mosaic-sequence",
+            modulator_dir_arg.as_str(),
+            carrier_dir_arg.as_str(),
+            output_dir_arg.as_str(),
+            "--grain-size",
+            "2",
+            "--seed",
+            "42",
+            "--grain-cache-dir",
+            grain_cache_arg.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered granular mosaic sequence with 1 frame(s)",
+        ));
+    assert!(output_dir.join("frame_000000.png").exists());
+    assert!(grain_cache_dir
+        .join("frame_000000/grain_descriptors.json")
+        .exists());
+    assert!(grain_cache_dir
+        .join("frame_000000/grain_selection.json")
+        .exists());
+}
+
+#[test]
 fn render_frame_sequence_writes_pngs_and_per_frame_flow_caches() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");
@@ -890,6 +1019,116 @@ fn frame_sequence_queue_job_persists_provenance_and_writes_bundle_output() {
             "job-0001 task=frame_sequence_flow_displace status=Complete",
         ))
         .stdout(predicate::str::contains("sources=2 caches=1"));
+}
+
+#[test]
+fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let queue_path = temp_dir.path().join("queue.json");
+    let output_root = temp_dir.path().join("queue-output");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        for directory in [&modulator_dir, &carrier_dir] {
+            let frame_arg = directory.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-granular-mosaic-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--grain-size",
+            "24",
+            "--variation",
+            "0.4",
+            "--seed",
+            "42",
+            "--max-frames",
+            "2",
+            "--frame-rate",
+            "12",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued granular-mosaic render job job-0001",
+        ));
+
+    let queued: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queued granular job"))
+            .expect("parse granular queue");
+    assert_eq!(
+        queued["jobs"][0]["task"]["type"],
+        "frame_sequence_granular_mosaic"
+    );
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"][0]["kind"],
+        "grain_descriptors"
+    );
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-granular-mosaic-sequence", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued granular-mosaic job job-0001",
+        ));
+
+    let bundle_dir = output_root.join("job-0001");
+    assert!(bundle_dir.join("frames/frame_000000.png").exists());
+    assert!(bundle_dir.join("frames/frame_000001.png").exists());
+    assert!(bundle_dir
+        .join("cache/grains/frame_000000/grain_descriptors.json")
+        .exists());
+    assert!(bundle_dir
+        .join("cache/grains/frame_000000/grain_selection.json")
+        .exists());
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle_dir.join("manifest.json")).expect("read granular manifest"),
+    )
+    .expect("parse granular manifest");
+    assert_eq!(manifest["task"], "frame_sequence_granular_mosaic");
+    assert_eq!(manifest["timing"]["frame_rate"], 12.0);
+    assert_eq!(manifest["timing"]["frame_count"], 2);
+    assert_eq!(
+        manifest["granular_mosaic"]["algorithm"],
+        "luma_nearest_grain_cpu_v1"
+    );
+    assert_eq!(
+        manifest["provenance"]["analysis_caches"][0]["producer"],
+        "luma_nearest_grain_cpu_v1"
+    );
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-inspect", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "job-0001 task=frame_sequence_granular_mosaic status=Complete",
+        ));
 }
 
 #[test]

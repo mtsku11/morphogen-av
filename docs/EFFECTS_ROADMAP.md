@@ -1,13 +1,13 @@
 # Effects Roadmap
 
-## Flow Feedback and Advection (Next Milestone)
+## Flow Feedback and Advection (Completed Milestone)
 
 - Modulator input: Source A motion fields or luminance gradients.
 - Carrier input: Source B and previous output frame.
 - Output: feedback trails pushed by modulator motion.
 - Cached analysis: flow fields and masks; render checkpoints hold the previous float output state.
-- First MVP version: one feedback buffer, the current luminance-gradient field, fixed frame order, verified float checkpoints, reset frames, and CPU/Metal parity.
-- Future high-quality version: real temporal optical flow, float feedback chains, temporal supersampling, and higher-precision image export.
+- First MVP version: one feedback buffer, temporal pyramidal Lucas-Kanade flow, fixed frame order, verified float checkpoints, reset frames, and CPU/Metal parity.
+- Future high-quality version: occlusion-aware flow, float feedback chains, higher temporal integration, and high-bit-depth ProRes export.
 
 ## Optical-Flow Advection
 
@@ -33,7 +33,7 @@
 - Carrier input: Source B audiovisual grains.
 - Output: recomposed audiovisual grains selected by descriptor similarity.
 - Cached analysis: grain indexes, RMS, onset maps, color/luma descriptors.
-- First MVP version: fixed-size visual tiles selected by luma.
+- First MVP version: fixed-size visual tiles selected by Source A luma, with deterministic variation and paired PNG-frame sequence output.
 - Future high-quality version: multimodal nearest-neighbor grain scheduling.
 
 ## Spectral Audio Cross-Synthesis

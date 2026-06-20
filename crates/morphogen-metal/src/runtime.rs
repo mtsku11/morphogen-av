@@ -2,11 +2,14 @@ use metal::{
     CompileOptions, Device, MTLCommandBufferStatus, MTLPixelFormat, MTLRegion, MTLSize,
     MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
 };
-use morphogen_render::{FlowFeedbackSettings, FlowField, ImageBufferF32};
+use morphogen_render::{
+    FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
+};
 
 use crate::{
-    FlowDisplaceDispatchPlan, MetalDispatchError, ADVECT_FEEDBACK_KERNEL_NAME,
-    ADVECT_FEEDBACK_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
+    FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
+    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME,
+    FLOW_DISPLACE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -24,6 +27,15 @@ struct AdvectFeedbackParams {
     decay: f32,
     width: u32,
     height: u32,
+}
+
+#[repr(C)]
+struct GranularMosaicParams {
+    rearrangement: f32,
+    width: u32,
+    height: u32,
+    grain_size: u32,
+    selection_columns: u32,
 }
 
 pub fn flow_displace_metal(
@@ -240,6 +252,127 @@ pub fn flow_feedback_metal(
     read_rgba_f32_texture(&output_texture, plan.width, plan.height)
 }
 
+pub fn granular_mosaic_metal(
+    carrier: &ImageBufferF32,
+    selection: &GrainSelection,
+    settings: GranularMosaicSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    settings
+        .validate()
+        .map_err(|error| MetalDispatchError::InvalidGranularMosaicSettings(error.to_string()))?;
+    let plan = GranularMosaicDispatchPlan::new(
+        carrier.width,
+        carrier.height,
+        settings.grain_size,
+        settings.rearrangement,
+    )?;
+    validate_grain_selection(carrier, selection, settings.grain_size)?;
+    let selection_byte_len = selection
+        .indices
+        .len()
+        .checked_mul(std::mem::size_of::<u32>())
+        .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(GRANULAR_MOSAIC_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(GRANULAR_MOSAIC_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+    let carrier_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&carrier_texture, carrier)?;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&carrier_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    let params = GranularMosaicParams {
+        rearrangement: plan.rearrangement,
+        width: plan.width,
+        height: plan.height,
+        grain_size: plan.grain_size,
+        selection_columns: selection.columns,
+    };
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<GranularMosaicParams>() as u64,
+        (&params as *const GranularMosaicParams).cast(),
+    );
+    encoder.set_bytes(
+        1,
+        selection_byte_len as u64,
+        selection.indices.as_ptr().cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
+fn validate_grain_selection(
+    carrier: &ImageBufferF32,
+    selection: &GrainSelection,
+    grain_size: u32,
+) -> Result<(), MetalDispatchError> {
+    let columns = div_ceil(carrier.width, grain_size);
+    let rows = div_ceil(carrier.height, grain_size);
+    let expected_count = (columns as usize)
+        .checked_mul(rows as usize)
+        .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?;
+    if selection.columns != columns
+        || selection.rows != rows
+        || selection.indices.len() != expected_count
+        || selection
+            .indices
+            .iter()
+            .any(|index| *index as usize >= expected_count)
+    {
+        return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+            "grain selection does not match the carrier grain grid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn new_texture(
     device: &Device,
     width: u32,
@@ -365,10 +498,15 @@ fn checked_image_bytes(height: u32, bytes_per_row: usize) -> Result<usize, Metal
         .ok_or(MetalDispatchError::TextureByteLengthTooLarge)
 }
 
+fn div_ceil(value: u32, divisor: u32) -> u32 {
+    value / divisor + u32::from(value % divisor != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
-        flow_displace_cpu, flow_feedback_frame_cpu, FlowFeedbackSettings, FlowField, ImageBufferF32,
+        flow_displace_cpu, flow_feedback_frame_cpu, granular_mosaic_with_selection_cpu,
+        FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
     };
 
     use super::*;
@@ -460,6 +598,53 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 0.000_01);
+    }
+
+    #[test]
+    fn metal_granular_mosaic_matches_cpu_reference_on_tiny_fixture() {
+        let carrier = ImageBufferF32::new(
+            4,
+            2,
+            vec![
+                [0.1, 0.0, 0.0, 1.0],
+                [0.3, 0.0, 0.0, 1.0],
+                [0.6, 0.0, 0.0, 1.0],
+                [0.9, 0.0, 0.0, 1.0],
+                [0.0, 0.1, 0.0, 1.0],
+                [0.0, 0.3, 0.0, 1.0],
+                [0.0, 0.6, 0.0, 1.0],
+                [0.0, 0.9, 0.0, 1.0],
+            ],
+        )
+        .expect("carrier");
+        let selection = GrainSelection {
+            columns: 2,
+            rows: 1,
+            indices: vec![1, 0],
+        };
+        let settings = GranularMosaicSettings {
+            grain_size: 2,
+            rearrangement: 0.65,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        let cpu =
+            granular_mosaic_with_selection_cpu(&carrier, &selection, settings).expect("cpu render");
+        let gpu = match granular_mosaic_metal(&carrier, &selection, settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal parity assertion because no Metal device is available");
+                return;
+            }
+            Err(error) => panic!("metal render failed: {error}"),
+        };
+
+        // A fractional rearrangement weight makes the carrier sample land between
+        // texels, where Metal's hardware linear sampler quantizes the
+        // interpolation weight to 8-bit fixed point. Hold parity to the project's
+        // Metal/CPU tolerance (1/255), the same bound the CLI render path gates on.
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
     }
 
     fn assert_image_near(actual: &ImageBufferF32, expected: &ImageBufferF32, epsilon: f32) {

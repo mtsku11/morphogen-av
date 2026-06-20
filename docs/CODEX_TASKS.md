@@ -62,4 +62,13 @@ The next effect is not another independent processor. It is a stateful temporal 
 3. Done: expose feedback amount, decay, the current one-iteration contract, reset behavior, flow source, and CPU/Metal backend choice in the SwiftUI render panel through a persisted feedback queue bridge.
 4. Done: add a first quality-controlled feedback preset library for aggressive degradation, stable trails, and reset-driven cuts.
 5. Done: add 16-bit PNG feedback exports and flow-guided temporal supersampling as an export-only pass; the checkpoint remains the exact once-per-frame RGBA32F feedback state.
-6. Only then resume independent effect families such as video vocoder, granular mosaicing, and codec-aware datamosh.
+6. Done: begin the independent-effect phase with deterministic CPU granular mosaicing. Source A luma selects fixed-size Source B tiles; direct image and paired-frame sequence CLI paths expose grain size, rearrangement, variation, and seed. The contract is in `docs/GRANULAR_MOSAIC_MILESTONE.md`.
+
+### AV Granular Mosaicing Milestone
+
+1. Done: implement the deterministic CPU reference renderer and direct image/paired PNG frame-sequence CLI path.
+2. Done: persist Source B grain descriptors and Source A selection indexes as validated JSON cache sidecars. Identical inputs/settings reuse both; changed variation, seed, source fingerprint, dimensions, or algorithm regenerates the affected sidecar.
+3. Done: add a persisted `frame_sequence_granular_mosaic` task that writes the standard ProRes-ready image-sequence bundle with timing, Source A/B, and grain-cache provenance.
+4. Done: add `granular_mosaic.metal`, a macOS runtime dispatcher, shader-binding preflight, and a tiny CPU/Metal parity fixture. Direct, sequence, and queue CLI paths select it with `--backend metal` and reject divergent frames before export.
+5. Route Source A RMS, onset, and spectral descriptors into frame-addressed grain controls.
+6. Add multimodal nearest-neighbor audiovisual grain scheduling.

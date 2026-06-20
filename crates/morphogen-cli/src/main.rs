@@ -20,11 +20,15 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
-    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
-    luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
-    read_flow_feedback_state, write_flow_cache, write_flow_cache_with_source_fingerprint,
-    write_flow_feedback_state, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
-    ImageBufferF32, RenderError, FLOW_VECTOR_CONVENTION, LUCAS_KANADE_WINDOW_RADIUS,
+    analyze_grains_cpu, feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu,
+    flow_temporal_supersample_cpu, granular_mosaic_with_selection_cpu, luminance_gradient_flow_cpu,
+    pyramidal_lucas_kanade_flow_cpu, read_flow_cache, read_flow_feedback_state,
+    read_grain_descriptor_cache, read_grain_selection_cache, select_grains_cpu, write_flow_cache,
+    write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
+    write_grain_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
+    FlowFeedbackStateDescriptor, FlowField, GranularMosaicSettings, ImageBufferF32, RenderError,
+    FLOW_VECTOR_CONVENTION, GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
+    GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -109,6 +113,42 @@ enum Commands {
         amount: f32,
         #[arg(long)]
         flow_cache_dir: Option<PathBuf>,
+    },
+    RenderGranularMosaic {
+        modulator_image: PathBuf,
+        carrier_image: PathBuf,
+        output_path: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        grain_cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    RenderGranularMosaicSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        max_frames: Option<usize>,
+        #[arg(long)]
+        grain_cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     RenderFrameSequence {
         modulator_dir: PathBuf,
@@ -241,6 +281,30 @@ enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    QueueAddGranularMosaicSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        no_grain_cache: bool,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
     QueueRunTest {
         queue_path: PathBuf,
         output_dir: PathBuf,
@@ -251,6 +315,9 @@ enum Commands {
         queue_path: PathBuf,
     },
     QueueRunFeedbackSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunGranularMosaicSequence {
         queue_path: PathBuf,
     },
     QueueCancel {
@@ -441,6 +508,55 @@ fn run() -> Result<(), CliError> {
             amount,
             flow_cache_dir.as_deref(),
         ),
+        Commands::RenderGranularMosaic {
+            modulator_image,
+            carrier_image,
+            output_path,
+            grain_size,
+            rearrangement,
+            variation,
+            seed,
+            grain_cache_dir,
+            backend,
+        } => render_granular_mosaic(
+            &modulator_image,
+            &carrier_image,
+            &output_path,
+            GranularMosaicSettings {
+                grain_size,
+                rearrangement,
+                variation,
+                seed,
+            },
+            grain_cache_dir.as_deref(),
+            backend.into(),
+        ),
+        Commands::RenderGranularMosaicSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            grain_size,
+            rearrangement,
+            variation,
+            seed,
+            max_frames,
+            grain_cache_dir,
+            backend,
+        } => render_granular_mosaic_sequence(GranularMosaicSequenceRenderRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            settings: GranularMosaicSettings {
+                grain_size,
+                rearrangement,
+                variation,
+                seed,
+            },
+            max_frames,
+            grain_cache_dir: grain_cache_dir.as_deref(),
+            backend: backend.into(),
+        })
+        .map(|_| ()),
         Commands::RenderFrameSequence {
             modulator_dir,
             carrier_dir,
@@ -593,6 +709,37 @@ fn run() -> Result<(), CliError> {
             flow_source: flow_source.into(),
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddGranularMosaicSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            grain_size,
+            rearrangement,
+            variation,
+            seed,
+            max_frames,
+            frame_rate,
+            no_grain_cache,
+            project_path,
+            backend,
+        } => queue_add_granular_mosaic_sequence(QueueAddGranularMosaicSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            settings: GranularMosaicSettings {
+                grain_size,
+                rearrangement,
+                variation,
+                seed,
+            },
+            max_frames,
+            frame_rate,
+            write_grain_cache: !no_grain_cache,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
         Commands::QueueRunTest {
             queue_path,
             output_dir,
@@ -601,6 +748,9 @@ fn run() -> Result<(), CliError> {
         Commands::QueueRunFrameSequence { queue_path } => queue_run_frame_sequence(&queue_path),
         Commands::QueueRunFeedbackSequence { queue_path } => {
             queue_run_feedback_sequence(&queue_path)
+        }
+        Commands::QueueRunGranularMosaicSequence { queue_path } => {
+            queue_run_granular_mosaic_sequence(&queue_path)
         }
         Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
@@ -1060,6 +1210,333 @@ fn render_two_source(
         output_path.display()
     );
     Ok(())
+}
+
+fn render_granular_mosaic(
+    modulator_image: &Path,
+    carrier_image: &Path,
+    output_path: &Path,
+    settings: GranularMosaicSettings,
+    grain_cache_dir: Option<&Path>,
+    backend: RenderBackend,
+) -> Result<(), CliError> {
+    settings.validate()?;
+    let modulator = load_image_f32(modulator_image)?;
+    let carrier = load_image_f32(carrier_image)?;
+    let rendered = if let Some(cache_directory) = grain_cache_dir {
+        let modulator_fingerprint = image_file_fingerprint(modulator_image)?;
+        let carrier_fingerprint = image_file_fingerprint(carrier_image)?;
+        render_granular_mosaic_frame(
+            &modulator,
+            &carrier,
+            settings,
+            Some(GranularMosaicCacheContext {
+                directory: cache_directory,
+                modulator_fingerprint: &modulator_fingerprint,
+                carrier_fingerprint: &carrier_fingerprint,
+            }),
+            backend,
+        )?
+    } else {
+        render_granular_mosaic_frame(&modulator, &carrier, settings, None, backend)?
+    };
+
+    write_parent_dirs(output_path)?;
+    save_png(&rendered.image, output_path)?;
+    print_granular_cache_summary(grain_cache_dir, rendered);
+    println!(
+        "rendered granular mosaic from {} modulating {} to {}",
+        modulator_image.display(),
+        carrier_image.display(),
+        output_path.display()
+    );
+    Ok(())
+}
+
+struct GranularMosaicSequenceRenderRequest<'a> {
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_dir: &'a Path,
+    settings: GranularMosaicSettings,
+    max_frames: Option<usize>,
+    grain_cache_dir: Option<&'a Path>,
+    backend: RenderBackend,
+}
+
+fn render_granular_mosaic_sequence(
+    request: GranularMosaicSequenceRenderRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    let GranularMosaicSequenceRenderRequest {
+        modulator_dir,
+        carrier_dir,
+        output_dir,
+        settings,
+        max_frames,
+        grain_cache_dir,
+        backend,
+    } = request;
+    settings.validate()?;
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(modulator_dir)?;
+    let carrier_frames = collect_image_frames(carrier_dir)?;
+    if modulator_frames.is_empty() || carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "granular mosaic requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    let paired_count = modulator_frames.len().min(carrier_frames.len());
+    let frame_count = max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    fs::create_dir_all(output_dir)?;
+    if let Some(cache_root) = grain_cache_dir {
+        fs::create_dir_all(cache_root)?;
+    }
+
+    let mut reused_descriptor_count = 0usize;
+    let mut reused_selection_count = 0usize;
+
+    for index in 0..frame_count {
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let carrier = load_image_f32(&carrier_frames[index])?;
+        let rendered = if let Some(cache_root) = grain_cache_dir {
+            let modulator_fingerprint = image_file_fingerprint(&modulator_frames[index])?;
+            let carrier_fingerprint = image_file_fingerprint(&carrier_frames[index])?;
+            render_granular_mosaic_frame(
+                &modulator,
+                &carrier,
+                settings,
+                Some(GranularMosaicCacheContext {
+                    directory: &cache_root.join(format!("frame_{index:06}")),
+                    modulator_fingerprint: &modulator_fingerprint,
+                    carrier_fingerprint: &carrier_fingerprint,
+                }),
+                backend,
+            )?
+        } else {
+            render_granular_mosaic_frame(&modulator, &carrier, settings, None, backend)?
+        };
+        reused_descriptor_count += usize::from(rendered.reused_descriptor_cache);
+        reused_selection_count += usize::from(rendered.reused_selection_cache);
+        save_png(
+            &rendered.image,
+            &output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if modulator_frames.len() != carrier_frames.len() {
+        println!(
+            "source frame counts differ: {} modulator frame(s), {} carrier frame(s); rendered common prefix",
+            modulator_frames.len(),
+            carrier_frames.len()
+        );
+    }
+    if let Some(cache_root) = grain_cache_dir {
+        println!(
+            "reused {reused_descriptor_count} descriptor and {reused_selection_count} selection cache frame(s) from {}",
+            cache_root.display()
+        );
+    }
+    println!(
+        "rendered granular mosaic sequence with {} frame(s) on the {} backend from {} modulating {} to {}",
+        frame_count,
+        render_backend_label(backend),
+        modulator_dir.display(),
+        carrier_dir.display(),
+        output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+struct GranularMosaicCacheContext<'a> {
+    directory: &'a Path,
+    modulator_fingerprint: &'a str,
+    carrier_fingerprint: &'a str,
+}
+
+struct GranularMosaicFrameRenderResult {
+    image: ImageBufferF32,
+    reused_descriptor_cache: bool,
+    reused_selection_cache: bool,
+}
+
+fn render_granular_mosaic_frame(
+    modulator: &ImageBufferF32,
+    carrier: &ImageBufferF32,
+    settings: GranularMosaicSettings,
+    cache: Option<GranularMosaicCacheContext<'_>>,
+    backend: RenderBackend,
+) -> Result<GranularMosaicFrameRenderResult, CliError> {
+    if let Some(cache) = cache {
+        fs::create_dir_all(cache.directory)?;
+        let descriptor_cache = if cache
+            .directory
+            .join(GRAIN_DESCRIPTOR_CACHE_FILE_NAME)
+            .is_file()
+        {
+            Some(read_grain_descriptor_cache(cache.directory)?)
+        } else {
+            None
+        };
+        let descriptor_is_current = descriptor_cache.as_ref().is_some_and(|descriptor_cache| {
+            descriptor_cache.algorithm == GRANULAR_MOSAIC_ALGORITHM
+                && descriptor_cache.carrier_width == carrier.width
+                && descriptor_cache.carrier_height == carrier.height
+                && descriptor_cache.grain_size == settings.grain_size
+                && descriptor_cache.carrier_fingerprint == cache.carrier_fingerprint
+        });
+        let descriptors = match descriptor_cache {
+            Some(descriptor_cache) if descriptor_is_current => descriptor_cache.descriptors,
+            _ => {
+                let descriptors = analyze_grains_cpu(carrier, settings.grain_size)?;
+                write_grain_descriptor_cache(
+                    cache.directory,
+                    carrier.width,
+                    carrier.height,
+                    settings.grain_size,
+                    cache.carrier_fingerprint,
+                    &descriptors,
+                )?;
+                descriptors
+            }
+        };
+        let selection_cache = if cache
+            .directory
+            .join(GRAIN_SELECTION_CACHE_FILE_NAME)
+            .is_file()
+        {
+            Some(read_grain_selection_cache(cache.directory)?)
+        } else {
+            None
+        };
+        let selection_is_current = selection_cache.as_ref().is_some_and(|selection_cache| {
+            selection_cache.algorithm == GRANULAR_MOSAIC_ALGORITHM
+                && selection_cache.modulator_fingerprint == cache.modulator_fingerprint
+                && selection_cache.carrier_fingerprint == cache.carrier_fingerprint
+                && selection_cache.carrier_width == carrier.width
+                && selection_cache.carrier_height == carrier.height
+                && selection_cache.grain_size == settings.grain_size
+                && selection_cache.variation == settings.variation
+                && selection_cache.seed == settings.seed
+        });
+        let selection = match selection_cache {
+            Some(selection_cache) if selection_is_current => selection_cache.selection,
+            _ => {
+                let selection = select_grains_cpu(
+                    modulator,
+                    carrier.width,
+                    carrier.height,
+                    &descriptors,
+                    settings,
+                )?;
+                write_grain_selection_cache(
+                    cache.directory,
+                    cache.modulator_fingerprint,
+                    cache.carrier_fingerprint,
+                    carrier.width,
+                    carrier.height,
+                    settings,
+                    &selection,
+                )?;
+                selection
+            }
+        };
+        let image = render_granular_mosaic_output(carrier, &selection, settings, backend)?;
+        return Ok(GranularMosaicFrameRenderResult {
+            image,
+            reused_descriptor_cache: descriptor_is_current,
+            reused_selection_cache: selection_is_current,
+        });
+    }
+
+    let descriptors = analyze_grains_cpu(carrier, settings.grain_size)?;
+    let selection = select_grains_cpu(
+        modulator,
+        carrier.width,
+        carrier.height,
+        &descriptors,
+        settings,
+    )?;
+    Ok(GranularMosaicFrameRenderResult {
+        image: render_granular_mosaic_output(carrier, &selection, settings, backend)?,
+        reused_descriptor_cache: false,
+        reused_selection_cache: false,
+    })
+}
+
+fn render_granular_mosaic_output(
+    carrier: &ImageBufferF32,
+    selection: &morphogen_render::GrainSelection,
+    settings: GranularMosaicSettings,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(granular_mosaic_with_selection_cpu(
+            carrier, selection, settings,
+        )?),
+        RenderBackend::Metal => render_granular_mosaic_output_metal(carrier, selection, settings),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_granular_mosaic_output_metal(
+    carrier: &ImageBufferF32,
+    selection: &morphogen_render::GrainSelection,
+    settings: GranularMosaicSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::granular_mosaic_metal(carrier, selection, settings)?;
+    let cpu = granular_mosaic_with_selection_cpu(carrier, selection, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU granular outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal granular render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_granular_mosaic_output_metal(
+    _carrier: &ImageBufferF32,
+    _selection: &morphogen_render::GrainSelection,
+    _settings: GranularMosaicSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal render backend is only available on macOS".to_string(),
+    ))
+}
+
+fn print_granular_cache_summary(
+    grain_cache_dir: Option<&Path>,
+    rendered: GranularMosaicFrameRenderResult,
+) {
+    if let Some(cache_directory) = grain_cache_dir {
+        println!(
+            "{} granular descriptor cache and {} selection cache at {}",
+            if rendered.reused_descriptor_cache {
+                "reused"
+            } else {
+                "generated"
+            },
+            if rendered.reused_selection_cache {
+                "reused"
+            } else {
+                "generated"
+            },
+            cache_directory.display()
+        );
+    }
 }
 
 struct FrameSequenceRenderRequest<'a> {
@@ -1712,6 +2189,36 @@ fn feedback_sequence_provenance(
     }
 }
 
+fn granular_mosaic_provenance(
+    modulator_dir: &Path,
+    carrier_dir: &Path,
+    grain_cache_dir: Option<&Path>,
+) -> RenderJobProvenance {
+    RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-frames".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: grain_cache_dir
+            .map(|path| {
+                vec![RenderJobAnalysisCacheProvenance {
+                    kind: AnalysisKind::GrainDescriptors,
+                    path: path.to_string_lossy().to_string(),
+                    producer: GRANULAR_MOSAIC_ALGORITHM.to_string(),
+                }]
+            })
+            .unwrap_or_default(),
+    }
+}
+
 fn feedback_source_fingerprint(
     directory: &Path,
     frames: &[PathBuf],
@@ -1733,6 +2240,17 @@ fn feedback_source_fingerprint(
         frame_count,
         checksum: format!("fnv1a64:{checksum:016x}"),
     })
+}
+
+fn image_file_fingerprint(path: &Path) -> Result<String, CliError> {
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    update_fnv1a(
+        &mut checksum,
+        path.file_name().unwrap_or_default().as_encoded_bytes(),
+    );
+    update_fnv1a(&mut checksum, &[0]);
+    update_fnv1a(&mut checksum, &fs::read(path)?);
+    Ok(format!("fnv1a64:{checksum:016x}"))
 }
 
 fn update_fnv1a(checksum: &mut u64, bytes: &[u8]) {
@@ -2174,6 +2692,102 @@ fn queue_add_frame_sequence(request: QueueAddFrameSequenceRequest<'_>) -> Result
     Ok(())
 }
 
+struct QueueAddGranularMosaicSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    settings: GranularMosaicSettings,
+    max_frames: Option<u32>,
+    frame_rate: f64,
+    write_grain_cache: bool,
+    project_path: Option<&'a Path>,
+    backend: RenderBackend,
+}
+
+fn queue_add_granular_mosaic_sequence(
+    request: QueueAddGranularMosaicSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddGranularMosaicSequenceRequest {
+        queue_path,
+        modulator_dir,
+        carrier_dir,
+        output_root_dir,
+        settings,
+        max_frames,
+        frame_rate,
+        write_grain_cache,
+        project_path,
+        backend,
+    } = request;
+    settings.validate()?;
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let grain_cache_directory = write_grain_cache
+        .then(|| job_output_dir.join("cache").join("grains"))
+        .map(|path| path.to_string_lossy().to_string());
+    let provenance = granular_mosaic_provenance(
+        modulator_dir,
+        carrier_dir,
+        grain_cache_directory.as_deref().map(Path::new),
+    );
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceGranularMosaic {
+            modulator_frame_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            grain_cache_directory,
+            grain_size: settings.grain_size,
+            rearrangement: settings.rearrangement,
+            variation: settings.variation,
+            seed: settings.seed,
+            max_frames,
+            frame_rate,
+            backend,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued granular-mosaic render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
 struct QueueAddFeedbackSequenceRequest<'a> {
     queue_path: &'a Path,
     modulator_dir: &'a Path,
@@ -2442,6 +3056,132 @@ fn queue_run_frame_sequence(queue_path: &Path) -> Result<(), CliError> {
             });
             queue.save_json(queue_path)?;
             eprintln!("frame-sequence job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
+fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceGranularMosaic { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running granular-mosaic jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::FrameSequenceGranularMosaic {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        grain_cache_directory,
+        grain_size,
+        rearrangement,
+        variation,
+        seed,
+        max_frames,
+        frame_rate,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a granular-mosaic render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    let provenance = granular_mosaic_provenance(
+        Path::new(&modulator_frame_directory),
+        Path::new(&carrier_frame_directory),
+        grain_cache_directory.as_deref().map(Path::new),
+    );
+    queue.jobs[job_index].provenance = Some(provenance.clone());
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_granular_mosaic_sequence(GranularMosaicSequenceRenderRequest {
+            modulator_dir: Path::new(&modulator_frame_directory),
+            carrier_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings: GranularMosaicSettings {
+                grain_size,
+                rearrangement,
+                variation,
+                seed,
+            },
+            max_frames: max_frames.map(|value| value as usize),
+            grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
+            backend,
+        })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        let settings = GranularMosaicSettings {
+            grain_size,
+            rearrangement,
+            variation,
+            seed,
+        };
+        write_granular_mosaic_sequence_manifest(
+            &job_id,
+            &output_dir,
+            &frame_paths,
+            &timing,
+            &settings,
+            Some(&provenance),
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued granular-mosaic job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("granular-mosaic job {job_id} failed: {error}");
             Err(error)
         }
     }
@@ -2742,6 +3482,42 @@ fn write_frame_sequence_manifest(
     Ok(())
 }
 
+fn write_granular_mosaic_sequence_manifest(
+    job_id: &str,
+    output_dir: &Path,
+    frame_paths: &[String],
+    timing: &RenderTimingMetadata,
+    settings: &GranularMosaicSettings,
+    provenance: Option<&RenderJobProvenance>,
+) -> Result<(), CliError> {
+    let manifest = serde_json::json!({
+        "job_id": job_id,
+        "status": "complete",
+        "task": "frame_sequence_granular_mosaic",
+        "frames": frame_paths,
+        "audio_stems": [],
+        "timing": {
+            "frame_rate": timing.frame_rate,
+            "frame_count": timing.frame_count,
+            "start_seconds": timing.start_seconds,
+            "duration_seconds": timing.duration_seconds,
+            "sample_rate": timing.sample_rate,
+            "audio_sample_count": timing.audio_sample_count
+        },
+        "granular_mosaic": {
+            "algorithm": GRANULAR_MOSAIC_ALGORITHM,
+            "settings": settings
+        },
+        "provenance": provenance,
+        "deterministic": true
+    });
+    fs::write(
+        output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
 fn write_frame_sequence_checkpoint(
     job_id: &str,
     output_dir: &Path,
@@ -2791,6 +3567,7 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::TestRender => "test_render",
             RenderJobTask::FrameSequenceFlowDisplace { .. } => "frame_sequence_flow_displace",
             RenderJobTask::FrameSequenceFlowFeedback { .. } => "frame_sequence_flow_feedback",
+            RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",
         };
         let provenance_summary = job
             .provenance

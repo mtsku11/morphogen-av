@@ -52,7 +52,13 @@ Centroid, bandwidth, rolloff, flatness, and future descriptors over audio window
 
 ## Grain Indexes
 
-Audio/video grain start times, durations, descriptors, media provenance, and cache version.
+The first implemented visual granular sidecars are per-frame JSON files written by `render-granular-mosaic` and `render-granular-mosaic-sequence` when `--grain-cache-dir` is supplied:
+
+- `grain_descriptors.json` contains `granular_mosaic_grain_descriptors`, algorithm identifier, Source B dimensions/fingerprint, grain size, and row-major tile origins with mean-luminance descriptors.
+- `grain_selection.json` contains `granular_mosaic_selection`, Source A and Source B fingerprints, dimensions, grain size, variation, seed, and the selected descriptor index for every output tile.
+- The renderer reuses descriptors only when Source B fingerprint, dimensions, grain size, and algorithm match. It reuses selections only when both source fingerprints plus variation and seed also match. A different arrangement amount does not invalidate selection because it changes only sampling interpolation after selection.
+
+Future audio/video grain indexes should add start times, durations, color and spectral descriptors, and media provenance.
 
 ## Render Job Metadata
 

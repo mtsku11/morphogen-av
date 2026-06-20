@@ -5,6 +5,8 @@ pub mod error;
 pub mod feedback_state;
 pub mod flow;
 pub mod flow_cache;
+pub mod grain_cache;
+pub mod granular_mosaic;
 pub mod image_buffer;
 pub mod luminance_flow;
 pub mod optical_flow;
@@ -22,6 +24,15 @@ pub use flow::FlowField;
 pub use flow_cache::{
     read_flow_cache, write_flow_cache, write_flow_cache_with_source_fingerprint, FlowCacheFrame,
     FlowCacheManifest, FLOW_VECTOR_CONVENTION,
+};
+pub use grain_cache::{
+    read_grain_descriptor_cache, read_grain_selection_cache, write_grain_descriptor_cache,
+    write_grain_selection_cache, GranularMosaicDescriptorCache, GranularMosaicSelectionCache,
+    GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
+};
+pub use granular_mosaic::{
+    analyze_grains_cpu, granular_mosaic_cpu, granular_mosaic_with_selection_cpu, select_grains_cpu,
+    GrainDescriptor, GrainSelection, GranularMosaicSettings, GRANULAR_MOSAIC_ALGORITHM,
 };
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;

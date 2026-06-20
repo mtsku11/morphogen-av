@@ -12,6 +12,10 @@ pub enum RenderError {
     InvalidFlowFeedbackSettings(String),
     #[error("invalid flow feedback state: {0}")]
     InvalidFlowFeedbackState(String),
+    #[error("invalid granular mosaic settings: {0}")]
+    InvalidGranularMosaicSettings(String),
+    #[error("invalid granular mosaic cache: {0}")]
+    InvalidGranularMosaicCache(String),
     #[error("render inputs are incompatible: {0}")]
     IncompatibleInputs(String),
     #[error("I/O error: {0}")]

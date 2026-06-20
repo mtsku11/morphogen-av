@@ -4,6 +4,8 @@ pub const FLOW_DISPLACE_KERNEL_NAME: &str = "flow_displace";
 pub const FLOW_DISPLACE_SHADER_SOURCE: &str = include_str!("../shaders/flow_displace.metal");
 pub const ADVECT_FEEDBACK_KERNEL_NAME: &str = "advect_feedback";
 pub const ADVECT_FEEDBACK_SHADER_SOURCE: &str = include_str!("../shaders/advect_feedback.metal");
+pub const GRANULAR_MOSAIC_KERNEL_NAME: &str = "granular_mosaic";
+pub const GRANULAR_MOSAIC_SHADER_SOURCE: &str = include_str!("../shaders/granular_mosaic.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -19,6 +21,16 @@ pub struct ThreadgroupSize {
     pub width: u32,
     pub height: u32,
     pub depth: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GranularMosaicDispatchPlan {
+    pub width: u32,
+    pub height: u32,
+    pub grain_size: u32,
+    pub rearrangement: f32,
+    pub threads_per_threadgroup: ThreadgroupSize,
+    pub threadgroups_per_grid: ThreadgroupSize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +70,12 @@ pub enum MetalDispatchError {
     MissingFeedbackTextureBindingLayout,
     #[error("invalid flow feedback settings: {0}")]
     InvalidFeedbackSettings(String),
+    #[error("invalid granular mosaic settings: {0}")]
+    InvalidGranularMosaicSettings(String),
+    #[error("granular_mosaic.metal does not contain the expected kernel entry point")]
+    MissingGranularMosaicKernelEntryPoint,
+    #[error("granular_mosaic.metal does not contain the expected texture and buffer bindings")]
+    MissingGranularMosaicBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -102,6 +120,52 @@ impl FlowDisplaceDispatchPlan {
     }
 }
 
+impl GranularMosaicDispatchPlan {
+    pub fn new(
+        width: u32,
+        height: u32,
+        grain_size: u32,
+        rearrangement: f32,
+    ) -> Result<Self, MetalDispatchError> {
+        if width == 0 || height == 0 {
+            return Err(MetalDispatchError::EmptyDimensions);
+        }
+        if grain_size == 0 {
+            return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+                "grain_size must be greater than zero".to_string(),
+            ));
+        }
+        if !rearrangement.is_finite() || !(0.0..=1.0).contains(&rearrangement) {
+            return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+                "rearrangement must be a finite value between zero and one".to_string(),
+            ));
+        }
+
+        let threads_per_threadgroup = ThreadgroupSize {
+            width: 16,
+            height: 16,
+            depth: 1,
+        };
+        let threadgroups_per_grid = ThreadgroupSize {
+            width: div_ceil(width, threads_per_threadgroup.width),
+            height: div_ceil(height, threads_per_threadgroup.height),
+            depth: 1,
+        };
+        Ok(Self {
+            width,
+            height,
+            grain_size,
+            rearrangement,
+            threads_per_threadgroup,
+            threadgroups_per_grid,
+        })
+    }
+
+    pub fn kernel_name(&self) -> &'static str {
+        GRANULAR_MOSAIC_KERNEL_NAME
+    }
+}
+
 pub fn validate_flow_displace_shader_source() -> Result<(), MetalDispatchError> {
     if !FLOW_DISPLACE_SHADER_SOURCE.contains("kernel void flow_displace") {
         return Err(MetalDispatchError::MissingKernelEntryPoint);
@@ -133,6 +197,25 @@ pub fn validate_advect_feedback_shader_source() -> Result<(), MetalDispatchError
     ] {
         if !ADVECT_FEEDBACK_SHADER_SOURCE.contains(expected) {
             return Err(MetalDispatchError::MissingFeedbackTextureBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_granular_mosaic_shader_source() -> Result<(), MetalDispatchError> {
+    if !GRANULAR_MOSAIC_SHADER_SOURCE.contains("kernel void granular_mosaic") {
+        return Err(MetalDispatchError::MissingGranularMosaicKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::sample> carrier [[texture(0)]]",
+        "texture2d<float, access::write> output [[texture(1)]]",
+        "constant GranularMosaicParams& params [[buffer(0)]]",
+        "device const uint* selectionIndices [[buffer(1)]]",
+    ] {
+        if !GRANULAR_MOSAIC_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingGranularMosaicBindingLayout);
         }
     }
 
@@ -200,5 +283,15 @@ mod tests {
     #[test]
     fn checked_in_feedback_shader_has_expected_bindings() {
         validate_advect_feedback_shader_source().expect("feedback shader preflight");
+    }
+
+    #[test]
+    fn granular_mosaic_dispatch_plan_and_shader_are_valid() {
+        let plan = GranularMosaicDispatchPlan::new(17, 18, 8, 0.75).expect("valid plan");
+
+        assert_eq!(plan.kernel_name(), "granular_mosaic");
+        assert_eq!(plan.threadgroups_per_grid.width, 2);
+        assert_eq!(plan.threadgroups_per_grid.height, 2);
+        validate_granular_mosaic_shader_source().expect("granular shader preflight");
     }
 }
