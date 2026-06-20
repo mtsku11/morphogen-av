@@ -582,6 +582,7 @@ mod tests {
             feedback_mix: 0.6,
             decay: 0.9,
             iterations: 1,
+            structure_mix: 0.0,
         };
 
         let cpu = flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, settings)

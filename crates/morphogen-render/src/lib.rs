@@ -133,6 +133,7 @@ mod tests {
             feedback_mix: 1.0,
             decay: 0.0,
             iterations: 1,
+            structure_mix: 0.0,
         };
 
         let feedback = flow_feedback_frame_cpu(&carrier, None, &flow, settings).expect("frame");
@@ -154,6 +155,7 @@ mod tests {
             feedback_mix: 0.5,
             decay: 0.5,
             iterations: 1,
+            structure_mix: 0.0,
         };
 
         let frame_zero =
@@ -214,6 +216,7 @@ mod tests {
             feedback_mix: 0.75,
             decay: 0.9,
             iterations: 1,
+            structure_mix: 0.0,
         };
         let carriers = [
             [0.2, 0.0, 0.0, 1.0],
@@ -268,5 +271,169 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn checkerboard(size: u32) -> ImageBufferF32 {
+        ImageBufferF32::from_fn(size, size, |x, y| {
+            let value = if (x + y) % 2 == 0 { 0.9 } else { 0.1 };
+            [value, value, value, 1.0]
+        })
+        .expect("checkerboard")
+    }
+
+    /// Sum of absolute neighbor differences on the luma channel; a proxy for how
+    /// much high-frequency detail (structure) a frame still carries. Trends to
+    /// zero as a frame washes out to flat fog.
+    fn total_variation(image: &ImageBufferF32) -> f32 {
+        let mut total = 0.0;
+        for y in 0..image.height {
+            for x in 0..image.width {
+                let here = image.pixel(x, y).expect("pixel")[0];
+                if x + 1 < image.width {
+                    total += (image.pixel(x + 1, y).expect("pixel")[0] - here).abs();
+                }
+                if y + 1 < image.height {
+                    total += (image.pixel(x, y + 1).expect("pixel")[0] - here).abs();
+                }
+            }
+        }
+        total
+    }
+
+    #[test]
+    fn structure_mix_adds_nothing_on_a_flat_carrier() {
+        // A flat carrier has no high-frequency band, so structure-preserving
+        // re-injection must be a no-op regardless of the mix amount.
+        let carrier = ImageBufferF32::new(4, 4, vec![[0.5, 0.5, 0.5, 1.0]; 16]).expect("carrier");
+        let previous = ImageBufferF32::new(4, 4, vec![[0.2, 0.2, 0.2, 1.0]; 16]).expect("previous");
+        let flow = FlowField::new(4, 4, vec![[0.0, 0.0]; 16]).expect("flow");
+        let base = FlowFeedbackSettings {
+            carrier_amount: 1.0,
+            feedback_amount: 1.0,
+            feedback_mix: 0.7,
+            decay: 0.9,
+            iterations: 1,
+            structure_mix: 0.0,
+        };
+
+        let without = flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, base).expect("a");
+        let with = flow_feedback_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &flow,
+            FlowFeedbackSettings {
+                structure_mix: 0.8,
+                ..base
+            },
+        )
+        .expect("b");
+
+        assert_image_near(&with, &without, 0.000_001);
+    }
+
+    #[test]
+    fn structure_mix_leaves_frame_zero_unchanged() {
+        // Frame zero (no history) is the displaced carrier by contract;
+        // structure re-injection only applies to frames that have history.
+        let carrier = checkerboard(8);
+        let flow = FlowField::new(8, 8, vec![[0.0, 0.0]; 64]).expect("flow");
+        let base = FlowFeedbackSettings {
+            carrier_amount: 1.0,
+            feedback_amount: 1.0,
+            feedback_mix: 0.7,
+            decay: 0.9,
+            iterations: 1,
+            structure_mix: 0.0,
+        };
+
+        let without = flow_feedback_frame_cpu(&carrier, None, &flow, base).expect("a");
+        let with = flow_feedback_frame_cpu(
+            &carrier,
+            None,
+            &flow,
+            FlowFeedbackSettings {
+                structure_mix: 0.9,
+                ..base
+            },
+        )
+        .expect("b");
+
+        assert_image_near(&with, &without, 0.0);
+    }
+
+    #[test]
+    fn structure_mix_reinjects_high_frequency_detail() {
+        // Against a washed-out (flat-gray) history, structure re-injection must
+        // restore the carrier's edges, raising the frame's total variation.
+        let carrier = checkerboard(8);
+        let washed = ImageBufferF32::new(8, 8, vec![[0.5, 0.5, 0.5, 1.0]; 64]).expect("washed");
+        let flow = FlowField::new(8, 8, vec![[0.0, 0.0]; 64]).expect("flow");
+        let base = FlowFeedbackSettings {
+            carrier_amount: 0.0,
+            feedback_amount: 0.0,
+            feedback_mix: 0.97,
+            decay: 1.0,
+            iterations: 1,
+            structure_mix: 0.0,
+        };
+
+        let plain = flow_feedback_frame_cpu(&carrier, Some(&washed), &flow, base).expect("plain");
+        let structured = flow_feedback_frame_cpu(
+            &carrier,
+            Some(&washed),
+            &flow,
+            FlowFeedbackSettings {
+                structure_mix: 0.8,
+                ..base
+            },
+        )
+        .expect("structured");
+
+        assert!(
+            total_variation(&structured) > total_variation(&plain) * 2.0,
+            "structure_mix should raise detail: plain={}, structured={}",
+            total_variation(&plain),
+            total_variation(&structured)
+        );
+    }
+
+    #[test]
+    fn structure_mix_resists_washout_across_a_sequence() {
+        // Fractional flow blurs the advected history every frame; with high
+        // feedback_mix the plain renderer collapses to flat fog. Structure
+        // re-injection keeps regenerating detail so the frame stays sharp.
+        let carrier = checkerboard(8);
+        let flow = FlowField::new(8, 8, vec![[0.3, 0.0]; 64]).expect("flow");
+        let base = FlowFeedbackSettings {
+            carrier_amount: 0.0,
+            feedback_amount: 1.0,
+            feedback_mix: 0.99,
+            decay: 1.0,
+            iterations: 1,
+            structure_mix: 0.0,
+        };
+        let structured = FlowFeedbackSettings {
+            structure_mix: 0.6,
+            ..base
+        };
+
+        let mut plain_state: Option<ImageBufferF32> = None;
+        let mut structured_state: Option<ImageBufferF32> = None;
+        for _ in 0..12 {
+            plain_state = Some(
+                flow_feedback_frame_cpu(&carrier, plain_state.as_ref(), &flow, base).expect("plain"),
+            );
+            structured_state = Some(
+                flow_feedback_frame_cpu(&carrier, structured_state.as_ref(), &flow, structured)
+                    .expect("structured"),
+            );
+        }
+
+        let plain_tv = total_variation(&plain_state.expect("plain final"));
+        let structured_tv = total_variation(&structured_state.expect("structured final"));
+        assert!(
+            structured_tv > plain_tv * 3.0,
+            "structured morph should resist washout: plain_tv={plain_tv}, structured_tv={structured_tv}"
+        );
     }
 }

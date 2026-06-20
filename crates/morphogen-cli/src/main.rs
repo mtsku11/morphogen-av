@@ -187,6 +187,8 @@ enum Commands {
         decay: f32,
         #[arg(long, default_value_t = 1)]
         iterations: u32,
+        #[arg(long, default_value_t = 0.0)]
+        structure_mix: f32,
         #[arg(long, default_value_t = 8)]
         output_bit_depth: u8,
         #[arg(long, default_value_t = 1)]
@@ -596,6 +598,7 @@ fn run() -> Result<(), CliError> {
             feedback_mix,
             decay,
             iterations,
+            structure_mix,
             output_bit_depth,
             temporal_supersampling,
             flow_cache_dir,
@@ -619,6 +622,7 @@ fn run() -> Result<(), CliError> {
                 feedback_mix,
                 decay,
                 iterations,
+                structure_mix,
             },
             output_bit_depth,
             temporal_supersampling,
@@ -698,6 +702,10 @@ fn run() -> Result<(), CliError> {
                 feedback_mix,
                 decay,
                 iterations,
+                // Structure-preserving morph is exposed only on the direct
+                // render path for now; the persisted queue job does not yet
+                // carry it (backlog: Structure-Preserving Morph task 4).
+                structure_mix: 0.0,
             },
             output_bit_depth,
             temporal_supersampling,
@@ -2119,6 +2127,11 @@ fn render_feedback_frame(
             settings,
         )?),
         RenderBackend::Metal => {
+            if settings.structure_mix != 0.0 {
+                return Err(CliError::Message(
+                    "structure-preserving morph (--structure-mix) is CPU-only until the Metal path lands; rerun with --backend cpu".to_string(),
+                ));
+            }
             render_feedback_frame_metal(carrier, previous_output, flow, settings)
         }
     }
@@ -3259,6 +3272,9 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
                 feedback_mix,
                 decay,
                 iterations,
+                // Persisted queue jobs do not carry structure_mix yet (backlog:
+                // Structure-Preserving Morph task 4).
+                structure_mix: 0.0,
             },
             output_bit_depth,
             temporal_supersampling,

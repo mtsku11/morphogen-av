@@ -12,6 +12,14 @@ pub struct FlowFeedbackSettings {
     pub feedback_mix: f32,
     pub decay: f32,
     pub iterations: u32,
+    /// Structure-preserving morph: amount of the carrier's high-frequency band
+    /// (detail/edges) re-injected into the feedback result every frame. The
+    /// accumulated optical-flow displacement owns the layout while this keeps
+    /// detail regenerating, so the frame goes beyond recognition without
+    /// collapsing to flat fog. `0.0` reproduces the original additive-feedback
+    /// behavior exactly; it defaults to zero for legacy queue files.
+    #[serde(default)]
+    pub structure_mix: f32,
 }
 
 impl FlowFeedbackSettings {
@@ -21,6 +29,7 @@ impl FlowFeedbackSettings {
             ("feedback_amount", self.feedback_amount),
             ("feedback_mix", self.feedback_mix),
             ("decay", self.decay),
+            ("structure_mix", self.structure_mix),
         ] {
             if !value.is_finite() {
                 return Err(RenderError::InvalidFlowFeedbackSettings(format!(
@@ -36,6 +45,11 @@ impl FlowFeedbackSettings {
         if self.decay < 0.0 {
             return Err(RenderError::InvalidFlowFeedbackSettings(
                 "decay must be greater than or equal to zero".to_string(),
+            ));
+        }
+        if self.structure_mix < 0.0 {
+            return Err(RenderError::InvalidFlowFeedbackSettings(
+                "structure_mix must be greater than or equal to zero".to_string(),
             ));
         }
         if self.iterations != 1 {
@@ -90,14 +104,76 @@ pub fn flow_feedback_frame_cpu(
     }
 
     let advected_history = flow_displace_cpu(previous_output, flow, settings.feedback_amount)?;
+
+    // Structure-preserving morph: re-inject the carrier's high-frequency band
+    // (carrier minus its low-pass) on top of the additive feedback result. The
+    // high-pass band has near-zero mean, so it regenerates detail/edges without
+    // re-asserting the carrier's flat composition or pulling the frame back to
+    // the original layout. `structure_mix == 0.0` skips it entirely and is
+    // bitwise-identical to the original additive-feedback output.
+    let low_pass = if settings.structure_mix != 0.0 {
+        Some(low_pass_blur(&displaced_carrier)?)
+    } else {
+        None
+    };
+
     ImageBufferF32::from_fn(carrier.width, carrier.height, |x, y| {
         let carrier_pixel = displaced_carrier.pixel(x, y).unwrap_or([0.0; 4]);
         let history_pixel = advected_history.pixel(x, y).unwrap_or([0.0; 4]);
-        mix_rgba(
+        let base = mix_rgba(
             carrier_pixel,
             scale_rgba(history_pixel, settings.decay),
             settings.feedback_mix,
-        )
+        );
+        match &low_pass {
+            None => base,
+            Some(low_pass) => {
+                let low_pixel = low_pass.pixel(x, y).unwrap_or([0.0; 4]);
+                [
+                    base[0] + settings.structure_mix * (carrier_pixel[0] - low_pixel[0]),
+                    base[1] + settings.structure_mix * (carrier_pixel[1] - low_pixel[1]),
+                    base[2] + settings.structure_mix * (carrier_pixel[2] - low_pixel[2]),
+                    base[3] + settings.structure_mix * (carrier_pixel[3] - low_pixel[3]),
+                ]
+            }
+        }
+    })
+}
+
+/// Deterministic separable binomial blur (radius 2, weights [1,4,6,4,1]/16)
+/// with clamped edges. Used to extract the carrier's low-frequency band for
+/// structure-preserving morph; the high-frequency band is `image - low_pass`.
+fn low_pass_blur(image: &ImageBufferF32) -> Result<ImageBufferF32, RenderError> {
+    const WEIGHTS: [f32; 5] = [1.0, 4.0, 6.0, 4.0, 1.0];
+    const RADIUS: i32 = 2;
+    const INV_SUM: f32 = 1.0 / 16.0;
+    let width = image.width as i32;
+    let height = image.height as i32;
+
+    // Horizontal pass.
+    let horizontal = ImageBufferF32::from_fn(image.width, image.height, |x, y| {
+        let mut accumulated = [0.0f32; 4];
+        for (tap_index, weight) in WEIGHTS.iter().enumerate() {
+            let sample_x = (x as i32 + tap_index as i32 - RADIUS).clamp(0, width - 1) as u32;
+            let sample = image.pixel(sample_x, y).unwrap_or([0.0; 4]);
+            for channel in 0..4 {
+                accumulated[channel] += sample[channel] * weight;
+            }
+        }
+        accumulated.map(|value| value * INV_SUM)
+    })?;
+
+    // Vertical pass.
+    ImageBufferF32::from_fn(image.width, image.height, |x, y| {
+        let mut accumulated = [0.0f32; 4];
+        for (tap_index, weight) in WEIGHTS.iter().enumerate() {
+            let sample_y = (y as i32 + tap_index as i32 - RADIUS).clamp(0, height - 1) as u32;
+            let sample = horizontal.pixel(x, sample_y).unwrap_or([0.0; 4]);
+            for channel in 0..4 {
+                accumulated[channel] += sample[channel] * weight;
+            }
+        }
+        accumulated.map(|value| value * INV_SUM)
     })
 }
 

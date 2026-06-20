@@ -72,3 +72,15 @@ The next effect is not another independent processor. It is a stateful temporal 
 4. Done: add `granular_mosaic.metal`, a macOS runtime dispatcher, shader-binding preflight, and a tiny CPU/Metal parity fixture. Direct, sequence, and queue CLI paths select it with `--backend metal` and reject divergent frames before export.
 5. Route Source A RMS, onset, and spectral descriptors into frame-addressed grain controls.
 6. Add multimodal nearest-neighbor audiovisual grain scheduling.
+
+### Structure-Preserving Morph (Flow Feedback Enhancement)
+
+Motivation: the current flow-feedback renderer can erase but not transform. Its feedback model is additive accumulation, so once the carrier stops re-asserting (high `--feedback-mix`), the frame collapses toward flat fog rather than reorganizing into new structure. An empirical lever sweep (cello@4fps carrier, harp modulator, optical flow) confirmed: `--feedback-mix` is the dissolve cliff (recognizable below ~0.94, gone by ~0.99), `--feedback-amount` past ~60 only adds haze, and the usable "unrecognizable but alive" window is a narrow transition band (mix ~0.96-0.98, decay ~0.97) that decays to fog within ~30 frames. The goal here is "beyond recognition" as a *structured morph into something new*, not a wash-out.
+
+The core idea: decouple carrier *texture* from carrier *position*. Re-inject the carrier's high-frequency structure (edges, grain, local contrast) every frame so detail keeps regenerating, while letting the accumulated optical-flow displacement own the *layout*. The original stops re-asserting its composition (so it goes beyond recognition) but the frame never collapses to uniform haze (because fresh high-frequency energy is continuously re-seeded).
+
+1. CPU reference: add a `--structure-mix` (or carrier high-pass re-injection) path that splits the carrier into low/high spatial-frequency bands, advects the accumulated feedback state as today, and re-injects only the carrier high-frequency band into the displaced result. Preserve the once-per-frame RGBA32F checkpoint contract, deterministic output, and a new algorithm identifier that invalidates prior checkpoints. Prove that at high feedback-mix the output retains regenerating structure instead of trending to flat fog.
+2. Expose the new control(s) in the CLI `render-feedback-sequence` path and document the interaction with `--feedback-mix`/`--decay`. Add a fixture-based test asserting the high-pass re-injection keeps per-frame high-frequency energy above a floor (i.e. it does not wash out) across a long sequence.
+3. Add a `structure_preserving_feedback` Metal path with CPU parity at `METAL_CPU_PARITY_EPSILON`, gating every exported frame against the CPU reference.
+4. Surface the control in the SwiftUI feedback panel and add a preset for "structured morph / beyond recognition" alongside the existing degradation, trails, and reset presets.
+5. Future high-quality version: multiscale (per-pyramid-level) texture re-injection and edge/structure-aware masking so re-seeded detail follows the morphed geometry rather than the static carrier grid.
