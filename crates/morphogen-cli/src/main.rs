@@ -11,8 +11,8 @@ use morphogen_audio::{
     AudioAnalysisCache, AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
 };
 use morphogen_core::{
-    AnalysisCacheEntry, AnalysisKind, ExportFormat, MediaProxy, Project, RenderBackend, RenderJob,
-    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
+    AnalysisCacheEntry, AnalysisKind, ExportFormat, FlowSource, MediaProxy, Project, RenderBackend,
+    RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
 };
@@ -20,9 +20,10 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
-    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, luminance_gradient_flow_cpu,
-    read_flow_feedback_state, write_flow_cache, write_flow_feedback_state, FlowFeedbackSettings,
-    FlowFeedbackStateDescriptor, FlowField, ImageBufferF32, RenderError,
+    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, lucas_kanade_flow_cpu,
+    luminance_gradient_flow_cpu, read_flow_feedback_state, write_flow_cache,
+    write_flow_feedback_state, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
+    ImageBufferF32, RenderError, LUCAS_KANADE_WINDOW_RADIUS,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -155,6 +156,8 @@ enum Commands {
         frame_rate: f64,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        #[arg(long, value_enum, default_value_t = CliFlowSource::OpticalFlow)]
+        flow_source: CliFlowSource,
         #[arg(long)]
         stop_after_frame: bool,
     },
@@ -224,6 +227,8 @@ enum Commands {
         no_flow_cache: bool,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        #[arg(long, value_enum, default_value_t = CliFlowSource::OpticalFlow)]
+        flow_source: CliFlowSource,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -319,6 +324,22 @@ impl From<CliRenderBackend> for RenderBackend {
         match value {
             CliRenderBackend::Cpu => Self::Cpu,
             CliRenderBackend::Metal => Self::Metal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliFlowSource {
+    Luminance,
+    #[default]
+    OpticalFlow,
+}
+
+impl From<CliFlowSource> for FlowSource {
+    fn from(value: CliFlowSource) -> Self {
+        match value {
+            CliFlowSource::Luminance => Self::Luminance,
+            CliFlowSource::OpticalFlow => Self::OpticalFlow,
         }
     }
 }
@@ -455,6 +476,7 @@ fn run() -> Result<(), CliError> {
             reset_at_frame,
             frame_rate,
             backend,
+            flow_source,
             stop_after_frame,
         } => render_feedback_sequence(FeedbackSequenceRenderRequest {
             modulator_dir: &modulator_dir,
@@ -472,6 +494,7 @@ fn run() -> Result<(), CliError> {
                 iterations,
             },
             backend: backend.into(),
+            flow_source: flow_source.into(),
             job_id: "direct-feedback-sequence",
             provenance: None,
             stop_after_frame,
@@ -531,6 +554,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             no_flow_cache,
             backend,
+            flow_source,
             project_path,
         } => queue_add_feedback_sequence(QueueAddFeedbackSequenceRequest {
             queue_path: &queue_path,
@@ -549,6 +573,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             write_flow_cache: !no_flow_cache,
             backend: backend.into(),
+            flow_source: flow_source.into(),
             project_path: project_path.as_deref(),
         }),
         Commands::QueueRunTest {
@@ -1213,6 +1238,17 @@ struct FrameSequenceRenderResult {
 
 const FLOW_FEEDBACK_RENDER_CONTRACT_VERSION: u32 = 1;
 const LUMINANCE_FLOW_ALGORITHM: &str = "luminance_gradient_cpu_v1";
+const OPTICAL_FLOW_ALGORITHM: &str = "lucas_kanade_cpu_v1";
+
+/// The recorded analysis-algorithm identifier for a flow source. This string is
+/// part of the feedback render contract, so changing the flow source invalidates
+/// an existing checkpoint.
+fn flow_source_algorithm(flow_source: FlowSource) -> &'static str {
+    match flow_source {
+        FlowSource::Luminance => LUMINANCE_FLOW_ALGORITHM,
+        FlowSource::OpticalFlow => OPTICAL_FLOW_ALGORITHM,
+    }
+}
 
 struct FeedbackSequenceRenderRequest<'a> {
     modulator_dir: &'a Path,
@@ -1224,6 +1260,7 @@ struct FeedbackSequenceRenderRequest<'a> {
     frame_rate: f64,
     settings: FlowFeedbackSettings,
     backend: RenderBackend,
+    flow_source: FlowSource,
     job_id: &'a str,
     provenance: Option<&'a RenderJobProvenance>,
     stop_after_frame: bool,
@@ -1273,11 +1310,13 @@ fn render_feedback_sequence(
         frame_rate,
         settings,
         backend,
+        flow_source,
         job_id,
         provenance,
         stop_after_frame,
     } = request;
 
+    let flow_algorithm = flow_source_algorithm(flow_source);
     settings.validate()?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
@@ -1326,7 +1365,7 @@ fn render_feedback_sequence(
     }
     let contract = FeedbackSequenceContract {
         version: FLOW_FEEDBACK_RENDER_CONTRACT_VERSION,
-        flow_algorithm: LUMINANCE_FLOW_ALGORITHM.to_string(),
+        flow_algorithm: flow_algorithm.to_string(),
         modulator: feedback_source_fingerprint(modulator_dir, &modulator_frames)?,
         carrier: feedback_source_fingerprint(carrier_dir, &carrier_frames)?,
         settings,
@@ -1334,7 +1373,7 @@ fn render_feedback_sequence(
         reset_at_frame,
     };
     let provenance = provenance.cloned().unwrap_or_else(|| {
-        feedback_sequence_provenance(modulator_dir, carrier_dir, flow_cache_dir)
+        feedback_sequence_provenance(modulator_dir, carrier_dir, flow_cache_dir, flow_algorithm)
     });
 
     let frame_dir = output_dir.join("frames");
@@ -1348,7 +1387,28 @@ fn render_feedback_sequence(
     for index in start_frame..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
-        let flow = luminance_gradient_flow_cpu(&modulator, carrier.width, carrier.height)?;
+        let flow = match flow_source {
+            FlowSource::Luminance => {
+                luminance_gradient_flow_cpu(&modulator, carrier.width, carrier.height)?
+            }
+            FlowSource::OpticalFlow => {
+                // Temporal flow needs a predecessor; frame zero (and any frame
+                // following a reset) has no implicit previous image, so it
+                // renders the carrier with a zero field, matching the contract.
+                if index == 0 {
+                    FlowField::from_fn(carrier.width, carrier.height, |_, _| [0.0, 0.0])?
+                } else {
+                    let previous_modulator = load_image_f32(&modulator_frames[index - 1])?;
+                    lucas_kanade_flow_cpu(
+                        &previous_modulator,
+                        &modulator,
+                        carrier.width,
+                        carrier.height,
+                        LUCAS_KANADE_WINDOW_RADIUS,
+                    )?
+                }
+            }
+        };
         let history = (Some(index as u32) != reset_at_frame)
             .then_some(previous_output.as_ref())
             .flatten();
@@ -1357,7 +1417,7 @@ fn render_feedback_sequence(
         save_png(&output, &output_path)?;
         if let Some(cache_root) = flow_cache_dir {
             let frame_cache_dir = cache_root.join(format!("frame_{index:06}"));
-            write_flow_cache(frame_cache_dir, &flow, LUMINANCE_FLOW_ALGORITHM)?;
+            write_flow_cache(frame_cache_dir, &flow, flow_algorithm)?;
         }
 
         let frame_index = u32::try_from(index).map_err(|_| {
@@ -1445,7 +1505,7 @@ fn render_feedback_sequence(
     }
     if let Some(cache_root) = flow_cache_dir {
         println!(
-            "wrote per-frame luminance flow caches to {}",
+            "wrote per-frame {flow_algorithm} flow caches to {}",
             cache_root.display()
         );
     }
@@ -1518,6 +1578,7 @@ fn feedback_sequence_provenance(
     modulator_dir: &Path,
     carrier_dir: &Path,
     flow_cache_dir: Option<&Path>,
+    flow_algorithm: &str,
 ) -> RenderJobProvenance {
     RenderJobProvenance {
         sources: vec![
@@ -1537,7 +1598,7 @@ fn feedback_sequence_provenance(
                 vec![RenderJobAnalysisCacheProvenance {
                     kind: AnalysisKind::OpticalFlow,
                     path: path.to_string_lossy().to_string(),
-                    producer: LUMINANCE_FLOW_ALGORITHM.to_string(),
+                    producer: flow_algorithm.to_string(),
                 }]
             })
             .unwrap_or_default(),
@@ -1978,6 +2039,7 @@ struct QueueAddFeedbackSequenceRequest<'a> {
     frame_rate: f64,
     write_flow_cache: bool,
     backend: RenderBackend,
+    flow_source: FlowSource,
     project_path: Option<&'a Path>,
 }
 
@@ -1995,6 +2057,7 @@ fn queue_add_feedback_sequence(
         frame_rate,
         write_flow_cache,
         backend,
+        flow_source,
         project_path,
     } = request;
 
@@ -2023,6 +2086,7 @@ fn queue_add_feedback_sequence(
         modulator_dir,
         carrier_dir,
         flow_cache_directory.as_deref().map(Path::new),
+        flow_source_algorithm(flow_source),
     );
 
     queue.enqueue(RenderJob {
@@ -2053,6 +2117,7 @@ fn queue_add_feedback_sequence(
             reset_at_frame,
             frame_rate,
             backend,
+            flow_source,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -2269,6 +2334,7 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
         reset_at_frame,
         frame_rate,
         backend,
+        flow_source,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2297,6 +2363,7 @@ fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
                 iterations,
             },
             backend,
+            flow_source,
             job_id: &job_id,
             provenance: Some(&provenance),
             stop_after_frame: false,

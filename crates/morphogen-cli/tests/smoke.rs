@@ -381,6 +381,65 @@ fn render_feedback_sequence_checkpoints_and_resumes() {
 }
 
 #[test]
+fn feedback_flow_source_selects_recorded_algorithm() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        for dir in [&modulator_dir, &carrier_dir] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    for (flow_source, expected_algorithm) in [
+        (None, "lucas_kanade_cpu_v1"),
+        (Some("luminance"), "luminance_gradient_cpu_v1"),
+        (Some("optical-flow"), "lucas_kanade_cpu_v1"),
+    ] {
+        let output_dir = temp_dir
+            .path()
+            .join(format!("out-{}", flow_source.unwrap_or("default")));
+        let output_arg = output_dir.to_string_lossy().to_string();
+        let mut args = vec![
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--max-frames",
+            "2",
+        ];
+        if let Some(flow_source) = flow_source {
+            args.push("--flow-source");
+            args.push(flow_source);
+        }
+
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+            .success();
+
+        let checkpoint: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("checkpoint.json")).expect("read checkpoint"),
+        )
+        .expect("parse checkpoint");
+        assert_eq!(
+            checkpoint["contract"]["flow_algorithm"], expected_algorithm,
+            "flow_source {flow_source:?} should record {expected_algorithm}"
+        );
+    }
+}
+
+#[test]
 fn cache_synthetic_flow_writes_manifest_and_frame() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let cache_dir = temp_dir.path().join("synthetic-flow-cache");

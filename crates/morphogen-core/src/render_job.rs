@@ -85,7 +85,24 @@ pub enum RenderJobTask {
         frame_rate: f64,
         #[serde(default)]
         backend: RenderBackend,
+        #[serde(default)]
+        flow_source: FlowSource,
     },
+}
+
+/// Selects the vector field that drives flow displacement and feedback.
+///
+/// The serde default is [`FlowSource::Luminance`] so legacy feedback jobs that
+/// were serialized before optical flow existed keep their original meaning.
+/// New jobs default to [`FlowSource::OpticalFlow`] at the CLI layer.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowSource {
+    /// Single-frame luminance-gradient field.
+    #[default]
+    Luminance,
+    /// Temporal Lucas-Kanade optical flow between consecutive modulator frames.
+    OpticalFlow,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -195,6 +212,7 @@ mod tests {
             reset_at_frame: Some(12),
             frame_rate: 24.0,
             backend: RenderBackend::Cpu,
+            flow_source: FlowSource::OpticalFlow,
         };
 
         let json = serde_json::to_string(&task).expect("serialize feedback task");
@@ -202,5 +220,29 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize feedback task");
 
         assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn feedback_task_without_flow_source_defaults_to_luminance() {
+        let json = r#"{
+            "type": "frame_sequence_flow_feedback",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "flow_cache_directory": null,
+            "carrier_amount": 12.0,
+            "feedback_amount": 24.0,
+            "feedback_mix": 0.72,
+            "decay": 0.995,
+            "iterations": 1,
+            "max_frames": null,
+            "frame_rate": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize legacy task");
+        let RenderJobTask::FrameSequenceFlowFeedback { flow_source, .. } = task else {
+            panic!("expected feedback task");
+        };
+        assert_eq!(flow_source, FlowSource::Luminance);
     }
 }

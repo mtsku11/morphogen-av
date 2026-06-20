@@ -49,6 +49,7 @@
 - Persist versioned, checksummed RGBA32F feedback state after every frame and prove exact resume output.
 - Add deterministic CLI feedback rendering and queued ProRes-ready feedback bundles.
 - Implement `advect_feedback.metal` and gate every Metal output frame against the CPU reference.
+- Add a temporal Lucas-Kanade optical-flow analysis and make it the feedback job's default flow source.
 
 ## Next
 
@@ -56,8 +57,8 @@
 
 The next effect is not another independent processor. It is a stateful temporal render primitive that the later datamosh, optical-flow, and video-vocoder work can reuse. The authoritative contract and acceptance criteria are in `docs/FLOW_FEEDBACK_MILESTONE.md`.
 
-1. Add a real temporal optical-flow analysis cache, then replace the luminance-gradient signal in the feedback job without changing its render-state contract.
-2. Expose feedback amount, decay, iterations, reset behavior, and CPU/Metal backend choice in the SwiftUI render panel.
+1. Done: added a temporal Lucas-Kanade optical-flow analysis (`lucas_kanade_cpu_v1`) and made it the feedback job's default flow source via `--flow-source`, without changing the render-state contract. Switching sources invalidates checkpoints through the contract's recorded `flow_algorithm`.
+2. Expose feedback amount, decay, iterations, reset behavior, flow source, and CPU/Metal backend choice in the SwiftUI render panel.
 3. Add a first quality-controlled feedback preset library for aggressive degradation, stable trails, and reset-driven cuts.
 4. Add higher-precision feedback exports and temporal supersampling without changing checkpoint semantics.
 5. Only then resume independent effect families such as video vocoder, granular mosaicing, and codec-aware datamosh.

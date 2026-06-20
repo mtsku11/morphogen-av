@@ -7,6 +7,7 @@ pub mod flow;
 pub mod flow_cache;
 pub mod image_buffer;
 pub mod luminance_flow;
+pub mod optical_flow;
 pub mod sampler;
 
 pub use cpu_reference::{flow_displace_cpu, flow_feedback_frame_cpu, FlowFeedbackSettings};
@@ -19,6 +20,7 @@ pub use flow::FlowField;
 pub use flow_cache::{read_flow_cache, write_flow_cache, FlowCacheFrame, FlowCacheManifest};
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
+pub use optical_flow::{lucas_kanade_flow_cpu, LUCAS_KANADE_WINDOW_RADIUS};
 pub use sampler::sample_bilinear_clamped;
 
 #[cfg(test)]

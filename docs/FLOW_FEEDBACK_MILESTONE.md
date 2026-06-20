@@ -10,6 +10,8 @@ This milestone proves temporal render semantics before the project adds unrelate
 
 The deterministic first version is complete. `render-feedback-sequence` and the equivalent queue task write a `frames/` bundle, `checkpoint.json`, and checksummed unquantized RGBA32F feedback states. When a flow-cache output is requested, the bundle also records each A-derived field. The CPU renderer is the reference; `advect_feedback.metal` passes per-frame parity checks on the same sequence. `--reset-at-frame` is persisted in the render contract and applies the documented frame-zero behavior at that frame.
 
+The A-derived vector field now defaults to temporal Lucas-Kanade optical flow (`lucas_kanade_cpu_v1`) computed between consecutive modulator frames, selectable with `--flow-source` (`luminance` restores the original single-frame gradient signal). The flow field is computed on the CPU and shared by both the CPU and Metal advection paths, so Metal parity is unaffected by the flow source. The active source is recorded in the contract's `flow_algorithm`, so switching it invalidates an existing checkpoint.
+
 ## Render Contract
 
 For output frame `n`, let `C_n` be the Source B carrier frame, `F_n` the A-derived vector field, and `O_n` the float output buffer.
@@ -46,7 +48,7 @@ The MVP uses one feedback iteration per output frame. Future iterations are a de
 5. Completed: implement `advect_feedback.metal` using the same texture and sampling convention.
 6. Completed: add per-frame Metal-to-CPU parity checks on synthetic and real sequences.
 7. Wire controls into SwiftUI after the offline path is stable.
-8. Replace luminance gradients with cached temporal optical flow in a separate, compatible analysis task.
+8. Completed: replace luminance gradients with temporal Lucas-Kanade optical flow as the default feedback flow source, keeping the render-state contract and resume semantics unchanged.
 
 ## Acceptance Criteria
 
