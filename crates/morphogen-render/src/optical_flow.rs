@@ -1,3 +1,5 @@
+use rayon::prelude::*;
+
 use crate::{FlowField, ImageBufferF32, RenderError};
 
 /// Default half-window for dense Lucas-Kanade least-squares neighborhoods.
@@ -271,12 +273,19 @@ fn refine_level(
         ));
     }
 
+    let width = current.width as usize;
     let mut confidence = vec![0.0; expected];
+    // Each pixel's update reads only its own flow estimate plus the (immutable)
+    // images, so the per-pixel work is independent within an iteration. Running
+    // it in parallel is bitwise-identical to the sequential pass.
     for _ in 0..iterations.max(1) {
-        for y in 0..current.height {
-            for x in 0..current.width {
-                let index = y as usize * current.width as usize + x as usize;
-                let estimate = flow[index];
+        flow.par_iter_mut()
+            .zip(confidence.par_iter_mut())
+            .enumerate()
+            .for_each(|(index, (flow_vector, confidence_value))| {
+                let x = (index % width) as f32;
+                let y = (index / width) as f32;
+                let estimate = *flow_vector;
                 let mut sxx = 0.0_f32;
                 let mut sxy = 0.0_f32;
                 let mut syy = 0.0_f32;
@@ -285,8 +294,8 @@ fn refine_level(
 
                 for window_y in -radius..=radius {
                     for window_x in -radius..=radius {
-                        let current_x = x as f32 + window_x as f32;
-                        let current_y = y as f32 + window_y as f32;
+                        let current_x = x + window_x as f32;
+                        let current_y = y + window_y as f32;
                         let previous_x = current_x - estimate[0];
                         let previous_y = current_y - estimate[1];
                         let ix = 0.5
@@ -307,19 +316,18 @@ fn refine_level(
                 }
 
                 let determinant = sxx * syy - sxy * sxy;
-                confidence[index] = structure_confidence(sxx, sxy, syy, determinant);
+                *confidence_value = structure_confidence(sxx, sxy, syy, determinant);
                 if determinant.abs() <= LUCAS_KANADE_DETERMINANT_EPSILON {
-                    continue;
+                    return;
                 }
 
                 let delta_x = (-syy * sxt + sxy * syt) / determinant;
                 let delta_y = (sxy * sxt - sxx * syt) / determinant;
                 if delta_x.is_finite() && delta_y.is_finite() {
-                    flow[index][0] += delta_x;
-                    flow[index][1] += delta_y;
+                    flow_vector[0] += delta_x;
+                    flow_vector[1] += delta_y;
                 }
-            }
-        }
+            });
     }
     Ok(confidence)
 }
