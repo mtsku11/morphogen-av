@@ -1,6 +1,6 @@
 use metal::{
-    CompileOptions, Device, MTLCommandBufferStatus, MTLPixelFormat, MTLRegion, MTLSize,
-    MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
+    CompileOptions, Device, MTLCommandBufferStatus, MTLPixelFormat, MTLRegion, MTLResourceOptions,
+    MTLSize, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
 };
 use morphogen_render::{
     FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
@@ -307,6 +307,11 @@ pub fn granular_mosaic_metal(
         MTLTextureUsage::ShaderWrite,
     );
     upload_rgba_f32_texture(&carrier_texture, carrier)?;
+    let selection_buffer = device.new_buffer_with_data(
+        selection.indices.as_ptr().cast(),
+        selection_byte_len as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
 
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
@@ -326,11 +331,7 @@ pub fn granular_mosaic_metal(
         std::mem::size_of::<GranularMosaicParams>() as u64,
         (&params as *const GranularMosaicParams).cast(),
     );
-    encoder.set_bytes(
-        1,
-        selection_byte_len as u64,
-        selection.indices.as_ptr().cast(),
-    );
+    encoder.set_buffer(1, Some(&selection_buffer), 0);
     encoder.dispatch_thread_groups(
         MTLSize::new(
             plan.threadgroups_per_grid.width as u64,
@@ -719,6 +720,44 @@ mod tests {
         // texels, where Metal's hardware linear sampler quantizes the
         // interpolation weight to 8-bit fixed point. Hold parity to the project's
         // Metal/CPU tolerance (1/255), the same bound the CLI render path gates on.
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_granular_mosaic_supports_selection_tables_over_four_kib() {
+        // `set_bytes` is limited to data smaller than 4 KiB. A 33x33 grain
+        // grid produces 1,089 u32 selection entries (4,356 bytes), so this
+        // validates the dedicated MTLBuffer binding used by real HD renders.
+        const SIDE: u32 = 33;
+        let carrier = ImageBufferF32::from_fn(SIDE, SIDE, |x, y| {
+            let value = (x + y * SIDE) as f32 / (SIDE * SIDE) as f32;
+            [value, 1.0 - value, value * 0.5, 1.0]
+        })
+        .expect("carrier");
+        let selection = GrainSelection {
+            columns: SIDE,
+            rows: SIDE,
+            indices: (0..SIDE * SIDE).collect(),
+        };
+        assert!(selection.indices.len() * std::mem::size_of::<u32>() > 4 * 1024);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 0.65,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        let cpu =
+            granular_mosaic_with_selection_cpu(&carrier, &selection, settings).expect("cpu render");
+        let gpu = match granular_mosaic_metal(&carrier, &selection, settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal parity assertion because no Metal device is available");
+                return;
+            }
+            Err(error) => panic!("metal render failed: {error}"),
+        };
+
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
     }
 
