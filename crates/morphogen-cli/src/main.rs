@@ -2127,11 +2127,6 @@ fn render_feedback_frame(
             settings,
         )?),
         RenderBackend::Metal => {
-            if settings.structure_mix != 0.0 {
-                return Err(CliError::Message(
-                    "structure-preserving morph (--structure-mix) is CPU-only until the Metal path lands; rerun with --backend cpu".to_string(),
-                ));
-            }
             render_feedback_frame_metal(carrier, previous_output, flow, settings)
         }
     }

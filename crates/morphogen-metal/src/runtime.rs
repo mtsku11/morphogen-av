@@ -25,6 +25,7 @@ struct AdvectFeedbackParams {
     feedback_amount: f32,
     feedback_mix: f32,
     decay: f32,
+    structure_mix: f32,
     width: u32,
     height: u32,
 }
@@ -218,6 +219,7 @@ pub fn flow_feedback_metal(
         feedback_amount: settings.feedback_amount,
         feedback_mix: settings.feedback_mix,
         decay: settings.decay,
+        structure_mix: settings.structure_mix,
         width: plan.width,
         height: plan.height,
     };
@@ -599,6 +601,43 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 0.000_01);
+    }
+
+    #[test]
+    fn metal_flow_feedback_structure_mix_matches_cpu_reference() {
+        // A 2D textured fixture so the structure-preserving blur exercises both
+        // axes, with fractional flow so the base term goes through the hardware
+        // linear sampler. Parity is asserted at the project's 1/255 tolerance.
+        let carrier = ImageBufferF32::from_fn(4, 4, |x, y| {
+            let value = if (x + y) % 2 == 0 { 0.85 } else { 0.15 };
+            [value, value * 0.5, 1.0 - value, 1.0]
+        })
+        .expect("carrier");
+        let previous = ImageBufferF32::new(4, 4, vec![[0.4, 0.4, 0.4, 1.0]; 16]).expect("previous");
+        let flow = FlowField::new(4, 4, vec![[0.35, -0.2]; 16]).expect("flow");
+        let settings = FlowFeedbackSettings {
+            carrier_amount: 1.0,
+            feedback_amount: 1.5,
+            feedback_mix: 0.8,
+            decay: 0.95,
+            iterations: 1,
+            structure_mix: 0.7,
+        };
+
+        let cpu =
+            flow_feedback_frame_cpu(&carrier, Some(&previous), &flow, settings).expect("cpu render");
+        let gpu = match flow_feedback_metal(&carrier, Some(&previous), &flow, settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal feedback structure parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal feedback render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
     }
 
     #[test]
