@@ -69,6 +69,7 @@ final class AppState: ObservableObject {
   @Published var granularPoolAntiRepeatCooldown = 8
   @Published var granularPoolCoherenceWeight = 0.0
   @Published var granularPoolCoherenceReach = 8
+  @Published var granularPoolSpatialCoherenceWeight = 0.0
   @Published var granularPoolBackend: FeedbackRenderBackendOption = .cpu
   @Published var granularPoolSummary = "No temporal grain pool sequence rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
@@ -562,6 +563,7 @@ final class AppState: ObservableObject {
       antiRepeatCooldown: max(0, granularPoolAntiRepeatCooldown),
       coherenceWeight: granularPoolCoherenceWeight,
       coherenceReach: max(0, granularPoolCoherenceReach),
+      spatialCoherenceWeight: granularPoolSpatialCoherenceWeight,
       maxFrames: frameSequenceMaxFrames,
       frameRate: proResFrameRate.framesPerSecond,
       backend: granularPoolBackend,

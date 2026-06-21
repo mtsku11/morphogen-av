@@ -221,7 +221,8 @@ enum RustBridgePlaceholder {
     }
     for (name, value) in [
       ("anti-repeat weight", request.antiRepeatWeight),
-      ("coherence weight", request.coherenceWeight)
+      ("coherence weight", request.coherenceWeight),
+      ("spatial coherence weight", request.spatialCoherenceWeight)
     ] {
       guard value.isFinite && value >= 0 else {
         throw RustBridgeError.invalidFrameSequenceRequest(
@@ -271,6 +272,8 @@ enum RustBridgePlaceholder {
       cliNumber(request.coherenceWeight),
       "--coherence-reach",
       String(request.coherenceReach),
+      "--spatial-coherence-weight",
+      cliNumber(request.spatialCoherenceWeight),
       "--frame-rate",
       cliNumber(request.frameRate),
       "--backend",
@@ -875,6 +878,7 @@ struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
   var antiRepeatCooldown: Int = 8
   var coherenceWeight: Double = 0
   var coherenceReach: Int = 8
+  var spatialCoherenceWeight: Double = 0
   let maxFrames: Int?
   let frameRate: Double
   let backend: FeedbackRenderBackendOption

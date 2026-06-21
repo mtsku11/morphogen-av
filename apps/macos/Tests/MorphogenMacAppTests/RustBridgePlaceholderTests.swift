@@ -269,6 +269,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       antiRepeatCooldown: 4,
       coherenceWeight: 0.25,
       coherenceReach: 6,
+      spatialCoherenceWeight: 0.125,
       maxFrames: nil,
       frameRate: 24.0,
       backend: .cpu,
@@ -282,6 +283,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--anti-repeat-cooldown", in: arguments), "4")
     XCTAssertEqual(Self.value(after: "--coherence-weight", in: arguments), "0.25")
     XCTAssertEqual(Self.value(after: "--coherence-reach", in: arguments), "6")
+    XCTAssertEqual(Self.value(after: "--spatial-coherence-weight", in: arguments), "0.125")
   }
 
   func testQueuedGranularMosaicPoolSequenceArgumentsIncludeCentroidCaches() throws {
