@@ -229,6 +229,109 @@ fn render_granular_mosaic_writes_image_and_frame_sequence() {
 }
 
 #[test]
+fn render_granular_mosaic_pool_sequence_writes_frames_and_pool_sidecar() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let output_dir = temp_dir.path().join("pool-frames");
+    let grain_cache_dir = temp_dir.path().join("pool-cache");
+    fs::create_dir_all(&modulator_dir).expect("create modulator frames");
+    fs::create_dir_all(&carrier_dir).expect("create carrier frames");
+
+    for index in 0..2u32 {
+        let modulator = ImageBuffer::from_fn(4, 2, |x, _| {
+            let value = ((x + index) as u8).wrapping_mul(60);
+            Rgba([value, value, value, u8::MAX])
+        });
+        let carrier = ImageBuffer::from_fn(4, 2, |x, y| {
+            Rgba([
+                (x as u8).wrapping_mul(50).wrapping_add(index as u8 * 30),
+                (y as u8).wrapping_mul(120),
+                ((x + y) as u8).wrapping_mul(40),
+                u8::MAX,
+            ])
+        });
+        modulator
+            .save(modulator_dir.join(format!("frame_{:06}.png", index + 1)))
+            .expect("write modulator frame");
+        carrier
+            .save(carrier_dir.join(format!("frame_{:06}.png", index + 1)))
+            .expect("write carrier frame");
+    }
+
+    // RMS caches for Source A (query) and Source B (pool grains).
+    let modulator_wav = temp_dir.path().join("modulator.wav");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    write_test_wav(&modulator_wav, &[0.0, 0.5, -0.5, 1.0, -1.0, 0.25, -0.25, 0.75]);
+    write_test_wav(&carrier_wav, &[1.0, -1.0, 0.5, -0.5, 0.0, 0.8, -0.8, 0.2]);
+    let modulator_rms = temp_dir.path().join("mod-rms.json");
+    let carrier_rms = temp_dir.path().join("car-rms.json");
+    for (wav, json) in [(&modulator_wav, &modulator_rms), (&carrier_wav, &carrier_rms)] {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "cache-rms",
+                wav.to_string_lossy().as_ref(),
+                json.to_string_lossy().as_ref(),
+                "--window-size",
+                "2",
+                "--hop-size",
+                "2",
+            ])
+            .assert()
+            .success();
+    }
+
+    let modulator_dir_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_dir_arg = carrier_dir.to_string_lossy().to_string();
+    let output_dir_arg = output_dir.to_string_lossy().to_string();
+    let grain_cache_arg = grain_cache_dir.to_string_lossy().to_string();
+    let modulator_rms_arg = modulator_rms.to_string_lossy().to_string();
+    let carrier_rms_arg = carrier_rms.to_string_lossy().to_string();
+    let pool_args = [
+        "render-granular-mosaic-pool-sequence",
+        modulator_dir_arg.as_str(),
+        carrier_dir_arg.as_str(),
+        output_dir_arg.as_str(),
+        "--grain-size",
+        "2",
+        "--audio-weight",
+        "1.0",
+        "--modulator-rms-cache",
+        modulator_rms_arg.as_str(),
+        "--carrier-rms-cache",
+        carrier_rms_arg.as_str(),
+        "--frame-rate",
+        "2.0",
+        "--grain-cache-dir",
+        grain_cache_arg.as_str(),
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(pool_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wrote grain pool sidecar"))
+        .stdout(predicate::str::contains("pooled_av_nearest_grain_cpu_v1"));
+
+    assert!(output_dir.join("frame_000000.png").exists());
+    assert!(output_dir.join("frame_000001.png").exists());
+    let pool_sidecar = grain_cache_dir.join("grain_pool_descriptors.json");
+    assert!(pool_sidecar.exists());
+    let pool_json = fs::read_to_string(&pool_sidecar).expect("read pool sidecar");
+    assert!(pool_json.contains("pooled_av_nearest_grain_cpu_v1"));
+
+    // A second identical run reuses the persisted pool.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(pool_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reused grain pool sidecar"));
+}
+
+#[test]
 fn render_frame_sequence_writes_pngs_and_per_frame_flow_caches() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");
@@ -1028,6 +1131,58 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
     let carrier_dir = temp_dir.path().join("carrier-frames");
     let queue_path = temp_dir.path().join("queue.json");
     let output_root = temp_dir.path().join("queue-output");
+    let rms_cache = temp_dir.path().join("source-a-rms.json");
+    let onset_cache = temp_dir.path().join("source-a-onsets.json");
+    let stft_cache = temp_dir.path().join("source-a-stft.json");
+
+    fs::write(
+        &rms_cache,
+        serde_json::json!({
+            "cache_format": "rms_envelope_v1",
+            "sample_rate": 8,
+            "frame_size": 2,
+            "hop_size": 1,
+            "frames": [{
+                "time_seconds": 0.0,
+                "rms": 0.5,
+                "spectral_centroid_hz": null
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write RMS cache");
+    fs::write(
+        &onset_cache,
+        serde_json::json!({
+            "cache_format": "onset_strength_v1",
+            "source_cache_format": "stft_magnitude_v1",
+            "sample_rate": 8,
+            "hop_size": 1,
+            "frames": [{ "index": 0, "time_seconds": 0.0, "strength": 1.0 }]
+        })
+        .to_string(),
+    )
+    .expect("write onset cache");
+    fs::write(
+        &stft_cache,
+        serde_json::json!({
+            "cache_format": "stft_magnitude_v1",
+            "sample_rate": 8,
+            "channels": 1,
+            "channel_mix": "mean_channels",
+            "fft_size": 8,
+            "hop_size": 1,
+            "window": "rectangular",
+            "bin_count": 5,
+            "frames": [{
+                "index": 0,
+                "time_seconds": 0.0,
+                "magnitudes": [0.0, 0.0, 1.0, 0.0, 0.0]
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write STFT cache");
 
     for frame_name in ["frame_000001.png", "frame_000002.png"] {
         for directory in [&modulator_dir, &carrier_dir] {
@@ -1044,6 +1199,9 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
     let modulator_arg = modulator_dir.to_string_lossy().to_string();
     let carrier_arg = carrier_dir.to_string_lossy().to_string();
     let output_arg = output_root.to_string_lossy().to_string();
+    let rms_cache_arg = rms_cache.to_string_lossy().to_string();
+    let onset_cache_arg = onset_cache.to_string_lossy().to_string();
+    let stft_cache_arg = stft_cache.to_string_lossy().to_string();
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
         .args(["queue-init", queue_arg.as_str()])
@@ -1063,6 +1221,18 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
             "0.4",
             "--seed",
             "42",
+            "--rms-cache",
+            rms_cache_arg.as_str(),
+            "--onset-cache",
+            onset_cache_arg.as_str(),
+            "--stft-cache",
+            stft_cache_arg.as_str(),
+            "--rms-variation-scale",
+            "0.6",
+            "--onset-rearrangement-scale",
+            "0.4",
+            "--centroid-grain-size-scale",
+            "8",
             "--max-frames",
             "2",
             "--frame-rate",
@@ -1084,6 +1254,16 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
     assert_eq!(
         queued["jobs"][0]["provenance"]["analysis_caches"][0]["kind"],
         "grain_descriptors"
+    );
+    assert_eq!(
+        queued["jobs"][0]["task"]["audio_modulation"]["rms_variation_scale"],
+        0.6
+    );
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"]
+            .as_array()
+            .map(Vec::len),
+        Some(4)
     );
 
     Command::cargo_bin("morphogen")
@@ -1117,6 +1297,10 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
         "luma_nearest_grain_cpu_v1"
     );
     assert_eq!(
+        manifest["granular_mosaic"]["audio_modulation"]["centroid_grain_size_scale"],
+        8.0
+    );
+    assert_eq!(
         manifest["provenance"]["analysis_caches"][0]["producer"],
         "luma_nearest_grain_cpu_v1"
     );
@@ -1128,6 +1312,146 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
         .success()
         .stdout(predicate::str::contains(
             "job-0001 task=frame_sequence_granular_mosaic status=Complete",
+        ));
+}
+
+#[test]
+fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let queue_path = temp_dir.path().join("queue.json");
+    let output_root = temp_dir.path().join("queue-output");
+    let modulator_rms = temp_dir.path().join("source-a-rms.json");
+    let carrier_rms = temp_dir.path().join("source-b-rms.json");
+
+    for (path, rms) in [(&modulator_rms, 0.5_f64), (&carrier_rms, 0.8)] {
+        fs::write(
+            path,
+            serde_json::json!({
+                "cache_format": "rms_envelope_v1",
+                "sample_rate": 8,
+                "frame_size": 2,
+                "hop_size": 1,
+                "frames": [{ "time_seconds": 0.0, "rms": rms, "spectral_centroid_hz": null }]
+            })
+            .to_string(),
+        )
+        .expect("write RMS cache");
+    }
+
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        for directory in [&modulator_dir, &carrier_dir] {
+            let frame_arg = directory.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_root.to_string_lossy().to_string();
+    let modulator_rms_arg = modulator_rms.to_string_lossy().to_string();
+    let carrier_rms_arg = carrier_rms.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-granular-mosaic-pool-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--grain-size",
+            "16",
+            "--variation",
+            "0",
+            "--seed",
+            "7",
+            "--audio-weight",
+            "1.0",
+            "--modulator-rms-cache",
+            modulator_rms_arg.as_str(),
+            "--carrier-rms-cache",
+            carrier_rms_arg.as_str(),
+            "--max-frames",
+            "2",
+            "--frame-rate",
+            "12",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued granular-mosaic pool render job job-0001",
+        ));
+
+    let queued: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queued pool job"))
+            .expect("parse pool queue");
+    assert_eq!(
+        queued["jobs"][0]["task"]["type"],
+        "frame_sequence_granular_mosaic_pool"
+    );
+    assert_eq!(queued["jobs"][0]["task"]["audio_weight"], 1.0);
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"][0]["kind"],
+        "grain_descriptors"
+    );
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"][0]["producer"],
+        "pooled_av_nearest_grain_cpu_v1"
+    );
+    // grain pool descriptors + Source A RMS + Source B RMS.
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-granular-mosaic-pool-sequence", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued granular-mosaic pool job job-0001",
+        ));
+
+    let bundle_dir = output_root.join("job-0001");
+    assert!(bundle_dir.join("frames/frame_000000.png").exists());
+    assert!(bundle_dir.join("frames/frame_000001.png").exists());
+    assert!(bundle_dir
+        .join("cache/pool/grain_pool_descriptors.json")
+        .exists());
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle_dir.join("manifest.json")).expect("read pool manifest"),
+    )
+    .expect("parse pool manifest");
+    assert_eq!(manifest["task"], "frame_sequence_granular_mosaic_pool");
+    assert_eq!(manifest["timing"]["frame_count"], 2);
+    assert_eq!(
+        manifest["granular_mosaic_pool"]["algorithm"],
+        "pooled_av_nearest_grain_cpu_v1"
+    );
+    assert_eq!(manifest["granular_mosaic_pool"]["audio_weight"], 1.0);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-inspect", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "job-0001 task=frame_sequence_granular_mosaic_pool status=Complete",
         ));
 }
 

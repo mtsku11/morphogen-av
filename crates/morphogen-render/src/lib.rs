@@ -27,13 +27,21 @@ pub use flow_cache::{
     FlowCacheManifest, FLOW_VECTOR_CONVENTION,
 };
 pub use grain_cache::{
-    read_grain_descriptor_cache, read_grain_selection_cache, write_grain_descriptor_cache,
-    write_grain_selection_cache, GranularMosaicDescriptorCache, GranularMosaicSelectionCache,
-    GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
+    read_grain_color_descriptor_cache, read_grain_descriptor_cache,
+    read_grain_pool_descriptor_cache, read_grain_selection_cache,
+    write_grain_color_descriptor_cache, write_grain_descriptor_cache,
+    write_grain_pool_descriptor_cache, write_grain_selection_cache,
+    GranularMosaicColorDescriptorCache, GranularMosaicDescriptorCache,
+    GranularMosaicPoolDescriptorCache, GranularMosaicSelectionCache,
+    GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
 };
 pub use granular_mosaic::{
-    analyze_grains_cpu, granular_mosaic_cpu, granular_mosaic_with_selection_cpu, select_grains_cpu,
-    GrainDescriptor, GrainSelection, GranularMosaicSettings, GRANULAR_MOSAIC_ALGORITHM,
+    analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, granular_mosaic_cpu,
+    granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu, select_grains_cpu,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, GrainColorDescriptor, GrainDescriptor,
+    GrainPool, GrainSelection, GranularMosaicSettings, PooledGrainDescriptor,
+    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;

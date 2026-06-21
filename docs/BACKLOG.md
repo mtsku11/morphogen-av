@@ -1,4 +1,8 @@
-# Codex Task Backlog
+# Task Backlog
+
+Shared, ordered follow-up backlog (history + next steps). Agent-neutral.
+The high-level plan lives in [EFFECTS_ROADMAP.md](EFFECTS_ROADMAP.md); per-effect
+contracts live in the `*_MILESTONE.md` docs.
 
 ## Completed
 
@@ -70,8 +74,42 @@ The next effect is not another independent processor. It is a stateful temporal 
 2. Done: persist Source B grain descriptors and Source A selection indexes as validated JSON cache sidecars. Identical inputs/settings reuse both; changed variation, seed, source fingerprint, dimensions, or algorithm regenerates the affected sidecar.
 3. Done: add a persisted `frame_sequence_granular_mosaic` task that writes the standard ProRes-ready image-sequence bundle with timing, Source A/B, and grain-cache provenance.
 4. Done: add `granular_mosaic.metal`, a macOS runtime dispatcher, shader-binding preflight, and a tiny CPU/Metal parity fixture. Direct, sequence, and queue CLI paths select it with `--backend metal` and reject divergent frames before export.
-5. Route Source A RMS, onset, and spectral descriptors into frame-addressed grain controls.
-6. Add multimodal nearest-neighbor audiovisual grain scheduling.
+5. Done: route Source A RMS, onset, and spectral descriptors from cache sidecars into frame-addressed variation, rearrangement, and grain-size controls; persist their paths/scales in granular queue jobs and output provenance.
+6. Done (selection slice): multimodal nearest-neighbor grain selection on mean
+   RGB (`multimodal_nearest_grain_cpu_v1`), opt-in via `--selection rgb` on the
+   direct, sequence, and queue CLI paths and persisted on granular jobs +
+   provenance. Weighted distance is written over feature slices so audio
+   dimensions append later. See `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6.
+7. Done (6b CPU core): temporal grain pool / joint-AV selection
+   (`pooled_av_nearest_grain_cpu_v1`). Grains drawn from across time (whole-clip
+   pool) each carry their frame's carrier-audio descriptor, making audio a real
+   matching dimension over a combined `[mean_color | audio]` weighted distance.
+   `rearrangement` is a cross-frame value blend. See
+   `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6b.
+8. Done (6b CLI wiring): `render-granular-mosaic-pool-sequence` renders the
+   pooled path end-to-end (`--audio-weight`, optional both-or-neither
+   `--modulator-rms-cache`/`--carrier-rms-cache`, RMS k=1), backed by a
+   `grain_pool_descriptors.json` sidecar keyed on the whole carrier set. Verified
+   on real footage: audio-weighted vs audio-off selection differs ~26% of pixels.
+9. Done (6b queue task): persisted `frame_sequence_granular_mosaic_pool` job +
+   `queue-add-/queue-run-granular-mosaic-pool-sequence`. ProRes-ready bundle with
+   pool sidecar and a manifest carrying the pooled algorithm id, `audio_weight`,
+   and RMS-cache provenance; queued frames byte-identical to the direct render.
+10. Done (6b SwiftUI exposure): the macOS Render panel exposes the pooled queue
+    job (`Granular Mosaic — Temporal Pool`) — grain size, rearrangement,
+    variation, seed, audio weight, and an Audio-Weighted (RMS) toggle that wires
+    the source-proxy RMS caches (both-or-neither, color-only when off). Dev bridge
+    shells out to `queue-add-/queue-run-granular-mosaic-pool-sequence`; 3 new arg
+    tests.
+11. Done (6b Metal render port): `granular_mosaic_pool` compute kernel +
+    `granular_mosaic_pool_metal` — whole-clip pool as a 2D texture array (slice
+    per frame), flat grain-metadata buffer for `(frame_index, origin_x, origin_y)`,
+    integer-nearest clamped sampling + `rearrangement` value-blend. Parity-gated by
+    a multi-frame runtime test; `render-granular-mosaic-pool-sequence --backend metal`
+    gates each frame against the CPU reference before export (queue runs stay CPU).
+    Verified: Metal output byte-identical to CPU on generated footage (PSNR inf).
+    Deferred: SwiftUI/queue exposure of the Metal backend, k>1 audio dims,
+    sliding-window scope, cross-frame scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

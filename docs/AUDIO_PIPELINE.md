@@ -32,7 +32,9 @@ Convolution starts as a documented skeleton and simple direct implementation for
 
 ## Granular Analysis
 
-Future granular analysis should cache grain indexes, descriptors, envelope data, and source provenance so visual and audio grains can be recomposed together.
+Granular sequence renders now consume the existing Source A RMS, onset-strength, and STFT magnitude sidecars directly. At each output frame time, the renderer uses the latest descriptor at or before that time: RMS raises visual-grain variation, peak-normalized onset strength raises rearrangement, and the STFT-derived spectral centroid, normalized to Nyquist, offsets grain size. The queue records these cache files as analysis provenance; the mapping is deterministic and remains independent of audio playback.
+
+Future granular analysis should add audiovisual grain indexes, descriptor similarity, envelope data, and source provenance so visual and audio grains can be recomposed together.
 
 ## Accelerate/vDSP
 

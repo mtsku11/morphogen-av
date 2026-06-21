@@ -107,7 +107,65 @@ pub enum RenderJobTask {
         frame_rate: f64,
         #[serde(default)]
         backend: RenderBackend,
+        #[serde(default)]
+        audio_modulation: Option<GranularAudioModulation>,
+        /// Grain-matching feature space. Defaults to [`GrainSelectionMode::Luma`]
+        /// so legacy jobs serialized before multimodal selection keep their
+        /// original 1-D luminance matching.
+        #[serde(default)]
+        selection_mode: GrainSelectionMode,
     },
+    /// Step 6b joint-AV path: grains are drawn from a whole-clip temporal pool and
+    /// matched on a combined `[mean_color | audio]` vector. CPU-only
+    /// (`pooled_av_nearest_grain_cpu_v1`); the cross-frame render has no Metal
+    /// port yet.
+    FrameSequenceGranularMosaicPool {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        grain_cache_directory: Option<String>,
+        grain_size: u32,
+        rearrangement: f32,
+        variation: f32,
+        seed: u64,
+        /// Scales every audio dimension in the selection distance.
+        audio_weight: f32,
+        /// RMS cache for Source A; supplies the per-output-frame query audio.
+        #[serde(default)]
+        modulator_rms_cache: Option<String>,
+        /// RMS cache for Source B; supplies each pool grain's carrier audio.
+        #[serde(default)]
+        carrier_rms_cache: Option<String>,
+        max_frames: Option<u32>,
+        frame_rate: f64,
+    },
+}
+
+/// Selects the feature space used to match Source A regions to Source B grains.
+///
+/// The serde default is [`GrainSelectionMode::Luma`] so granular jobs serialized
+/// before step 6 keep their original 1-D luminance matching.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GrainSelectionMode {
+    /// 1-D nearest neighbor on mean luminance (`luma_nearest_grain_cpu_v1`).
+    #[default]
+    Luma,
+    /// Multimodal nearest neighbor on mean RGB (`multimodal_nearest_grain_cpu_v1`).
+    MultimodalRgb,
+}
+
+/// Cache-backed Source A audio controls for a granular-mosaic sequence. Each
+/// cache is sampled at the output frame time, preserving deterministic offline
+/// routing independently of realtime audio playback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GranularAudioModulation {
+    pub rms_cache_path: Option<String>,
+    pub onset_cache_path: Option<String>,
+    pub stft_cache_path: Option<String>,
+    pub rms_variation_scale: f32,
+    pub onset_rearrangement_scale: f32,
+    pub centroid_grain_size_scale: f32,
 }
 
 /// Selects the vector field that drives flow displacement and feedback.
@@ -287,6 +345,15 @@ mod tests {
             max_frames: Some(48),
             frame_rate: 24.0,
             backend: RenderBackend::Metal,
+            audio_modulation: Some(GranularAudioModulation {
+                rms_cache_path: Some("/tmp/a-rms.json".to_string()),
+                onset_cache_path: Some("/tmp/a-onsets.json".to_string()),
+                stft_cache_path: Some("/tmp/a-stft.json".to_string()),
+                rms_variation_scale: 0.6,
+                onset_rearrangement_scale: 0.4,
+                centroid_grain_size_scale: 12.0,
+            }),
+            selection_mode: GrainSelectionMode::MultimodalRgb,
         };
 
         let json = serde_json::to_string(&task).expect("serialize granular task");
@@ -294,5 +361,85 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize granular task");
 
         assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn granular_mosaic_pool_task_serializes_render_settings() {
+        let task = RenderJobTask::FrameSequenceGranularMosaicPool {
+            modulator_frame_directory: "/tmp/mod".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            grain_cache_directory: Some("/tmp/out/cache/pool".to_string()),
+            grain_size: 16,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 7,
+            audio_weight: 1.0,
+            modulator_rms_cache: Some("/tmp/a-rms.json".to_string()),
+            carrier_rms_cache: Some("/tmp/b-rms.json".to_string()),
+            max_frames: Some(48),
+            frame_rate: 24.0,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize pool task");
+        let decoded: RenderJobTask = serde_json::from_str(&json).expect("deserialize pool task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn granular_mosaic_pool_task_without_audio_caches_defaults_to_none() {
+        let json = r#"{
+            "type": "frame_sequence_granular_mosaic_pool",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "grain_cache_directory": null,
+            "grain_size": 16,
+            "rearrangement": 1.0,
+            "variation": 0.0,
+            "seed": 7,
+            "audio_weight": 1.0,
+            "max_frames": null,
+            "frame_rate": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize pool task");
+        let RenderJobTask::FrameSequenceGranularMosaicPool {
+            modulator_rms_cache,
+            carrier_rms_cache,
+            ..
+        } = task
+        else {
+            panic!("expected pool task");
+        };
+        assert_eq!(modulator_rms_cache, None);
+        assert_eq!(carrier_rms_cache, None);
+    }
+
+    #[test]
+    fn granular_mosaic_task_without_audio_modulation_defaults_to_none() {
+        let json = r#"{
+            "type": "frame_sequence_granular_mosaic",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "grain_cache_directory": null,
+            "grain_size": 24,
+            "rearrangement": 1.0,
+            "variation": 0.35,
+            "seed": 42,
+            "max_frames": null,
+            "frame_rate": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize legacy task");
+        let RenderJobTask::FrameSequenceGranularMosaic {
+            audio_modulation, ..
+        } = task
+        else {
+            panic!("expected granular task");
+        };
+        assert_eq!(audio_modulation, None);
     }
 }

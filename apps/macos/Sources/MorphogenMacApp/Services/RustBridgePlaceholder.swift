@@ -40,6 +40,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultGranularMosaicPoolSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-granular-pool-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -132,6 +138,127 @@ enum RustBridgePlaceholder {
       bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
       commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
     )
+  }
+
+  static func runQueuedGranularMosaicPoolSequenceRender(
+    request: GranularMosaicPoolSequenceRenderQueueCommandRequest
+  ) throws -> GranularMosaicPoolSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddGranularMosaicPoolSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-granular-mosaic-pool-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return GranularMosaicPoolSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddGranularMosaicPoolSequenceArguments(
+    request: GranularMosaicPoolSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.grainSize > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("grain size must be greater than zero")
+    }
+    for (name, value) in [
+      ("rearrangement", request.rearrangement),
+      ("variation", request.variation),
+      ("audio weight", request.audioWeight),
+      ("frame rate", request.frameRate)
+    ] {
+      guard value.isFinite else {
+        throw RustBridgeError.invalidFrameSequenceRequest("\(name) must be finite")
+      }
+    }
+    guard (0...1).contains(request.rearrangement) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("rearrangement must be between zero and one")
+    }
+    guard request.variation >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "variation must be greater than or equal to zero"
+      )
+    }
+    guard request.audioWeight >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "audio weight must be greater than or equal to zero"
+      )
+    }
+    guard request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive")
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+    guard (request.modulatorRMSCacheURL == nil) == (request.carrierRMSCacheURL == nil) else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "audio matching needs both Source A and Source B RMS caches, or neither"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-granular-mosaic-pool-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--grain-size",
+      String(request.grainSize),
+      "--rearrangement",
+      cliNumber(request.rearrangement),
+      "--variation",
+      cliNumber(request.variation),
+      "--seed",
+      String(request.seed),
+      "--audio-weight",
+      cliNumber(request.audioWeight),
+      "--frame-rate",
+      cliNumber(request.frameRate)
+    ]
+
+    if let modulatorRMSCacheURL = request.modulatorRMSCacheURL {
+      arguments.append("--modulator-rms-cache")
+      arguments.append(modulatorRMSCacheURL.path)
+    }
+    if let carrierRMSCacheURL = request.carrierRMSCacheURL {
+      arguments.append("--carrier-rms-cache")
+      arguments.append(carrierRMSCacheURL.path)
+    }
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
   }
 
   static func queueAddFrameSequenceArguments(
@@ -678,6 +805,29 @@ struct FeedbackSequenceRenderQueueCommandRequest {
 }
 
 struct FeedbackSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let grainSize: Int
+  let rearrangement: Double
+  let variation: Double
+  let seed: UInt64
+  let audioWeight: Double
+  let modulatorRMSCacheURL: URL?
+  let carrierRMSCacheURL: URL?
+  let maxFrames: Int?
+  let frameRate: Double
+  let projectURL: URL?
+}
+
+struct GranularMosaicPoolSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String
