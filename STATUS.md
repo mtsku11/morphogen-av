@@ -16,6 +16,46 @@ _Last updated: 2026-06-21_
 
 ## What just landed
 
+- **Granular step 6b cross-frame scheduling — anti-repeat (render/CLI path):**
+  `--anti-repeat-weight W` (0 = off) + `--anti-repeat-cooldown C` (default 8)
+  penalize grains used in recent output frames (penalty `W*(C-age)/C`, linear
+  decay) to push temporal diversity. State is `last_used_frame: Vec<Option<u32>>`
+  (serializable checkpoint rep). Frame zero has empty history ⇒ byte-identical to
+  non-scheduled (declared frame-zero behavior); penalty reshapes only the
+  nearest-match distance, Metal path unaffected (CPU-side selection). New
+  render-crate test (penalty overturns color-nearest; frame-zero no-op). Verified
+  e2e on a colorful carrier + static modulator: off = 1 distinct output frame,
+  on = 3 distinct, frame 0 identical / frames 1–3 diverge. Render 53 → 54
+  (workspace 139). Queue/SwiftUI exposure deferred.
+- **Granular step 6b sliding-window pool scope (render/CLI path):**
+  `--pool-window N` bounds each output frame to a trailing window of the last `N`
+  carrier frames (`0` = whole-clip). Grains are frame-major, so a trailing window
+  is a contiguous global-index slice — `PoolSelectionWindow::Trailing` is a
+  selection-only filter (whole-clip sidecar stays reusable; Metal render path
+  unaffected; `WholeClip` byte-identical to prior behavior). New render-crate test
+  pins window membership. Verified e2e: `--pool-window 1` forces each output frame
+  onto its own carrier frame (red→green→blue→white) vs the static whole-clip
+  mosaic. Render tests 52 → 53 (workspace 138). Queue/SwiftUI exposure deferred.
+- **Granular step 6b k>1 audio dims (render/CLI path):**
+  `render-granular-mosaic-pool-sequence` accepts optional
+  `--modulator-centroid-cache` / `--carrier-centroid-cache` (STFT caches)
+  alongside RMS. The audio vector is `[rms?, centroid?]` (each descriptor
+  independently both-or-neither across modulator/carrier), k=0..=2; one
+  `audio_weight` scales every dim. CPU core was already k-generic; the Metal
+  kernel is untouched (audio drives only CPU-side selection). New render-crate
+  test proves a centroid dim flips selection vs RMS-only. Verified end-to-end: on
+  a 4-frame solid-color carrier + constant-amplitude chirp (flat RMS, rising
+  centroid), k=1 vs k=2 give different mosaics (k=1 frame0 mean greenish, k=2
+  pulled to blue/white = higher-centroid frames). Render tests 51 → 52
+  (workspace 137). Queue/SwiftUI centroid exposure deferred.
+- **Granular step 6b Metal backend in queue + SwiftUI:** the persisted
+  `frame_sequence_granular_mosaic_pool` job gained a `backend` field (serde
+  default CPU). `queue-add-granular-mosaic-pool-sequence --backend metal` is
+  parity-gated frame-by-frame in the run path and the manifest records the
+  backend; the macOS Render panel exposes a CPU/Metal segmented selector for the
+  pool job. Verified end-to-end: a Metal-backed queue run on generated 48×48
+  footage rendered 4 frames (per-frame parity gate passed) with `backend: Metal`
+  in the manifest. Swift tests 22 → 23; Rust workspace 136 (unchanged count).
 - **Granular step 6b Metal render port (temporal grain pool):** a
   `granular_mosaic_pool` compute kernel renders the cross-frame pooled mosaic on
   the GPU — the whole-clip pool uploads as a 2D texture array (slice per frame),
@@ -64,7 +104,12 @@ _Last updated: 2026-06-21_
 
 ## In flight
 
-Nothing actively in progress — clean handoff point.
+Branch `granular-6b-deferred-features` — all four requested deferred 6b items
+landed on the render/CLI path and checkpointed: (1) Metal backend in queue +
+SwiftUI, (2) k>1 audio dims (rms+centroid), (3) trailing sliding-window pool
+scope, (4) anti-repeat cross-frame scheduling. Not yet pushed. Deferred follow-ons
+(not requested): queue/SwiftUI exposure of the centroid caches / pool window /
+anti-repeat knobs; temporal-coherence scheduling (the complement to anti-repeat).
 
 ## Candidate next steps
 
@@ -72,9 +117,9 @@ From `docs/BACKLOG.md` "Next" and `docs/EFFECTS_ROADMAP.md`:
 
 1. **Granular step 6b remaining** — CPU core + CLI render path + pool sidecar +
    queue task + SwiftUI exposure + Metal render port (`--backend metal`,
-   parity-gated) all landed. Deferred within 6b: SwiftUI/queue exposure of the
-   Metal pool backend, k>1 audio dims (add centroid), sliding-window pool scope,
-   and cross-frame scheduling (anti-repeat / temporal coherence).
+   parity-gated) + Metal backend in queue/SwiftUI all landed. Deferred within 6b:
+   k>1 audio dims (add centroid), sliding-window pool scope, and cross-frame
+   scheduling (anti-repeat / temporal coherence).
 2. **Next roadmap effect** — Video Vocoder (luma-band gain routing MVP) or
    Spectral Audio Cross-Synthesis (RMS/centroid filter path) are the natural
    next vertical slices.

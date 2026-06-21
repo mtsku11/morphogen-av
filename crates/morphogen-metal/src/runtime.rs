@@ -1046,6 +1046,8 @@ mod tests {
             &pool,
             settings,
             audio_weight,
+            morphogen_render::PoolSelectionWindow::WholeClip,
+            None,
         )
         .expect("selection");
 

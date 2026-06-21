@@ -116,9 +116,9 @@ pub enum RenderJobTask {
         selection_mode: GrainSelectionMode,
     },
     /// Step 6b joint-AV path: grains are drawn from a whole-clip temporal pool and
-    /// matched on a combined `[mean_color | audio]` vector. CPU-only
-    /// (`pooled_av_nearest_grain_cpu_v1`); the cross-frame render has no Metal
-    /// port yet.
+    /// matched on a combined `[mean_color | audio]` vector
+    /// (`pooled_av_nearest_grain_cpu_v1`). The cross-frame render has a
+    /// parity-gated Metal port selected via `backend`.
     FrameSequenceGranularMosaicPool {
         modulator_frame_directory: String,
         carrier_frame_directory: String,
@@ -138,6 +138,10 @@ pub enum RenderJobTask {
         carrier_rms_cache: Option<String>,
         max_frames: Option<u32>,
         frame_rate: f64,
+        /// Render backend; the Metal path is gated per-frame against the CPU
+        /// reference. Defaults to CPU so legacy jobs keep their meaning.
+        #[serde(default)]
+        backend: RenderBackend,
     },
 }
 
@@ -379,6 +383,7 @@ mod tests {
             carrier_rms_cache: Some("/tmp/b-rms.json".to_string()),
             max_frames: Some(48),
             frame_rate: 24.0,
+            backend: RenderBackend::Metal,
         };
 
         let json = serde_json::to_string(&task).expect("serialize pool task");
@@ -408,6 +413,7 @@ mod tests {
         let RenderJobTask::FrameSequenceGranularMosaicPool {
             modulator_rms_cache,
             carrier_rms_cache,
+            backend,
             ..
         } = task
         else {
@@ -415,6 +421,7 @@ mod tests {
         };
         assert_eq!(modulator_rms_cache, None);
         assert_eq!(carrier_rms_cache, None);
+        assert_eq!(backend, RenderBackend::Cpu);
     }
 
     #[test]

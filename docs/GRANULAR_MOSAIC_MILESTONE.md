@@ -151,8 +151,50 @@ integer-nearest clamped and `rearrangement` value-blends carrier vs. selected
 grain, matching the CPU reference within the 1/255 parity tolerance (a multi-frame
 runtime parity test plus the CLI's per-frame gate). `render-granular-mosaic-pool-sequence`
 accepts `--backend metal`, gating every frame against
-`granular_mosaic_with_pool_selection_cpu` before export (queue runs stay CPU).
+`granular_mosaic_with_pool_selection_cpu` before export. The persisted
+`frame_sequence_granular_mosaic_pool` queue job now carries a `backend` field
+(`queue-add-granular-mosaic-pool-sequence --backend metal`, parity-gated per
+frame in the run path; the manifest records the backend), and the macOS Render
+panel exposes a CPU/Metal selector for the pool job.
 
-Deferred: k>1 audio dims (add spectral centroid); sliding-window pool scope;
-luma-variance/gradient feature dims; cross-frame scheduling (anti-repeat /
-temporal coherence); and SwiftUI/queue exposure of the Metal pool backend.
+k>1 audio dims (landed on the render/CLI path): `render-granular-mosaic-pool-sequence`
+accepts optional `--modulator-centroid-cache` / `--carrier-centroid-cache` (STFT
+caches) alongside the RMS caches. The audio feature vector is built in fixed
+order `[rms?, centroid?]` (each descriptor independently both-or-neither across
+modulator/carrier), so k ranges 0..=2; `audio_weight` scales every dim equally.
+The CPU core was already k-generic and the Metal kernel is unaffected (audio only
+drives CPU-side selection). Verified: on a 4-frame solid-color carrier with a
+constant-amplitude chirp (flat RMS, rising centroid), k=1 (RMS) and k=2
+(RMS+centroid) produce different mosaics — the centroid query pulls selection
+toward the higher-centroid frames. Queue/SwiftUI exposure of centroid deferred.
+
+Sliding-window pool scope (landed, render/CLI path): `--pool-window N` bounds each
+output frame to a **trailing** window of the last `N` carrier frames (`0` =
+whole-clip, the default). Because grains are stored frame-major, the trailing
+window is a contiguous global-index slice, so it is a selection-only filter:
+`PoolSelectionWindow::Trailing { current_frame, frames }` restricts both the
+nearest match and the seeded alternate, the whole-clip pool sidecar stays
+reusable, and the Metal render path is unaffected (it renders whatever index map
+selection produces; `WholeClip` is byte-identical to the prior behavior).
+Verified: `--pool-window 1` forces each output frame onto its own carrier frame
+(red→green→blue→white on a 4-solid-color carrier) vs the static whole-clip
+mosaic; a render-crate test pins the window membership.
+
+Cross-frame scheduling — anti-repeat (landed, render/CLI path): `--anti-repeat-weight W`
+(`0` = off) with `--anti-repeat-cooldown C` (default 8) penalizes grains selected
+in recent output frames, pushing temporal diversity. A grain used `age` frames
+ago adds `W * (C - age) / C` to its squared feature distance while `age < C`,
+decaying linearly. State is `last_used_frame: Vec<Option<u32>>` (the most recent
+selecting frame per global grain index) — a plain serializable buffer, the
+checkpoint representation for this stateful temporal node. Frame zero has an
+empty history, so it is byte-identical to the non-scheduled selection (declared
+frame-zero behavior); the penalty reshapes only the nearest-match distance, not
+the seeded alternate. Metal render path unaffected (selection is CPU-side).
+Verified: render-crate test (penalty overturns the color-nearest grain; frame
+zero is a no-op) plus e2e on a colorful carrier with a **static** modulator —
+anti-repeat off yields 1 distinct output frame (max repetition), on yields 3
+distinct, frame 0 identical and frames 1–3 diverge.
+
+Deferred: queue/SwiftUI exposure of the centroid (k=2) caches, pool window, and
+anti-repeat; luma-variance/gradient feature dims; temporal-coherence scheduling
+(the complementary "smooth motion" mode to anti-repeat).

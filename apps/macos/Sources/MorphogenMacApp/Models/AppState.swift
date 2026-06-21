@@ -63,6 +63,7 @@ final class AppState: ObservableObject {
   @Published var granularPoolSeed = 0
   @Published var granularPoolAudioWeight = 1.0
   @Published var granularPoolAudioWeighted = true
+  @Published var granularPoolBackend: FeedbackRenderBackendOption = .cpu
   @Published var granularPoolSummary = "No temporal grain pool sequence rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
@@ -538,6 +539,7 @@ final class AppState: ObservableObject {
       carrierRMSCacheURL: carrierRMSCacheURL,
       maxFrames: frameSequenceMaxFrames,
       frameRate: proResFrameRate.framesPerSecond,
+      backend: granularPoolBackend,
       projectURL: projectURL
     )
 

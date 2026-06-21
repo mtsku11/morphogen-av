@@ -106,10 +106,41 @@ The next effect is not another independent processor. It is a stateful temporal 
     per frame), flat grain-metadata buffer for `(frame_index, origin_x, origin_y)`,
     integer-nearest clamped sampling + `rearrangement` value-blend. Parity-gated by
     a multi-frame runtime test; `render-granular-mosaic-pool-sequence --backend metal`
-    gates each frame against the CPU reference before export (queue runs stay CPU).
+    gates each frame against the CPU reference before export.
     Verified: Metal output byte-identical to CPU on generated footage (PSNR inf).
-    Deferred: SwiftUI/queue exposure of the Metal backend, k>1 audio dims,
-    sliding-window scope, cross-frame scheduling.
+12. Done (6b Metal backend in queue/SwiftUI): the persisted
+    `frame_sequence_granular_mosaic_pool` job carries a `backend` field (serde
+    default CPU); `queue-add-granular-mosaic-pool-sequence --backend metal` is
+    parity-gated frame-by-frame in the run path (manifest records the backend),
+    and the macOS Render panel has a CPU/Metal selector for the pool job.
+    Verified end-to-end on generated footage.
+13. Done (6b k>1 audio dims, render/CLI path): `render-granular-mosaic-pool-sequence`
+    accepts optional `--modulator-centroid-cache` / `--carrier-centroid-cache`
+    (STFT caches) beside RMS; the audio vector is `[rms?, centroid?]` (each
+    descriptor independently both-or-neither), k=0..=2, one `audio_weight` for
+    all dims. CPU core already k-generic; Metal kernel unaffected (audio drives
+    only CPU-side selection). Verified: k=1 vs k=2 differ on a solid-color carrier
+    + chirp (flat RMS, rising centroid); new render-crate test proves a centroid
+    dim flips selection vs RMS-only.
+    Deferred: queue/SwiftUI exposure of centroid caches, cross-frame scheduling.
+14. Done (6b sliding-window pool scope, render/CLI path): `--pool-window N` bounds
+    each output frame to a trailing window of the last `N` carrier frames (0 =
+    whole-clip). Frame-major storage makes a trailing window a contiguous
+    global-index slice, so `PoolSelectionWindow::Trailing` is a selection-only
+    filter — whole-clip sidecar stays reusable, Metal render path unaffected,
+    `WholeClip` byte-identical to prior behavior. Verified e2e (`--pool-window 1`
+    → own-frame-only red→green→blue→white) + a render-crate membership test.
+    Deferred: queue/SwiftUI exposure of centroid caches + pool window.
+15. Done (6b cross-frame scheduling — anti-repeat, render/CLI path):
+    `--anti-repeat-weight W` (0 = off) + `--anti-repeat-cooldown C` (default 8)
+    penalize grains used in recent output frames (`W*(C-age)/C`, linear decay) for
+    temporal diversity. State `last_used_frame: Vec<Option<u32>>` is the
+    serializable checkpoint rep; frame zero (empty history) is byte-identical to
+    non-scheduled; penalty reshapes only the nearest-match distance; Metal path
+    unaffected (CPU-side selection). Render-crate test + e2e (static modulator:
+    off → 1 distinct output frame, on → 3 distinct; frame 0 identical).
+    Deferred: queue/SwiftUI exposure of centroid caches / pool window /
+    anti-repeat; temporal-coherence scheduling (complement to anti-repeat).
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

@@ -238,7 +238,9 @@ enum RustBridgePlaceholder {
       "--audio-weight",
       cliNumber(request.audioWeight),
       "--frame-rate",
-      cliNumber(request.frameRate)
+      cliNumber(request.frameRate),
+      "--backend",
+      request.backend.cliValue
     ]
 
     if let modulatorRMSCacheURL = request.modulatorRMSCacheURL {
@@ -824,6 +826,7 @@ struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
   let carrierRMSCacheURL: URL?
   let maxFrames: Int?
   let frameRate: Double
+  let backend: FeedbackRenderBackendOption
   let projectURL: URL?
 }
 
