@@ -212,9 +212,25 @@ frame-zero behaviour); the penalty reshapes only the nearest-match distance, not
 the seeded alternate, and composes additively with anti-repeat (continuity vs
 diversity). Metal render path unaffected (selection is CPU-side). Verified: a
 render-crate test (coherence pulls selection back to the previous pick's frame,
-overturning the colour-nearest grain; frame zero is a no-op). Spatial-origin
-coherence (continuity in `(origin_x, origin_y)`, not just frame index) is a noted
-deferred refinement.
+overturning the colour-nearest grain; frame zero is a no-op).
+
+Cross-frame scheduling — spatial-origin coherence (landed, render/CLI + queue +
+SwiftUI): the spatial complement to frame coherence. `--spatial-coherence-weight W`
+(`0` = off) adds a second additive continuity term to [`TemporalCoherence`]: a
+candidate grain whose origin differs from that same tile's previous pick adds
+`W * min(dist_tiles, reach) / reach` to its squared feature distance, where
+`dist_tiles` is the Euclidean distance between origins in grain-tile units
+(`origin / grain_size`) and `reach` is the **shared** `--coherence-reach`. This
+keeps a tile's pick from teleporting across the *frame* even when it stays on a
+nearby source frame. Both terms default off; with either weight > 0 the scheduler
+engages (frame zero still empty-history ⇒ byte-identical). The new weight is
+plumbed through the persisted `frame_sequence_granular_mosaic_pool` job (serde
+default 0), `queue-add-`/`queue-run`, the bundle manifest, and the macOS Render
+panel (a Spatial weight stepper sharing the Reach control). Verified: a
+render-crate test (spatial weight overturns the exact-colour grain toward the
+previous pick's origin with frame weight 0; frame zero a no-op); `/parity` OK 4/4
+with frame + spatial coherence engaged (queue == direct); the pool queue smoke
+test and Swift bridge test pin the knob through task/manifest/args.
 
 Queue/SwiftUI exposure of the pool-selection knobs (landed): the persisted
 `frame_sequence_granular_mosaic_pool` job now carries the centroid (k=2) STFT
@@ -232,4 +248,4 @@ identical to the direct render with the same flags; extended pool queue smoke
 test asserts the knobs round-trip through task + manifest; three new Swift bridge
 tests pin the scheduling flags and centroid-cache args.
 
-Deferred: luma-variance/gradient feature dims; spatial-origin coherence.
+Deferred: luma-variance/gradient feature dims.
