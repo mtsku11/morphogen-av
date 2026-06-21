@@ -141,6 +141,21 @@ The next effect is not another independent processor. It is a stateful temporal 
     off → 1 distinct output frame, on → 3 distinct; frame 0 identical).
     Deferred: queue/SwiftUI exposure of centroid caches / pool window /
     anti-repeat; temporal-coherence scheduling (complement to anti-repeat).
+16. Done (6b remaining — closes step 6b): (a) **frame coherence** scheduling
+    (`--coherence-weight`/`--coherence-reach`, rewards per-tile source-frame
+    continuity); (b) **queue/SwiftUI exposure sweep** plumbing centroid caches,
+    pool window, anti-repeat, and frame coherence through the persisted job +
+    manifest + Render panel; (c) **spatial-origin coherence**
+    (`--spatial-coherence-weight`, shares `--coherence-reach`, penalizes grain
+    origins that teleport across the frame); (d) **luma-variance + gradient texture
+    dims** (`--texture-weight`, a 2-dim `[variance, gradient]` per-grain descriptor
+    matched against Source A's per-tile texture) — this bumped the pool algorithm
+    id `pooled_av_nearest_grain_cpu_v1 → _v2` (descriptor schema change). All four
+    are off-by-default selection-only knobs (byte-identical when off, Metal render
+    path unaffected), each plumbed through render/CLI + queue + SwiftUI with
+    render-crate tests, `/parity`, smoke, and Swift bridge coverage, plus off-vs-on
+    readouts on `/fixture` modes (`origin` for spatial coherence, `texture` for the
+    texture dims). With this, granular step 6b is feature-complete.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

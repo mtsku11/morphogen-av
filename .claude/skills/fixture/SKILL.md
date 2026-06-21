@@ -13,10 +13,10 @@ temporal-coherence work.
 ## What it builds
 
 ```sh
-scripts/make-fixture.sh /tmp/fix --frames 4 [--size WxH] [--readout frame|origin] [--with-chirp]
+scripts/make-fixture.sh /tmp/fix --frames 4 [--size WxH] [--readout frame|origin|texture] [--with-chirp]
 ```
 
-Two readout modes — pick the one matching the axis your knob moves:
+Three readout modes — pick the one matching the axis your knob moves:
 
 **`--readout frame` (default) — which source FRAME was picked.**
 - **Carrier**: an ordered grey ramp — frame 0 darkest → frame N−1 lightest.
@@ -36,6 +36,19 @@ Two readout modes — pick the one matching the axis your knob moves:
   knobs. The solid-colour `frame` readout *cannot* show them — all grains in one
   frame share a colour, so origin only breaks via tie-break. See
   [[spatial-coherence-shares-reach]].
+
+**`--readout texture` — which source TEXTURE was picked (for the texture dims).**
+- **Carrier**: frames alternate a *flat* mid-grey and a *busy* vertical-stripe
+  frame at the **same mean colour** (0x80), so mean colour ties across frames and
+  only the texture descriptor (luma variance + gradient) can decide which a tile
+  draws.
+- **Modulator**: alternates flat/busy too, so the demanded texture flips each
+  frame.
+- This is the readout for `--texture-weight`. With it ON the output structure
+  tracks the modulator demand (flat↔stripes, high frame-delta); OFF the colour tie
+  pins selection to the flat frame (≈0 delta). The `frame`/`origin` readouts cannot
+  show texture — solid tiles have zero texture and the coordinate gradient is
+  spatially uniform.
 
 `--with-chirp` additionally writes, per source, a constant-amplitude linear chirp
 WAV (flat RMS, rising spectral centroid — isolates the centroid dim) and the

@@ -11,6 +11,15 @@
 #   anti-repeat, frame coherence) must visibly tame. See the granular-audio /
 #   temporal-coherence findings.
 #
+# --readout texture: carrier frames alternate FLAT vs busy (vertical 1px stripes)
+#   at the SAME mean gray, so mean colour ties across frames and only the texture
+#   descriptor (luma variance + gradient magnitude) can decide which frame a tile
+#   draws. The modulator alternates flat/busy too, so the demanded texture flips
+#   each frame: with --texture-weight ON the output structure tracks that demand
+#   (flat<->stripes), with it OFF the colour tie pins selection to the flat frame.
+#   This is the readout for the texture dims — frame/origin readouts cannot show
+#   them (solid tiles have zero texture; the gradient is spatially uniform).
+#
 # --readout origin: a STATIC coordinate-gradient carrier (R encodes x, G encodes
 #   y) makes each output tile's COLOUR reveal which CARRIER ORIGIN it sampled
 #   (blue=left edge, yellow=right edge). The modulator's demanded region flips
@@ -54,7 +63,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$out" ] || { echo "$usage" >&2; exit 2; }
 [ "$frames" -ge 1 ] || { echo "make-fixture: --frames must be >= 1" >&2; exit 2; }
-case "$readout" in frame|origin) ;; *) echo "make-fixture: --readout must be frame or origin" >&2; exit 2 ;; esac
+case "$readout" in frame|origin|texture) ;; *) echo "make-fixture: --readout must be frame, origin or texture" >&2; exit 2 ;; esac
 command -v ffmpeg >/dev/null 2>&1 || { echo "make-fixture: ffmpeg not found on PATH" >&2; exit 1; }
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -74,7 +83,7 @@ if [ "$readout" = "frame" ]; then
     if [ $(( i % 2 )) -eq 0 ]; then e="$(printf '%02x' "$lo")"; else e="$(printf '%02x' "$hi")"; fi
     solid "$(printf '%s/modulator/frame_%06d.png' "$out" "$i")" "$e$e$e"
   done
-else
+elif [ "$readout" = "origin" ]; then
   # Static coordinate-gradient carrier: tile colour == its origin (R=x, G=y).
   ffmpeg -v error -y -f lavfi -i "nullsrc=s=$size" \
     -vf "geq=r='X/W*255':g='Y/H*255':b=128,format=rgb24" -frames:v 1 "$out/_car.png"
@@ -87,6 +96,19 @@ else
   for ((i = 0; i < frames; i++)); do
     cp "$out/_car.png" "$(printf '%s/carrier/frame_%06d.png' "$out" "$i")"
     if [ $(( i % 2 )) -eq 0 ]; then src="$out/_gradL.png"; else src="$out/_gradR.png"; fi
+    cp "$src" "$(printf '%s/modulator/frame_%06d.png' "$out" "$i")"
+  done
+else
+  # Texture readout: a FLAT mid-gray and a busy vertical-stripe frame, both with
+  # mean 0x80 so mean colour ties — only the texture descriptor can tell them
+  # apart. Carrier and modulator both alternate flat (even) / busy (odd).
+  ffmpeg -v error -y -f lavfi -i "color=c=0x808080:s=$size" -frames:v 1 "$out/_flat.png"
+  ffmpeg -v error -y -f lavfi -i "nullsrc=s=$size" \
+    -vf "geq=r='if(mod(floor(X)\,2)\,192\,64)':g='if(mod(floor(X)\,2)\,192\,64)':b='if(mod(floor(X)\,2)\,192\,64)',format=rgb24" \
+    -frames:v 1 "$out/_busy.png"
+  for ((i = 0; i < frames; i++)); do
+    if [ $(( i % 2 )) -eq 0 ]; then src="$out/_flat.png"; else src="$out/_busy.png"; fi
+    cp "$src" "$(printf '%s/carrier/frame_%06d.png' "$out" "$i")"
     cp "$src" "$(printf '%s/modulator/frame_%06d.png' "$out" "$i")"
   done
 fi
@@ -116,6 +138,13 @@ if [ "$readout" = "origin" ]; then
   echo "  cargo run -q -p morphogen-cli -- render-granular-mosaic-pool-sequence \\"
   echo "    $out/modulator $out/carrier $out/on  --grain-size 8 --rearrangement 1.0 --variation 0 --coherence-reach 10 --spatial-coherence-weight 6"
   echo "  scripts/frame-delta.py $out/off $out/on   # OFF strobes, ON holds"
+elif [ "$readout" = "texture" ]; then
+  echo "make-fixture: try — render OFF vs ON, then compare (note --variation 0):"
+  echo "  cargo run -q -p morphogen-cli -- render-granular-mosaic-pool-sequence \\"
+  echo "    $out/modulator $out/carrier $out/off --grain-size 8 --rearrangement 1.0 --variation 0 --texture-weight 0"
+  echo "  cargo run -q -p morphogen-cli -- render-granular-mosaic-pool-sequence \\"
+  echo "    $out/modulator $out/carrier $out/on  --grain-size 8 --rearrangement 1.0 --variation 0 --texture-weight 8"
+  echo "  scripts/frame-delta.py $out/off $out/on   # OFF holds flat, ON tracks the flat<->stripes demand"
 else
   echo "make-fixture: try — scripts/parity-check.sh $out/modulator $out/carrier -- --rearrangement 1.0 --pool-window 2"
 fi

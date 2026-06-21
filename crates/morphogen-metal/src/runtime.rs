@@ -1046,6 +1046,7 @@ mod tests {
             &pool,
             settings,
             audio_weight,
+            0.0,
             morphogen_render::PoolSelectionWindow::WholeClip,
             None,
             None,
