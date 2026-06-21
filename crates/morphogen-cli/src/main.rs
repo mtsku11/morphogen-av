@@ -34,7 +34,8 @@ use morphogen_render::{
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
     FlowFeedbackStateDescriptor, FlowField, GrainColorDescriptor, GrainDescriptor, GrainPool,
-    GrainSelection, GranularMosaicSettings, ImageBufferF32, RenderError, StructureMode,
+    GrainSelection, GranularMosaicSettings, ImageBufferF32, PoolSelectionWindow, RenderError,
+    StructureMode,
     FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM,
     LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
@@ -207,6 +208,10 @@ enum Commands {
         /// STFT cache for Source B; appends a spectral-centroid dimension to each pool grain.
         #[arg(long)]
         carrier_centroid_cache: Option<PathBuf>,
+        /// Trailing pool window in frames: each output frame may only draw grains
+        /// from the last N carrier frames (0 = whole-clip, the default).
+        #[arg(long, default_value_t = 0)]
+        pool_window: u32,
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
         #[arg(long)]
@@ -752,6 +757,7 @@ fn run() -> Result<(), CliError> {
             carrier_rms_cache,
             modulator_centroid_cache,
             carrier_centroid_cache,
+            pool_window,
             frame_rate,
             max_frames,
             grain_cache_dir,
@@ -771,6 +777,7 @@ fn run() -> Result<(), CliError> {
             carrier_rms_cache: carrier_rms_cache.as_deref(),
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
             carrier_centroid_cache: carrier_centroid_cache.as_deref(),
+            pool_window,
             frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
@@ -1987,6 +1994,7 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     carrier_rms_cache: Option<&'a Path>,
     modulator_centroid_cache: Option<&'a Path>,
     carrier_centroid_cache: Option<&'a Path>,
+    pool_window: u32,
     frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
@@ -2029,6 +2037,7 @@ fn render_granular_mosaic_pool_sequence(
         carrier_rms_cache,
         modulator_centroid_cache,
         carrier_centroid_cache,
+        pool_window,
         frame_rate,
         max_frames,
         grain_cache_dir,
@@ -2132,6 +2141,14 @@ fn render_granular_mosaic_pool_sequence(
             modulator_centroid_controls.as_deref(),
             index as f64 / frame_rate,
         );
+        let window = if pool_window == 0 {
+            PoolSelectionWindow::WholeClip
+        } else {
+            PoolSelectionWindow::Trailing {
+                current_frame: index as u32,
+                frames: pool_window,
+            }
+        };
         let selection = select_grains_from_pool_cpu(
             &modulator,
             carrier.width,
@@ -2140,6 +2157,7 @@ fn render_granular_mosaic_pool_sequence(
             &pool,
             settings,
             audio_weight,
+            window,
         )?;
         let image = render_granular_mosaic_pool_output(
             &pool_frames,
@@ -4516,10 +4534,12 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 audio_weight,
                 modulator_rms_cache: modulator_rms_cache.as_deref().map(Path::new),
                 carrier_rms_cache: carrier_rms_cache.as_deref().map(Path::new),
-                // Queue jobs persist only RMS caches today; centroid (k=2) is a
-                // direct-render knob until the queue task carries centroid paths.
+                // Queue jobs persist only RMS caches today; centroid (k=2) and the
+                // trailing pool window are direct-render knobs until the queue task
+                // carries them.
                 modulator_centroid_cache: None,
                 carrier_centroid_cache: None,
+                pool_window: 0,
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),

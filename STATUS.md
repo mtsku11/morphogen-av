@@ -16,6 +16,15 @@ _Last updated: 2026-06-21_
 
 ## What just landed
 
+- **Granular step 6b sliding-window pool scope (render/CLI path):**
+  `--pool-window N` bounds each output frame to a trailing window of the last `N`
+  carrier frames (`0` = whole-clip). Grains are frame-major, so a trailing window
+  is a contiguous global-index slice — `PoolSelectionWindow::Trailing` is a
+  selection-only filter (whole-clip sidecar stays reusable; Metal render path
+  unaffected; `WholeClip` byte-identical to prior behavior). New render-crate test
+  pins window membership. Verified e2e: `--pool-window 1` forces each output frame
+  onto its own carrier frame (red→green→blue→white) vs the static whole-clip
+  mosaic. Render tests 52 → 53 (workspace 138). Queue/SwiftUI exposure deferred.
 - **Granular step 6b k>1 audio dims (render/CLI path):**
   `render-granular-mosaic-pool-sequence` accepts optional
   `--modulator-centroid-cache` / `--carrier-centroid-cache` (STFT caches)
@@ -85,10 +94,12 @@ _Last updated: 2026-06-21_
 ## In flight
 
 On branch `granular-6b-deferred-features`: working through the deferred 6b items.
-Done: Metal backend in queue + SwiftUI; k>1 audio dims on the render/CLI path
-(both above). Next in this branch: sliding-window pool scope, then cross-frame
-scheduling — both have design forks to confirm before building. Also deferred:
-queue/SwiftUI exposure of the centroid (k=2) caches.
+Done: Metal backend in queue + SwiftUI; k>1 audio dims; trailing sliding-window
+pool scope (all on the render/CLI path). Next in this branch: cross-frame
+scheduling — chosen behavior is **anti-repeat diversity** (penalize re-selecting
+recently-used grains). This is a stateful temporal node (prior-frame selection
+state) needing frame-zero behavior + a checkpoint representation per invariants.
+Also deferred: queue/SwiftUI exposure of the centroid (k=2) caches and pool window.
 
 ## Candidate next steps
 

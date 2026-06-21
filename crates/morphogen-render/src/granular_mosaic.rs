@@ -379,12 +379,27 @@ pub fn analyze_grain_pool_cpu(
     })
 }
 
+/// Restricts which pool frames a selection may draw grains from.
+///
+/// `WholeClip` (the default behavior) considers every grain in the pool.
+/// `Trailing` bounds selection to a causal window: only grains from the `frames`
+/// carrier frames up to and including `current_frame` are eligible, clamping to a
+/// shrinking window at the clip start. The window is selection-only — the pool
+/// sidecar stays whole-clip and reusable, and the Metal render path is unaffected
+/// because it renders whatever index map the selection produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolSelectionWindow {
+    WholeClip,
+    Trailing { current_frame: u32, frames: u32 },
+}
+
 /// Select pool grains for each output tile by nearest combined `[color | audio]`
 /// descriptor (step 6b). The query is Source A's per-tile mean color plus this
 /// output frame's audio descriptor vector; `audio_weight` scales every audio
 /// dimension. Selected indices are global pool indices. `variation` blends the
 /// nearest match with a seeded alternate pool grain, leaving the match exact at
-/// `variation = 0`.
+/// `variation = 0`. `window` bounds which pool frames are eligible.
+#[allow(clippy::too_many_arguments)]
 pub fn select_grains_from_pool_cpu(
     modulator: &ImageBufferF32,
     carrier_width: u32,
@@ -393,6 +408,7 @@ pub fn select_grains_from_pool_cpu(
     pool: &GrainPool,
     settings: GranularMosaicSettings,
     audio_weight: f32,
+    window: PoolSelectionWindow,
 ) -> Result<GrainSelection, RenderError> {
     settings.validate()?;
     validate_pool(pool, settings.grain_size)?;
@@ -416,6 +432,8 @@ pub fn select_grains_from_pool_cpu(
 
     let columns = div_ceil(carrier_width, settings.grain_size);
     let rows = div_ceil(carrier_height, settings.grain_size);
+    let (eligible_start, eligible_end) = eligible_grain_range(pool, window);
+    let eligible = &pool.grains[eligible_start..eligible_end];
     let mut indices = Vec::with_capacity((columns as usize) * (rows as usize));
     for tile_y in 0..rows {
         for tile_x in 0..columns {
@@ -431,7 +449,8 @@ pub fn select_grains_from_pool_cpu(
                 target,
                 query_audio,
                 audio_weight,
-                pool,
+                eligible,
+                eligible_start,
                 settings,
                 tile_x,
                 tile_y,
@@ -707,17 +726,45 @@ fn select_color_grain_index(
     lerp(feature_selected as f32, random_selected as f32, variation).round() as u32
 }
 
+/// The contiguous global-index range `[start, end)` of grains eligible under
+/// `window`. Because grains are stored frame-major, a trailing frame window maps
+/// to a single contiguous slice of the pool.
+fn eligible_grain_range(pool: &GrainPool, window: PoolSelectionWindow) -> (usize, usize) {
+    let per_frame = pool.columns as usize * pool.rows as usize;
+    match window {
+        PoolSelectionWindow::WholeClip => (0, pool.grains.len()),
+        PoolSelectionWindow::Trailing {
+            current_frame,
+            frames,
+        } => {
+            if frames == 0 || per_frame == 0 {
+                return (0, pool.grains.len());
+            }
+            let frame_count = pool.grains.len() / per_frame;
+            if frame_count == 0 {
+                return (0, pool.grains.len());
+            }
+            let current = (current_frame as usize).min(frame_count - 1);
+            let start_frame = current.saturating_sub(frames as usize - 1);
+            (start_frame * per_frame, (current + 1) * per_frame)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn select_pool_grain_index(
     target_color: [f32; 3],
     query_audio: &[f32],
     audio_weight: f32,
-    pool: &GrainPool,
+    eligible: &[PooledGrainDescriptor],
+    eligible_start: usize,
     settings: GranularMosaicSettings,
     tile_x: u32,
     tile_y: u32,
 ) -> u32 {
-    let feature_selected = pool
-        .grains
+    // `eligible` is a contiguous window of the pool; the nearest match and the
+    // seeded alternate both resolve to global indices that stay inside it.
+    let feature_selected = eligible
         .iter()
         .min_by(|left, right| {
             let left_distance =
@@ -731,7 +778,8 @@ fn select_pool_grain_index(
         })
         .map(|grain| grain.global_index)
         .unwrap_or(0);
-    let random_selected = tile_hash(settings.seed, tile_x, tile_y) % pool.grains.len() as u64;
+    let random_selected =
+        eligible_start as u64 + tile_hash(settings.seed, tile_x, tile_y) % eligible.len() as u64;
     lerp(
         feature_selected as f32,
         random_selected as f32,
@@ -1228,12 +1276,12 @@ mod tests {
         };
 
         // Query audio = frame 1's descriptor; weighted audio picks grain 1.
-        let weighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 1.0)
+        let weighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 1.0, PoolSelectionWindow::WholeClip)
             .expect("weighted selection");
         assert_eq!(weighted.indices, vec![1]);
 
         // audio_weight 0 ignores audio; the color tie breaks to ascending index.
-        let unweighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 0.0)
+        let unweighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 0.0, PoolSelectionWindow::WholeClip)
             .expect("unweighted selection");
         assert_eq!(unweighted.indices, vec![0]);
     }
@@ -1255,7 +1303,7 @@ mod tests {
         // k = 1 (RMS only): grain 0's RMS (0.5) is nearest the 0.52 query.
         let rms_only = vec![vec![0.5_f32], vec![0.6_f32]];
         let pool_k1 = analyze_grain_pool_cpu(&frames, &rms_only, 1).expect("k1 pool");
-        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0)
+        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0, PoolSelectionWindow::WholeClip)
             .expect("k1 selection");
         assert_eq!(pick_k1.indices, vec![0]);
 
@@ -1265,9 +1313,66 @@ mod tests {
         let pool_k2 = analyze_grain_pool_cpu(&frames, &rms_centroid, 1).expect("k2 pool");
         assert_eq!(pool_k2.audio_dims, 2);
         let pick_k2 =
-            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0)
+            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0, PoolSelectionWindow::WholeClip)
                 .expect("k2 selection");
         assert_eq!(pick_k2.indices, vec![1]);
+    }
+
+    #[test]
+    fn pool_trailing_window_restricts_eligible_frames() {
+        // Four single-grain frames with distinct colors. A trailing window of 1
+        // frame must force every output frame to select its own frame's grain
+        // (global index == current frame), regardless of color match. WholeClip on
+        // the same query is free to pick the best color match across all frames.
+        let frames = [
+            rgb_image(&[[1.0, 0.0, 0.0]]),
+            rgb_image(&[[0.0, 1.0, 0.0]]),
+            rgb_image(&[[0.0, 0.0, 1.0]]),
+            rgb_image(&[[1.0, 1.0, 1.0]]),
+        ];
+        let audio = vec![Vec::new(); 4];
+        let pool = analyze_grain_pool_cpu(&frames, &audio, 1).expect("pool");
+        // Query color is pure red — color-nearest is always frame 0.
+        let modulator = rgb_image(&[[1.0, 0.0, 0.0]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        for current in 0..4u32 {
+            let trailing = select_grains_from_pool_cpu(
+                &modulator,
+                1,
+                1,
+                &[],
+                &pool,
+                settings,
+                0.0,
+                PoolSelectionWindow::Trailing {
+                    current_frame: current,
+                    frames: 1,
+                },
+            )
+            .expect("trailing selection");
+            // Only the current frame's grain is eligible.
+            assert_eq!(trailing.indices, vec![current]);
+        }
+
+        // Whole-clip picks the red frame (index 0) for every current frame.
+        let whole = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+        )
+        .expect("whole selection");
+        assert_eq!(whole.indices, vec![0]);
     }
 
     #[test]
@@ -1324,9 +1429,9 @@ mod tests {
             seed: 17,
         };
 
-        let first = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7)
+        let first = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip)
             .expect("first selection");
-        let second = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7)
+        let second = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip)
             .expect("second selection");
 
         assert_eq!(first, second);

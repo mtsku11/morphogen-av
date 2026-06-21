@@ -168,6 +168,18 @@ constant-amplitude chirp (flat RMS, rising centroid), k=1 (RMS) and k=2
 (RMS+centroid) produce different mosaics — the centroid query pulls selection
 toward the higher-centroid frames. Queue/SwiftUI exposure of centroid deferred.
 
-Deferred: queue/SwiftUI exposure of the centroid (k=2) caches; sliding-window
-pool scope; luma-variance/gradient feature dims; cross-frame scheduling
-(anti-repeat / temporal coherence).
+Sliding-window pool scope (landed, render/CLI path): `--pool-window N` bounds each
+output frame to a **trailing** window of the last `N` carrier frames (`0` =
+whole-clip, the default). Because grains are stored frame-major, the trailing
+window is a contiguous global-index slice, so it is a selection-only filter:
+`PoolSelectionWindow::Trailing { current_frame, frames }` restricts both the
+nearest match and the seeded alternate, the whole-clip pool sidecar stays
+reusable, and the Metal render path is unaffected (it renders whatever index map
+selection produces; `WholeClip` is byte-identical to the prior behavior).
+Verified: `--pool-window 1` forces each output frame onto its own carrier frame
+(red→green→blue→white on a 4-solid-color carrier) vs the static whole-clip
+mosaic; a render-crate test pins the window membership.
+
+Deferred: queue/SwiftUI exposure of the centroid (k=2) caches and the pool
+window; luma-variance/gradient feature dims; cross-frame scheduling (anti-repeat
+/ temporal coherence).

@@ -122,8 +122,16 @@ The next effect is not another independent processor. It is a stateful temporal 
     only CPU-side selection). Verified: k=1 vs k=2 differ on a solid-color carrier
     + chirp (flat RMS, rising centroid); new render-crate test proves a centroid
     dim flips selection vs RMS-only.
-    Deferred: queue/SwiftUI exposure of centroid caches, sliding-window scope,
-    cross-frame scheduling.
+    Deferred: queue/SwiftUI exposure of centroid caches, cross-frame scheduling.
+14. Done (6b sliding-window pool scope, render/CLI path): `--pool-window N` bounds
+    each output frame to a trailing window of the last `N` carrier frames (0 =
+    whole-clip). Frame-major storage makes a trailing window a contiguous
+    global-index slice, so `PoolSelectionWindow::Trailing` is a selection-only
+    filter — whole-clip sidecar stays reusable, Metal render path unaffected,
+    `WholeClip` byte-identical to prior behavior. Verified e2e (`--pool-window 1`
+    → own-frame-only red→green→blue→white) + a render-crate membership test.
+    Deferred: queue/SwiftUI exposure of centroid caches + pool window,
+    cross-frame scheduling (next: anti-repeat diversity).
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 
