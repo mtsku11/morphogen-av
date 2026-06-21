@@ -56,6 +56,25 @@ Then Read e.g. `frame_000000.png`, a middle frame, and the last. Describe what y
 see. For A/B tuning comparisons, render two param sets into separate dirs and Read
 the same frame index from each.
 
+### Isolating a selection/scheduling knob (off vs on)
+
+To judge what a *selection* knob does (pool window, anti-repeat, frame/spatial
+coherence, audio/centroid weight), render the same job with the knob **off** and
+**on** and compare both the pixels and a number:
+
+```sh
+scripts/make-fixture.sh /tmp/fix --frames 8 --size 96x96 --readout origin   # or default frame readout
+# off vs on — ALWAYS --variation 0. The default 0.25 injects a per-tile random
+# alternate the schedulers never touch, scattering the readout and hiding the knob.
+cargo run -q -p morphogen-cli -- render-granular-mosaic-pool-sequence /tmp/fix/modulator /tmp/fix/carrier /tmp/fix/off --rearrangement 1.0 --variation 0 --coherence-reach 10 --spatial-coherence-weight 0
+cargo run -q -p morphogen-cli -- render-granular-mosaic-pool-sequence /tmp/fix/modulator /tmp/fix/carrier /tmp/fix/on  --rearrangement 1.0 --variation 0 --coherence-reach 10 --spatial-coherence-weight 6
+scripts/frame-delta.py /tmp/fix/off /tmp/fix/on   # quantify temporal change; THEN Read frames from each
+```
+
+Pick the readout to the axis: `--readout origin` (colour = source *location*) for
+spatial/selection knobs, default `--readout frame` (colour = source *frame*) for
+frame schedulers. See `/fixture` and [[spatial-coherence-shares-reach]].
+
 ## Step 4 — Optional: assemble a clip to send
 
 ```sh
