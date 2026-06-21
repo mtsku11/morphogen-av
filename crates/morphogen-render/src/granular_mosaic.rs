@@ -439,11 +439,23 @@ impl AntiRepeat<'_> {
 /// dominant flicker source in a per-tile nearest-neighbor mosaic).
 ///
 /// `prev_selection[tile_index]` is the global grain index the tile (row-major)
-/// selected on the previous output frame (`None` ⇒ no previous selection). A
-/// candidate grain whose source frame differs from the previous pick's source
-/// frame by `delta` adds `weight * min(delta, reach) / reach` to its squared
-/// feature distance — zero when the source frame is unchanged, saturating at
-/// `weight` once `delta >= reach`. Frame zero has an all-`None` history, so the
+/// selected on the previous output frame (`None` ⇒ no previous selection). Two
+/// additive continuity penalties share the same `reach` normalization:
+///
+/// - **Frame continuity** (`weight`): a candidate whose source frame differs from
+///   the previous pick's frame by `delta` adds `weight * min(delta, reach) / reach`
+///   — zero when the source frame is unchanged, saturating at `weight` once
+///   `delta >= reach`.
+/// - **Spatial-origin continuity** (`spatial_weight`): a candidate whose grain
+///   origin differs from the previous pick's origin adds
+///   `spatial_weight * min(dist_tiles, reach) / reach`, where `dist_tiles` is the
+///   Euclidean distance between the two origins measured in grain-tile units
+///   (`origin / grain_size`). Zero when the grain origin is unchanged, saturating
+///   at `spatial_weight` once the origins are `reach` tiles apart. This keeps a
+///   tile's pick from teleporting across the *frame* even when it stays on a
+///   nearby source frame.
+///
+/// Both default off at weight `0`. Frame zero has an all-`None` history, so the
 /// first frame is identical to the non-scheduled selection (declared frame-zero
 /// behavior). The state is a plain `Vec<Option<u32>>` (one entry per output
 /// tile), the serializable checkpoint representation for this stateful temporal
@@ -454,20 +466,40 @@ pub struct TemporalCoherence<'a> {
     pub prev_selection: &'a [Option<u32>],
     pub reach: u32,
     pub weight: f32,
+    pub spatial_weight: f32,
 }
 
 impl TemporalCoherence<'_> {
-    /// Penalty for a candidate from `candidate_frame` given the tile's previous
-    /// pick was from `prev_frame` (`None` ⇒ no previous selection ⇒ no penalty).
-    fn penalty(&self, candidate_frame: u32, prev_frame: Option<u32>) -> f32 {
-        if self.reach == 0 || self.weight <= 0.0 {
+    /// Penalty for a candidate grain given the tile's previous pick (`None` ⇒ no
+    /// previous selection ⇒ no penalty). `prev` carries the previous pick's source
+    /// `(frame, origin_x, origin_y)`; `grain_size` converts pixel origins to
+    /// grain-tile units for the spatial term.
+    fn penalty(
+        &self,
+        candidate_frame: u32,
+        candidate_origin: (u32, u32),
+        prev: Option<(u32, u32, u32)>,
+        grain_size: u32,
+    ) -> f32 {
+        if self.reach == 0 {
             return 0.0;
         }
-        let Some(prev_frame) = prev_frame else {
+        let Some((prev_frame, prev_origin_x, prev_origin_y)) = prev else {
             return 0.0;
         };
-        let delta = candidate_frame.abs_diff(prev_frame).min(self.reach);
-        self.weight * delta as f32 / self.reach as f32
+        let reach = self.reach as f32;
+        let mut penalty = 0.0;
+        if self.weight > 0.0 {
+            let delta = candidate_frame.abs_diff(prev_frame).min(self.reach);
+            penalty += self.weight * delta as f32 / reach;
+        }
+        if self.spatial_weight > 0.0 && grain_size > 0 {
+            let dx = (candidate_origin.0 as f32 - prev_origin_x as f32) / grain_size as f32;
+            let dy = (candidate_origin.1 as f32 - prev_origin_y as f32) / grain_size as f32;
+            let dist_tiles = (dx * dx + dy * dy).sqrt().min(reach);
+            penalty += self.spatial_weight * dist_tiles / reach;
+        }
+        penalty
     }
 }
 
@@ -528,9 +560,9 @@ pub fn select_grains_from_pool_cpu(
                 tile_y,
                 settings.grain_size,
             );
-            // Resolve this tile's previous source frame for temporal coherence:
-            // map the tile's prior global selection back to its pool frame index.
-            let coherence_prev_frame = coherence.as_ref().and_then(|coherence| {
+            // Resolve this tile's previous pick for temporal coherence: map the
+            // tile's prior global selection back to its pool frame and origin.
+            let coherence_prev = coherence.as_ref().and_then(|coherence| {
                 let tile_index = (tile_y * columns + tile_x) as usize;
                 coherence
                     .prev_selection
@@ -538,7 +570,7 @@ pub fn select_grains_from_pool_cpu(
                     .copied()
                     .flatten()
                     .and_then(|global| pool.grains.get(global as usize))
-                    .map(|grain| grain.frame_index)
+                    .map(|grain| (grain.frame_index, grain.origin_x, grain.origin_y))
             });
             indices.push(select_pool_grain_index(
                 target,
@@ -548,7 +580,7 @@ pub fn select_grains_from_pool_cpu(
                 eligible_start,
                 anti_repeat.as_ref(),
                 coherence.as_ref(),
-                coherence_prev_frame,
+                coherence_prev,
                 settings,
                 tile_x,
                 tile_y,
@@ -858,7 +890,7 @@ fn select_pool_grain_index(
     eligible_start: usize,
     anti_repeat: Option<&AntiRepeat<'_>>,
     coherence: Option<&TemporalCoherence<'_>>,
-    coherence_prev_frame: Option<u32>,
+    coherence_prev: Option<(u32, u32, u32)>,
     settings: GranularMosaicSettings,
     tile_x: u32,
     tile_y: u32,
@@ -872,7 +904,12 @@ fn select_pool_grain_index(
             distance += anti_repeat.penalty(grain.global_index);
         }
         if let Some(coherence) = coherence {
-            distance += coherence.penalty(grain.frame_index, coherence_prev_frame);
+            distance += coherence.penalty(
+                grain.frame_index,
+                (grain.origin_x, grain.origin_y),
+                coherence_prev,
+                settings.grain_size,
+            );
         }
         distance
     };
@@ -1600,6 +1637,7 @@ mod tests {
                 prev_selection: &history,
                 reach: 4,
                 weight: 1.0,
+                spatial_weight: 0.0,
             }),
         )
         .expect("frame 0");
@@ -1622,12 +1660,97 @@ mod tests {
                 prev_selection: &history,
                 reach: 4,
                 weight: 1.0,
+                spatial_weight: 0.0,
             }),
         )
         .expect("frame 1 coherent");
         assert_eq!(coherent.indices, vec![2]);
 
         // ...while the same frame without the scheduler still picks the red grain.
+        let unscheduled = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("frame 1 unscheduled");
+        assert_eq!(unscheduled.indices, vec![0]);
+    }
+
+    #[test]
+    fn pool_spatial_coherence_rewards_previous_origin() {
+        // One frame, two grains side by side: grain 0 (origin x=0) is an exact
+        // color match for the red query; grain 1 (origin x=1) is a near miss. With
+        // no scheduler color picks grain 0. Spatial-origin coherence (frame weight
+        // 0) must overturn that once the tile's previous pick was grain 1's origin:
+        // grain 0 then carries a spatial penalty for moving one tile, grain 1 none.
+        let frames = [rgb_image(&[[1.0, 0.0, 0.0], [0.9, 0.0, 0.0]])];
+        let audio = vec![Vec::new(); 1];
+        let pool = analyze_grain_pool_cpu(&frames, &audio, 1).expect("pool");
+        assert_eq!(pool.grains[0].origin_x, 0);
+        assert_eq!(pool.grains[1].origin_x, 1);
+        let modulator = rgb_image(&[[1.0, 0.0, 0.0]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        // Frame zero: no previous selection ⇒ identical to non-scheduled (grain 0).
+        let history = vec![None];
+        let frame0 = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            Some(TemporalCoherence {
+                prev_selection: &history,
+                reach: 4,
+                weight: 0.0,
+                spatial_weight: 1.0,
+            }),
+        )
+        .expect("frame 0");
+        assert_eq!(frame0.indices, vec![0]);
+
+        // Previous pick was grain 1 (origin x=1): the spatial penalty on grain 0
+        // (1 tile away ⇒ 1.0*1/4 = 0.25) beats its color win (0), while grain 1
+        // pays no spatial penalty against its small color miss (0.01).
+        let history = vec![Some(1)];
+        let coherent = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            Some(TemporalCoherence {
+                prev_selection: &history,
+                reach: 4,
+                weight: 0.0,
+                spatial_weight: 1.0,
+            }),
+        )
+        .expect("frame 1 spatially coherent");
+        assert_eq!(coherent.indices, vec![1]);
+
+        // ...while the same frame without the scheduler still picks the exact-color
+        // grain 0, confirming spatial coherence alone caused the flip.
         let unscheduled = select_grains_from_pool_cpu(
             &modulator,
             1,

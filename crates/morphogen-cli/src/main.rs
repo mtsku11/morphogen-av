@@ -232,6 +232,13 @@ enum Commands {
         /// linearly to the weight). Only matters when --coherence-weight > 0.
         #[arg(long, default_value_t = 8)]
         coherence_reach: u32,
+        /// Spatial-origin coherence reward: penalty added to the squared feature
+        /// distance of grains whose origin is far (in grain-tile units) from each
+        /// tile's previous pick (0 = off, the default). Shares --coherence-reach as
+        /// its saturation distance; keeps a tile's pick from teleporting across the
+        /// frame even when it stays on a nearby source frame.
+        #[arg(long, default_value_t = 0.0)]
+        spatial_coherence_weight: f32,
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
         #[arg(long)]
@@ -803,6 +810,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             frame_rate,
             max_frames,
             grain_cache_dir,
@@ -827,6 +835,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
@@ -2062,6 +2071,7 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     anti_repeat_cooldown: u32,
     coherence_weight: f32,
     coherence_reach: u32,
+    spatial_coherence_weight: f32,
     frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
@@ -2109,6 +2119,7 @@ fn render_granular_mosaic_pool_sequence(
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         frame_rate,
         max_frames,
         grain_cache_dir,
@@ -2123,6 +2134,11 @@ fn render_granular_mosaic_pool_sequence(
     if !coherence_weight.is_finite() || coherence_weight < 0.0 {
         return Err(CliError::Message(
             "coherence-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    if !spatial_coherence_weight.is_finite() || spatial_coherence_weight < 0.0 {
+        return Err(CliError::Message(
+            "spatial-coherence-weight must be a finite, non-negative number".to_string(),
         ));
     }
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
@@ -2227,7 +2243,8 @@ fn render_granular_mosaic_pool_sequence(
     // Temporal-coherence scheduling state: the global grain index each output tile
     // selected on the previous frame (one entry per tile, row-major). Only tracked
     // when enabled so the default path stays allocation-free and byte-identical.
-    let coherence_enabled = coherence_weight > 0.0 && coherence_reach > 0;
+    let coherence_enabled =
+        (coherence_weight > 0.0 || spatial_coherence_weight > 0.0) && coherence_reach > 0;
     let mut prev_selection: Vec<Option<u32>> = Vec::new();
 
     for index in 0..frame_count {
@@ -2258,6 +2275,7 @@ fn render_granular_mosaic_pool_sequence(
             prev_selection: &prev_selection,
             reach: coherence_reach,
             weight: coherence_weight,
+            spatial_weight: spatial_coherence_weight,
         });
         let selection = select_grains_from_pool_cpu(
             &modulator,
@@ -4726,6 +4744,9 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 anti_repeat_cooldown,
                 coherence_weight,
                 coherence_reach,
+                // Queue exposure of spatial-origin coherence lands in the next
+                // increment; whole-clip jobs render with it off.
+                spatial_coherence_weight: 0.0,
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
