@@ -151,8 +151,12 @@ integer-nearest clamped and `rearrangement` value-blends carrier vs. selected
 grain, matching the CPU reference within the 1/255 parity tolerance (a multi-frame
 runtime parity test plus the CLI's per-frame gate). `render-granular-mosaic-pool-sequence`
 accepts `--backend metal`, gating every frame against
-`granular_mosaic_with_pool_selection_cpu` before export (queue runs stay CPU).
+`granular_mosaic_with_pool_selection_cpu` before export. The persisted
+`frame_sequence_granular_mosaic_pool` queue job now carries a `backend` field
+(`queue-add-granular-mosaic-pool-sequence --backend metal`, parity-gated per
+frame in the run path; the manifest records the backend), and the macOS Render
+panel exposes a CPU/Metal selector for the pool job.
 
 Deferred: k>1 audio dims (add spectral centroid); sliding-window pool scope;
 luma-variance/gradient feature dims; cross-frame scheduling (anti-repeat /
-temporal coherence); and SwiftUI/queue exposure of the Metal pool backend.
+temporal coherence).

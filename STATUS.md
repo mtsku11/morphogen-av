@@ -16,6 +16,14 @@ _Last updated: 2026-06-21_
 
 ## What just landed
 
+- **Granular step 6b Metal backend in queue + SwiftUI:** the persisted
+  `frame_sequence_granular_mosaic_pool` job gained a `backend` field (serde
+  default CPU). `queue-add-granular-mosaic-pool-sequence --backend metal` is
+  parity-gated frame-by-frame in the run path and the manifest records the
+  backend; the macOS Render panel exposes a CPU/Metal segmented selector for the
+  pool job. Verified end-to-end: a Metal-backed queue run on generated 48×48
+  footage rendered 4 frames (per-frame parity gate passed) with `backend: Metal`
+  in the manifest. Swift tests 22 → 23; Rust workspace 136 (unchanged count).
 - **Granular step 6b Metal render port (temporal grain pool):** a
   `granular_mosaic_pool` compute kernel renders the cross-frame pooled mosaic on
   the GPU — the whole-clip pool uploads as a 2D texture array (slice per frame),
@@ -64,7 +72,10 @@ _Last updated: 2026-06-21_
 
 ## In flight
 
-Nothing actively in progress — clean handoff point.
+On branch `granular-6b-deferred-features`: working through the deferred 6b items.
+Done: Metal backend in queue + SwiftUI (above). Next in this branch: k>1 audio
+dims (add spectral centroid), then sliding-window pool scope, then cross-frame
+scheduling. Items 3–4 have design forks to confirm before building.
 
 ## Candidate next steps
 
@@ -72,9 +83,9 @@ From `docs/BACKLOG.md` "Next" and `docs/EFFECTS_ROADMAP.md`:
 
 1. **Granular step 6b remaining** — CPU core + CLI render path + pool sidecar +
    queue task + SwiftUI exposure + Metal render port (`--backend metal`,
-   parity-gated) all landed. Deferred within 6b: SwiftUI/queue exposure of the
-   Metal pool backend, k>1 audio dims (add centroid), sliding-window pool scope,
-   and cross-frame scheduling (anti-repeat / temporal coherence).
+   parity-gated) + Metal backend in queue/SwiftUI all landed. Deferred within 6b:
+   k>1 audio dims (add centroid), sliding-window pool scope, and cross-frame
+   scheduling (anti-repeat / temporal coherence).
 2. **Next roadmap effect** — Video Vocoder (luma-band gain routing MVP) or
    Spectral Audio Cross-Synthesis (RMS/centroid filter path) are the natural
    next vertical slices.

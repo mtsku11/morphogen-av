@@ -106,10 +106,15 @@ The next effect is not another independent processor. It is a stateful temporal 
     per frame), flat grain-metadata buffer for `(frame_index, origin_x, origin_y)`,
     integer-nearest clamped sampling + `rearrangement` value-blend. Parity-gated by
     a multi-frame runtime test; `render-granular-mosaic-pool-sequence --backend metal`
-    gates each frame against the CPU reference before export (queue runs stay CPU).
+    gates each frame against the CPU reference before export.
     Verified: Metal output byte-identical to CPU on generated footage (PSNR inf).
-    Deferred: SwiftUI/queue exposure of the Metal backend, k>1 audio dims,
-    sliding-window scope, cross-frame scheduling.
+12. Done (6b Metal backend in queue/SwiftUI): the persisted
+    `frame_sequence_granular_mosaic_pool` job carries a `backend` field (serde
+    default CPU); `queue-add-granular-mosaic-pool-sequence --backend metal` is
+    parity-gated frame-by-frame in the run path (manifest records the backend),
+    and the macOS Render panel has a CPU/Metal selector for the pool job.
+    Verified end-to-end on generated footage.
+    Deferred: k>1 audio dims, sliding-window scope, cross-frame scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

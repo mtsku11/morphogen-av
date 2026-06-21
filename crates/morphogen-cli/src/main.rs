@@ -413,6 +413,8 @@ enum Commands {
         no_grain_cache: bool,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     QueueRunTest {
         queue_path: PathBuf,
@@ -990,6 +992,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             no_grain_cache,
             project_path,
+            backend,
         } => queue_add_granular_mosaic_pool_sequence(QueueAddGranularMosaicPoolSequenceRequest {
             queue_path: &queue_path,
             modulator_dir: &modulator_dir,
@@ -1008,6 +1011,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             write_grain_cache: !no_grain_cache,
             project_path: project_path.as_deref(),
+            backend: backend.into(),
         }),
         Commands::QueueRunTest {
             queue_path,
@@ -3876,6 +3880,7 @@ struct QueueAddGranularMosaicPoolSequenceRequest<'a> {
     frame_rate: f64,
     write_grain_cache: bool,
     project_path: Option<&'a Path>,
+    backend: RenderBackend,
 }
 
 fn queue_add_granular_mosaic_pool_sequence(
@@ -3894,6 +3899,7 @@ fn queue_add_granular_mosaic_pool_sequence(
         frame_rate,
         write_grain_cache,
         project_path,
+        backend,
     } = request;
     settings.validate()?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
@@ -3966,6 +3972,7 @@ fn queue_add_granular_mosaic_pool_sequence(
             carrier_rms_cache,
             max_frames,
             frame_rate,
+            backend,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -4424,6 +4431,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
         carrier_rms_cache,
         max_frames,
         frame_rate,
+        backend,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -4461,7 +4469,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
-                backend: RenderBackend::Cpu,
+                backend,
             })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
@@ -4486,6 +4494,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
             audio_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
+            backend,
             provenance: Some(&provenance),
         })?;
         write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
@@ -4872,6 +4881,7 @@ struct GranularMosaicPoolManifest<'a> {
     audio_weight: f32,
     modulator_rms_cache: Option<&'a str>,
     carrier_rms_cache: Option<&'a str>,
+    backend: RenderBackend,
     provenance: Option<&'a RenderJobProvenance>,
 }
 
@@ -4887,6 +4897,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
         audio_weight,
         modulator_rms_cache,
         carrier_rms_cache,
+        backend,
         provenance,
     } = manifest;
     let manifest = serde_json::json!({
@@ -4908,7 +4919,8 @@ fn write_granular_mosaic_pool_sequence_manifest(
             "settings": settings,
             "audio_weight": audio_weight,
             "modulator_rms_cache": modulator_rms_cache,
-            "carrier_rms_cache": carrier_rms_cache
+            "carrier_rms_cache": carrier_rms_cache,
+            "backend": render_backend_label(backend)
         },
         "provenance": provenance,
         "deterministic": true

@@ -139,6 +139,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       carrierRMSCacheURL: URL(fileURLWithPath: "/tmp/source-b/analysis/rms.json"),
       maxFrames: 48,
       frameRate: 24.0,
+      backend: .cpu,
       projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
     )
 
@@ -169,6 +170,33 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("48"))
     XCTAssertTrue(arguments.contains("--project-path"))
     XCTAssertTrue(arguments.contains("/tmp/project.morphogen.json"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("cpu"))
+  }
+
+  func testQueuedGranularMosaicPoolSequenceArgumentsSelectMetalBackend() throws {
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      grainSize: 32,
+      rearrangement: 1.0,
+      variation: 0.25,
+      seed: 0,
+      audioWeight: 1.0,
+      modulatorRMSCacheURL: nil,
+      carrierRMSCacheURL: nil,
+      maxFrames: nil,
+      frameRate: 24.0,
+      backend: .metal,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
   }
 
   func testQueuedGranularMosaicPoolSequenceArgumentsOmitAudioCachesWhenColorOnly() throws {
@@ -186,6 +214,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       carrierRMSCacheURL: nil,
       maxFrames: nil,
       frameRate: 24.0,
+      backend: .cpu,
       projectURL: nil
     )
 
@@ -213,6 +242,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       carrierRMSCacheURL: nil,
       maxFrames: nil,
       frameRate: 24.0,
+      backend: .cpu,
       projectURL: nil
     )
 

@@ -391,6 +391,16 @@ struct RenderPanelView: View {
 
             Toggle("Audio-Weighted (RMS)", isOn: $state.granularPoolAudioWeighted)
               .toggleStyle(.checkbox)
+          }
+
+          HStack(spacing: 16) {
+            Picker("Backend", selection: $state.granularPoolBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
 
             Button {
               state.runGranularMosaicPoolSequenceRender()
