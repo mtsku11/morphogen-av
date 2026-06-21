@@ -197,6 +197,11 @@ enum Commands {
         /// Scales every audio dimension in the selection distance.
         #[arg(long, default_value_t = 1.0)]
         audio_weight: f32,
+        /// Scales both texture dimensions (luma variance + gradient magnitude) in
+        /// the selection distance, so Source A's per-tile spatial busyness matches
+        /// carrier grains of similar structure (0 = off, the default).
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
         /// RMS cache for Source A; supplies the per-output-frame query audio.
         #[arg(long)]
         modulator_rms_cache: Option<PathBuf>,
@@ -439,6 +444,9 @@ enum Commands {
         seed: u64,
         #[arg(long, default_value_t = 1.0)]
         audio_weight: f32,
+        /// Scales both texture dims (luma variance + gradient magnitude); 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
         #[arg(long)]
         modulator_rms_cache: Option<PathBuf>,
         #[arg(long)]
@@ -805,6 +813,7 @@ fn run() -> Result<(), CliError> {
             variation,
             seed,
             audio_weight,
+            texture_weight,
             modulator_rms_cache,
             carrier_rms_cache,
             modulator_centroid_cache,
@@ -830,6 +839,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             audio_weight,
+            texture_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
@@ -1065,6 +1075,7 @@ fn run() -> Result<(), CliError> {
             variation,
             seed,
             audio_weight,
+            texture_weight,
             modulator_rms_cache,
             carrier_rms_cache,
             modulator_centroid_cache,
@@ -1092,6 +1103,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             audio_weight,
+            texture_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
@@ -2068,6 +2080,7 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     output_dir: &'a Path,
     settings: GranularMosaicSettings,
     audio_weight: f32,
+    texture_weight: f32,
     modulator_rms_cache: Option<&'a Path>,
     carrier_rms_cache: Option<&'a Path>,
     modulator_centroid_cache: Option<&'a Path>,
@@ -2116,6 +2129,7 @@ fn render_granular_mosaic_pool_sequence(
         output_dir,
         settings,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -2160,6 +2174,11 @@ fn render_granular_mosaic_pool_sequence(
     if !audio_weight.is_finite() || audio_weight < 0.0 {
         return Err(CliError::Message(
             "audio-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    if !texture_weight.is_finite() || texture_weight < 0.0 {
+        return Err(CliError::Message(
+            "texture-weight must be a finite, non-negative number".to_string(),
         ));
     }
     // Audio matching needs the pool grains and the query to share a descriptor
@@ -2291,6 +2310,7 @@ fn render_granular_mosaic_pool_sequence(
             &pool,
             settings,
             audio_weight,
+            texture_weight,
             window,
             anti_repeat,
             coherence,
@@ -2329,12 +2349,13 @@ fn render_granular_mosaic_pool_sequence(
         );
     }
     println!(
-        "rendered granular mosaic pool sequence with {} frame(s) ({}, {} pool frame(s), audio_dims={}, audio_weight={}) from {} modulating {} to {}",
+        "rendered granular mosaic pool sequence with {} frame(s) ({}, {} pool frame(s), audio_dims={}, audio_weight={}, texture_weight={}) from {} modulating {} to {}",
         frame_count,
         POOLED_GRAIN_ALGORITHM,
         pool_frames.len(),
         pool.audio_dims,
         audio_weight,
+        texture_weight,
         modulator_dir.display(),
         carrier_dir.display(),
         output_dir.display()
@@ -4099,6 +4120,7 @@ struct QueueAddGranularMosaicPoolSequenceRequest<'a> {
     output_root_dir: &'a Path,
     settings: GranularMosaicSettings,
     audio_weight: f32,
+    texture_weight: f32,
     modulator_rms_cache: Option<&'a Path>,
     carrier_rms_cache: Option<&'a Path>,
     modulator_centroid_cache: Option<&'a Path>,
@@ -4126,6 +4148,7 @@ fn queue_add_granular_mosaic_pool_sequence(
         output_root_dir,
         settings,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -4185,6 +4208,11 @@ fn queue_add_granular_mosaic_pool_sequence(
             "spatial-coherence-weight must be a finite, non-negative number".to_string(),
         ));
     }
+    if !texture_weight.is_finite() || texture_weight < 0.0 {
+        return Err(CliError::Message(
+            "texture-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
 
     let mut queue = if queue_path.exists() {
         RenderQueue::load_json(queue_path)?
@@ -4236,6 +4264,7 @@ fn queue_add_granular_mosaic_pool_sequence(
             variation: settings.variation,
             seed: settings.seed,
             audio_weight,
+            texture_weight,
             modulator_rms_cache,
             carrier_rms_cache,
             modulator_centroid_cache,
@@ -4703,6 +4732,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
         variation,
         seed,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -4750,6 +4780,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 output_dir: &output_dir.join("frames"),
                 settings,
                 audio_weight,
+                texture_weight,
                 modulator_rms_cache: modulator_rms_cache.as_deref().map(Path::new),
                 carrier_rms_cache: carrier_rms_cache.as_deref().map(Path::new),
                 modulator_centroid_cache: modulator_centroid_cache.as_deref().map(Path::new),
@@ -4786,6 +4817,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
             timing: &timing,
             settings: &settings,
             audio_weight,
+            texture_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
@@ -5181,6 +5213,7 @@ struct GranularMosaicPoolManifest<'a> {
     timing: &'a RenderTimingMetadata,
     settings: &'a GranularMosaicSettings,
     audio_weight: f32,
+    texture_weight: f32,
     modulator_rms_cache: Option<&'a str>,
     carrier_rms_cache: Option<&'a str>,
     modulator_centroid_cache: Option<&'a str>,
@@ -5205,6 +5238,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
         timing,
         settings,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -5236,6 +5270,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
             "algorithm": POOLED_GRAIN_ALGORITHM,
             "settings": settings,
             "audio_weight": audio_weight,
+            "texture_weight": texture_weight,
             "modulator_rms_cache": modulator_rms_cache,
             "carrier_rms_cache": carrier_rms_cache,
             "modulator_centroid_cache": modulator_centroid_cache,

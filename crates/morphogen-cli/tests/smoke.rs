@@ -313,14 +313,14 @@ fn render_granular_mosaic_pool_sequence_writes_frames_and_pool_sidecar() {
         .assert()
         .success()
         .stdout(predicate::str::contains("wrote grain pool sidecar"))
-        .stdout(predicate::str::contains("pooled_av_nearest_grain_cpu_v1"));
+        .stdout(predicate::str::contains("pooled_av_nearest_grain_cpu_v2"));
 
     assert!(output_dir.join("frame_000000.png").exists());
     assert!(output_dir.join("frame_000001.png").exists());
     let pool_sidecar = grain_cache_dir.join("grain_pool_descriptors.json");
     assert!(pool_sidecar.exists());
     let pool_json = fs::read_to_string(&pool_sidecar).expect("read pool sidecar");
-    assert!(pool_json.contains("pooled_av_nearest_grain_cpu_v1"));
+    assert!(pool_json.contains("pooled_av_nearest_grain_cpu_v2"));
 
     // A second identical run reuses the persisted pool.
     Command::cargo_bin("morphogen")
@@ -1378,6 +1378,8 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
             "7",
             "--audio-weight",
             "1.0",
+            "--texture-weight",
+            "0.0625",
             "--modulator-rms-cache",
             modulator_rms_arg.as_str(),
             "--carrier-rms-cache",
@@ -1413,6 +1415,7 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
         "frame_sequence_granular_mosaic_pool"
     );
     assert_eq!(queued["jobs"][0]["task"]["audio_weight"], 1.0);
+    assert_eq!(queued["jobs"][0]["task"]["texture_weight"], 0.0625);
     // Pool-selection knobs added in the exposure sweep persist on the queued task.
     assert_eq!(queued["jobs"][0]["task"]["pool_window"], 2);
     assert_eq!(queued["jobs"][0]["task"]["anti_repeat_weight"], 0.5);
@@ -1426,7 +1429,7 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
     );
     assert_eq!(
         queued["jobs"][0]["provenance"]["analysis_caches"][0]["producer"],
-        "pooled_av_nearest_grain_cpu_v1"
+        "pooled_av_nearest_grain_cpu_v2"
     );
     // grain pool descriptors + Source A RMS + Source B RMS.
     assert_eq!(
@@ -1460,9 +1463,10 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
     assert_eq!(manifest["timing"]["frame_count"], 2);
     assert_eq!(
         manifest["granular_mosaic_pool"]["algorithm"],
-        "pooled_av_nearest_grain_cpu_v1"
+        "pooled_av_nearest_grain_cpu_v2"
     );
     assert_eq!(manifest["granular_mosaic_pool"]["audio_weight"], 1.0);
+    assert_eq!(manifest["granular_mosaic_pool"]["texture_weight"], 0.0625);
     assert_eq!(manifest["granular_mosaic_pool"]["pool_window"], 2);
     assert_eq!(manifest["granular_mosaic_pool"]["anti_repeat_weight"], 0.5);
     assert_eq!(manifest["granular_mosaic_pool"]["anti_repeat_cooldown"], 3);
