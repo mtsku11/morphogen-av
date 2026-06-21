@@ -214,6 +214,30 @@ enum RustBridgePlaceholder {
         "audio matching needs both Source A and Source B RMS caches, or neither"
       )
     }
+    guard (request.modulatorCentroidCacheURL == nil) == (request.carrierCentroidCacheURL == nil) else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "centroid matching needs both Source A and Source B STFT caches, or neither"
+      )
+    }
+    for (name, value) in [
+      ("anti-repeat weight", request.antiRepeatWeight),
+      ("coherence weight", request.coherenceWeight)
+    ] {
+      guard value.isFinite && value >= 0 else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "\(name) must be finite and greater than or equal to zero"
+        )
+      }
+    }
+    guard request.poolWindow >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("pool window must be zero or greater")
+    }
+    guard request.antiRepeatCooldown >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("anti-repeat cooldown must be zero or greater")
+    }
+    guard request.coherenceReach >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("coherence reach must be zero or greater")
+    }
 
     var arguments = [
       "cargo",
@@ -237,6 +261,16 @@ enum RustBridgePlaceholder {
       String(request.seed),
       "--audio-weight",
       cliNumber(request.audioWeight),
+      "--pool-window",
+      String(request.poolWindow),
+      "--anti-repeat-weight",
+      cliNumber(request.antiRepeatWeight),
+      "--anti-repeat-cooldown",
+      String(request.antiRepeatCooldown),
+      "--coherence-weight",
+      cliNumber(request.coherenceWeight),
+      "--coherence-reach",
+      String(request.coherenceReach),
       "--frame-rate",
       cliNumber(request.frameRate),
       "--backend",
@@ -250,6 +284,14 @@ enum RustBridgePlaceholder {
     if let carrierRMSCacheURL = request.carrierRMSCacheURL {
       arguments.append("--carrier-rms-cache")
       arguments.append(carrierRMSCacheURL.path)
+    }
+    if let modulatorCentroidCacheURL = request.modulatorCentroidCacheURL {
+      arguments.append("--modulator-centroid-cache")
+      arguments.append(modulatorCentroidCacheURL.path)
+    }
+    if let carrierCentroidCacheURL = request.carrierCentroidCacheURL {
+      arguments.append("--carrier-centroid-cache")
+      arguments.append(carrierCentroidCacheURL.path)
     }
     if let maxFrames = request.maxFrames {
       arguments.append("--max-frames")
@@ -824,6 +866,15 @@ struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
   let audioWeight: Double
   let modulatorRMSCacheURL: URL?
   let carrierRMSCacheURL: URL?
+  // Pool-selection knobs added in the queue/SwiftUI exposure sweep. Defaulted to
+  // off so call sites predating the sweep keep their whole-clip / no-scheduler meaning.
+  var modulatorCentroidCacheURL: URL? = nil
+  var carrierCentroidCacheURL: URL? = nil
+  var poolWindow: Int = 0
+  var antiRepeatWeight: Double = 0
+  var antiRepeatCooldown: Int = 8
+  var coherenceWeight: Double = 0
+  var coherenceReach: Int = 8
   let maxFrames: Int?
   let frameRate: Double
   let backend: FeedbackRenderBackendOption

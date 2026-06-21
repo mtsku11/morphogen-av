@@ -63,6 +63,12 @@ final class AppState: ObservableObject {
   @Published var granularPoolSeed = 0
   @Published var granularPoolAudioWeight = 1.0
   @Published var granularPoolAudioWeighted = true
+  @Published var granularPoolCentroidEnabled = false
+  @Published var granularPoolWindow = 0
+  @Published var granularPoolAntiRepeatWeight = 0.0
+  @Published var granularPoolAntiRepeatCooldown = 8
+  @Published var granularPoolCoherenceWeight = 0.0
+  @Published var granularPoolCoherenceReach = 8
   @Published var granularPoolBackend: FeedbackRenderBackendOption = .cpu
   @Published var granularPoolSummary = "No temporal grain pool sequence rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
@@ -81,6 +87,8 @@ final class AppState: ObservableObject {
   private var lastFrameSequenceOutputURL: URL?
   private var sourceARMSCacheURL: URL?
   private var sourceBRMSCacheURL: URL?
+  private var sourceASTFTCacheURL: URL?
+  private var sourceBSTFTCacheURL: URL?
   private var mediaProxyOutputURL = RustBridgePlaceholder.defaultMediaProxyRootURL()
 
   func setSource(_ role: SourceRole, url: URL) {
@@ -368,10 +376,12 @@ final class AppState: ObservableObject {
               self.frameSequenceModulatorURL = result.frameDirectoryURL
               self.frameSequenceModulatorPath = result.frameDirectoryURL.path
               self.sourceARMSCacheURL = result.rmsCacheURL
+              self.sourceASTFTCacheURL = result.stftCacheURL
             case .carrier:
               self.frameSequenceCarrierURL = result.frameDirectoryURL
               self.frameSequenceCarrierPath = result.frameDirectoryURL.path
               self.sourceBRMSCacheURL = result.rmsCacheURL
+              self.sourceBSTFTCacheURL = result.stftCacheURL
             }
           }
           if let projectSummary {
@@ -525,6 +535,14 @@ final class AppState: ObservableObject {
       return
     }
 
+    let centroidEnabled = granularPoolCentroidEnabled
+    let modulatorCentroidCacheURL = centroidEnabled ? sourceASTFTCacheURL : nil
+    let carrierCentroidCacheURL = centroidEnabled ? sourceBSTFTCacheURL : nil
+    if centroidEnabled && (modulatorCentroidCacheURL == nil || carrierCentroidCacheURL == nil) {
+      statusMessage = "Extract source proxies first to generate the STFT caches spectral-centroid matching needs, or turn off Spectral Centroid."
+      return
+    }
+
     let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultGranularMosaicPoolSequenceRenderQueueURL(),
       modulatorDirectoryURL: modulatorURL,
@@ -537,6 +555,13 @@ final class AppState: ObservableObject {
       audioWeight: granularPoolAudioWeight,
       modulatorRMSCacheURL: modulatorRMSCacheURL,
       carrierRMSCacheURL: carrierRMSCacheURL,
+      modulatorCentroidCacheURL: modulatorCentroidCacheURL,
+      carrierCentroidCacheURL: carrierCentroidCacheURL,
+      poolWindow: max(0, granularPoolWindow),
+      antiRepeatWeight: granularPoolAntiRepeatWeight,
+      antiRepeatCooldown: max(0, granularPoolAntiRepeatCooldown),
+      coherenceWeight: granularPoolCoherenceWeight,
+      coherenceReach: max(0, granularPoolCoherenceReach),
       maxFrames: frameSequenceMaxFrames,
       frameRate: proResFrameRate.framesPerSecond,
       backend: granularPoolBackend,

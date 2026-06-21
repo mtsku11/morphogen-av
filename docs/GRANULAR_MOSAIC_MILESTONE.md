@@ -166,7 +166,8 @@ The CPU core was already k-generic and the Metal kernel is unaffected (audio onl
 drives CPU-side selection). Verified: on a 4-frame solid-color carrier with a
 constant-amplitude chirp (flat RMS, rising centroid), k=1 (RMS) and k=2
 (RMS+centroid) produce different mosaics — the centroid query pulls selection
-toward the higher-centroid frames. Queue/SwiftUI exposure of centroid deferred.
+toward the higher-centroid frames. (Queue/SwiftUI exposure landed later — see the
+pool-selection-knob exposure paragraph below.)
 
 Sliding-window pool scope (landed, render/CLI path): `--pool-window N` bounds each
 output frame to a **trailing** window of the last `N` carrier frames (`0` =
@@ -215,6 +216,20 @@ overturning the colour-nearest grain; frame zero is a no-op). Spatial-origin
 coherence (continuity in `(origin_x, origin_y)`, not just frame index) is a noted
 deferred refinement.
 
-Deferred: queue/SwiftUI exposure of the centroid (k=2) caches, pool window,
-anti-repeat, and temporal coherence; luma-variance/gradient feature dims;
-spatial-origin coherence.
+Queue/SwiftUI exposure of the pool-selection knobs (landed): the persisted
+`frame_sequence_granular_mosaic_pool` job now carries the centroid (k=2) STFT
+caches, trailing pool window, anti-repeat (weight + cooldown), and temporal
+coherence (weight + reach). New schema fields are `#[serde(default)]` (off), so
+jobs serialized before this sweep keep their whole-clip / no-scheduler meaning.
+`queue-add-granular-mosaic-pool-sequence` gained the matching flags (same
+both-or-neither centroid validation and finite/non-negative weight checks as the
+direct path); `queue-run` threads them into the render request; the bundle
+manifest and provenance record them. The macOS Render panel adds a Spectral
+Centroid (k=2) toggle (wires the STFT caches from proxy extraction), a pool
+window stepper, and anti-repeat / coherence weight+span steppers. Verified: a
+queue add→run with pool window + anti-repeat + coherence engaged is byte-
+identical to the direct render with the same flags; extended pool queue smoke
+test asserts the knobs round-trip through task + manifest; three new Swift bridge
+tests pin the scheduling flags and centroid-cache args.
+
+Deferred: luma-variance/gradient feature dims; spatial-origin coherence.
