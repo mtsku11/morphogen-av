@@ -431,14 +431,55 @@ impl AntiRepeat<'_> {
     }
 }
 
+/// Cross-frame temporal-coherence scheduling state (step 6b) — the smooth-motion
+/// complement to [`AntiRepeat`]. Where anti-repeat penalizes recently-used grains
+/// to push diversity, coherence rewards a tile picking a grain whose *source
+/// frame* is close to that same tile's previous selection, so each tile's source
+/// frame drifts smoothly through the pool instead of jumping across the clip (the
+/// dominant flicker source in a per-tile nearest-neighbor mosaic).
+///
+/// `prev_selection[tile_index]` is the global grain index the tile (row-major)
+/// selected on the previous output frame (`None` ⇒ no previous selection). A
+/// candidate grain whose source frame differs from the previous pick's source
+/// frame by `delta` adds `weight * min(delta, reach) / reach` to its squared
+/// feature distance — zero when the source frame is unchanged, saturating at
+/// `weight` once `delta >= reach`. Frame zero has an all-`None` history, so the
+/// first frame is identical to the non-scheduled selection (declared frame-zero
+/// behavior). The state is a plain `Vec<Option<u32>>` (one entry per output
+/// tile), the serializable checkpoint representation for this stateful temporal
+/// node. The penalty reshapes only the nearest-match distance, not the seeded
+/// alternate; the Metal render path is unaffected (selection is CPU-side).
+#[derive(Debug, Clone, Copy)]
+pub struct TemporalCoherence<'a> {
+    pub prev_selection: &'a [Option<u32>],
+    pub reach: u32,
+    pub weight: f32,
+}
+
+impl TemporalCoherence<'_> {
+    /// Penalty for a candidate from `candidate_frame` given the tile's previous
+    /// pick was from `prev_frame` (`None` ⇒ no previous selection ⇒ no penalty).
+    fn penalty(&self, candidate_frame: u32, prev_frame: Option<u32>) -> f32 {
+        if self.reach == 0 || self.weight <= 0.0 {
+            return 0.0;
+        }
+        let Some(prev_frame) = prev_frame else {
+            return 0.0;
+        };
+        let delta = candidate_frame.abs_diff(prev_frame).min(self.reach);
+        self.weight * delta as f32 / self.reach as f32
+    }
+}
+
 /// Select pool grains for each output tile by nearest combined `[color | audio]`
 /// descriptor (step 6b). The query is Source A's per-tile mean color plus this
 /// output frame's audio descriptor vector; `audio_weight` scales every audio
 /// dimension. Selected indices are global pool indices. `variation` blends the
 /// nearest match with a seeded alternate pool grain, leaving the match exact at
 /// `variation = 0`. `window` bounds which pool frames are eligible; `anti_repeat`
-/// penalizes recently-used grains in the nearest-match search (the seeded
-/// alternate is left untouched).
+/// penalizes recently-used grains, and `coherence` rewards per-tile source-frame
+/// continuity, in the nearest-match search (the seeded alternate is left
+/// untouched).
 #[allow(clippy::too_many_arguments)]
 pub fn select_grains_from_pool_cpu(
     modulator: &ImageBufferF32,
@@ -450,6 +491,7 @@ pub fn select_grains_from_pool_cpu(
     audio_weight: f32,
     window: PoolSelectionWindow,
     anti_repeat: Option<AntiRepeat<'_>>,
+    coherence: Option<TemporalCoherence<'_>>,
 ) -> Result<GrainSelection, RenderError> {
     settings.validate()?;
     validate_pool(pool, settings.grain_size)?;
@@ -486,6 +528,18 @@ pub fn select_grains_from_pool_cpu(
                 tile_y,
                 settings.grain_size,
             );
+            // Resolve this tile's previous source frame for temporal coherence:
+            // map the tile's prior global selection back to its pool frame index.
+            let coherence_prev_frame = coherence.as_ref().and_then(|coherence| {
+                let tile_index = (tile_y * columns + tile_x) as usize;
+                coherence
+                    .prev_selection
+                    .get(tile_index)
+                    .copied()
+                    .flatten()
+                    .and_then(|global| pool.grains.get(global as usize))
+                    .map(|grain| grain.frame_index)
+            });
             indices.push(select_pool_grain_index(
                 target,
                 query_audio,
@@ -493,6 +547,8 @@ pub fn select_grains_from_pool_cpu(
                 eligible,
                 eligible_start,
                 anti_repeat.as_ref(),
+                coherence.as_ref(),
+                coherence_prev_frame,
                 settings,
                 tile_x,
                 tile_y,
@@ -801,17 +857,22 @@ fn select_pool_grain_index(
     eligible: &[PooledGrainDescriptor],
     eligible_start: usize,
     anti_repeat: Option<&AntiRepeat<'_>>,
+    coherence: Option<&TemporalCoherence<'_>>,
+    coherence_prev_frame: Option<u32>,
     settings: GranularMosaicSettings,
     tile_x: u32,
     tile_y: u32,
 ) -> u32 {
     // `eligible` is a contiguous window of the pool; the nearest match and the
     // seeded alternate both resolve to global indices that stay inside it. The
-    // anti-repeat penalty reshapes only the nearest-match distance.
+    // anti-repeat and coherence penalties reshape only the nearest-match distance.
     let distance = |grain: &PooledGrainDescriptor| {
         let mut distance = pooled_distance_sq(grain, &target_color, query_audio, audio_weight);
         if let Some(anti_repeat) = anti_repeat {
             distance += anti_repeat.penalty(grain.global_index);
+        }
+        if let Some(coherence) = coherence {
+            distance += coherence.penalty(grain.frame_index, coherence_prev_frame);
         }
         distance
     };
@@ -1323,12 +1384,12 @@ mod tests {
         };
 
         // Query audio = frame 1's descriptor; weighted audio picks grain 1.
-        let weighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 1.0, PoolSelectionWindow::WholeClip, None)
+        let weighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 1.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("weighted selection");
         assert_eq!(weighted.indices, vec![1]);
 
         // audio_weight 0 ignores audio; the color tie breaks to ascending index.
-        let unweighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 0.0, PoolSelectionWindow::WholeClip, None)
+        let unweighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 0.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("unweighted selection");
         assert_eq!(unweighted.indices, vec![0]);
     }
@@ -1350,7 +1411,7 @@ mod tests {
         // k = 1 (RMS only): grain 0's RMS (0.5) is nearest the 0.52 query.
         let rms_only = vec![vec![0.5_f32], vec![0.6_f32]];
         let pool_k1 = analyze_grain_pool_cpu(&frames, &rms_only, 1).expect("k1 pool");
-        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0, PoolSelectionWindow::WholeClip, None)
+        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("k1 selection");
         assert_eq!(pick_k1.indices, vec![0]);
 
@@ -1360,7 +1421,7 @@ mod tests {
         let pool_k2 = analyze_grain_pool_cpu(&frames, &rms_centroid, 1).expect("k2 pool");
         assert_eq!(pool_k2.audio_dims, 2);
         let pick_k2 =
-            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0, PoolSelectionWindow::WholeClip, None)
+            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0, PoolSelectionWindow::WholeClip, None, None)
                 .expect("k2 selection");
         assert_eq!(pick_k2.indices, vec![1]);
     }
@@ -1402,6 +1463,7 @@ mod tests {
                     frames: 1,
                 },
                 None,
+                None,
             )
             .expect("trailing selection");
             // Only the current frame's grain is eligible.
@@ -1418,6 +1480,7 @@ mod tests {
             settings,
             0.0,
             PoolSelectionWindow::WholeClip,
+            None,
             None,
         )
         .expect("whole selection");
@@ -1457,6 +1520,7 @@ mod tests {
                 cooldown: 4,
                 weight: 1.0,
             }),
+            None,
         )
         .expect("frame 0");
         assert_eq!(frame0.indices, vec![0]);
@@ -1478,6 +1542,7 @@ mod tests {
                 cooldown: 4,
                 weight: 1.0,
             }),
+            None,
         )
         .expect("frame 1 penalized");
         assert_eq!(penalized.indices, vec![1]);
@@ -1493,9 +1558,90 @@ mod tests {
             0.0,
             PoolSelectionWindow::WholeClip,
             None,
+            None,
         )
         .expect("frame 1 unpenalized");
         assert_eq!(unpenalized.indices, vec![0]);
+    }
+
+    #[test]
+    fn pool_coherence_rewards_previous_source_frame() {
+        // Three near-red frames; the query is pure red, so color always favors
+        // frame 0 (index 0). Temporal coherence must overturn that once the tile's
+        // previous pick was frame 2, steering selection back toward frame 2.
+        let frames = [
+            rgb_image(&[[1.0, 0.0, 0.0]]),
+            rgb_image(&[[0.9, 0.0, 0.0]]),
+            rgb_image(&[[0.8, 0.0, 0.0]]),
+        ];
+        let audio = vec![Vec::new(); 3];
+        let pool = analyze_grain_pool_cpu(&frames, &audio, 1).expect("pool");
+        let modulator = rgb_image(&[[1.0, 0.0, 0.0]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        // Frame zero: no previous selection ⇒ identical to non-scheduled (grain 0).
+        let history = vec![None];
+        let frame0 = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            Some(TemporalCoherence {
+                prev_selection: &history,
+                reach: 4,
+                weight: 1.0,
+            }),
+        )
+        .expect("frame 0");
+        assert_eq!(frame0.indices, vec![0]);
+
+        // Tile's previous pick was frame 2's grain: coherence pulls selection back
+        // to frame 2 (color 0.04 + penalty 0 beats color 0 + penalty 0.5)...
+        let history = vec![Some(2)];
+        let coherent = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            Some(TemporalCoherence {
+                prev_selection: &history,
+                reach: 4,
+                weight: 1.0,
+            }),
+        )
+        .expect("frame 1 coherent");
+        assert_eq!(coherent.indices, vec![2]);
+
+        // ...while the same frame without the scheduler still picks the red grain.
+        let unscheduled = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("frame 1 unscheduled");
+        assert_eq!(unscheduled.indices, vec![0]);
     }
 
     #[test]
@@ -1552,9 +1698,9 @@ mod tests {
             seed: 17,
         };
 
-        let first = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip, None)
+        let first = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip, None, None)
             .expect("first selection");
-        let second = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip, None)
+        let second = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip, None, None)
             .expect("second selection");
 
         assert_eq!(first, second);

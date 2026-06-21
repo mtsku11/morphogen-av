@@ -29,7 +29,8 @@ use morphogen_render::{
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
-    select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, write_flow_cache,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, TemporalCoherence,
+    write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
@@ -221,6 +222,16 @@ enum Commands {
         /// linearly to zero). Only matters when --anti-repeat-weight > 0.
         #[arg(long, default_value_t = 8)]
         anti_repeat_cooldown: u32,
+        /// Temporal-coherence reward (the smooth-motion complement to anti-repeat):
+        /// penalty added to the squared feature distance of grains whose source
+        /// frame is far from each tile's previous pick (0 = off, the default).
+        /// Keeps each tile's source frame drifting smoothly instead of jumping.
+        #[arg(long, default_value_t = 0.0)]
+        coherence_weight: f32,
+        /// Frame distance over which the coherence penalty saturates (penalty grows
+        /// linearly to the weight). Only matters when --coherence-weight > 0.
+        #[arg(long, default_value_t = 8)]
+        coherence_reach: u32,
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
         #[arg(long)]
@@ -769,6 +780,8 @@ fn run() -> Result<(), CliError> {
             pool_window,
             anti_repeat_weight,
             anti_repeat_cooldown,
+            coherence_weight,
+            coherence_reach,
             frame_rate,
             max_frames,
             grain_cache_dir,
@@ -791,6 +804,8 @@ fn run() -> Result<(), CliError> {
             pool_window,
             anti_repeat_weight,
             anti_repeat_cooldown,
+            coherence_weight,
+            coherence_reach,
             frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
@@ -2010,6 +2025,8 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     pool_window: u32,
     anti_repeat_weight: f32,
     anti_repeat_cooldown: u32,
+    coherence_weight: f32,
+    coherence_reach: u32,
     frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
@@ -2055,6 +2072,8 @@ fn render_granular_mosaic_pool_sequence(
         pool_window,
         anti_repeat_weight,
         anti_repeat_cooldown,
+        coherence_weight,
+        coherence_reach,
         frame_rate,
         max_frames,
         grain_cache_dir,
@@ -2064,6 +2083,11 @@ fn render_granular_mosaic_pool_sequence(
     if !anti_repeat_weight.is_finite() || anti_repeat_weight < 0.0 {
         return Err(CliError::Message(
             "anti-repeat-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    if !coherence_weight.is_finite() || coherence_weight < 0.0 {
+        return Err(CliError::Message(
+            "coherence-weight must be a finite, non-negative number".to_string(),
         ));
     }
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
@@ -2165,6 +2189,12 @@ fn render_granular_mosaic_pool_sequence(
         Vec::new()
     };
 
+    // Temporal-coherence scheduling state: the global grain index each output tile
+    // selected on the previous frame (one entry per tile, row-major). Only tracked
+    // when enabled so the default path stays allocation-free and byte-identical.
+    let coherence_enabled = coherence_weight > 0.0 && coherence_reach > 0;
+    let mut prev_selection: Vec<Option<u32>> = Vec::new();
+
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = &pool_frames[index];
@@ -2187,6 +2217,13 @@ fn render_granular_mosaic_pool_sequence(
             cooldown: anti_repeat_cooldown,
             weight: anti_repeat_weight,
         });
+        // Frame zero has an empty `prev_selection`, so coherence is a no-op there
+        // (byte-identical to the non-scheduled selection).
+        let coherence = coherence_enabled.then(|| TemporalCoherence {
+            prev_selection: &prev_selection,
+            reach: coherence_reach,
+            weight: coherence_weight,
+        });
         let selection = select_grains_from_pool_cpu(
             &modulator,
             carrier.width,
@@ -2197,7 +2234,11 @@ fn render_granular_mosaic_pool_sequence(
             audio_weight,
             window,
             anti_repeat,
+            coherence,
         )?;
+        if coherence_enabled {
+            prev_selection = selection.indices.iter().map(|&index| Some(index)).collect();
+        }
         if anti_repeat_enabled {
             for &grain_index in &selection.indices {
                 last_used_frame[grain_index as usize] = Some(index as u32);
@@ -4579,13 +4620,15 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 modulator_rms_cache: modulator_rms_cache.as_deref().map(Path::new),
                 carrier_rms_cache: carrier_rms_cache.as_deref().map(Path::new),
                 // Queue jobs persist only RMS caches today; centroid (k=2), the
-                // trailing pool window, and anti-repeat scheduling are direct-render
-                // knobs until the queue task carries them.
+                // trailing pool window, and the anti-repeat / temporal-coherence
+                // schedulers are direct-render knobs until the queue task carries them.
                 modulator_centroid_cache: None,
                 carrier_centroid_cache: None,
                 pool_window: 0,
                 anti_repeat_weight: 0.0,
                 anti_repeat_cooldown: 8,
+                coherence_weight: 0.0,
+                coherence_reach: 8,
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),

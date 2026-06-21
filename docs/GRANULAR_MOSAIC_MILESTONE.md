@@ -195,6 +195,26 @@ zero is a no-op) plus e2e on a colorful carrier with a **static** modulator —
 anti-repeat off yields 1 distinct output frame (max repetition), on yields 3
 distinct, frame 0 identical and frames 1–3 diverge.
 
-Deferred: queue/SwiftUI exposure of the centroid (k=2) caches, pool window, and
-anti-repeat; luma-variance/gradient feature dims; temporal-coherence scheduling
-(the complementary "smooth motion" mode to anti-repeat).
+Cross-frame scheduling — temporal coherence (landed, render/CLI path): the
+smooth-motion complement to anti-repeat. `--coherence-weight W` (`0` = off) with
+`--coherence-reach R` (default 8) rewards source-frame continuity: a candidate
+grain whose source frame differs from that **same tile's** previous pick by
+`delta` adds `W * min(delta, R) / R` to its squared feature distance (zero when
+the source frame is unchanged, saturating at `W` once `delta >= R`). Each tile's
+source frame therefore drifts smoothly through the pool instead of jumping across
+the clip (the dominant flicker source in a per-tile nearest-neighbour mosaic).
+State is `prev_selection: Vec<Option<u32>>` — the global grain index each output
+tile selected last frame, one entry per tile — a plain serializable buffer, the
+checkpoint representation for this stateful temporal node. Frame zero has an
+empty history, so it is byte-identical to the non-scheduled selection (declared
+frame-zero behaviour); the penalty reshapes only the nearest-match distance, not
+the seeded alternate, and composes additively with anti-repeat (continuity vs
+diversity). Metal render path unaffected (selection is CPU-side). Verified: a
+render-crate test (coherence pulls selection back to the previous pick's frame,
+overturning the colour-nearest grain; frame zero is a no-op). Spatial-origin
+coherence (continuity in `(origin_x, origin_y)`, not just frame index) is a noted
+deferred refinement.
+
+Deferred: queue/SwiftUI exposure of the centroid (k=2) caches, pool window,
+anti-repeat, and temporal coherence; luma-variance/gradient feature dims;
+spatial-origin coherence.
