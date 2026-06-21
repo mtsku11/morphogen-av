@@ -42,6 +42,21 @@ swift run MorphogenMacApp        # run the app shell
 
 The full CLI catalog and key-path map are in **[docs/REFERENCE.md](docs/REFERENCE.md)**.
 
+### Project tooling
+
+- **`/verify`** (project-local skill) — clippy + targeted tests + offline shader
+  compile + a visual PNG check. Overrides the generic verify.
+- **`/preview`** (project-local skill) — render an effect on a small fixture and
+  look at the frames; the inner loop for tuning an effect's look.
+- **`scripts/check-shaders.sh`** — offline-compiles the `.metal` shaders. Skips
+  cleanly unless the Xcode Metal Toolchain component is installed
+  (`xcodebuild -downloadComponent MetalToolchain`); the runtime tests in
+  `morphogen-metal` already validate wired shaders + CPU parity during `cargo test`.
+- **Visual verification is the backbone**: render to PNG, then read it as an image.
+  Use `ffmpeg -i out.mov -frames:v 1 f.png` to inspect video/ProRes output.
+- Use **context7** for current Metal Shading Language / AVFoundation / VideoToolbox
+  and crate docs rather than relying on memory.
+
 ## Workflow (how I build here)
 
 1. **Contract first.** Before implementing an effect, read/extend its

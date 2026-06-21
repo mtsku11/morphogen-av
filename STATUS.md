@@ -20,6 +20,9 @@ _Last updated: 2026-06-21_
 - Doc bootstrap: `CLAUDE.md` is now the canonical agent guide; `AGENTS.md` is a
   thin pointer; full command/path catalog moved to `docs/REFERENCE.md`;
   `CODEX_TASKS.md` renamed `docs/BACKLOG.md`.
+- Dev tooling: project-local `/verify` + `/preview` skills, and
+  `scripts/check-shaders.sh` (offline Metal compile, skips without the toolchain
+  component). Verified: clippy clean, render→PNG→Read visual loop works.
 
 ## In flight
 
