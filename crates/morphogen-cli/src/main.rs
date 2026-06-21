@@ -207,6 +207,8 @@ enum Commands {
         max_frames: Option<usize>,
         #[arg(long)]
         grain_cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     RenderFrameSequence {
         modulator_dir: PathBuf,
@@ -743,6 +745,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             max_frames,
             grain_cache_dir,
+            backend,
         } => render_granular_mosaic_pool_sequence(GranularMosaicPoolSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -759,6 +762,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderFrameSequence {
@@ -1970,6 +1974,7 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
+    backend: RenderBackend,
 }
 
 /// Render a temporal-grain-pool mosaic sequence (step 6b). The whole-clip pool is
@@ -1989,6 +1994,7 @@ fn render_granular_mosaic_pool_sequence(
         frame_rate,
         max_frames,
         grain_cache_dir,
+        backend,
     } = request;
     settings.validate()?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
@@ -2081,8 +2087,14 @@ fn render_granular_mosaic_pool_sequence(
             settings,
             audio_weight,
         )?;
-        let image =
-            granular_mosaic_with_pool_selection_cpu(&pool_frames, &pool, carrier, &selection, settings)?;
+        let image = render_granular_mosaic_pool_output(
+            &pool_frames,
+            &pool,
+            carrier,
+            &selection,
+            settings,
+            backend,
+        )?;
         save_png(&image, &output_dir.join(format!("frame_{index:06}.png")))?;
     }
 
@@ -2432,6 +2444,66 @@ fn render_granular_mosaic_output_metal(
 
 #[cfg(not(target_os = "macos"))]
 fn render_granular_mosaic_output_metal(
+    _carrier: &ImageBufferF32,
+    _selection: &morphogen_render::GrainSelection,
+    _settings: GranularMosaicSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal render backend is only available on macOS".to_string(),
+    ))
+}
+
+fn render_granular_mosaic_pool_output(
+    pool_frames: &[ImageBufferF32],
+    pool: &morphogen_render::GrainPool,
+    carrier: &ImageBufferF32,
+    selection: &morphogen_render::GrainSelection,
+    settings: GranularMosaicSettings,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(granular_mosaic_with_pool_selection_cpu(
+            pool_frames,
+            pool,
+            carrier,
+            selection,
+            settings,
+        )?),
+        RenderBackend::Metal => {
+            render_granular_mosaic_pool_output_metal(pool_frames, pool, carrier, selection, settings)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_granular_mosaic_pool_output_metal(
+    pool_frames: &[ImageBufferF32],
+    pool: &morphogen_render::GrainPool,
+    carrier: &ImageBufferF32,
+    selection: &morphogen_render::GrainSelection,
+    settings: GranularMosaicSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu =
+        morphogen_metal::granular_mosaic_pool_metal(pool_frames, pool, carrier, selection, settings)?;
+    let cpu = granular_mosaic_with_pool_selection_cpu(pool_frames, pool, carrier, selection, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU granular pool outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal granular pool render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_granular_mosaic_pool_output_metal(
+    _pool_frames: &[ImageBufferF32],
+    _pool: &morphogen_render::GrainPool,
     _carrier: &ImageBufferF32,
     _selection: &morphogen_render::GrainSelection,
     _settings: GranularMosaicSettings,
@@ -4389,6 +4461,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
+                backend: RenderBackend::Cpu,
             })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())

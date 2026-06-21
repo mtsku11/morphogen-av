@@ -8,21 +8,30 @@ _Last updated: 2026-06-21_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **134 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **136 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **22 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the granular step-6b SwiftUI commit. Manual-testing clips
+- Tree clean as of the granular step-6b Metal-port commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
 
+- **Granular step 6b Metal render port (temporal grain pool):** a
+  `granular_mosaic_pool` compute kernel renders the cross-frame pooled mosaic on
+  the GPU — the whole-clip pool uploads as a 2D texture array (slice per frame),
+  a flat grain-metadata buffer resolves each global pool index to
+  `(frame_index, origin_x, origin_y)`, integer-nearest clamped sampling +
+  `rearrangement` value-blend. `granular_mosaic_pool_metal` is parity-gated by a
+  multi-frame runtime test; `render-granular-mosaic-pool-sequence --backend metal`
+  gates every frame against the CPU reference before export (queue runs stay CPU).
+  Verified on generated footage: Metal output byte-identical to CPU (PSNR inf,
+  4 frames). Metal tests 11 → 13. SwiftUI/queue exposure of the Metal backend deferred.
 - **Granular step 6b SwiftUI exposure (temporal grain pool):** the macOS Render
   panel gains a `Granular Mosaic — Temporal Pool` section (grain size,
   rearrangement, variation, seed, audio weight, Audio-Weighted RMS toggle). The
   dev bridge shells out to `queue-add-/queue-run-granular-mosaic-pool-sequence`;
   the toggle wires the RMS caches from source-proxy extraction (both-or-neither,
-  color-only when off). 3 new bridge arg tests (Swift 19 → 22). Metal port is the
-  last remaining 6b increment.
+  color-only when off). 3 new bridge arg tests (Swift 19 → 22).
 - **Granular step 6b queue task (temporal grain pool):** persisted
   `frame_sequence_granular_mosaic_pool` `RenderJob` variant +
   `queue-add-/queue-run-granular-mosaic-pool-sequence`. Writes a ProRes-ready
@@ -62,11 +71,10 @@ Nothing actively in progress — clean handoff point.
 From `docs/BACKLOG.md` "Next" and `docs/EFFECTS_ROADMAP.md`:
 
 1. **Granular step 6b remaining** — CPU core + CLI render path + pool sidecar +
-   queue task + SwiftUI exposure landed. Next candidate: a Metal render port
-   (selection is CPU-side, but the cross-frame render samples multiple frames, so
-   the GPU port is its own task). Also deferred within 6b: k>1 audio dims (add
-   centroid), sliding-window pool scope, and cross-frame scheduling (anti-repeat /
-   temporal coherence).
+   queue task + SwiftUI exposure + Metal render port (`--backend metal`,
+   parity-gated) all landed. Deferred within 6b: SwiftUI/queue exposure of the
+   Metal pool backend, k>1 audio dims (add centroid), sliding-window pool scope,
+   and cross-frame scheduling (anti-repeat / temporal coherence).
 2. **Next roadmap effect** — Video Vocoder (luma-band gain routing MVP) or
    Spectral Audio Cross-Synthesis (RMS/centroid filter path) are the natural
    next vertical slices.

@@ -32,7 +32,7 @@ The cached audio controls alter per-frame granular settings, not the underlying 
 
 1. Done: route Source A RMS, onset, and spectral descriptors into time-addressed grain controls backed by the existing JSON analysis sidecars.
 2. Done (selection slice): multimodal nearest-neighbor grain selection on mean RGB — see Step 6 below.
-3. Done (6b CPU core + CLI render path + queue task + SwiftUI exposure): temporal grain pool / joint-AV selection — see Step 6b below. Per-grain carrier audio is now a real matching dimension, rendered by `render-granular-mosaic-pool-sequence`, the persisted `frame_sequence_granular_mosaic_pool` queue job, and the macOS Render panel. A Metal render port is the remaining 6b increment; cross-frame scheduling stays deferred.
+3. Done (6b CPU core + CLI render path + queue task + SwiftUI exposure + Metal render port): temporal grain pool / joint-AV selection — see Step 6b below. Per-grain carrier audio is now a real matching dimension, rendered by `render-granular-mosaic-pool-sequence` (CPU and parity-gated `--backend metal`), the persisted `frame_sequence_granular_mosaic_pool` queue job, and the macOS Render panel. Cross-frame scheduling and k>1 audio dims stay deferred.
 
 ## Step 6 — Multimodal Nearest-Neighbor Selection (RGB)
 
@@ -143,7 +143,16 @@ audio weight, and an Audio-Weighted (RMS) toggle. The dev bridge shells out to
 `queue-add-`/`queue-run-granular-mosaic-pool-sequence`; the toggle wires the RMS
 caches produced by source-proxy extraction (both-or-neither, color-only when off).
 
-Deferred: a Metal render port (selection stays CPU-side, but the cross-frame
-render samples multiple frames, so the GPU port is its own task); k>1 audio dims
-(add spectral centroid); sliding-window pool scope; luma-variance/gradient
-feature dims; and cross-frame scheduling (anti-repeat / temporal coherence).
+Metal (landed): `granular_mosaic_pool_metal` ports the cross-frame render to a
+`granular_mosaic_pool` compute kernel. The whole-clip pool uploads as a 2D
+texture array (one slice per frame); a flat grain-metadata buffer resolves each
+global pool index to its `(frame_index, origin_x, origin_y)`. Sampling is
+integer-nearest clamped and `rearrangement` value-blends carrier vs. selected
+grain, matching the CPU reference within the 1/255 parity tolerance (a multi-frame
+runtime parity test plus the CLI's per-frame gate). `render-granular-mosaic-pool-sequence`
+accepts `--backend metal`, gating every frame against
+`granular_mosaic_with_pool_selection_cpu` before export (queue runs stay CPU).
+
+Deferred: k>1 audio dims (add spectral centroid); sliding-window pool scope;
+luma-variance/gradient feature dims; cross-frame scheduling (anti-repeat /
+temporal coherence); and SwiftUI/queue exposure of the Metal pool backend.

@@ -100,7 +100,15 @@ The next effect is not another independent processor. It is a stateful temporal 
     variation, seed, audio weight, and an Audio-Weighted (RMS) toggle that wires
     the source-proxy RMS caches (both-or-neither, color-only when off). Dev bridge
     shells out to `queue-add-/queue-run-granular-mosaic-pool-sequence`; 3 new arg
-    tests. Remaining 6b: Metal render port; deferred: k>1 audio dims,
+    tests.
+11. Done (6b Metal render port): `granular_mosaic_pool` compute kernel +
+    `granular_mosaic_pool_metal` — whole-clip pool as a 2D texture array (slice
+    per frame), flat grain-metadata buffer for `(frame_index, origin_x, origin_y)`,
+    integer-nearest clamped sampling + `rearrangement` value-blend. Parity-gated by
+    a multi-frame runtime test; `render-granular-mosaic-pool-sequence --backend metal`
+    gates each frame against the CPU reference before export (queue runs stay CPU).
+    Verified: Metal output byte-identical to CPU on generated footage (PSNR inf).
+    Deferred: SwiftUI/queue exposure of the Metal backend, k>1 audio dims,
     sliding-window scope, cross-frame scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
