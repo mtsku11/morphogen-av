@@ -262,6 +262,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       variation: 0.25,
       seed: 0,
       audioWeight: 1.0,
+      textureWeight: 0.0625,
       modulatorRMSCacheURL: nil,
       carrierRMSCacheURL: nil,
       poolWindow: 3,
@@ -278,6 +279,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
 
     let arguments = try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
 
+    XCTAssertEqual(Self.value(after: "--texture-weight", in: arguments), "0.0625")
     XCTAssertEqual(Self.value(after: "--pool-window", in: arguments), "3")
     XCTAssertEqual(Self.value(after: "--anti-repeat-weight", in: arguments), "0.5")
     XCTAssertEqual(Self.value(after: "--anti-repeat-cooldown", in: arguments), "4")

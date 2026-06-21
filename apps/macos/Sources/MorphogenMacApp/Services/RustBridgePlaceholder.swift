@@ -220,6 +220,7 @@ enum RustBridgePlaceholder {
       )
     }
     for (name, value) in [
+      ("texture weight", request.textureWeight),
       ("anti-repeat weight", request.antiRepeatWeight),
       ("coherence weight", request.coherenceWeight),
       ("spatial coherence weight", request.spatialCoherenceWeight)
@@ -262,6 +263,8 @@ enum RustBridgePlaceholder {
       String(request.seed),
       "--audio-weight",
       cliNumber(request.audioWeight),
+      "--texture-weight",
+      cliNumber(request.textureWeight),
       "--pool-window",
       String(request.poolWindow),
       "--anti-repeat-weight",
@@ -867,6 +870,8 @@ struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
   let variation: Double
   let seed: UInt64
   let audioWeight: Double
+  // Texture matching weight; defaulted off so call sites predating it keep meaning.
+  var textureWeight: Double = 0
   let modulatorRMSCacheURL: URL?
   let carrierRMSCacheURL: URL?
   // Pool-selection knobs added in the queue/SwiftUI exposure sweep. Defaulted to

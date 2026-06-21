@@ -389,6 +389,11 @@ struct RenderPanelView: View {
             .frame(width: 200, alignment: .leading)
             .disabled(!state.granularPoolAudioWeighted)
 
+            Stepper(value: $state.granularPoolTextureWeight, in: 0...8, step: 0.1) {
+              Text("Texture Weight \(state.granularPoolTextureWeight, specifier: "%.1f")")
+            }
+            .frame(width: 200, alignment: .leading)
+
             Toggle("Audio-Weighted (RMS)", isOn: $state.granularPoolAudioWeighted)
               .toggleStyle(.checkbox)
 

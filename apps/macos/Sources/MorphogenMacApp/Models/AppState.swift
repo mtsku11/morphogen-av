@@ -62,6 +62,7 @@ final class AppState: ObservableObject {
   @Published var granularPoolVariation = 0.25
   @Published var granularPoolSeed = 0
   @Published var granularPoolAudioWeight = 1.0
+  @Published var granularPoolTextureWeight = 0.0
   @Published var granularPoolAudioWeighted = true
   @Published var granularPoolCentroidEnabled = false
   @Published var granularPoolWindow = 0
@@ -554,6 +555,7 @@ final class AppState: ObservableObject {
       variation: granularPoolVariation,
       seed: UInt64(max(0, granularPoolSeed)),
       audioWeight: granularPoolAudioWeight,
+      textureWeight: granularPoolTextureWeight,
       modulatorRMSCacheURL: modulatorRMSCacheURL,
       carrierRMSCacheURL: carrierRMSCacheURL,
       modulatorCentroidCacheURL: modulatorCentroidCacheURL,
