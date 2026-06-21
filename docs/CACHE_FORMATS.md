@@ -57,6 +57,7 @@ The first implemented visual granular sidecars are per-frame JSON files written 
 - `grain_descriptors.json` contains `granular_mosaic_grain_descriptors`, algorithm identifier, Source B dimensions/fingerprint, grain size, and row-major tile origins with mean-luminance descriptors.
 - `grain_selection.json` contains `granular_mosaic_selection`, Source A and Source B fingerprints, dimensions, grain size, variation, seed, and the selected descriptor index for every output tile.
 - The renderer reuses descriptors only when Source B fingerprint, dimensions, grain size, and algorithm match. It reuses selections only when both source fingerprints plus variation and seed also match. A different arrangement amount does not invalidate selection because it changes only sampling interpolation after selection.
+- Granular sequence jobs can also route the existing `rms_envelope_v1`, `onset_strength_v1`, and `stft_magnitude_v1` Source A sidecars at frame times. Their paths and mapping scales persist in the render job and output manifest; changing a frame's audio-controlled grain size or variation naturally selects a distinct per-frame visual cache entry.
 
 Future audio/video grain indexes should add start times, durations, color and spectral descriptors, and media provenance.
 

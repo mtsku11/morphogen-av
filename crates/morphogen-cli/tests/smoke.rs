@@ -1028,6 +1028,58 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
     let carrier_dir = temp_dir.path().join("carrier-frames");
     let queue_path = temp_dir.path().join("queue.json");
     let output_root = temp_dir.path().join("queue-output");
+    let rms_cache = temp_dir.path().join("source-a-rms.json");
+    let onset_cache = temp_dir.path().join("source-a-onsets.json");
+    let stft_cache = temp_dir.path().join("source-a-stft.json");
+
+    fs::write(
+        &rms_cache,
+        serde_json::json!({
+            "cache_format": "rms_envelope_v1",
+            "sample_rate": 8,
+            "frame_size": 2,
+            "hop_size": 1,
+            "frames": [{
+                "time_seconds": 0.0,
+                "rms": 0.5,
+                "spectral_centroid_hz": null
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write RMS cache");
+    fs::write(
+        &onset_cache,
+        serde_json::json!({
+            "cache_format": "onset_strength_v1",
+            "source_cache_format": "stft_magnitude_v1",
+            "sample_rate": 8,
+            "hop_size": 1,
+            "frames": [{ "index": 0, "time_seconds": 0.0, "strength": 1.0 }]
+        })
+        .to_string(),
+    )
+    .expect("write onset cache");
+    fs::write(
+        &stft_cache,
+        serde_json::json!({
+            "cache_format": "stft_magnitude_v1",
+            "sample_rate": 8,
+            "channels": 1,
+            "channel_mix": "mean_channels",
+            "fft_size": 8,
+            "hop_size": 1,
+            "window": "rectangular",
+            "bin_count": 5,
+            "frames": [{
+                "index": 0,
+                "time_seconds": 0.0,
+                "magnitudes": [0.0, 0.0, 1.0, 0.0, 0.0]
+            }]
+        })
+        .to_string(),
+    )
+    .expect("write STFT cache");
 
     for frame_name in ["frame_000001.png", "frame_000002.png"] {
         for directory in [&modulator_dir, &carrier_dir] {
@@ -1044,6 +1096,9 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
     let modulator_arg = modulator_dir.to_string_lossy().to_string();
     let carrier_arg = carrier_dir.to_string_lossy().to_string();
     let output_arg = output_root.to_string_lossy().to_string();
+    let rms_cache_arg = rms_cache.to_string_lossy().to_string();
+    let onset_cache_arg = onset_cache.to_string_lossy().to_string();
+    let stft_cache_arg = stft_cache.to_string_lossy().to_string();
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
         .args(["queue-init", queue_arg.as_str()])
@@ -1063,6 +1118,18 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
             "0.4",
             "--seed",
             "42",
+            "--rms-cache",
+            rms_cache_arg.as_str(),
+            "--onset-cache",
+            onset_cache_arg.as_str(),
+            "--stft-cache",
+            stft_cache_arg.as_str(),
+            "--rms-variation-scale",
+            "0.6",
+            "--onset-rearrangement-scale",
+            "0.4",
+            "--centroid-grain-size-scale",
+            "8",
             "--max-frames",
             "2",
             "--frame-rate",
@@ -1084,6 +1151,16 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
     assert_eq!(
         queued["jobs"][0]["provenance"]["analysis_caches"][0]["kind"],
         "grain_descriptors"
+    );
+    assert_eq!(
+        queued["jobs"][0]["task"]["audio_modulation"]["rms_variation_scale"],
+        0.6
+    );
+    assert_eq!(
+        queued["jobs"][0]["provenance"]["analysis_caches"]
+            .as_array()
+            .map(Vec::len),
+        Some(4)
     );
 
     Command::cargo_bin("morphogen")
@@ -1115,6 +1192,10 @@ fn granular_mosaic_queue_job_persists_provenance_and_writes_bundle_output() {
     assert_eq!(
         manifest["granular_mosaic"]["algorithm"],
         "luma_nearest_grain_cpu_v1"
+    );
+    assert_eq!(
+        manifest["granular_mosaic"]["audio_modulation"]["centroid_grain_size_scale"],
+        8.0
     );
     assert_eq!(
         manifest["provenance"]["analysis_caches"][0]["producer"],

@@ -7,14 +7,16 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use image::{ImageBuffer, ImageReader, Rgba};
 use morphogen_audio::{
-    load_wav_f32, onset_strength_from_stft, rms_envelope, save_wav_f32, stft_magnitude_cache,
-    AudioAnalysisCache, AudioBufferF32, AudioDescriptorFrame, StftConfig, WindowFunction,
+    load_wav_f32, onset_strength_from_stft, rms_envelope, save_wav_f32,
+    spectral_centroid_from_magnitudes, stft_magnitude_cache, AudioAnalysisCache, AudioBufferF32,
+    AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache, StftConfig, WindowFunction,
 };
 use morphogen_core::{
-    AnalysisCacheEntry, AnalysisKind, ExportFormat, FlowSource, MediaProxy, Project, RenderBackend,
-    RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
-    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
-    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
+    AnalysisCacheEntry, AnalysisKind, ExportFormat, FlowSource, GranularAudioModulation,
+    MediaProxy, Project, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance,
+    RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
+    RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue, RenderSettings,
+    RenderTimingMetadata, SourceRole,
 };
 use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
@@ -143,6 +145,20 @@ enum Commands {
         variation: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        #[arg(long)]
+        rms_cache: Option<PathBuf>,
+        #[arg(long)]
+        onset_cache: Option<PathBuf>,
+        #[arg(long)]
+        stft_cache: Option<PathBuf>,
+        #[arg(long, default_value_t = 0.0)]
+        rms_variation_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        onset_rearrangement_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        centroid_grain_size_scale: f32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
         #[arg(long)]
         max_frames: Option<usize>,
         #[arg(long)]
@@ -300,6 +316,18 @@ enum Commands {
         variation: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        #[arg(long)]
+        rms_cache: Option<PathBuf>,
+        #[arg(long)]
+        onset_cache: Option<PathBuf>,
+        #[arg(long)]
+        stft_cache: Option<PathBuf>,
+        #[arg(long, default_value_t = 0.0)]
+        rms_variation_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        onset_rearrangement_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        centroid_grain_size_scale: f32,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long, default_value_t = 24.0)]
@@ -561,6 +589,13 @@ fn run() -> Result<(), CliError> {
             rearrangement,
             variation,
             seed,
+            rms_cache,
+            onset_cache,
+            stft_cache,
+            rms_variation_scale,
+            onset_rearrangement_scale,
+            centroid_grain_size_scale,
+            frame_rate,
             max_frames,
             grain_cache_dir,
             backend,
@@ -574,9 +609,18 @@ fn run() -> Result<(), CliError> {
                 variation,
                 seed,
             },
+            frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
             backend: backend.into(),
+            audio_modulation: granular_audio_modulation_from_cli(
+                rms_cache.as_deref(),
+                onset_cache.as_deref(),
+                stft_cache.as_deref(),
+                rms_variation_scale,
+                onset_rearrangement_scale,
+                centroid_grain_size_scale,
+            ),
         })
         .map(|_| ()),
         Commands::RenderFrameSequence {
@@ -750,6 +794,12 @@ fn run() -> Result<(), CliError> {
             rearrangement,
             variation,
             seed,
+            rms_cache,
+            onset_cache,
+            stft_cache,
+            rms_variation_scale,
+            onset_rearrangement_scale,
+            centroid_grain_size_scale,
             max_frames,
             frame_rate,
             no_grain_cache,
@@ -766,6 +816,14 @@ fn run() -> Result<(), CliError> {
                 variation,
                 seed,
             },
+            audio_modulation: granular_audio_modulation_from_cli(
+                rms_cache.as_deref(),
+                onset_cache.as_deref(),
+                stft_cache.as_deref(),
+                rms_variation_scale,
+                onset_rearrangement_scale,
+                centroid_grain_size_scale,
+            ),
             max_frames,
             frame_rate,
             write_grain_cache: !no_grain_cache,
@@ -1285,14 +1343,319 @@ fn render_granular_mosaic(
     Ok(())
 }
 
+fn granular_audio_modulation_from_cli(
+    rms_cache: Option<&Path>,
+    onset_cache: Option<&Path>,
+    stft_cache: Option<&Path>,
+    rms_variation_scale: f32,
+    onset_rearrangement_scale: f32,
+    centroid_grain_size_scale: f32,
+) -> Option<GranularAudioModulation> {
+    if rms_cache.is_none()
+        && onset_cache.is_none()
+        && stft_cache.is_none()
+        && rms_variation_scale == 0.0
+        && onset_rearrangement_scale == 0.0
+        && centroid_grain_size_scale == 0.0
+    {
+        return None;
+    }
+
+    Some(GranularAudioModulation {
+        rms_cache_path: rms_cache.map(|path| path.to_string_lossy().to_string()),
+        onset_cache_path: onset_cache.map(|path| path.to_string_lossy().to_string()),
+        stft_cache_path: stft_cache.map(|path| path.to_string_lossy().to_string()),
+        rms_variation_scale,
+        onset_rearrangement_scale,
+        centroid_grain_size_scale,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TimedScalarControl {
+    time_seconds: f64,
+    value: f32,
+}
+
+struct GranularAudioControls {
+    frame_rate: f64,
+    rms: Option<Vec<TimedScalarControl>>,
+    onset: Option<Vec<TimedScalarControl>>,
+    centroid: Option<Vec<TimedScalarControl>>,
+    rms_variation_scale: f32,
+    onset_rearrangement_scale: f32,
+    centroid_grain_size_scale: f32,
+}
+
+impl GranularAudioControls {
+    fn settings_for_frame(
+        &self,
+        frame_index: usize,
+        base: GranularMosaicSettings,
+    ) -> GranularMosaicSettings {
+        if self.rms_variation_scale == 0.0
+            && self.onset_rearrangement_scale == 0.0
+            && self.centroid_grain_size_scale == 0.0
+        {
+            return base;
+        }
+
+        let time_seconds = frame_index as f64 / self.frame_rate;
+        let rms = self
+            .rms
+            .as_deref()
+            .map(|frames| scalar_at_frame_time(frames, time_seconds))
+            .unwrap_or(0.0);
+        let onset = self
+            .onset
+            .as_deref()
+            .map(|frames| scalar_at_frame_time(frames, time_seconds))
+            .unwrap_or(0.0);
+        let centroid = self
+            .centroid
+            .as_deref()
+            .map(|frames| scalar_at_frame_time(frames, time_seconds))
+            .unwrap_or(0.0);
+
+        let grain_size = (base.grain_size as f64
+            + centroid as f64 * self.centroid_grain_size_scale as f64)
+            .round()
+            .clamp(1.0, u32::MAX as f64) as u32;
+        GranularMosaicSettings {
+            grain_size,
+            rearrangement: (base.rearrangement + onset * self.onset_rearrangement_scale)
+                .clamp(0.0, 1.0),
+            variation: (base.variation + rms * self.rms_variation_scale).clamp(0.0, 1.0),
+            ..base
+        }
+    }
+
+    fn rms_frame_count(&self) -> usize {
+        self.rms.as_ref().map_or(0, Vec::len)
+    }
+
+    fn onset_frame_count(&self) -> usize {
+        self.onset.as_ref().map_or(0, Vec::len)
+    }
+
+    fn centroid_frame_count(&self) -> usize {
+        self.centroid.as_ref().map_or(0, Vec::len)
+    }
+}
+
+fn load_granular_audio_controls(
+    modulation: Option<&GranularAudioModulation>,
+    frame_rate: f64,
+) -> Result<Option<GranularAudioControls>, CliError> {
+    let Some(modulation) = modulation else {
+        return Ok(None);
+    };
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    for (name, scale) in [
+        ("rms-variation-scale", modulation.rms_variation_scale),
+        (
+            "onset-rearrangement-scale",
+            modulation.onset_rearrangement_scale,
+        ),
+        (
+            "centroid-grain-size-scale",
+            modulation.centroid_grain_size_scale,
+        ),
+    ] {
+        if !scale.is_finite() {
+            return Err(CliError::Message(format!("{name} must be finite")));
+        }
+    }
+    if modulation.rms_variation_scale != 0.0 && modulation.rms_cache_path.is_none() {
+        return Err(CliError::Message(
+            "rms-variation-scale requires --rms-cache".to_string(),
+        ));
+    }
+    if modulation.onset_rearrangement_scale != 0.0 && modulation.onset_cache_path.is_none() {
+        return Err(CliError::Message(
+            "onset-rearrangement-scale requires --onset-cache".to_string(),
+        ));
+    }
+    if modulation.centroid_grain_size_scale != 0.0 && modulation.stft_cache_path.is_none() {
+        return Err(CliError::Message(
+            "centroid-grain-size-scale requires --stft-cache".to_string(),
+        ));
+    }
+
+    let rms = modulation
+        .rms_cache_path
+        .as_deref()
+        .map(load_rms_controls)
+        .transpose()?;
+    let onset = modulation
+        .onset_cache_path
+        .as_deref()
+        .map(load_onset_controls)
+        .transpose()?;
+    let centroid = modulation
+        .stft_cache_path
+        .as_deref()
+        .map(load_centroid_controls)
+        .transpose()?;
+
+    Ok(Some(GranularAudioControls {
+        frame_rate,
+        rms,
+        onset,
+        centroid,
+        rms_variation_scale: modulation.rms_variation_scale,
+        onset_rearrangement_scale: modulation.onset_rearrangement_scale,
+        centroid_grain_size_scale: modulation.centroid_grain_size_scale,
+    }))
+}
+
+fn load_rms_controls(path: &str) -> Result<Vec<TimedScalarControl>, CliError> {
+    let cache: AudioAnalysisCache = serde_json::from_str(&fs::read_to_string(path)?)?;
+    if cache.cache_format != "rms_envelope_v1" {
+        return Err(CliError::Message(format!(
+            "RMS cache at {path} has unsupported format {}",
+            cache.cache_format
+        )));
+    }
+    if cache.sample_rate == 0 || cache.frame_size == 0 || cache.hop_size == 0 {
+        return Err(CliError::Message(format!(
+            "RMS cache at {path} has invalid timing metadata"
+        )));
+    }
+    timed_scalar_controls(
+        cache
+            .frames
+            .into_iter()
+            .map(|frame| Ok((frame.time_seconds, frame.rms))),
+        "RMS",
+        true,
+    )
+}
+
+fn load_onset_controls(path: &str) -> Result<Vec<TimedScalarControl>, CliError> {
+    let cache: OnsetStrengthCache = serde_json::from_str(&fs::read_to_string(path)?)?;
+    if cache.cache_format != "onset_strength_v1" {
+        return Err(CliError::Message(format!(
+            "onset cache at {path} has unsupported format {}",
+            cache.cache_format
+        )));
+    }
+    if cache.source_cache_format != "stft_magnitude_v1"
+        || cache.sample_rate == 0
+        || cache.hop_size == 0
+    {
+        return Err(CliError::Message(format!(
+            "onset cache at {path} has invalid source or timing metadata"
+        )));
+    }
+    let controls = timed_scalar_controls(
+        cache
+            .frames
+            .into_iter()
+            .map(|frame| Ok((frame.time_seconds, frame.strength))),
+        "onset",
+        true,
+    )?;
+    let peak = controls.iter().map(|frame| frame.value).fold(0.0, f32::max);
+    if peak == 0.0 {
+        return Ok(controls);
+    }
+    Ok(controls
+        .into_iter()
+        .map(|frame| TimedScalarControl {
+            time_seconds: frame.time_seconds,
+            value: frame.value / peak,
+        })
+        .collect())
+}
+
+fn load_centroid_controls(path: &str) -> Result<Vec<TimedScalarControl>, CliError> {
+    let cache: StftAnalysisCache = serde_json::from_str(&fs::read_to_string(path)?)?;
+    if cache.cache_format != "stft_magnitude_v1" {
+        return Err(CliError::Message(format!(
+            "STFT cache at {path} has unsupported format {}",
+            cache.cache_format
+        )));
+    }
+    if cache.sample_rate == 0 || cache.fft_size == 0 || cache.hop_size == 0 {
+        return Err(CliError::Message(format!(
+            "STFT cache at {path} has invalid timing metadata"
+        )));
+    }
+    let nyquist = cache.sample_rate as f32 * 0.5;
+    let fft_size = cache.fft_size;
+    let sample_rate = cache.sample_rate;
+    timed_scalar_controls(
+        cache.frames.into_iter().map(|frame| {
+            spectral_centroid_from_magnitudes(&frame.magnitudes, fft_size, sample_rate)
+                .map(|centroid| (frame.time_seconds, (centroid / nyquist).clamp(0.0, 1.0)))
+        }),
+        "spectral centroid",
+        true,
+    )
+}
+
+fn timed_scalar_controls(
+    values: impl IntoIterator<Item = Result<(f64, f32), morphogen_audio::AudioError>>,
+    label: &str,
+    non_negative: bool,
+) -> Result<Vec<TimedScalarControl>, CliError> {
+    let mut controls = Vec::new();
+    let mut previous_time = None;
+    for value in values {
+        let (time_seconds, value) = value?;
+        if !time_seconds.is_finite() || time_seconds < 0.0 || !value.is_finite() {
+            return Err(CliError::Message(format!(
+                "{label} cache contains non-finite or negative-time descriptor data"
+            )));
+        }
+        if non_negative && value < 0.0 {
+            return Err(CliError::Message(format!(
+                "{label} cache contains a negative control value"
+            )));
+        }
+        if previous_time.is_some_and(|previous_time| time_seconds < previous_time) {
+            return Err(CliError::Message(format!(
+                "{label} cache descriptor times must be sorted"
+            )));
+        }
+        previous_time = Some(time_seconds);
+        controls.push(TimedScalarControl {
+            time_seconds,
+            value,
+        });
+    }
+    if controls.is_empty() {
+        return Err(CliError::Message(format!(
+            "{label} cache contains no descriptor frames"
+        )));
+    }
+    Ok(controls)
+}
+
+fn scalar_at_frame_time(frames: &[TimedScalarControl], time_seconds: f64) -> f32 {
+    let descriptor_count = frames.partition_point(|frame| frame.time_seconds <= time_seconds);
+    descriptor_count
+        .checked_sub(1)
+        .and_then(|index| frames.get(index))
+        .map(|frame| frame.value)
+        .unwrap_or(0.0)
+}
+
 struct GranularMosaicSequenceRenderRequest<'a> {
     modulator_dir: &'a Path,
     carrier_dir: &'a Path,
     output_dir: &'a Path,
     settings: GranularMosaicSettings,
+    frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
     backend: RenderBackend,
+    audio_modulation: Option<GranularAudioModulation>,
 }
 
 fn render_granular_mosaic_sequence(
@@ -1303,11 +1666,18 @@ fn render_granular_mosaic_sequence(
         carrier_dir,
         output_dir,
         settings,
+        frame_rate,
         max_frames,
         grain_cache_dir,
         backend,
+        audio_modulation,
     } = request;
     settings.validate()?;
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
     if matches!(max_frames, Some(0)) {
         return Err(CliError::Message(
             "max-frames must be greater than zero".to_string(),
@@ -1330,6 +1700,7 @@ fn render_granular_mosaic_sequence(
     if let Some(cache_root) = grain_cache_dir {
         fs::create_dir_all(cache_root)?;
     }
+    let audio_controls = load_granular_audio_controls(audio_modulation.as_ref(), frame_rate)?;
 
     let mut reused_descriptor_count = 0usize;
     let mut reused_selection_count = 0usize;
@@ -1337,13 +1708,17 @@ fn render_granular_mosaic_sequence(
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
+        let frame_settings = audio_controls
+            .as_ref()
+            .map(|controls| controls.settings_for_frame(index, settings))
+            .unwrap_or(settings);
         let rendered = if let Some(cache_root) = grain_cache_dir {
             let modulator_fingerprint = image_file_fingerprint(&modulator_frames[index])?;
             let carrier_fingerprint = image_file_fingerprint(&carrier_frames[index])?;
             render_granular_mosaic_frame(
                 &modulator,
                 &carrier,
-                settings,
+                frame_settings,
                 Some(GranularMosaicCacheContext {
                     directory: &cache_root.join(format!("frame_{index:06}")),
                     modulator_fingerprint: &modulator_fingerprint,
@@ -1352,7 +1727,7 @@ fn render_granular_mosaic_sequence(
                 backend,
             )?
         } else {
-            render_granular_mosaic_frame(&modulator, &carrier, settings, None, backend)?
+            render_granular_mosaic_frame(&modulator, &carrier, frame_settings, None, backend)?
         };
         reused_descriptor_count += usize::from(rendered.reused_descriptor_cache);
         reused_selection_count += usize::from(rendered.reused_selection_cache);
@@ -1373,6 +1748,14 @@ fn render_granular_mosaic_sequence(
         println!(
             "reused {reused_descriptor_count} descriptor and {reused_selection_count} selection cache frame(s) from {}",
             cache_root.display()
+        );
+    }
+    if let Some(controls) = audio_controls {
+        println!(
+            "applied Source A audio granular modulation from {} RMS, {} onset, and {} centroid descriptor frame(s)",
+            controls.rms_frame_count(),
+            controls.onset_frame_count(),
+            controls.centroid_frame_count()
         );
     }
     println!(
@@ -2225,29 +2608,57 @@ fn granular_mosaic_provenance(
     modulator_dir: &Path,
     carrier_dir: &Path,
     grain_cache_dir: Option<&Path>,
+    audio_modulation: Option<&GranularAudioModulation>,
 ) -> RenderJobProvenance {
+    let sources = vec![
+        RenderJobSourceProvenance {
+            source_id: "source-a-frames".to_string(),
+            role: SourceRole::Modulator,
+            path: modulator_dir.to_string_lossy().to_string(),
+        },
+        RenderJobSourceProvenance {
+            source_id: "source-b-frames".to_string(),
+            role: SourceRole::Carrier,
+            path: carrier_dir.to_string_lossy().to_string(),
+        },
+    ];
+    let mut analysis_caches = grain_cache_dir
+        .map(|path| {
+            vec![RenderJobAnalysisCacheProvenance {
+                kind: AnalysisKind::GrainDescriptors,
+                path: path.to_string_lossy().to_string(),
+                producer: GRANULAR_MOSAIC_ALGORITHM.to_string(),
+            }]
+        })
+        .unwrap_or_default();
+
+    if let Some(audio_modulation) = audio_modulation {
+        if let Some(path) = audio_modulation.rms_cache_path.as_deref() {
+            analysis_caches.push(RenderJobAnalysisCacheProvenance {
+                kind: AnalysisKind::AudioRms,
+                path: path.to_string(),
+                producer: "rms_envelope_v1".to_string(),
+            });
+        }
+        if let Some(path) = audio_modulation.onset_cache_path.as_deref() {
+            analysis_caches.push(RenderJobAnalysisCacheProvenance {
+                kind: AnalysisKind::OnsetStrength,
+                path: path.to_string(),
+                producer: "onset_strength_v1".to_string(),
+            });
+        }
+        if let Some(path) = audio_modulation.stft_cache_path.as_deref() {
+            analysis_caches.push(RenderJobAnalysisCacheProvenance {
+                kind: AnalysisKind::SpectralCentroid,
+                path: path.to_string(),
+                producer: "stft_magnitude_v1".to_string(),
+            });
+        }
+    }
+
     RenderJobProvenance {
-        sources: vec![
-            RenderJobSourceProvenance {
-                source_id: "source-a-frames".to_string(),
-                role: SourceRole::Modulator,
-                path: modulator_dir.to_string_lossy().to_string(),
-            },
-            RenderJobSourceProvenance {
-                source_id: "source-b-frames".to_string(),
-                role: SourceRole::Carrier,
-                path: carrier_dir.to_string_lossy().to_string(),
-            },
-        ],
-        analysis_caches: grain_cache_dir
-            .map(|path| {
-                vec![RenderJobAnalysisCacheProvenance {
-                    kind: AnalysisKind::GrainDescriptors,
-                    path: path.to_string_lossy().to_string(),
-                    producer: GRANULAR_MOSAIC_ALGORITHM.to_string(),
-                }]
-            })
-            .unwrap_or_default(),
+        sources,
+        analysis_caches,
     }
 }
 
@@ -2730,6 +3141,7 @@ struct QueueAddGranularMosaicSequenceRequest<'a> {
     carrier_dir: &'a Path,
     output_root_dir: &'a Path,
     settings: GranularMosaicSettings,
+    audio_modulation: Option<GranularAudioModulation>,
     max_frames: Option<u32>,
     frame_rate: f64,
     write_grain_cache: bool,
@@ -2746,6 +3158,7 @@ fn queue_add_granular_mosaic_sequence(
         carrier_dir,
         output_root_dir,
         settings,
+        audio_modulation,
         max_frames,
         frame_rate,
         write_grain_cache,
@@ -2778,6 +3191,7 @@ fn queue_add_granular_mosaic_sequence(
         modulator_dir,
         carrier_dir,
         grain_cache_directory.as_deref().map(Path::new),
+        audio_modulation.as_ref(),
     );
 
     queue.enqueue(RenderJob {
@@ -2806,6 +3220,7 @@ fn queue_add_granular_mosaic_sequence(
             max_frames,
             frame_rate,
             backend,
+            audio_modulation,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -3127,6 +3542,7 @@ fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError>
         max_frames,
         frame_rate,
         backend,
+        audio_modulation,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3138,6 +3554,7 @@ fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError>
         Path::new(&modulator_frame_directory),
         Path::new(&carrier_frame_directory),
         grain_cache_directory.as_deref().map(Path::new),
+        audio_modulation.as_ref(),
     );
     queue.jobs[job_index].provenance = Some(provenance.clone());
     queue.jobs[job_index].status = RenderJobStatus::Running;
@@ -3154,9 +3571,11 @@ fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError>
                 variation,
                 seed,
             },
+            frame_rate,
             max_frames: max_frames.map(|value| value as usize),
             grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
             backend,
+            audio_modulation: audio_modulation.clone(),
         })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
@@ -3184,6 +3603,7 @@ fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError>
             &frame_paths,
             &timing,
             &settings,
+            audio_modulation.as_ref(),
             Some(&provenance),
         )?;
         write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
@@ -3527,6 +3947,7 @@ fn write_granular_mosaic_sequence_manifest(
     frame_paths: &[String],
     timing: &RenderTimingMetadata,
     settings: &GranularMosaicSettings,
+    audio_modulation: Option<&GranularAudioModulation>,
     provenance: Option<&RenderJobProvenance>,
 ) -> Result<(), CliError> {
     let manifest = serde_json::json!({
@@ -3545,7 +3966,8 @@ fn write_granular_mosaic_sequence_manifest(
         },
         "granular_mosaic": {
             "algorithm": GRANULAR_MOSAIC_ALGORITHM,
-            "settings": settings
+            "settings": settings,
+            "audio_modulation": audio_modulation
         },
         "provenance": provenance,
         "deterministic": true
@@ -3819,5 +4241,47 @@ mod tests {
         assert_eq!(modulation.amount_for_frame(0, 10.0), 12.0);
         assert_eq!(modulation.amount_for_frame(1, 10.0), 12.0);
         assert_eq!(modulation.amount_for_frame(2, 10.0), 16.0);
+    }
+
+    #[test]
+    fn granular_audio_controls_route_cached_scalars_to_grain_settings() {
+        let controls = GranularAudioControls {
+            frame_rate: 4.0,
+            rms: Some(vec![TimedScalarControl {
+                time_seconds: 0.0,
+                value: 0.5,
+            }]),
+            onset: Some(vec![
+                TimedScalarControl {
+                    time_seconds: 0.0,
+                    value: 0.0,
+                },
+                TimedScalarControl {
+                    time_seconds: 0.5,
+                    value: 1.0,
+                },
+            ]),
+            centroid: Some(vec![TimedScalarControl {
+                time_seconds: 0.0,
+                value: 0.5,
+            }]),
+            rms_variation_scale: 0.6,
+            onset_rearrangement_scale: 0.4,
+            centroid_grain_size_scale: 8.0,
+        };
+        let base = GranularMosaicSettings {
+            grain_size: 16,
+            rearrangement: 0.2,
+            variation: 0.1,
+            seed: 42,
+        };
+
+        let first = controls.settings_for_frame(0, base);
+        let second = controls.settings_for_frame(2, base);
+
+        assert_eq!(first.grain_size, 20);
+        assert_eq!(first.variation, 0.4);
+        assert_eq!(first.rearrangement, 0.2);
+        assert_eq!(second.rearrangement, 0.6);
     }
 }

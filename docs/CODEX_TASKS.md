@@ -70,7 +70,7 @@ The next effect is not another independent processor. It is a stateful temporal 
 2. Done: persist Source B grain descriptors and Source A selection indexes as validated JSON cache sidecars. Identical inputs/settings reuse both; changed variation, seed, source fingerprint, dimensions, or algorithm regenerates the affected sidecar.
 3. Done: add a persisted `frame_sequence_granular_mosaic` task that writes the standard ProRes-ready image-sequence bundle with timing, Source A/B, and grain-cache provenance.
 4. Done: add `granular_mosaic.metal`, a macOS runtime dispatcher, shader-binding preflight, and a tiny CPU/Metal parity fixture. Direct, sequence, and queue CLI paths select it with `--backend metal` and reject divergent frames before export.
-5. Route Source A RMS, onset, and spectral descriptors into frame-addressed grain controls.
+5. Done: route Source A RMS, onset, and spectral descriptors from cache sidecars into frame-addressed variation, rearrangement, and grain-size controls; persist their paths/scales in granular queue jobs and output provenance.
 6. Add multimodal nearest-neighbor audiovisual grain scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)

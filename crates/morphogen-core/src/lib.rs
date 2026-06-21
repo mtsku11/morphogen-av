@@ -20,9 +20,10 @@ pub use media::{MediaProxy, MediaSource, SourceRole};
 pub use node::{Node, NodeId, NodeKind, SignalType};
 pub use project::{Project, ProjectMetadata};
 pub use render_job::{
-    ExportFormat, FlowSource, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance,
-    RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
-    RenderJobStatus, RenderJobTask, RenderQuality, RenderSettings, RenderTimingMetadata,
+    ExportFormat, FlowSource, GranularAudioModulation, RenderBackend, RenderJob,
+    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
+    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
+    RenderSettings, RenderTimingMetadata,
 };
 pub use render_queue::RenderQueue;
 pub use timeline::{FrameSampleRange, TimeRange, Timeline};

@@ -18,7 +18,7 @@ This repository is an initial production-quality scaffold with deterministic ver
 - Typed node-port compatibility checks for known analysis outputs and render parameters in `morphogen-core`.
 - Optional external FFmpeg/FFprobe command wrappers in `morphogen-media`.
 - Portable audio buffer, WAV loading/export, RMS envelope, spectral centroid, STFT magnitude cache, and onset-strength scaffolding in `morphogen-audio`.
-- Float RGBA CPU image buffers, flow fields, bilinear sampling, luma-selected granular mosaicing with reusable grain-analysis sidecars, luminance-gradient flow generation, temporal pyramidal Lucas-Kanade flow with forward/backward confidence, flow displacement, and versioned reusable flow cache sidecars in `morphogen-render`.
+- Float RGBA CPU image buffers, flow fields, bilinear sampling, luma-selected granular mosaicing with reusable grain-analysis sidecars and frame-addressed RMS/onset/centroid controls, luminance-gradient flow generation, temporal pyramidal Lucas-Kanade flow with forward/backward confidence, flow displacement, and versioned reusable flow cache sidecars in `morphogen-render`.
 - Deterministic temporal flow feedback with explicit frame-zero/reset semantics, CPU/Metal parity, resumable RGBA32F state checkpoints, 8/16-bit PNG exports, and export-only flow-guided temporal supersampling.
 - A checked-in tiny golden fixture for CPU flow-displacement output.
 - Metal backend placeholders plus a first flow-displacement compute kernel in `morphogen-metal`.
@@ -94,6 +94,15 @@ Render Source B as luma-selected visual grains controlled by Source A:
 ```sh
 cargo run -p morphogen-cli -- render-granular-mosaic /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-granular.png --grain-size 24 --rearrangement 1 --variation 0.35 --seed 42 --grain-cache-dir /tmp/morphogen-grain-cache --backend metal
 cargo run -p morphogen-cli -- render-granular-mosaic-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-granular-frames --grain-size 24 --rearrangement 1 --variation 0.35 --seed 42 --grain-cache-dir /tmp/morphogen-grain-cache --max-frames 120 --backend metal
+```
+
+Route cached Source A audio analysis into frame-addressed granular controls. RMS raises `variation`, normalized onset strength raises `rearrangement`, and normalized spectral centroid offsets `grain_size` in pixels. Generate the cache sidecars first, then pass the same frame rate used for the image sequence:
+
+```sh
+cargo run -p morphogen-cli -- cache-rms /tmp/source-a.wav /tmp/source-a-rms.json
+cargo run -p morphogen-cli -- cache-onsets /tmp/source-a.wav /tmp/source-a-onsets.json
+cargo run -p morphogen-cli -- cache-stft /tmp/source-a.wav /tmp/source-a-stft.json
+cargo run -p morphogen-cli -- render-granular-mosaic-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-granular-frames --grain-size 24 --rearrangement 0.5 --variation 0.1 --rms-cache /tmp/source-a-rms.json --onset-cache /tmp/source-a-onsets.json --stft-cache /tmp/source-a-stft.json --rms-variation-scale 0.6 --onset-rearrangement-scale 0.4 --centroid-grain-size-scale 12 --frame-rate 24 --backend metal
 ```
 
 Render paired frame sequences from extracted frame directories:
