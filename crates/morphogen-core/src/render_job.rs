@@ -136,6 +136,27 @@ pub enum RenderJobTask {
         /// RMS cache for Source B; supplies each pool grain's carrier audio.
         #[serde(default)]
         carrier_rms_cache: Option<String>,
+        /// STFT cache for Source A; adds a spectral-centroid (k=2) query dimension.
+        #[serde(default)]
+        modulator_centroid_cache: Option<String>,
+        /// STFT cache for Source B; adds each pool grain's spectral-centroid dim.
+        #[serde(default)]
+        carrier_centroid_cache: Option<String>,
+        /// Trailing pool window (last N carrier frames); `0` = whole-clip pool.
+        #[serde(default)]
+        pool_window: u32,
+        /// Anti-repeat weight (penalizes recently-used grains); `0` = off.
+        #[serde(default)]
+        anti_repeat_weight: f32,
+        /// Anti-repeat cooldown frames over which the penalty decays to zero.
+        #[serde(default)]
+        anti_repeat_cooldown: u32,
+        /// Temporal-coherence weight (rewards source-frame continuity); `0` = off.
+        #[serde(default)]
+        coherence_weight: f32,
+        /// Frame distance over which the coherence penalty saturates.
+        #[serde(default)]
+        coherence_reach: u32,
         max_frames: Option<u32>,
         frame_rate: f64,
         /// Render backend; the Metal path is gated per-frame against the CPU
@@ -381,6 +402,13 @@ mod tests {
             audio_weight: 1.0,
             modulator_rms_cache: Some("/tmp/a-rms.json".to_string()),
             carrier_rms_cache: Some("/tmp/b-rms.json".to_string()),
+            modulator_centroid_cache: Some("/tmp/a-stft.json".to_string()),
+            carrier_centroid_cache: Some("/tmp/b-stft.json".to_string()),
+            pool_window: 12,
+            anti_repeat_weight: 0.5,
+            anti_repeat_cooldown: 6,
+            coherence_weight: 0.75,
+            coherence_reach: 4,
             max_frames: Some(48),
             frame_rate: 24.0,
             backend: RenderBackend::Metal,
@@ -413,6 +441,13 @@ mod tests {
         let RenderJobTask::FrameSequenceGranularMosaicPool {
             modulator_rms_cache,
             carrier_rms_cache,
+            modulator_centroid_cache,
+            carrier_centroid_cache,
+            pool_window,
+            anti_repeat_weight,
+            anti_repeat_cooldown,
+            coherence_weight,
+            coherence_reach,
             backend,
             ..
         } = task
@@ -421,6 +456,15 @@ mod tests {
         };
         assert_eq!(modulator_rms_cache, None);
         assert_eq!(carrier_rms_cache, None);
+        // Pool-selection knobs added after the original schema default to off, so
+        // jobs serialized before this sweep keep their whole-clip / no-scheduler meaning.
+        assert_eq!(modulator_centroid_cache, None);
+        assert_eq!(carrier_centroid_cache, None);
+        assert_eq!(pool_window, 0);
+        assert_eq!(anti_repeat_weight, 0.0);
+        assert_eq!(anti_repeat_cooldown, 0);
+        assert_eq!(coherence_weight, 0.0);
+        assert_eq!(coherence_reach, 0);
         assert_eq!(backend, RenderBackend::Cpu);
     }
 

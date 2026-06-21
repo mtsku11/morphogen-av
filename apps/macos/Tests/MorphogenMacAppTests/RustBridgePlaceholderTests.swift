@@ -251,6 +251,107 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedGranularMosaicPoolSequenceArgumentsIncludeSchedulingKnobs() throws {
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      grainSize: 32,
+      rearrangement: 1.0,
+      variation: 0.25,
+      seed: 0,
+      audioWeight: 1.0,
+      modulatorRMSCacheURL: nil,
+      carrierRMSCacheURL: nil,
+      poolWindow: 3,
+      antiRepeatWeight: 0.5,
+      antiRepeatCooldown: 4,
+      coherenceWeight: 0.25,
+      coherenceReach: 6,
+      maxFrames: nil,
+      frameRate: 24.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
+
+    XCTAssertEqual(Self.value(after: "--pool-window", in: arguments), "3")
+    XCTAssertEqual(Self.value(after: "--anti-repeat-weight", in: arguments), "0.5")
+    XCTAssertEqual(Self.value(after: "--anti-repeat-cooldown", in: arguments), "4")
+    XCTAssertEqual(Self.value(after: "--coherence-weight", in: arguments), "0.25")
+    XCTAssertEqual(Self.value(after: "--coherence-reach", in: arguments), "6")
+  }
+
+  func testQueuedGranularMosaicPoolSequenceArgumentsIncludeCentroidCaches() throws {
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      grainSize: 32,
+      rearrangement: 1.0,
+      variation: 0.25,
+      seed: 0,
+      audioWeight: 1.0,
+      modulatorRMSCacheURL: nil,
+      carrierRMSCacheURL: nil,
+      modulatorCentroidCacheURL: URL(fileURLWithPath: "/tmp/source-a/analysis/stft.json"),
+      carrierCentroidCacheURL: URL(fileURLWithPath: "/tmp/source-b/analysis/stft.json"),
+      maxFrames: nil,
+      frameRate: 24.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      Self.value(after: "--modulator-centroid-cache", in: arguments),
+      "/tmp/source-a/analysis/stft.json"
+    )
+    XCTAssertEqual(
+      Self.value(after: "--carrier-centroid-cache", in: arguments),
+      "/tmp/source-b/analysis/stft.json"
+    )
+  }
+
+  func testQueuedGranularMosaicPoolSequenceArgumentsRejectMismatchedCentroidCaches() {
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      grainSize: 32,
+      rearrangement: 1.0,
+      variation: 0.25,
+      seed: 0,
+      audioWeight: 1.0,
+      modulatorRMSCacheURL: nil,
+      carrierRMSCacheURL: nil,
+      modulatorCentroidCacheURL: URL(fileURLWithPath: "/tmp/source-a/analysis/stft.json"),
+      carrierCentroidCacheURL: nil,
+      maxFrames: nil,
+      frameRate: 24.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
+    )
+  }
+
+  /// Returns the argument immediately following `flag`, or nil if the flag is absent
+  /// or trailing. Lets tests pin a flag to its value rather than just membership.
+  private static func value(after flag: String, in arguments: [String]) -> String? {
+    guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else {
+      return nil
+    }
+    return arguments[index + 1]
+  }
+
   func testMediaProxyArgumentsIncludeFrameAndAudioExtraction() throws {
     let request = MediaProxyExtractionCommandRequest(
       sourceURL: URL(fileURLWithPath: "/tmp/source.mov"),

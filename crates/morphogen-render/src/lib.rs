@@ -41,7 +41,7 @@ pub use granular_mosaic::{
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu, select_grains_cpu,
     select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, GrainColorDescriptor,
     GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, PoolSelectionWindow,
-    PooledGrainDescriptor,
+    PooledGrainDescriptor, TemporalCoherence,
     GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 pub use image_buffer::ImageBufferF32;

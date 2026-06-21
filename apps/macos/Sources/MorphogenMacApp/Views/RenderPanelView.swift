@@ -391,6 +391,44 @@ struct RenderPanelView: View {
 
             Toggle("Audio-Weighted (RMS)", isOn: $state.granularPoolAudioWeighted)
               .toggleStyle(.checkbox)
+
+            Toggle("Spectral Centroid (k=2)", isOn: $state.granularPoolCentroidEnabled)
+              .toggleStyle(.checkbox)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.granularPoolWindow, in: 0...512, step: 1) {
+              Text(state.granularPoolWindow == 0
+                ? "Pool Window: whole clip"
+                : "Pool Window \(state.granularPoolWindow)")
+            }
+            .frame(width: 230, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.granularPoolAntiRepeatWeight, in: 0...8, step: 0.1) {
+              Text("Anti-Repeat \(state.granularPoolAntiRepeatWeight, specifier: "%.1f")")
+            }
+            .frame(width: 190, alignment: .leading)
+
+            Stepper(value: $state.granularPoolAntiRepeatCooldown, in: 1...64, step: 1) {
+              Text("Cooldown \(state.granularPoolAntiRepeatCooldown)")
+            }
+            .frame(width: 170, alignment: .leading)
+            .disabled(state.granularPoolAntiRepeatWeight <= 0)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.granularPoolCoherenceWeight, in: 0...8, step: 0.1) {
+              Text("Coherence \(state.granularPoolCoherenceWeight, specifier: "%.1f")")
+            }
+            .frame(width: 190, alignment: .leading)
+
+            Stepper(value: $state.granularPoolCoherenceReach, in: 1...64, step: 1) {
+              Text("Reach \(state.granularPoolCoherenceReach)")
+            }
+            .frame(width: 150, alignment: .leading)
+            .disabled(state.granularPoolCoherenceWeight <= 0)
           }
 
           HStack(spacing: 16) {

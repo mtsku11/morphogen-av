@@ -8,14 +8,49 @@ _Last updated: 2026-06-21_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **136 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **140 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **22 passing, 0 failing** (Swift shell + service tests).
+- `swift test`: **26 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the granular step-6b Metal-port commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
 
+- **Granular step 6b pool-selection knobs — queue/SwiftUI exposure sweep:** the
+  persisted `frame_sequence_granular_mosaic_pool` job now carries all four
+  direct-render pool knobs — centroid (k=2) STFT caches, trailing pool window,
+  anti-repeat (weight + cooldown), and temporal coherence (weight + reach). New
+  schema fields are `#[serde(default)]` (off), so jobs serialized before this
+  sweep keep their whole-clip / no-scheduler meaning.
+  `queue-add-granular-mosaic-pool-sequence` gained the matching flags (same
+  both-or-neither centroid validation + finite/non-negative weight checks as the
+  direct path); `queue-run` threads them into the render request instead of the
+  old hardcoded defaults; the bundle manifest + provenance record them. The macOS
+  Render panel adds a Spectral Centroid (k=2) toggle (wires the STFT caches from
+  proxy extraction, both-or-neither), a pool-window stepper, and anti-repeat /
+  coherence weight+span steppers (span steppers disabled when weight = 0).
+  Verified e2e: queue add→run with pool-window + anti-repeat + coherence engaged
+  is byte-identical to the direct render with the same flags; extended pool queue
+  smoke test asserts the knobs round-trip through task + manifest; 3 new Swift
+  bridge tests pin the scheduling flags + centroid-cache args (Swift 23 → 26;
+  Rust workspace unchanged at 140 — existing tests extended). With this, the last
+  deferred 6b follow-on is closed; only spatial-origin coherence + luma-variance/
+  gradient feature dims remain noted as algorithmic refinements.
+- **Granular step 6b cross-frame scheduling — temporal coherence (render/CLI
+  path):** the smooth-motion complement to anti-repeat. `--coherence-weight W`
+  (0 = off) + `--coherence-reach R` (default 8) reward source-frame continuity:
+  a candidate grain whose source frame differs from that **same tile's** previous
+  pick by `delta` adds `W*min(delta,R)/R` to its squared feature distance (0 when
+  unchanged, saturating at `W` once `delta>=R`). State is `prev_selection:
+  Vec<Option<u32>>` (one global grain index per output tile) — serializable
+  checkpoint rep. Frame zero has an empty history ⇒ byte-identical to
+  non-scheduled (declared frame-zero behavior); composes additively with
+  anti-repeat; Metal path unaffected (CPU-side selection). New render-crate test
+  (coherence overturns color-nearest toward the previous pick's frame; frame-zero
+  no-op). Verified e2e on solid-gray footage (rearrangement=1.0 ⇒ output color
+  reveals source frame): alternating modulator → off jumps f0↔f3 every frame,
+  on (W=5, R=1) holds f0 after an identical frame 0. Workspace 139 → 140.
+  Queue/SwiftUI exposure deferred. Spatial-origin coherence deferred.
 - **Granular step 6b cross-frame scheduling — anti-repeat (render/CLI path):**
   `--anti-repeat-weight W` (0 = off) + `--anti-repeat-cooldown C` (default 8)
   penalize grains used in recent output frames (penalty `W*(C-age)/C`, linear
@@ -104,12 +139,16 @@ _Last updated: 2026-06-21_
 
 ## In flight
 
-Branch `granular-6b-deferred-features` — all four requested deferred 6b items
-landed on the render/CLI path and checkpointed: (1) Metal backend in queue +
-SwiftUI, (2) k>1 audio dims (rms+centroid), (3) trailing sliding-window pool
-scope, (4) anti-repeat cross-frame scheduling. Not yet pushed. Deferred follow-ons
-(not requested): queue/SwiftUI exposure of the centroid caches / pool window /
-anti-repeat knobs; temporal-coherence scheduling (the complement to anti-repeat).
+On `main`. Granular step 6b is now feature-complete end-to-end: CPU core + CLI
+render path + queue task + SwiftUI exposure + parity-gated Metal port, plus k>1
+audio dims, trailing pool window, and both cross-frame schedulers (anti-repeat +
+temporal coherence) — all now plumbed through the persisted queue job and the
+macOS Render panel by the exposure sweep (see "What just landed"). These last
+commits (temporal coherence + the exposure sweep) are local, not yet pushed.
+Remaining 6b refinements are deferred and unscheduled: spatial-origin coherence
+(continuity in grain origin, not just frame index) and luma-variance/gradient
+feature dims. The natural next vertical slice is a new roadmap effect (Video
+Vocoder or Spectral Audio Cross-Synthesis).
 
 ## Candidate next steps
 
