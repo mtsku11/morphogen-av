@@ -1,0 +1,79 @@
+# Morphogen AV — Project Guide
+
+Mac-first experimental audiovisual cross-synthesis app. Two loaded sources:
+**Source A** (modulator / analysis) drives the transformation of **Source B**
+(carrier / material). Output is B reshaped by motion, audio, spectral, temporal,
+or structural analysis derived from A. The long-term target is an audiovisual
+modular synthesizer where typed analysis signals modulate visual/audio params.
+
+This file is the canonical entry point for agents (auto-loaded each session).
+`AGENTS.md` points here. Keep this file lean and always-true; depth lives in `docs/`.
+
+## Non-Negotiable Invariants
+
+- **Determinism first.** Offline deterministic rendering leads; realtime preview
+  is a lower-fidelity view of the same project graph, never a separate engine.
+  Identical inputs + settings ⇒ bit-reproducible output.
+- **CPU reference is ground truth.** Every Metal kernel must match the CPU
+  reference within tolerance (`METAL_CPU_PARITY_EPSILON`) and is gated frame-by-frame
+  against it before export. Never ship a GPU path that hasn't passed parity.
+- **Metal is the only GPU target.** No Vulkan, CUDA, WebGPU, or WGSL.
+- **Stateful temporal nodes** declare frame-zero behavior, the exact prior-frame
+  state consumed, and a checkpoint representation. Resume from an **unquantized**
+  internal state buffer (RGBA32F), never from a display PNG. Changing the
+  algorithm identifier, inputs, or settings must invalidate stale caches/checkpoints.
+- **Analysis is reusable sidecar data**, regenerable from source + settings.
+  Sidecars carry algorithm id, dimensions, sampling convention, and source
+  fingerprint; reuse only a matching sidecar.
+- **FFmpeg stays external and optional** — never vendor it; missing tools return a
+  clear error. Avoid GPL-only application dependencies.
+- **No `unwrap()` in library code** (tests excepted). Errors via `thiserror`.
+- Prefer small, concrete vertical slices over broad abstractions.
+
+## Everyday Commands
+
+```sh
+cargo test --workspace          # Rust tests (baseline: 117 passing across 7 crates)
+cargo build --workspace         # build all crates
+cargo run -p morphogen-cli -- <subcommand>   # engine validation path
+swift build && swift test       # macOS SwiftUI shell + its service tests
+swift run MorphogenMacApp        # run the app shell
+```
+
+The full CLI catalog and key-path map are in **[docs/REFERENCE.md](docs/REFERENCE.md)**.
+
+## Workflow (how I build here)
+
+1. **Contract first.** Before implementing an effect, read/extend its
+   `docs/*_MILESTONE.md` contract. Acceptance criteria are defined there.
+2. **CPU reference, then Metal.** Land the deterministic CPU path with focused
+   tests, then add the Metal kernel gated against it. Don't expose a feature in
+   the queue/SwiftUI before its CPU path is proven.
+3. **Verify before "done".** Run `/verify` (typecheck/tests, build if config
+   changed). Capture a baseline pass/fail count *before* changing anything and
+   report the delta — "no regressions" needs a number. Show evidence, don't assert.
+4. **Checkpoint each verified increment** with `/checkpoint` (local commit,
+   source files only, no push). Commit/push only when asked; branch off `main`
+   first if pushing. Long uncommitted stretches lose work to session cutoffs.
+5. **Record non-obvious findings** in `/memory/` (auto-recalled), not in prose
+   docs. Empirical lever sweeps, "looks right but isn't" traps, tuning dead-ends.
+
+## Context-Loading Order
+
+1. This file (`CLAUDE.md`) — invariants + workflow.
+2. `STATUS.md` — current phase, baseline, next action.
+3. `docs/ARCHITECTURE.md` — system shape (core / Metal / cache / UI / queue).
+4. `docs/BACKLOG.md` — completed + next tasks.
+5. `docs/EFFECTS_ROADMAP.md` — long-term effect plan.
+6. The relevant `docs/*_MILESTONE.md` contract for the effect in flight.
+7. `docs/REFERENCE.md` + the crate/app files for the task at hand.
+
+## Layout
+
+- `crates/morphogen-core` — project schema, graph, timeline, render-job + queue persistence.
+- `crates/morphogen-render` — deterministic CPU renderers, flow/grain/feedback caches, samplers.
+- `crates/morphogen-audio` — WAV I/O, RMS, STFT, onset, spectral centroid.
+- `crates/morphogen-media` — optional external FFmpeg/FFprobe wrappers.
+- `crates/morphogen-metal` — Metal device/pipeline/texture + compute kernels (parity-gated).
+- `crates/morphogen-cli` — the engine validation + render driver.
+- `apps/macos` — native SwiftUI shell (calls the CLI via a dev bridge; no direct Rust link yet).

@@ -1,4 +1,8 @@
-# Codex Task Backlog
+# Task Backlog
+
+Shared, ordered follow-up backlog (history + next steps). Agent-neutral.
+The high-level plan lives in [EFFECTS_ROADMAP.md](EFFECTS_ROADMAP.md); per-effect
+contracts live in the `*_MILESTONE.md` docs.
 
 ## Completed
 
