@@ -124,6 +124,103 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertThrowsError(try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request))
   }
 
+  func testQueuedGranularMosaicPoolSequenceArgumentsIncludeAudioControls() throws {
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      grainSize: 24,
+      rearrangement: 0.5,
+      variation: 0.3,
+      seed: 7,
+      audioWeight: 1.5,
+      modulatorRMSCacheURL: URL(fileURLWithPath: "/tmp/source-a/analysis/rms.json"),
+      carrierRMSCacheURL: URL(fileURLWithPath: "/tmp/source-b/analysis/rms.json"),
+      maxFrames: 48,
+      frameRate: 24.0,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-granular-mosaic-pool-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/output-root"))
+    XCTAssertTrue(arguments.contains("--grain-size"))
+    XCTAssertTrue(arguments.contains("24"))
+    XCTAssertTrue(arguments.contains("--rearrangement"))
+    XCTAssertTrue(arguments.contains("0.5"))
+    XCTAssertTrue(arguments.contains("--variation"))
+    XCTAssertTrue(arguments.contains("0.3"))
+    XCTAssertTrue(arguments.contains("--seed"))
+    XCTAssertTrue(arguments.contains("7"))
+    XCTAssertTrue(arguments.contains("--audio-weight"))
+    XCTAssertTrue(arguments.contains("1.5"))
+    XCTAssertTrue(arguments.contains("--modulator-rms-cache"))
+    XCTAssertTrue(arguments.contains("/tmp/source-a/analysis/rms.json"))
+    XCTAssertTrue(arguments.contains("--carrier-rms-cache"))
+    XCTAssertTrue(arguments.contains("/tmp/source-b/analysis/rms.json"))
+    XCTAssertTrue(arguments.contains("--max-frames"))
+    XCTAssertTrue(arguments.contains("48"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+    XCTAssertTrue(arguments.contains("/tmp/project.morphogen.json"))
+  }
+
+  func testQueuedGranularMosaicPoolSequenceArgumentsOmitAudioCachesWhenColorOnly() throws {
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      grainSize: 32,
+      rearrangement: 1.0,
+      variation: 0.25,
+      seed: 0,
+      audioWeight: 1.0,
+      modulatorRMSCacheURL: nil,
+      carrierRMSCacheURL: nil,
+      maxFrames: nil,
+      frameRate: 24.0,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
+
+    XCTAssertFalse(arguments.contains("--modulator-rms-cache"))
+    XCTAssertFalse(arguments.contains("--carrier-rms-cache"))
+    XCTAssertFalse(arguments.contains("--max-frames"))
+    XCTAssertFalse(arguments.contains("--project-path"))
+    XCTAssertTrue(arguments.contains("--audio-weight"))
+  }
+
+  func testQueuedGranularMosaicPoolSequenceArgumentsRejectMismatchedAudioCaches() {
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      grainSize: 32,
+      rearrangement: 1.0,
+      variation: 0.25,
+      seed: 0,
+      audioWeight: 1.0,
+      modulatorRMSCacheURL: URL(fileURLWithPath: "/tmp/source-a/analysis/rms.json"),
+      carrierRMSCacheURL: nil,
+      maxFrames: nil,
+      frameRate: 24.0,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
+    )
+  }
+
   func testMediaProxyArgumentsIncludeFrameAndAudioExtraction() throws {
     let request = MediaProxyExtractionCommandRequest(
       sourceURL: URL(fileURLWithPath: "/tmp/source.mov"),

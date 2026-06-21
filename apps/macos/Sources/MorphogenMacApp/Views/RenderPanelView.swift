@@ -127,6 +127,12 @@ struct RenderPanelView: View {
             .lineLimit(3)
             .foregroundStyle(.secondary)
         }
+        GridRow {
+          Label("Grain Pool", systemImage: "circle.grid.3x3")
+          Text(state.granularPoolSummary)
+            .lineLimit(3)
+            .foregroundStyle(.secondary)
+        }
       }
 
       VStack(alignment: .leading, spacing: 8) {
@@ -344,6 +350,52 @@ struct RenderPanelView: View {
               state.runFlowFeedbackSequenceRender()
             } label: {
               Label("Run Flow Feedback", systemImage: "arrow.triangle.2.circlepath")
+            }
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Granular Mosaic — Temporal Pool (Joint-AV)")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.granularPoolGrainSize, in: 4...256, step: 4) {
+              Text("Grain \(state.granularPoolGrainSize)px")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.granularPoolRearrangement, in: 0...1, step: 0.05) {
+              Text("Rearrange \(state.granularPoolRearrangement, specifier: "%.2f")")
+            }
+            .frame(width: 180, alignment: .leading)
+
+            Stepper(value: $state.granularPoolVariation, in: 0...1, step: 0.05) {
+              Text("Variation \(state.granularPoolVariation, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.granularPoolSeed, in: 0...9999, step: 1) {
+              Text("Seed \(state.granularPoolSeed)")
+            }
+            .frame(width: 140, alignment: .leading)
+
+            Stepper(value: $state.granularPoolAudioWeight, in: 0...8, step: 0.25) {
+              Text("Audio Weight \(state.granularPoolAudioWeight, specifier: "%.2f")")
+            }
+            .frame(width: 200, alignment: .leading)
+            .disabled(!state.granularPoolAudioWeighted)
+
+            Toggle("Audio-Weighted (RMS)", isOn: $state.granularPoolAudioWeighted)
+              .toggleStyle(.checkbox)
+
+            Button {
+              state.runGranularMosaicPoolSequenceRender()
+            } label: {
+              Label("Run Grain Pool", systemImage: "circle.grid.3x3.fill")
             }
           }
         }

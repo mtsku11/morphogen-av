@@ -32,7 +32,7 @@ The cached audio controls alter per-frame granular settings, not the underlying 
 
 1. Done: route Source A RMS, onset, and spectral descriptors into time-addressed grain controls backed by the existing JSON analysis sidecars.
 2. Done (selection slice): multimodal nearest-neighbor grain selection on mean RGB — see Step 6 below.
-3. Done (6b CPU core + CLI render path + queue task): temporal grain pool / joint-AV selection — see Step 6b below. Per-grain carrier audio is now a real matching dimension, rendered by `render-granular-mosaic-pool-sequence` and the persisted `frame_sequence_granular_mosaic_pool` queue job. SwiftUI exposure and a Metal render port are the remaining 6b increments; cross-frame scheduling stays deferred.
+3. Done (6b CPU core + CLI render path + queue task + SwiftUI exposure): temporal grain pool / joint-AV selection — see Step 6b below. Per-grain carrier audio is now a real matching dimension, rendered by `render-granular-mosaic-pool-sequence`, the persisted `frame_sequence_granular_mosaic_pool` queue job, and the macOS Render panel. A Metal render port is the remaining 6b increment; cross-frame scheduling stays deferred.
 
 ## Step 6 — Multimodal Nearest-Neighbor Selection (RGB)
 
@@ -137,8 +137,13 @@ writes a ProRes-ready bundle (frames + pool sidecar + a
 `audio_weight`, and RMS-cache provenance). Queued frames are byte-identical to
 the direct render.
 
-Deferred: SwiftUI exposure of the pooled path; a Metal render port (selection
-stays CPU-side, but the cross-frame render samples multiple frames, so the GPU
-port is its own task); k>1 audio dims (add spectral centroid); sliding-window
-pool scope; luma-variance/gradient feature dims; and cross-frame scheduling
-(anti-repeat / temporal coherence).
+SwiftUI (landed): the native shell's Render panel exposes the pooled queue job
+(`Granular Mosaic — Temporal Pool`) — grain size, rearrangement, variation, seed,
+audio weight, and an Audio-Weighted (RMS) toggle. The dev bridge shells out to
+`queue-add-`/`queue-run-granular-mosaic-pool-sequence`; the toggle wires the RMS
+caches produced by source-proxy extraction (both-or-neither, color-only when off).
+
+Deferred: a Metal render port (selection stays CPU-side, but the cross-frame
+render samples multiple frames, so the GPU port is its own task); k>1 audio dims
+(add spectral centroid); sliding-window pool scope; luma-variance/gradient
+feature dims; and cross-frame scheduling (anti-repeat / temporal coherence).

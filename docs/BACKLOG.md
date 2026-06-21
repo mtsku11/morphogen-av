@@ -95,8 +95,13 @@ The next effect is not another independent processor. It is a stateful temporal 
    `queue-add-/queue-run-granular-mosaic-pool-sequence`. ProRes-ready bundle with
    pool sidecar and a manifest carrying the pooled algorithm id, `audio_weight`,
    and RMS-cache provenance; queued frames byte-identical to the direct render.
-   CPU-only. Remaining 6b: SwiftUI exposure, Metal render port; deferred: k>1
-   audio dims, sliding-window scope, cross-frame scheduling.
+10. Done (6b SwiftUI exposure): the macOS Render panel exposes the pooled queue
+    job (`Granular Mosaic — Temporal Pool`) — grain size, rearrangement,
+    variation, seed, audio weight, and an Audio-Weighted (RMS) toggle that wires
+    the source-proxy RMS caches (both-or-neither, color-only when off). Dev bridge
+    shells out to `queue-add-/queue-run-granular-mosaic-pool-sequence`; 3 new arg
+    tests. Remaining 6b: Metal render port; deferred: k>1 audio dims,
+    sliding-window scope, cross-frame scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

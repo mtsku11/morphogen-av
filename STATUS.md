@@ -10,11 +10,19 @@ _Last updated: 2026-06-21_
 
 - `cargo test --workspace`: **134 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- Tree clean as of the granular step-6b queue-task commit. Manual-testing clips
+- `swift test`: **22 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the granular step-6b SwiftUI commit. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
 
+- **Granular step 6b SwiftUI exposure (temporal grain pool):** the macOS Render
+  panel gains a `Granular Mosaic — Temporal Pool` section (grain size,
+  rearrangement, variation, seed, audio weight, Audio-Weighted RMS toggle). The
+  dev bridge shells out to `queue-add-/queue-run-granular-mosaic-pool-sequence`;
+  the toggle wires the RMS caches from source-proxy extraction (both-or-neither,
+  color-only when off). 3 new bridge arg tests (Swift 19 → 22). Metal port is the
+  last remaining 6b increment.
 - **Granular step 6b queue task (temporal grain pool):** persisted
   `frame_sequence_granular_mosaic_pool` `RenderJob` variant +
   `queue-add-/queue-run-granular-mosaic-pool-sequence`. Writes a ProRes-ready
@@ -54,11 +62,11 @@ Nothing actively in progress — clean handoff point.
 From `docs/BACKLOG.md` "Next" and `docs/EFFECTS_ROADMAP.md`:
 
 1. **Granular step 6b remaining** — CPU core + CLI render path + pool sidecar +
-   queue task landed. Next candidates: SwiftUI exposure of the pooled queue job,
-   and/or a Metal render port (selection is CPU-side, but the cross-frame render
-   samples multiple frames, so the GPU port is its own task). Also deferred
-   within 6b: k>1 audio dims (add centroid), sliding-window pool scope, and
-   cross-frame scheduling (anti-repeat / temporal coherence).
+   queue task + SwiftUI exposure landed. Next candidate: a Metal render port
+   (selection is CPU-side, but the cross-frame render samples multiple frames, so
+   the GPU port is its own task). Also deferred within 6b: k>1 audio dims (add
+   centroid), sliding-window pool scope, and cross-frame scheduling (anti-repeat /
+   temporal coherence).
 2. **Next roadmap effect** — Video Vocoder (luma-band gain routing MVP) or
    Spectral Audio Cross-Synthesis (RMS/centroid filter path) are the natural
    next vertical slices.

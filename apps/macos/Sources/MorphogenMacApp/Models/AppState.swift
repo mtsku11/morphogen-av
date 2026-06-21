@@ -57,6 +57,13 @@ final class AppState: ObservableObject {
   @Published var feedbackResetEnabled = false
   @Published var feedbackResetAtFrame = 48
   @Published var feedbackSummary = "No temporal flow-feedback sequence rendered"
+  @Published var granularPoolGrainSize = 32
+  @Published var granularPoolRearrangement = 1.0
+  @Published var granularPoolVariation = 0.25
+  @Published var granularPoolSeed = 0
+  @Published var granularPoolAudioWeight = 1.0
+  @Published var granularPoolAudioWeighted = true
+  @Published var granularPoolSummary = "No temporal grain pool sequence rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
   @Published var mediaProxyFrameRate = 12.0
@@ -71,6 +78,8 @@ final class AppState: ObservableObject {
   private var frameSequenceCarrierURL: URL?
   private var frameSequenceOutputURL: URL?
   private var lastFrameSequenceOutputURL: URL?
+  private var sourceARMSCacheURL: URL?
+  private var sourceBRMSCacheURL: URL?
   private var mediaProxyOutputURL = RustBridgePlaceholder.defaultMediaProxyRootURL()
 
   func setSource(_ role: SourceRole, url: URL) {
@@ -357,9 +366,11 @@ final class AppState: ObservableObject {
             case .modulator:
               self.frameSequenceModulatorURL = result.frameDirectoryURL
               self.frameSequenceModulatorPath = result.frameDirectoryURL.path
+              self.sourceARMSCacheURL = result.rmsCacheURL
             case .carrier:
               self.frameSequenceCarrierURL = result.frameDirectoryURL
               self.frameSequenceCarrierPath = result.frameDirectoryURL.path
+              self.sourceBRMSCacheURL = result.rmsCacheURL
             }
           }
           if let projectSummary {
@@ -486,6 +497,70 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
           self.feedbackSummary = "Temporal flow-feedback render failed: \(error.localizedDescription)"
           self.statusMessage = "Temporal flow-feedback render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runGranularMosaicPoolSequenceRender() {
+    guard let modulatorURL = frameSequenceModulatorURL else {
+      statusMessage = "Select Source A frame directory before rendering the grain pool."
+      return
+    }
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering the grain pool."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering the grain pool."
+      return
+    }
+
+    let audioWeighted = granularPoolAudioWeighted
+    let modulatorRMSCacheURL = audioWeighted ? sourceARMSCacheURL : nil
+    let carrierRMSCacheURL = audioWeighted ? sourceBRMSCacheURL : nil
+    if audioWeighted && (modulatorRMSCacheURL == nil || carrierRMSCacheURL == nil) {
+      statusMessage = "Extract source proxies first to generate the RMS caches audio matching needs, or turn off Audio-Weighted."
+      return
+    }
+
+    let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultGranularMosaicPoolSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      grainSize: granularPoolGrainSize,
+      rearrangement: granularPoolRearrangement,
+      variation: granularPoolVariation,
+      seed: UInt64(max(0, granularPoolSeed)),
+      audioWeight: granularPoolAudioWeight,
+      modulatorRMSCacheURL: modulatorRMSCacheURL,
+      carrierRMSCacheURL: carrierRMSCacheURL,
+      maxFrames: frameSequenceMaxFrames,
+      frameRate: proResFrameRate.framesPerSecond,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing temporal grain pool (joint-AV) render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedGranularMosaicPoolSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        let audioText = audioWeighted ? ", audio-weighted (RMS)" : ", color-only"
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.granularPoolSummary = "\(bundle.frameCount) grain-pool frame(s)\(audioText) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued grain pool sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Temporal grain pool render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.granularPoolSummary = "Temporal grain pool render failed: \(error.localizedDescription)"
+          self.statusMessage = "Temporal grain pool render failed: \(error.localizedDescription)"
         }
       }
     }
