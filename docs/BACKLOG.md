@@ -91,9 +91,12 @@ The next effect is not another independent processor. It is a stateful temporal 
    `--modulator-rms-cache`/`--carrier-rms-cache`, RMS k=1), backed by a
    `grain_pool_descriptors.json` sidecar keyed on the whole carrier set. Verified
    on real footage: audio-weighted vs audio-off selection differs ~26% of pixels.
-   CPU-only. Remaining 6b: persisted queue task variant, SwiftUI exposure, Metal
-   render port; deferred: k>1 audio dims, sliding-window scope, cross-frame
-   scheduling.
+9. Done (6b queue task): persisted `frame_sequence_granular_mosaic_pool` job +
+   `queue-add-/queue-run-granular-mosaic-pool-sequence`. ProRes-ready bundle with
+   pool sidecar and a manifest carrying the pooled algorithm id, `audio_weight`,
+   and RMS-cache provenance; queued frames byte-identical to the direct render.
+   CPU-only. Remaining 6b: SwiftUI exposure, Metal render port; deferred: k>1
+   audio dims, sliding-window scope, cross-frame scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

@@ -115,6 +115,30 @@ pub enum RenderJobTask {
         #[serde(default)]
         selection_mode: GrainSelectionMode,
     },
+    /// Step 6b joint-AV path: grains are drawn from a whole-clip temporal pool and
+    /// matched on a combined `[mean_color | audio]` vector. CPU-only
+    /// (`pooled_av_nearest_grain_cpu_v1`); the cross-frame render has no Metal
+    /// port yet.
+    FrameSequenceGranularMosaicPool {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        grain_cache_directory: Option<String>,
+        grain_size: u32,
+        rearrangement: f32,
+        variation: f32,
+        seed: u64,
+        /// Scales every audio dimension in the selection distance.
+        audio_weight: f32,
+        /// RMS cache for Source A; supplies the per-output-frame query audio.
+        #[serde(default)]
+        modulator_rms_cache: Option<String>,
+        /// RMS cache for Source B; supplies each pool grain's carrier audio.
+        #[serde(default)]
+        carrier_rms_cache: Option<String>,
+        max_frames: Option<u32>,
+        frame_rate: f64,
+    },
 }
 
 /// Selects the feature space used to match Source A regions to Source B grains.
@@ -337,6 +361,60 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize granular task");
 
         assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn granular_mosaic_pool_task_serializes_render_settings() {
+        let task = RenderJobTask::FrameSequenceGranularMosaicPool {
+            modulator_frame_directory: "/tmp/mod".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            grain_cache_directory: Some("/tmp/out/cache/pool".to_string()),
+            grain_size: 16,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 7,
+            audio_weight: 1.0,
+            modulator_rms_cache: Some("/tmp/a-rms.json".to_string()),
+            carrier_rms_cache: Some("/tmp/b-rms.json".to_string()),
+            max_frames: Some(48),
+            frame_rate: 24.0,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize pool task");
+        let decoded: RenderJobTask = serde_json::from_str(&json).expect("deserialize pool task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn granular_mosaic_pool_task_without_audio_caches_defaults_to_none() {
+        let json = r#"{
+            "type": "frame_sequence_granular_mosaic_pool",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "grain_cache_directory": null,
+            "grain_size": 16,
+            "rearrangement": 1.0,
+            "variation": 0.0,
+            "seed": 7,
+            "audio_weight": 1.0,
+            "max_frames": null,
+            "frame_rate": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize pool task");
+        let RenderJobTask::FrameSequenceGranularMosaicPool {
+            modulator_rms_cache,
+            carrier_rms_cache,
+            ..
+        } = task
+        else {
+            panic!("expected pool task");
+        };
+        assert_eq!(modulator_rms_cache, None);
+        assert_eq!(carrier_rms_cache, None);
     }
 
     #[test]
