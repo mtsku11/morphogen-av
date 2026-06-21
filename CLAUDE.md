@@ -48,6 +48,15 @@ The full CLI catalog and key-path map are in **[docs/REFERENCE.md](docs/REFERENC
   compile + a visual PNG check. Overrides the generic verify.
 - **`/preview`** (project-local skill) — render an effect on a small fixture and
   look at the frames; the inner loop for tuning an effect's look.
+- **`/fixture`** (project-local skill, `scripts/make-fixture.sh`) — scaffold a
+  synthetic readout fixture for the granular-pool path (solid-colour frames whose
+  output colour reveals the selected source frame; optional chirp WAVs + RMS/STFT
+  caches for audio/centroid runs).
+- **`/parity`** (project-local skill, `scripts/parity-check.sh`) — prove a
+  granular-pool render is path-independent: render the same job via the direct CLI
+  and the queue add→run path, byte-compare every frame, show the persisted
+  manifest knobs. The exploratory complement to the determinism assertions in
+  `crates/morphogen-cli/tests/smoke.rs`.
 - **`scripts/check-shaders.sh`** — offline-compiles the `.metal` shaders. Skips
   cleanly unless the Xcode Metal Toolchain component is installed
   (`xcodebuild -downloadComponent MetalToolchain`); the runtime tests in
