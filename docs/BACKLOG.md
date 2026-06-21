@@ -75,7 +75,14 @@ The next effect is not another independent processor. It is a stateful temporal 
 3. Done: add a persisted `frame_sequence_granular_mosaic` task that writes the standard ProRes-ready image-sequence bundle with timing, Source A/B, and grain-cache provenance.
 4. Done: add `granular_mosaic.metal`, a macOS runtime dispatcher, shader-binding preflight, and a tiny CPU/Metal parity fixture. Direct, sequence, and queue CLI paths select it with `--backend metal` and reject divergent frames before export.
 5. Done: route Source A RMS, onset, and spectral descriptors from cache sidecars into frame-addressed variation, rearrangement, and grain-size controls; persist their paths/scales in granular queue jobs and output provenance.
-6. Add multimodal nearest-neighbor audiovisual grain scheduling.
+6. Done (selection slice): multimodal nearest-neighbor grain selection on mean
+   RGB (`multimodal_nearest_grain_cpu_v1`), opt-in via `--selection rgb` on the
+   direct, sequence, and queue CLI paths and persisted on granular jobs +
+   provenance. Weighted distance is written over feature slices so audio
+   dimensions append later. Deferred: variance/gradient feature dims, per-grain
+   carrier-audio matching dims (the joint-AV endgame), and cross-frame
+   scheduling (anti-repeat / temporal coherence). See
+   `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

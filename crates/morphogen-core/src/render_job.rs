@@ -109,7 +109,26 @@ pub enum RenderJobTask {
         backend: RenderBackend,
         #[serde(default)]
         audio_modulation: Option<GranularAudioModulation>,
+        /// Grain-matching feature space. Defaults to [`GrainSelectionMode::Luma`]
+        /// so legacy jobs serialized before multimodal selection keep their
+        /// original 1-D luminance matching.
+        #[serde(default)]
+        selection_mode: GrainSelectionMode,
     },
+}
+
+/// Selects the feature space used to match Source A regions to Source B grains.
+///
+/// The serde default is [`GrainSelectionMode::Luma`] so granular jobs serialized
+/// before step 6 keep their original 1-D luminance matching.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GrainSelectionMode {
+    /// 1-D nearest neighbor on mean luminance (`luma_nearest_grain_cpu_v1`).
+    #[default]
+    Luma,
+    /// Multimodal nearest neighbor on mean RGB (`multimodal_nearest_grain_cpu_v1`).
+    MultimodalRgb,
 }
 
 /// Cache-backed Source A audio controls for a granular-mosaic sequence. Each
@@ -310,6 +329,7 @@ mod tests {
                 onset_rearrangement_scale: 0.4,
                 centroid_grain_size_scale: 12.0,
             }),
+            selection_mode: GrainSelectionMode::MultimodalRgb,
         };
 
         let json = serde_json::to_string(&task).expect("serialize granular task");

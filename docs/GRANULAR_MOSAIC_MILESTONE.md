@@ -31,7 +31,7 @@ The cached audio controls alter per-frame granular settings, not the underlying 
 ## Next Steps
 
 1. Done: route Source A RMS, onset, and spectral descriptors into time-addressed grain controls backed by the existing JSON analysis sidecars.
-2. Add multimodal nearest-neighbor grain selection and audiovisual grain scheduling.
+2. Done (selection slice): multimodal nearest-neighbor grain selection on mean RGB — see Step 6 below. Audiovisual grain scheduling (per-grain carrier-audio matching dims + cross-frame scheduling) is deferred to a 6b follow-on.
 
 ## Step 6 — Multimodal Nearest-Neighbor Selection (RGB)
 

@@ -8,32 +8,35 @@ _Last updated: 2026-06-21_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **117 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **123 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- Tree clean as of the doc-bootstrap commit. Manual-testing clips
+- Tree clean as of the granular step-6 commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
 
-- Source A audio descriptors routed into granular-mosaic controls
-  (RMS→variation, onset→rearrangement, centroid→grain-size). Committed.
-- Doc bootstrap: `CLAUDE.md` is now the canonical agent guide; `AGENTS.md` is a
-  thin pointer; full command/path catalog moved to `docs/REFERENCE.md`;
-  `CODEX_TASKS.md` renamed `docs/BACKLOG.md`.
-- Dev tooling: project-local `/verify` + `/preview` skills, and
-  `scripts/check-shaders.sh` (offline Metal compile, skips without the toolchain
-  component). Verified: clippy clean, render→PNG→Read visual loop works.
+- **Granular step 6 (selection slice):** multimodal nearest-neighbor grain
+  selection on mean RGB (`multimodal_nearest_grain_cpu_v1`), opt-in via
+  `--selection rgb` on the direct, sequence, and queue CLI paths; persisted on
+  granular queue jobs + provenance; new `grain_color_descriptors.json` sidecar.
+  Selection is CPU-side so the Metal render path + parity gate are untouched.
+  Verified end-to-end: rgb vs luma give different coherent mosaics; sidecars
+  tagged correctly; algorithm-mismatch recompute works.
+- (prior) Source A audio descriptors routed into granular-mosaic controls
+  (RMS→variation, onset→rearrangement, centroid→grain-size).
 
 ## In flight
 
 Nothing actively in progress — clean handoff point.
 
-## Candidate next steps (awaiting direction on which effect to build)
+## Candidate next steps
 
 From `docs/BACKLOG.md` "Next" and `docs/EFFECTS_ROADMAP.md`:
 
-1. **Granular step 6** — multimodal nearest-neighbor audiovisual grain scheduling
-   (extends the now-complete luma+audio-descriptor selection).
+1. **Granular step 6b** — extend the multimodal feature vector with per-grain
+   carrier-audio matching dimensions (the joint-AV "grains selected by descriptor
+   similarity" endgame) and/or cross-frame scheduling (anti-repeat, temporal
+   coherence). Needs time-aligned carrier-audio analysis.
 2. **Next roadmap effect** — Video Vocoder (luma-band gain routing MVP) or
    Spectral Audio Cross-Synthesis (RMS/centroid filter path) are the natural
    next vertical slices.

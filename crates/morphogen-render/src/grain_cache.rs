@@ -3,11 +3,13 @@ use std::{fs, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GrainDescriptor, GrainSelection, GranularMosaicSettings, RenderError, GRANULAR_MOSAIC_ALGORITHM,
+    GrainColorDescriptor, GrainDescriptor, GrainSelection, GranularMosaicSettings, RenderError,
+    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 
 const GRAIN_CACHE_VERSION: u32 = 1;
 pub const GRAIN_DESCRIPTOR_CACHE_FILE_NAME: &str = "grain_descriptors.json";
+pub const GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME: &str = "grain_color_descriptors.json";
 pub const GRAIN_SELECTION_CACHE_FILE_NAME: &str = "grain_selection.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -20,6 +22,22 @@ pub struct GranularMosaicDescriptorCache {
     pub grain_size: u32,
     pub carrier_fingerprint: String,
     pub descriptors: Vec<GrainDescriptor>,
+}
+
+/// Sidecar for multimodal RGB grain descriptors (step 6). Structurally mirrors
+/// [`GranularMosaicDescriptorCache`] but carries per-channel mean color and the
+/// multimodal algorithm id so a luma sidecar can never satisfy a multimodal
+/// request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GranularMosaicColorDescriptorCache {
+    pub version: u32,
+    pub kind: String,
+    pub algorithm: String,
+    pub carrier_width: u32,
+    pub carrier_height: u32,
+    pub grain_size: u32,
+    pub carrier_fingerprint: String,
+    pub descriptors: Vec<GrainColorDescriptor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -75,8 +93,52 @@ pub fn read_grain_descriptor_cache(
     Ok(cache)
 }
 
+pub fn write_grain_color_descriptor_cache(
+    directory: impl AsRef<Path>,
+    carrier_width: u32,
+    carrier_height: u32,
+    grain_size: u32,
+    carrier_fingerprint: impl Into<String>,
+    descriptors: &[GrainColorDescriptor],
+) -> Result<GranularMosaicColorDescriptorCache, RenderError> {
+    let cache = GranularMosaicColorDescriptorCache {
+        version: GRAIN_CACHE_VERSION,
+        kind: "granular_mosaic_color_descriptors".to_string(),
+        algorithm: MULTIMODAL_GRAIN_ALGORITHM.to_string(),
+        carrier_width,
+        carrier_height,
+        grain_size,
+        carrier_fingerprint: carrier_fingerprint.into(),
+        descriptors: descriptors.to_vec(),
+    };
+    validate_color_descriptor_cache(&cache)?;
+    let directory = directory.as_ref();
+    fs::create_dir_all(directory)?;
+    fs::write(
+        directory.join(GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME),
+        serde_json::to_string_pretty(&cache)?,
+    )?;
+    Ok(cache)
+}
+
+pub fn read_grain_color_descriptor_cache(
+    directory: impl AsRef<Path>,
+) -> Result<GranularMosaicColorDescriptorCache, RenderError> {
+    let cache: GranularMosaicColorDescriptorCache = serde_json::from_str(&fs::read_to_string(
+        directory
+            .as_ref()
+            .join(GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME),
+    )?)?;
+    validate_color_descriptor_cache(&cache)?;
+    Ok(cache)
+}
+
+// Mirrors the positional shape of `write_grain_descriptor_cache`; the algorithm
+// tag pushes it one over clippy's argument threshold.
+#[allow(clippy::too_many_arguments)]
 pub fn write_grain_selection_cache(
     directory: impl AsRef<Path>,
+    algorithm: &str,
     modulator_fingerprint: impl Into<String>,
     carrier_fingerprint: impl Into<String>,
     carrier_width: u32,
@@ -87,7 +149,7 @@ pub fn write_grain_selection_cache(
     let cache = GranularMosaicSelectionCache {
         version: GRAIN_CACHE_VERSION,
         kind: "granular_mosaic_selection".to_string(),
-        algorithm: GRANULAR_MOSAIC_ALGORITHM.to_string(),
+        algorithm: algorithm.to_string(),
         modulator_fingerprint: modulator_fingerprint.into(),
         carrier_fingerprint: carrier_fingerprint.into(),
         carrier_width,
@@ -159,6 +221,55 @@ fn validate_descriptor_cache(cache: &GranularMosaicDescriptorCache) -> Result<()
     Ok(())
 }
 
+fn validate_color_descriptor_cache(
+    cache: &GranularMosaicColorDescriptorCache,
+) -> Result<(), RenderError> {
+    validate_common(
+        cache.version,
+        &cache.kind,
+        &cache.algorithm,
+        cache.carrier_width,
+        cache.carrier_height,
+        cache.grain_size,
+    )?;
+    if cache.kind != "granular_mosaic_color_descriptors" {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "color descriptor cache has the wrong kind".to_string(),
+        ));
+    }
+    if cache.algorithm != MULTIMODAL_GRAIN_ALGORITHM {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "color descriptor cache has the wrong algorithm".to_string(),
+        ));
+    }
+    if cache.carrier_fingerprint.is_empty() {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "carrier fingerprint must not be empty".to_string(),
+        ));
+    }
+    let expected = grain_count(cache.carrier_width, cache.carrier_height, cache.grain_size)?;
+    if cache.descriptors.len() != expected {
+        return Err(RenderError::InvalidGranularMosaicCache(format!(
+            "expected {expected} descriptors, got {}",
+            cache.descriptors.len()
+        )));
+    }
+    let columns = div_ceil(cache.carrier_width, cache.grain_size);
+    for (expected_index, descriptor) in cache.descriptors.iter().enumerate() {
+        let expected_index = expected_index as u32;
+        if descriptor.index != expected_index
+            || descriptor.origin_x != (expected_index % columns) * cache.grain_size
+            || descriptor.origin_y != (expected_index / columns) * cache.grain_size
+            || !descriptor.mean_color.iter().all(|value| value.is_finite())
+        {
+            return Err(RenderError::InvalidGranularMosaicCache(
+                "descriptor data does not match the carrier grain grid".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_selection_cache(cache: &GranularMosaicSelectionCache) -> Result<(), RenderError> {
     validate_common(
         cache.version,
@@ -217,13 +328,15 @@ fn validate_common(
     }
     if !matches!(
         kind,
-        "granular_mosaic_grain_descriptors" | "granular_mosaic_selection"
+        "granular_mosaic_grain_descriptors"
+            | "granular_mosaic_color_descriptors"
+            | "granular_mosaic_selection"
     ) {
         return Err(RenderError::InvalidGranularMosaicCache(format!(
             "unsupported cache kind {kind}"
         )));
     }
-    if algorithm != GRANULAR_MOSAIC_ALGORITHM {
+    if algorithm != GRANULAR_MOSAIC_ALGORITHM && algorithm != MULTIMODAL_GRAIN_ALGORITHM {
         return Err(RenderError::InvalidGranularMosaicCache(format!(
             "unsupported cache algorithm {algorithm}"
         )));
@@ -286,6 +399,7 @@ mod tests {
                 .expect("write descriptors");
         let selection_written = write_grain_selection_cache(
             temp_dir.path(),
+            GRANULAR_MOSAIC_ALGORITHM,
             "fnv1a64:modulator",
             "fnv1a64:carrier",
             4,
@@ -303,6 +417,67 @@ mod tests {
             read_grain_selection_cache(temp_dir.path()).expect("read selection"),
             selection_written
         );
+    }
+
+    #[test]
+    fn color_descriptor_cache_round_trips_and_tags_the_multimodal_algorithm() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let descriptors = vec![
+            GrainColorDescriptor {
+                index: 0,
+                origin_x: 0,
+                origin_y: 0,
+                mean_color: [0.2, 0.4, 0.6],
+            },
+            GrainColorDescriptor {
+                index: 1,
+                origin_x: 2,
+                origin_y: 0,
+                mean_color: [0.7, 0.1, 0.3],
+            },
+        ];
+
+        let written = write_grain_color_descriptor_cache(
+            temp_dir.path(),
+            4,
+            2,
+            2,
+            "fnv1a64:carrier",
+            &descriptors,
+        )
+        .expect("write color descriptors");
+        assert_eq!(written.algorithm, MULTIMODAL_GRAIN_ALGORITHM);
+        assert_eq!(
+            read_grain_color_descriptor_cache(temp_dir.path()).expect("read color descriptors"),
+            written
+        );
+    }
+
+    #[test]
+    fn color_descriptor_cache_rejects_a_luma_algorithm_tag() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let cache = serde_json::json!({
+            "version": 1,
+            "kind": "granular_mosaic_color_descriptors",
+            "algorithm": GRANULAR_MOSAIC_ALGORITHM,
+            "carrier_width": 2,
+            "carrier_height": 1,
+            "grain_size": 1,
+            "carrier_fingerprint": "fnv1a64:carrier",
+            "descriptors": [
+                { "index": 0, "origin_x": 0, "origin_y": 0, "mean_color": [0.1, 0.2, 0.3] },
+                { "index": 1, "origin_x": 1, "origin_y": 0, "mean_color": [0.4, 0.5, 0.6] }
+            ]
+        });
+        fs::write(
+            temp_dir
+                .path()
+                .join(GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME),
+            serde_json::to_string(&cache).expect("serialize cache"),
+        )
+        .expect("write cache");
+
+        assert!(read_grain_color_descriptor_cache(temp_dir.path()).is_err());
     }
 
     #[test]

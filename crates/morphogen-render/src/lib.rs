@@ -27,9 +27,11 @@ pub use flow_cache::{
     FlowCacheManifest, FLOW_VECTOR_CONVENTION,
 };
 pub use grain_cache::{
-    read_grain_descriptor_cache, read_grain_selection_cache, write_grain_descriptor_cache,
-    write_grain_selection_cache, GranularMosaicDescriptorCache, GranularMosaicSelectionCache,
-    GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
+    read_grain_color_descriptor_cache, read_grain_descriptor_cache, read_grain_selection_cache,
+    write_grain_color_descriptor_cache, write_grain_descriptor_cache, write_grain_selection_cache,
+    GranularMosaicColorDescriptorCache, GranularMosaicDescriptorCache, GranularMosaicSelectionCache,
+    GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_SELECTION_CACHE_FILE_NAME,
 };
 pub use granular_mosaic::{
     analyze_grain_colors_cpu, analyze_grains_cpu, granular_mosaic_cpu,
