@@ -4,6 +4,11 @@ use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 pub const GRANULAR_MOSAIC_ALGORITHM: &str = "luma_nearest_grain_cpu_v1";
 
+/// Algorithm identifier for the multimodal RGB nearest-neighbor selection path
+/// (step 6). Distinct from [`GRANULAR_MOSAIC_ALGORITHM`] so a stale luma sidecar
+/// never satisfies a multimodal request.
+pub const MULTIMODAL_GRAIN_ALGORITHM: &str = "multimodal_nearest_grain_cpu_v1";
+
 /// Parameters for deterministic visual grain recomposition. A tile's average
 /// Source A luminance selects a Source B tile; variation blends that choice
 /// with a seeded alternate tile, while rearrangement blends the selected
@@ -22,6 +27,18 @@ pub struct GrainDescriptor {
     pub origin_x: u32,
     pub origin_y: u32,
     pub mean_luminance: f32,
+}
+
+/// Multimodal grain descriptor (step 6). Carries the per-channel mean color of a
+/// Source B tile so selection can match on RGB rather than luminance alone. The
+/// feature vector is intentionally stored as a fixed array now; audio dimensions
+/// are appended in a later step under a new algorithm identifier.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GrainColorDescriptor {
+    pub index: u32,
+    pub origin_x: u32,
+    pub origin_y: u32,
+    pub mean_color: [f32; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -161,6 +178,90 @@ pub fn select_grains_cpu(
     })
 }
 
+/// Analyze fixed-size Source B tiles into RGB feature descriptors for multimodal
+/// selection (step 6). Mirrors [`analyze_grains_cpu`] but records the per-channel
+/// mean color instead of a single luminance.
+pub fn analyze_grain_colors_cpu(
+    carrier: &ImageBufferF32,
+    grain_size: u32,
+) -> Result<Vec<GrainColorDescriptor>, RenderError> {
+    if grain_size == 0 {
+        return Err(RenderError::InvalidGranularMosaicSettings(
+            "grain_size must be greater than zero".to_string(),
+        ));
+    }
+
+    let columns = div_ceil(carrier.width, grain_size);
+    let rows = div_ceil(carrier.height, grain_size);
+    let mut descriptors = Vec::with_capacity((columns as usize) * (rows as usize));
+
+    for tile_y in 0..rows {
+        for tile_x in 0..columns {
+            let origin_x = tile_x * grain_size;
+            let origin_y = tile_y * grain_size;
+            descriptors.push(GrainColorDescriptor {
+                index: tile_y * columns + tile_x,
+                origin_x,
+                origin_y,
+                mean_color: average_carrier_tile_color(carrier, origin_x, origin_y, grain_size),
+            });
+        }
+    }
+
+    Ok(descriptors)
+}
+
+/// Select carrier grains for each output tile by nearest RGB descriptor (step 6).
+/// Matching uses weighted Euclidean distance over the color feature vector, with
+/// ties broken by ascending grain index. `variation` blends the deterministic
+/// nearest match with a seeded alternate grain exactly as the luma path does, so
+/// `variation = 0` leaves the RGB match exact.
+pub fn select_grains_multimodal_cpu(
+    modulator: &ImageBufferF32,
+    carrier_width: u32,
+    carrier_height: u32,
+    descriptors: &[GrainColorDescriptor],
+    settings: GranularMosaicSettings,
+) -> Result<GrainSelection, RenderError> {
+    settings.validate()?;
+    let columns = div_ceil(carrier_width, settings.grain_size);
+    let rows = div_ceil(carrier_height, settings.grain_size);
+    validate_color_descriptors(
+        descriptors,
+        carrier_width,
+        carrier_height,
+        settings.grain_size,
+    )?;
+
+    let mut indices = Vec::with_capacity((columns as usize) * (rows as usize));
+    for tile_y in 0..rows {
+        for tile_x in 0..columns {
+            let target = average_modulator_tile_color(
+                modulator,
+                carrier_width,
+                carrier_height,
+                tile_x,
+                tile_y,
+                settings.grain_size,
+            );
+            indices.push(select_color_grain_index(
+                target,
+                descriptors,
+                settings.variation,
+                settings.seed,
+                tile_x,
+                tile_y,
+            ));
+        }
+    }
+
+    Ok(GrainSelection {
+        columns,
+        rows,
+        indices,
+    })
+}
+
 /// Render a granular mosaic from a previously computed selection map. This is
 /// the cache-friendly form used by offline sequence rendering.
 pub fn granular_mosaic_with_selection_cpu(
@@ -275,6 +376,137 @@ fn select_grain_index(
         .unwrap_or(0);
     let random_selected = tile_hash(seed, tile_x, tile_y) % descriptors.len() as u64;
     lerp(luma_selected as f32, random_selected as f32, variation).round() as u32
+}
+
+fn average_modulator_tile_color(
+    modulator: &ImageBufferF32,
+    output_width: u32,
+    output_height: u32,
+    tile_x: u32,
+    tile_y: u32,
+    grain_size: u32,
+) -> [f32; 3] {
+    let start_x = tile_x * grain_size;
+    let start_y = tile_y * grain_size;
+    let end_x = (start_x + grain_size).min(output_width);
+    let end_y = (start_y + grain_size).min(output_height);
+    let mut total = [0.0_f32; 3];
+    let mut count = 0_u32;
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let pixel = sample_bilinear_clamped(
+                modulator,
+                remap_coordinate(x, output_width, modulator.width),
+                remap_coordinate(y, output_height, modulator.height),
+            );
+            total[0] += pixel[0];
+            total[1] += pixel[1];
+            total[2] += pixel[2];
+            count += 1;
+        }
+    }
+
+    let inverse = 1.0 / count as f32;
+    [total[0] * inverse, total[1] * inverse, total[2] * inverse]
+}
+
+fn average_carrier_tile_color(
+    carrier: &ImageBufferF32,
+    start_x: u32,
+    start_y: u32,
+    grain_size: u32,
+) -> [f32; 3] {
+    let end_x = (start_x + grain_size).min(carrier.width);
+    let end_y = (start_y + grain_size).min(carrier.height);
+    let mut total = [0.0_f32; 3];
+    let mut count = 0_u32;
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let pixel = carrier.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+            total[0] += pixel[0];
+            total[1] += pixel[1];
+            total[2] += pixel[2];
+            count += 1;
+        }
+    }
+
+    let inverse = 1.0 / count as f32;
+    [total[0] * inverse, total[1] * inverse, total[2] * inverse]
+}
+
+fn select_color_grain_index(
+    target: [f32; 3],
+    descriptors: &[GrainColorDescriptor],
+    variation: f32,
+    seed: u64,
+    tile_x: u32,
+    tile_y: u32,
+) -> u32 {
+    // Equal per-channel weights in this slice; the distance is written over
+    // feature slices so audio dimensions can be appended later.
+    const FEATURE_WEIGHTS: [f32; 3] = [1.0, 1.0, 1.0];
+    let feature_selected = descriptors
+        .iter()
+        .min_by(|left, right| {
+            let left_distance = weighted_distance_sq(&left.mean_color, &target, &FEATURE_WEIGHTS);
+            let right_distance = weighted_distance_sq(&right.mean_color, &target, &FEATURE_WEIGHTS);
+            left_distance
+                .partial_cmp(&right_distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.index.cmp(&right.index))
+        })
+        .map(|descriptor| descriptor.index)
+        .unwrap_or(0);
+    let random_selected = tile_hash(seed, tile_x, tile_y) % descriptors.len() as u64;
+    lerp(feature_selected as f32, random_selected as f32, variation).round() as u32
+}
+
+/// Weighted squared Euclidean distance over two equal-length feature slices.
+/// Shorter inputs are compared over their common length so future feature sets
+/// can grow without a rewrite.
+fn weighted_distance_sq(a: &[f32], b: &[f32], weights: &[f32]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .zip(weights.iter())
+        .map(|((left, right), weight)| {
+            let delta = left - right;
+            weight * delta * delta
+        })
+        .sum()
+}
+
+fn validate_color_descriptors(
+    descriptors: &[GrainColorDescriptor],
+    carrier_width: u32,
+    carrier_height: u32,
+    grain_size: u32,
+) -> Result<(), RenderError> {
+    let columns = div_ceil(carrier_width, grain_size);
+    let rows = div_ceil(carrier_height, grain_size);
+    let expected = columns as usize * rows as usize;
+    if descriptors.len() != expected {
+        return Err(RenderError::InvalidGranularMosaicSettings(format!(
+            "expected {expected} grain descriptors, got {}",
+            descriptors.len()
+        )));
+    }
+    for (expected_index, descriptor) in descriptors.iter().enumerate() {
+        let expected_index = expected_index as u32;
+        let expected_x = (expected_index % columns) * grain_size;
+        let expected_y = (expected_index / columns) * grain_size;
+        if descriptor.index != expected_index
+            || descriptor.origin_x != expected_x
+            || descriptor.origin_y != expected_y
+            || !descriptor.mean_color.iter().all(|value| value.is_finite())
+        {
+            return Err(RenderError::InvalidGranularMosaicSettings(
+                "grain descriptors do not match the carrier grid".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_descriptors(
@@ -472,6 +704,138 @@ mod tests {
             granular_mosaic_cpu(&modulator, &carrier, settings).expect("one-shot mosaic");
 
         assert_eq!(cached, one_shot);
+    }
+
+    fn rgb_image(colors: &[[f32; 3]]) -> ImageBufferF32 {
+        ImageBufferF32::new(
+            colors.len() as u32,
+            1,
+            colors.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect(),
+        )
+        .expect("valid rgb test image")
+    }
+
+    #[test]
+    fn multimodal_matches_on_color_where_luma_cannot() {
+        // grain 0 is a gray whose luminance equals the green modulator's, so the
+        // luma path is pulled to it; grain 1 is the near-identical green the RGB
+        // path should pick instead.
+        let carrier = rgb_image(&[[0.3576, 0.3576, 0.3576], [0.0, 0.45, 0.0]]);
+        let modulator = rgb_image(&[[0.0, 0.5, 0.0], [0.0, 0.5, 0.0]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        let color_descriptors =
+            analyze_grain_colors_cpu(&carrier, settings.grain_size).expect("color descriptors");
+        let multimodal = select_grains_multimodal_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &color_descriptors,
+            settings,
+        )
+        .expect("multimodal selection");
+        assert_eq!(multimodal.indices, vec![1, 1]);
+
+        let luma_descriptors =
+            analyze_grains_cpu(&carrier, settings.grain_size).expect("luma descriptors");
+        let luma = select_grains_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &luma_descriptors,
+            settings,
+        )
+        .expect("luma selection");
+        assert_eq!(luma.indices, vec![0, 0]);
+    }
+
+    #[test]
+    fn multimodal_ties_break_by_ascending_index() {
+        let carrier = rgb_image(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+        let modulator = rgb_image(&[[0.5, 0.0, 0.0]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        let descriptors =
+            analyze_grain_colors_cpu(&carrier, settings.grain_size).expect("descriptors");
+        let selection = select_grains_multimodal_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &descriptors,
+            settings,
+        )
+        .expect("selection");
+        assert_eq!(selection.indices, vec![0, 0]);
+    }
+
+    #[test]
+    fn multimodal_zero_rearrangement_preserves_the_carrier() {
+        let modulator = rgb_image(&[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
+        let carrier = rgb_image(&[[0.2, 0.1, 0.9], [0.7, 0.3, 0.0]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 0.0,
+            variation: 1.0,
+            seed: 5,
+        };
+
+        let descriptors =
+            analyze_grain_colors_cpu(&carrier, settings.grain_size).expect("descriptors");
+        let selection = select_grains_multimodal_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &descriptors,
+            settings,
+        )
+        .expect("selection");
+        let rendered = granular_mosaic_with_selection_cpu(&carrier, &selection, settings)
+            .expect("render mosaic");
+
+        assert_eq!(rendered, carrier);
+    }
+
+    #[test]
+    fn multimodal_selection_is_deterministic() {
+        let modulator = rgb_image(&[[0.0, 0.5, 0.0], [0.9, 0.1, 0.2], [0.3, 0.3, 0.8]]);
+        let carrier = rgb_image(&[[0.1, 0.9, 0.2], [0.8, 0.2, 0.1], [0.2, 0.2, 0.7]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 1.0,
+            variation: 0.5,
+            seed: 17,
+        };
+
+        let descriptors =
+            analyze_grain_colors_cpu(&carrier, settings.grain_size).expect("descriptors");
+        let first = select_grains_multimodal_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &descriptors,
+            settings,
+        )
+        .expect("first selection");
+        let second = select_grains_multimodal_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &descriptors,
+            settings,
+        )
+        .expect("second selection");
+
+        assert_eq!(first, second);
     }
 
     #[test]

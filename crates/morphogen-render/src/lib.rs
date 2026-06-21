@@ -32,8 +32,10 @@ pub use grain_cache::{
     GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
 };
 pub use granular_mosaic::{
-    analyze_grains_cpu, granular_mosaic_cpu, granular_mosaic_with_selection_cpu, select_grains_cpu,
-    GrainDescriptor, GrainSelection, GranularMosaicSettings, GRANULAR_MOSAIC_ALGORITHM,
+    analyze_grain_colors_cpu, analyze_grains_cpu, granular_mosaic_cpu,
+    granular_mosaic_with_selection_cpu, select_grains_cpu, select_grains_multimodal_cpu,
+    GrainColorDescriptor, GrainDescriptor, GrainSelection, GranularMosaicSettings,
+    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
