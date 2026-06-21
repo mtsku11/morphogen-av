@@ -79,10 +79,15 @@ The next effect is not another independent processor. It is a stateful temporal 
    RGB (`multimodal_nearest_grain_cpu_v1`), opt-in via `--selection rgb` on the
    direct, sequence, and queue CLI paths and persisted on granular jobs +
    provenance. Weighted distance is written over feature slices so audio
-   dimensions append later. Deferred: variance/gradient feature dims, per-grain
-   carrier-audio matching dims (the joint-AV endgame), and cross-frame
-   scheduling (anti-repeat / temporal coherence). See
-   `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6.
+   dimensions append later. See `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6.
+7. Done (6b CPU core): temporal grain pool / joint-AV selection
+   (`pooled_av_nearest_grain_cpu_v1`). Grains drawn from across time (whole-clip
+   pool) each carry their frame's carrier-audio descriptor, making audio a real
+   matching dimension over a combined `[mean_color | audio]` weighted distance.
+   `rearrangement` is a cross-frame value blend. CPU-only this slice. Next:
+   pool sidecar + CLI/queue wiring (mirror 6's 3+4), then an optional Metal
+   render port. Deferred: sliding-window pool scope, variance/gradient dims, and
+   cross-frame scheduling. See `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6b.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

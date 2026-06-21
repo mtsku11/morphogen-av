@@ -8,13 +8,21 @@ _Last updated: 2026-06-21_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **123 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **128 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- Tree clean as of the granular step-6 commits. Manual-testing clips
+- Tree clean as of the granular step-6b CPU-core commit. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
 
+- **Granular step 6b CPU core (temporal grain pool, joint-AV selection):**
+  `pooled_av_nearest_grain_cpu_v1`. Grains are drawn from across time (whole-clip
+  pool); each carries its frame's carrier-audio descriptor, so audio is finally a
+  real matching dimension. `analyze_grain_pool_cpu` / `select_grains_from_pool_cpu`
+  (combined `[mean_color | audio]` weighted NN, scalar `audio_weight`) /
+  `granular_mosaic_with_pool_selection_cpu` (rearrangement = cross-frame value
+  blend). CPU-only; sidecar/CLI/queue wiring is the next increment. 5 new tests
+  incl. one proving the audio dim breaks a color tie. See milestone step 6b.
 - **Granular step 6 (selection slice):** multimodal nearest-neighbor grain
   selection on mean RGB (`multimodal_nearest_grain_cpu_v1`), opt-in via
   `--selection rgb` on the direct, sequence, and queue CLI paths; persisted on
@@ -33,10 +41,13 @@ Nothing actively in progress — clean handoff point.
 
 From `docs/BACKLOG.md` "Next" and `docs/EFFECTS_ROADMAP.md`:
 
-1. **Granular step 6b** — extend the multimodal feature vector with per-grain
-   carrier-audio matching dimensions (the joint-AV "grains selected by descriptor
-   similarity" endgame) and/or cross-frame scheduling (anti-repeat, temporal
-   coherence). Needs time-aligned carrier-audio analysis.
+1. **Granular step 6b wiring** — CPU core landed (temporal grain pool, joint-AV
+   selection). Next: persist a pool sidecar (frames fingerprint + audio dims +
+   algorithm id), wire a CLI/queue path that assembles the pool and threads
+   `audio_weight` + Source A frame-time query audio, mirroring step 6's 3+4.
+   Then optionally a Metal render port (selection is CPU-side, but the cross-frame
+   render samples multiple frames). Deferred within 6b: sliding-window pool scope;
+   cross-frame scheduling (anti-repeat / temporal coherence).
 2. **Next roadmap effect** — Video Vocoder (luma-band gain routing MVP) or
    Spectral Audio Cross-Synthesis (RMS/centroid filter path) are the natural
    next vertical slices.

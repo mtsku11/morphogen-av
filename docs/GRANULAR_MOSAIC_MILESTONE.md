@@ -31,7 +31,8 @@ The cached audio controls alter per-frame granular settings, not the underlying 
 ## Next Steps
 
 1. Done: route Source A RMS, onset, and spectral descriptors into time-addressed grain controls backed by the existing JSON analysis sidecars.
-2. Done (selection slice): multimodal nearest-neighbor grain selection on mean RGB — see Step 6 below. Audiovisual grain scheduling (per-grain carrier-audio matching dims + cross-frame scheduling) is deferred to a 6b follow-on.
+2. Done (selection slice): multimodal nearest-neighbor grain selection on mean RGB — see Step 6 below.
+3. Done (6b CPU core): temporal grain pool / joint-AV selection — see Step 6b below. Per-grain carrier audio is now a real matching dimension. Sidecar/CLI/queue wiring and an optional Metal render port are the remaining 6b increments; cross-frame scheduling stays deferred.
 
 ## Step 6 — Multimodal Nearest-Neighbor Selection (RGB)
 
@@ -73,3 +74,57 @@ dimensions; per-grain carrier-audio descriptors as real matching dimensions (the
 follow-on); and any cross-frame scheduling — anti-repeat diversity or temporal
 coherence. Those introduce cross-frame state and are out of the selection-only
 scope.
+
+## Step 6b — Temporal Grain Pool (Joint-AV Selection)
+
+Scope (CPU core slice): make per-grain carrier audio a **real matching
+dimension**. Step 6's audio dim was a no-op because all grains in one carrier
+frame share that frame's timestamp, hence one audio descriptor. The fix is to
+draw grains from **across time**: a temporal grain pool where each grain carries
+the carrier-audio descriptor of *its own* source moment. Selection then matches a
+combined `[mean_color | audio]` feature vector, and audio finally discriminates
+between grains. This is the joint-AV concatenative step toward the audiovisual
+similarity space in `EFFECTS_ROADMAP.md`.
+
+Pool scope for this slice: **whole-clip** — the pool is assembled once from a
+fixed set of Source B frames (the global library), independent of output frame.
+A bounded sliding window is a deferred knob.
+
+Contract:
+
+- New algorithm id `pooled_av_nearest_grain_cpu_v1`, distinct from the luma and
+  multimodal ids. The differing id invalidates stale single-frame sidecars.
+  Luma and multimodal paths stay byte-identical and remain available.
+- A **grain pool** is built from `F` Source B frames that share dimensions and
+  grain grid. Each pool grain carries `frame_index`, `origin_x/y`, `mean_color`
+  (per-channel tile mean), and an `audio` feature vector = the carrier-audio
+  descriptors at that frame's source time (shared by all grains of that frame).
+  Grains are globally indexed frame-major then row-major (deterministic).
+- Each pool grain's audio vector must have equal length `k` across the pool;
+  `k = 0` is allowed and degenerates to multimodal-over-time (color only).
+- For each output tile, the query is Source A's per-tile mean color (same
+  output-normalized sampling as step 6) concatenated with Source A's
+  **frame-time** audio descriptor vector (one query audio vector per output
+  frame). Selection minimizes **weighted Euclidean distance** over the combined
+  `[color(3) | audio(k)]` vector — equal per-channel color weights and a single
+  scalar `audio_weight` applied to every audio dim — with ties broken by
+  ascending global grain index. `variation` blends the nearest match with a
+  seeded alternate **pool** grain exactly as before.
+- Output dimensions follow the current carrier frame; the output grid is that
+  frame's grain grid. A selected grain may live in any pool frame.
+- Render semantics: because a selected grain and the current carrier pixel live
+  in **different frames**, coordinate-lerp is undefined. `rearrangement` is a
+  cross-frame **value blend** in this slice: `rearrangement = 0` samples the
+  current carrier at the output pixel exactly (preserves Source B);
+  `rearrangement = 1` samples the selected grain's pixel from its source frame;
+  in between, the two sampled colors are linearly blended. (The single-frame
+  coordinate-warp paths are unchanged under their own algorithm ids.)
+- Determinism: identical frames, audio, settings, `audio_weight`, and seed ⇒
+  identical pool, selection, and output.
+
+Deferred (not this CPU-core slice): sidecar persistence, CLI/queue wiring, and
+SwiftUI exposure of the pooled path (a follow-on increment, mirroring step 6's
+3+4); a Metal port (selection stays CPU-side, but the cross-frame render samples
+multiple frames, so the GPU port is its own task); sliding-window pool scope;
+luma-variance/gradient feature dims; and cross-frame scheduling (anti-repeat /
+temporal coherence).
