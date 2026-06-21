@@ -29,7 +29,7 @@ use morphogen_render::{
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
-    select_grains_from_pool_cpu, select_grains_multimodal_cpu, write_flow_cache,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
@@ -212,6 +212,15 @@ enum Commands {
         /// from the last N carrier frames (0 = whole-clip, the default).
         #[arg(long, default_value_t = 0)]
         pool_window: u32,
+        /// Anti-repeat penalty added to the squared feature distance of grains
+        /// used in recent output frames (0 = off, the default). Pushes temporal
+        /// diversity so the mosaic keeps finding fresh material.
+        #[arg(long, default_value_t = 0.0)]
+        anti_repeat_weight: f32,
+        /// Number of frames a selected grain stays penalized (penalty decays
+        /// linearly to zero). Only matters when --anti-repeat-weight > 0.
+        #[arg(long, default_value_t = 8)]
+        anti_repeat_cooldown: u32,
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
         #[arg(long)]
@@ -758,6 +767,8 @@ fn run() -> Result<(), CliError> {
             modulator_centroid_cache,
             carrier_centroid_cache,
             pool_window,
+            anti_repeat_weight,
+            anti_repeat_cooldown,
             frame_rate,
             max_frames,
             grain_cache_dir,
@@ -778,6 +789,8 @@ fn run() -> Result<(), CliError> {
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
             carrier_centroid_cache: carrier_centroid_cache.as_deref(),
             pool_window,
+            anti_repeat_weight,
+            anti_repeat_cooldown,
             frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
@@ -1995,6 +2008,8 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     modulator_centroid_cache: Option<&'a Path>,
     carrier_centroid_cache: Option<&'a Path>,
     pool_window: u32,
+    anti_repeat_weight: f32,
+    anti_repeat_cooldown: u32,
     frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
@@ -2038,12 +2053,19 @@ fn render_granular_mosaic_pool_sequence(
         modulator_centroid_cache,
         carrier_centroid_cache,
         pool_window,
+        anti_repeat_weight,
+        anti_repeat_cooldown,
         frame_rate,
         max_frames,
         grain_cache_dir,
         backend,
     } = request;
     settings.validate()?;
+    if !anti_repeat_weight.is_finite() || anti_repeat_weight < 0.0 {
+        return Err(CliError::Message(
+            "anti-repeat-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
             "frame-rate must be a positive finite number".to_string(),
@@ -2133,6 +2155,16 @@ fn render_granular_mosaic_pool_sequence(
         .map(|limit| limit.min(paired_count))
         .unwrap_or(paired_count);
 
+    // Anti-repeat scheduling state: the most recent output frame at which each
+    // global grain index was selected. Only tracked when enabled so the default
+    // path stays allocation-free and byte-identical.
+    let anti_repeat_enabled = anti_repeat_weight > 0.0 && anti_repeat_cooldown > 0;
+    let mut last_used_frame: Vec<Option<u32>> = if anti_repeat_enabled {
+        vec![None; pool.grains.len()]
+    } else {
+        Vec::new()
+    };
+
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = &pool_frames[index];
@@ -2149,6 +2181,12 @@ fn render_granular_mosaic_pool_sequence(
                 frames: pool_window,
             }
         };
+        let anti_repeat = anti_repeat_enabled.then(|| AntiRepeat {
+            last_used_frame: &last_used_frame,
+            current_frame: index as u32,
+            cooldown: anti_repeat_cooldown,
+            weight: anti_repeat_weight,
+        });
         let selection = select_grains_from_pool_cpu(
             &modulator,
             carrier.width,
@@ -2158,7 +2196,13 @@ fn render_granular_mosaic_pool_sequence(
             settings,
             audio_weight,
             window,
+            anti_repeat,
         )?;
+        if anti_repeat_enabled {
+            for &grain_index in &selection.indices {
+                last_used_frame[grain_index as usize] = Some(index as u32);
+            }
+        }
         let image = render_granular_mosaic_pool_output(
             &pool_frames,
             &pool,
@@ -4534,12 +4578,14 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 audio_weight,
                 modulator_rms_cache: modulator_rms_cache.as_deref().map(Path::new),
                 carrier_rms_cache: carrier_rms_cache.as_deref().map(Path::new),
-                // Queue jobs persist only RMS caches today; centroid (k=2) and the
-                // trailing pool window are direct-render knobs until the queue task
-                // carries them.
+                // Queue jobs persist only RMS caches today; centroid (k=2), the
+                // trailing pool window, and anti-repeat scheduling are direct-render
+                // knobs until the queue task carries them.
                 modulator_centroid_cache: None,
                 carrier_centroid_cache: None,
                 pool_window: 0,
+                anti_repeat_weight: 0.0,
+                anti_repeat_cooldown: 8,
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),

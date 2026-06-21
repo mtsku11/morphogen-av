@@ -180,6 +180,21 @@ Verified: `--pool-window 1` forces each output frame onto its own carrier frame
 (red→green→blue→white on a 4-solid-color carrier) vs the static whole-clip
 mosaic; a render-crate test pins the window membership.
 
-Deferred: queue/SwiftUI exposure of the centroid (k=2) caches and the pool
-window; luma-variance/gradient feature dims; cross-frame scheduling (anti-repeat
-/ temporal coherence).
+Cross-frame scheduling — anti-repeat (landed, render/CLI path): `--anti-repeat-weight W`
+(`0` = off) with `--anti-repeat-cooldown C` (default 8) penalizes grains selected
+in recent output frames, pushing temporal diversity. A grain used `age` frames
+ago adds `W * (C - age) / C` to its squared feature distance while `age < C`,
+decaying linearly. State is `last_used_frame: Vec<Option<u32>>` (the most recent
+selecting frame per global grain index) — a plain serializable buffer, the
+checkpoint representation for this stateful temporal node. Frame zero has an
+empty history, so it is byte-identical to the non-scheduled selection (declared
+frame-zero behavior); the penalty reshapes only the nearest-match distance, not
+the seeded alternate. Metal render path unaffected (selection is CPU-side).
+Verified: render-crate test (penalty overturns the color-nearest grain; frame
+zero is a no-op) plus e2e on a colorful carrier with a **static** modulator —
+anti-repeat off yields 1 distinct output frame (max repetition), on yields 3
+distinct, frame 0 identical and frames 1–3 diverge.
+
+Deferred: queue/SwiftUI exposure of the centroid (k=2) caches, pool window, and
+anti-repeat; luma-variance/gradient feature dims; temporal-coherence scheduling
+(the complementary "smooth motion" mode to anti-repeat).

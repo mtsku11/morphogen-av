@@ -16,6 +16,17 @@ _Last updated: 2026-06-21_
 
 ## What just landed
 
+- **Granular step 6b cross-frame scheduling — anti-repeat (render/CLI path):**
+  `--anti-repeat-weight W` (0 = off) + `--anti-repeat-cooldown C` (default 8)
+  penalize grains used in recent output frames (penalty `W*(C-age)/C`, linear
+  decay) to push temporal diversity. State is `last_used_frame: Vec<Option<u32>>`
+  (serializable checkpoint rep). Frame zero has empty history ⇒ byte-identical to
+  non-scheduled (declared frame-zero behavior); penalty reshapes only the
+  nearest-match distance, Metal path unaffected (CPU-side selection). New
+  render-crate test (penalty overturns color-nearest; frame-zero no-op). Verified
+  e2e on a colorful carrier + static modulator: off = 1 distinct output frame,
+  on = 3 distinct, frame 0 identical / frames 1–3 diverge. Render 53 → 54
+  (workspace 139). Queue/SwiftUI exposure deferred.
 - **Granular step 6b sliding-window pool scope (render/CLI path):**
   `--pool-window N` bounds each output frame to a trailing window of the last `N`
   carrier frames (`0` = whole-clip). Grains are frame-major, so a trailing window
@@ -93,13 +104,12 @@ _Last updated: 2026-06-21_
 
 ## In flight
 
-On branch `granular-6b-deferred-features`: working through the deferred 6b items.
-Done: Metal backend in queue + SwiftUI; k>1 audio dims; trailing sliding-window
-pool scope (all on the render/CLI path). Next in this branch: cross-frame
-scheduling — chosen behavior is **anti-repeat diversity** (penalize re-selecting
-recently-used grains). This is a stateful temporal node (prior-frame selection
-state) needing frame-zero behavior + a checkpoint representation per invariants.
-Also deferred: queue/SwiftUI exposure of the centroid (k=2) caches and pool window.
+Branch `granular-6b-deferred-features` — all four requested deferred 6b items
+landed on the render/CLI path and checkpointed: (1) Metal backend in queue +
+SwiftUI, (2) k>1 audio dims (rms+centroid), (3) trailing sliding-window pool
+scope, (4) anti-repeat cross-frame scheduling. Not yet pushed. Deferred follow-ons
+(not requested): queue/SwiftUI exposure of the centroid caches / pool window /
+anti-repeat knobs; temporal-coherence scheduling (the complement to anti-repeat).
 
 ## Candidate next steps
 

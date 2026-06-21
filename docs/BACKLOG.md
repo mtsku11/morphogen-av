@@ -130,8 +130,17 @@ The next effect is not another independent processor. It is a stateful temporal 
     filter — whole-clip sidecar stays reusable, Metal render path unaffected,
     `WholeClip` byte-identical to prior behavior. Verified e2e (`--pool-window 1`
     → own-frame-only red→green→blue→white) + a render-crate membership test.
-    Deferred: queue/SwiftUI exposure of centroid caches + pool window,
-    cross-frame scheduling (next: anti-repeat diversity).
+    Deferred: queue/SwiftUI exposure of centroid caches + pool window.
+15. Done (6b cross-frame scheduling — anti-repeat, render/CLI path):
+    `--anti-repeat-weight W` (0 = off) + `--anti-repeat-cooldown C` (default 8)
+    penalize grains used in recent output frames (`W*(C-age)/C`, linear decay) for
+    temporal diversity. State `last_used_frame: Vec<Option<u32>>` is the
+    serializable checkpoint rep; frame zero (empty history) is byte-identical to
+    non-scheduled; penalty reshapes only the nearest-match distance; Metal path
+    unaffected (CPU-side selection). Render-crate test + e2e (static modulator:
+    off → 1 distinct output frame, on → 3 distinct; frame 0 identical).
+    Deferred: queue/SwiftUI exposure of centroid caches / pool window /
+    anti-repeat; temporal-coherence scheduling (complement to anti-repeat).
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 
