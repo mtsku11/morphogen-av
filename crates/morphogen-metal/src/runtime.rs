@@ -3,14 +3,15 @@ use metal::{
     MTLSize, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
 };
 use morphogen_render::{
-    FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
-    StructureMode,
+    FlowFeedbackSettings, FlowField, GrainPool, GrainSelection, GranularMosaicSettings,
+    ImageBufferF32, StructureMode,
 };
 
 use crate::{
     FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
     ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME,
-    FLOW_DISPLACE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_SHADER_SOURCE,
+    FLOW_DISPLACE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_POOL_KERNEL_NAME,
+    GRANULAR_MOSAIC_POOL_SHADER_SOURCE, GRANULAR_MOSAIC_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -33,6 +34,15 @@ struct AdvectFeedbackParams {
 
 #[repr(C)]
 struct GranularMosaicParams {
+    rearrangement: f32,
+    width: u32,
+    height: u32,
+    grain_size: u32,
+    selection_columns: u32,
+}
+
+#[repr(C)]
+struct GranularMosaicPoolParams {
     rearrangement: f32,
     width: u32,
     height: u32,
@@ -357,6 +367,208 @@ pub fn granular_mosaic_metal(
     read_rgba_f32_texture(&output_texture, plan.width, plan.height)
 }
 
+/// Render a temporal-grain-pool mosaic (granular step 6b) on the GPU, gated by
+/// the caller against [`morphogen_render::granular_mosaic_with_pool_selection_cpu`].
+/// The whole-clip pool is uploaded as a 2D texture array (one slice per pool
+/// frame); a flat grain-metadata buffer resolves each global pool index to its
+/// `(frame_index, origin_x, origin_y)`. Sampling is integer-nearest clamped to
+/// match the CPU reference, and `rearrangement` value-blends the current carrier
+/// pixel with the selected grain's pixel.
+pub fn granular_mosaic_pool_metal(
+    pool_frames: &[ImageBufferF32],
+    pool: &GrainPool,
+    carrier: &ImageBufferF32,
+    selection: &GrainSelection,
+    settings: GranularMosaicSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    settings
+        .validate()
+        .map_err(|error| MetalDispatchError::InvalidGranularMosaicSettings(error.to_string()))?;
+    let plan = GranularMosaicDispatchPlan::new(
+        carrier.width,
+        carrier.height,
+        settings.grain_size,
+        settings.rearrangement,
+    )?;
+    validate_pool_render_inputs(pool_frames, pool, carrier, selection, settings.grain_size)?;
+
+    // Flatten the pool descriptors into a `[frame_index, origin_x, origin_y]`
+    // triple per global grain index, matching the shader's `grainMeta` layout.
+    let mut grain_meta = Vec::with_capacity(
+        pool.grains
+            .len()
+            .checked_mul(3)
+            .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?,
+    );
+    for grain in &pool.grains {
+        grain_meta.push(grain.frame_index);
+        grain_meta.push(grain.origin_x);
+        grain_meta.push(grain.origin_y);
+    }
+    let grain_meta_byte_len = grain_meta
+        .len()
+        .checked_mul(std::mem::size_of::<u32>())
+        .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?;
+    let selection_byte_len = selection
+        .indices
+        .len()
+        .checked_mul(std::mem::size_of::<u32>())
+        .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?;
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(GRANULAR_MOSAIC_POOL_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(GRANULAR_MOSAIC_POOL_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let carrier_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&carrier_texture, carrier)?;
+
+    let pool_texture = new_array_texture(
+        &device,
+        pool.frame_width,
+        pool.frame_height,
+        pool_frames.len() as u32,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    for (slice, frame) in pool_frames.iter().enumerate() {
+        upload_rgba_f32_texture_slice(&pool_texture, frame, slice as u32)?;
+    }
+
+    let selection_buffer = device.new_buffer_with_data(
+        selection.indices.as_ptr().cast(),
+        selection_byte_len as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let grain_meta_buffer = device.new_buffer_with_data(
+        grain_meta.as_ptr().cast(),
+        grain_meta_byte_len as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&carrier_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_texture(2, Some(&pool_texture));
+    let params = GranularMosaicPoolParams {
+        rearrangement: plan.rearrangement,
+        width: plan.width,
+        height: plan.height,
+        grain_size: plan.grain_size,
+        selection_columns: selection.columns,
+    };
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<GranularMosaicPoolParams>() as u64,
+        (&params as *const GranularMosaicPoolParams).cast(),
+    );
+    encoder.set_buffer(1, Some(&selection_buffer), 0);
+    encoder.set_buffer(2, Some(&grain_meta_buffer), 0);
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
+fn validate_pool_render_inputs(
+    pool_frames: &[ImageBufferF32],
+    pool: &GrainPool,
+    carrier: &ImageBufferF32,
+    selection: &GrainSelection,
+    grain_size: u32,
+) -> Result<(), MetalDispatchError> {
+    if pool_frames.is_empty() {
+        return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+            "grain pool render requires at least one pool frame".to_string(),
+        ));
+    }
+    if carrier.width != pool.frame_width || carrier.height != pool.frame_height {
+        return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+            "carrier dimensions do not match the grain pool".to_string(),
+        ));
+    }
+    if pool_frames
+        .iter()
+        .any(|frame| frame.width != pool.frame_width || frame.height != pool.frame_height)
+    {
+        return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+            "every pool frame must share the grain pool dimensions".to_string(),
+        ));
+    }
+
+    let columns = div_ceil(carrier.width, grain_size);
+    let rows = div_ceil(carrier.height, grain_size);
+    let expected_count = (columns as usize)
+        .checked_mul(rows as usize)
+        .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?;
+    if selection.columns != columns
+        || selection.rows != rows
+        || selection.indices.len() != expected_count
+        || selection
+            .indices
+            .iter()
+            .any(|index| *index as usize >= pool.grains.len())
+    {
+        return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+            "grain selection does not match the carrier grid or references a missing pool grain"
+                .to_string(),
+        ));
+    }
+    if pool
+        .grains
+        .iter()
+        .any(|grain| grain.frame_index as usize >= pool_frames.len())
+    {
+        return Err(MetalDispatchError::InvalidGranularMosaicSettings(
+            "grain pool references a frame outside the supplied pool frames".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_grain_selection(
     carrier: &ImageBufferF32,
     selection: &GrainSelection,
@@ -399,17 +611,45 @@ fn new_texture(
     device.new_texture(&descriptor)
 }
 
+fn new_array_texture(
+    device: &Device,
+    width: u32,
+    height: u32,
+    array_length: u32,
+    pixel_format: MTLPixelFormat,
+    usage: MTLTextureUsage,
+) -> Texture {
+    let descriptor = TextureDescriptor::new();
+    descriptor.set_texture_type(MTLTextureType::D2Array);
+    descriptor.set_pixel_format(pixel_format);
+    descriptor.set_width(width as u64);
+    descriptor.set_height(height as u64);
+    descriptor.set_array_length(array_length as u64);
+    descriptor.set_storage_mode(MTLStorageMode::Shared);
+    descriptor.set_usage(usage);
+    device.new_texture(&descriptor)
+}
+
 fn upload_rgba_f32_texture(
     texture: &Texture,
     image: &ImageBufferF32,
 ) -> Result<(), MetalDispatchError> {
     let bytes = rgba_f32_bytes(&image.pixels)?;
-    replace_texture_bytes(texture, image.width, image.height, 16, &bytes)
+    replace_texture_bytes(texture, image.width, image.height, 16, 0, &bytes)
+}
+
+fn upload_rgba_f32_texture_slice(
+    texture: &Texture,
+    image: &ImageBufferF32,
+    slice: u32,
+) -> Result<(), MetalDispatchError> {
+    let bytes = rgba_f32_bytes(&image.pixels)?;
+    replace_texture_bytes(texture, image.width, image.height, 16, slice, &bytes)
 }
 
 fn upload_rg_f32_texture(texture: &Texture, flow: &FlowField) -> Result<(), MetalDispatchError> {
     let bytes = rg_f32_bytes(&flow.vectors)?;
-    replace_texture_bytes(texture, flow.width, flow.height, 8, &bytes)
+    replace_texture_bytes(texture, flow.width, flow.height, 8, 0, &bytes)
 }
 
 fn replace_texture_bytes(
@@ -417,6 +657,7 @@ fn replace_texture_bytes(
     width: u32,
     height: u32,
     bytes_per_pixel: usize,
+    slice: u32,
     bytes: &[u8],
 ) -> Result<(), MetalDispatchError> {
     let bytes_per_row = checked_row_bytes(width, bytes_per_pixel)?;
@@ -424,7 +665,7 @@ fn replace_texture_bytes(
     texture.replace_region_in_slice(
         MTLRegion::new_2d(0, 0, width as u64, height as u64),
         0,
-        0,
+        slice as u64,
         bytes.as_ptr().cast(),
         bytes_per_row as u64,
         image_stride as u64,
@@ -514,9 +755,10 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
-        flow_displace_cpu, flow_feedback_frame_cpu, granular_mosaic_with_selection_cpu,
-        FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
-        StructureMode,
+        analyze_grain_pool_cpu, flow_displace_cpu, flow_feedback_frame_cpu,
+        granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
+        select_grains_from_pool_cpu, FlowFeedbackSettings, FlowField, GrainSelection,
+        GranularMosaicSettings, ImageBufferF32, StructureMode,
     };
 
     use super::*;
@@ -756,6 +998,68 @@ mod tests {
                 return;
             }
             Err(error) => panic!("metal render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_granular_mosaic_pool_matches_cpu_reference_on_multi_frame_fixture() {
+        // Two distinct pool frames so the cross-frame selection actually pulls
+        // grains from different source frames, exercising the texture array.
+        let frame_a = ImageBufferF32::from_fn(4, 4, |x, y| {
+            let v = (x + y * 4) as f32 / 16.0;
+            [v, 0.0, 0.0, 1.0]
+        })
+        .expect("frame a");
+        let frame_b = ImageBufferF32::from_fn(4, 4, |x, y| {
+            let v = (x + y * 4) as f32 / 16.0;
+            [0.0, v, 1.0 - v, 1.0]
+        })
+        .expect("frame b");
+        let pool_frames = vec![frame_a.clone(), frame_b.clone()];
+        // Frame A is bright top-left, frame B bottom-right: distinct audio
+        // descriptors give the joint-AV matcher something to separate on.
+        let frame_audio = vec![vec![0.1_f32], vec![0.9_f32]];
+        let grain_size = 2;
+        let pool = analyze_grain_pool_cpu(&pool_frames, &frame_audio, grain_size).expect("pool");
+
+        let modulator = ImageBufferF32::from_fn(4, 4, |x, y| {
+            let v = (x + y) as f32 / 6.0;
+            [v, v, v, 1.0]
+        })
+        .expect("modulator");
+        let settings = GranularMosaicSettings {
+            grain_size,
+            rearrangement: 0.6,
+            variation: 0.0,
+            seed: 7,
+        };
+        let carrier = &pool_frames[0];
+        let query_audio = vec![0.3_f32];
+        let audio_weight = 1.0;
+        let selection = select_grains_from_pool_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &query_audio,
+            &pool,
+            settings,
+            audio_weight,
+        )
+        .expect("selection");
+
+        let cpu =
+            granular_mosaic_with_pool_selection_cpu(&pool_frames, &pool, carrier, &selection, settings)
+                .expect("cpu render");
+        let gpu = match granular_mosaic_pool_metal(&pool_frames, &pool, carrier, &selection, settings)
+        {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal pool parity assertion because no Metal device is available");
+                return;
+            }
+            Err(error) => panic!("metal pool render failed: {error}"),
         };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);

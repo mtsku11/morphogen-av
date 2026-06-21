@@ -6,6 +6,9 @@ pub const ADVECT_FEEDBACK_KERNEL_NAME: &str = "advect_feedback";
 pub const ADVECT_FEEDBACK_SHADER_SOURCE: &str = include_str!("../shaders/advect_feedback.metal");
 pub const GRANULAR_MOSAIC_KERNEL_NAME: &str = "granular_mosaic";
 pub const GRANULAR_MOSAIC_SHADER_SOURCE: &str = include_str!("../shaders/granular_mosaic.metal");
+pub const GRANULAR_MOSAIC_POOL_KERNEL_NAME: &str = "granular_mosaic_pool";
+pub const GRANULAR_MOSAIC_POOL_SHADER_SOURCE: &str =
+    include_str!("../shaders/granular_mosaic_pool.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -76,6 +79,10 @@ pub enum MetalDispatchError {
     MissingGranularMosaicKernelEntryPoint,
     #[error("granular_mosaic.metal does not contain the expected texture and buffer bindings")]
     MissingGranularMosaicBindingLayout,
+    #[error("granular_mosaic_pool.metal does not contain the expected kernel entry point")]
+    MissingGranularMosaicPoolKernelEntryPoint,
+    #[error("granular_mosaic_pool.metal does not contain the expected texture and buffer bindings")]
+    MissingGranularMosaicPoolBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -222,6 +229,27 @@ pub fn validate_granular_mosaic_shader_source() -> Result<(), MetalDispatchError
     Ok(())
 }
 
+pub fn validate_granular_mosaic_pool_shader_source() -> Result<(), MetalDispatchError> {
+    if !GRANULAR_MOSAIC_POOL_SHADER_SOURCE.contains("kernel void granular_mosaic_pool") {
+        return Err(MetalDispatchError::MissingGranularMosaicPoolKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::read> carrier [[texture(0)]]",
+        "texture2d<float, access::write> output [[texture(1)]]",
+        "texture2d_array<float, access::read> poolFrames [[texture(2)]]",
+        "constant GranularMosaicPoolParams& params [[buffer(0)]]",
+        "device const uint* selectionIndices [[buffer(1)]]",
+        "device const uint* grainMeta [[buffer(2)]]",
+    ] {
+        if !GRANULAR_MOSAIC_POOL_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingGranularMosaicPoolBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -293,5 +321,10 @@ mod tests {
         assert_eq!(plan.threadgroups_per_grid.width, 2);
         assert_eq!(plan.threadgroups_per_grid.height, 2);
         validate_granular_mosaic_shader_source().expect("granular shader preflight");
+    }
+
+    #[test]
+    fn granular_mosaic_pool_shader_has_expected_bindings() {
+        validate_granular_mosaic_pool_shader_source().expect("granular pool shader preflight");
     }
 }
