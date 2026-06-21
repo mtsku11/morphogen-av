@@ -3,14 +3,15 @@ use std::{fs, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GrainColorDescriptor, GrainDescriptor, GrainSelection, GranularMosaicSettings, RenderError,
-    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+    GrainColorDescriptor, GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings,
+    RenderError, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 
 const GRAIN_CACHE_VERSION: u32 = 1;
 pub const GRAIN_DESCRIPTOR_CACHE_FILE_NAME: &str = "grain_descriptors.json";
 pub const GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME: &str = "grain_color_descriptors.json";
 pub const GRAIN_SELECTION_CACHE_FILE_NAME: &str = "grain_selection.json";
+pub const GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME: &str = "grain_pool_descriptors.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GranularMosaicDescriptorCache {
@@ -38,6 +39,25 @@ pub struct GranularMosaicColorDescriptorCache {
     pub grain_size: u32,
     pub carrier_fingerprint: String,
     pub descriptors: Vec<GrainColorDescriptor>,
+}
+
+/// Sidecar for a whole-clip temporal grain pool (step 6b). Carries the pooled
+/// algorithm id, the carrier-set fingerprint (so changing any pool frame or its
+/// audio invalidates reuse), `audio_dims`, and the assembled pool. Deep grain
+/// geometry is re-validated at selection/render time, so this cache only checks
+/// tags, dimensions, and grain count.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GranularMosaicPoolDescriptorCache {
+    pub version: u32,
+    pub kind: String,
+    pub algorithm: String,
+    pub grain_size: u32,
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub frame_count: u32,
+    pub audio_dims: usize,
+    pub carrier_set_fingerprint: String,
+    pub pool: GrainPool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -130,6 +150,46 @@ pub fn read_grain_color_descriptor_cache(
             .join(GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME),
     )?)?;
     validate_color_descriptor_cache(&cache)?;
+    Ok(cache)
+}
+
+pub fn write_grain_pool_descriptor_cache(
+    directory: impl AsRef<Path>,
+    frame_count: u32,
+    carrier_set_fingerprint: impl Into<String>,
+    pool: &GrainPool,
+) -> Result<GranularMosaicPoolDescriptorCache, RenderError> {
+    let cache = GranularMosaicPoolDescriptorCache {
+        version: GRAIN_CACHE_VERSION,
+        kind: "granular_mosaic_pool_descriptors".to_string(),
+        algorithm: POOLED_GRAIN_ALGORITHM.to_string(),
+        grain_size: pool.grain_size,
+        frame_width: pool.frame_width,
+        frame_height: pool.frame_height,
+        frame_count,
+        audio_dims: pool.audio_dims,
+        carrier_set_fingerprint: carrier_set_fingerprint.into(),
+        pool: pool.clone(),
+    };
+    validate_pool_descriptor_cache(&cache)?;
+    let directory = directory.as_ref();
+    fs::create_dir_all(directory)?;
+    fs::write(
+        directory.join(GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME),
+        serde_json::to_string_pretty(&cache)?,
+    )?;
+    Ok(cache)
+}
+
+pub fn read_grain_pool_descriptor_cache(
+    directory: impl AsRef<Path>,
+) -> Result<GranularMosaicPoolDescriptorCache, RenderError> {
+    let cache: GranularMosaicPoolDescriptorCache = serde_json::from_str(&fs::read_to_string(
+        directory
+            .as_ref()
+            .join(GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME),
+    )?)?;
+    validate_pool_descriptor_cache(&cache)?;
     Ok(cache)
 }
 
@@ -270,6 +330,63 @@ fn validate_color_descriptor_cache(
     Ok(())
 }
 
+fn validate_pool_descriptor_cache(
+    cache: &GranularMosaicPoolDescriptorCache,
+) -> Result<(), RenderError> {
+    validate_common(
+        cache.version,
+        &cache.kind,
+        &cache.algorithm,
+        cache.frame_width,
+        cache.frame_height,
+        cache.grain_size,
+    )?;
+    if cache.kind != "granular_mosaic_pool_descriptors" {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "pool descriptor cache has the wrong kind".to_string(),
+        ));
+    }
+    if cache.algorithm != POOLED_GRAIN_ALGORITHM {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "pool descriptor cache has the wrong algorithm".to_string(),
+        ));
+    }
+    if cache.carrier_set_fingerprint.is_empty() {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "carrier set fingerprint must not be empty".to_string(),
+        ));
+    }
+    if cache.frame_count == 0 {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "pool must carry at least one frame".to_string(),
+        ));
+    }
+    // Tag/shape check only; the render crate re-validates per-grain geometry when
+    // the pool is used for selection and rendering.
+    if cache.pool.grain_size != cache.grain_size
+        || cache.pool.frame_width != cache.frame_width
+        || cache.pool.frame_height != cache.frame_height
+        || cache.pool.audio_dims != cache.audio_dims
+    {
+        return Err(RenderError::InvalidGranularMosaicCache(
+            "pool descriptor cache header does not match its pool".to_string(),
+        ));
+    }
+    let per_frame = grain_count(cache.frame_width, cache.frame_height, cache.grain_size)?;
+    let expected = per_frame
+        .checked_mul(cache.frame_count as usize)
+        .ok_or_else(|| {
+            RenderError::InvalidGranularMosaicCache("grain pool is too large".to_string())
+        })?;
+    if cache.pool.grains.len() != expected {
+        return Err(RenderError::InvalidGranularMosaicCache(format!(
+            "expected {expected} pool grains, got {}",
+            cache.pool.grains.len()
+        )));
+    }
+    Ok(())
+}
+
 fn validate_selection_cache(cache: &GranularMosaicSelectionCache) -> Result<(), RenderError> {
     validate_common(
         cache.version,
@@ -330,13 +447,17 @@ fn validate_common(
         kind,
         "granular_mosaic_grain_descriptors"
             | "granular_mosaic_color_descriptors"
+            | "granular_mosaic_pool_descriptors"
             | "granular_mosaic_selection"
     ) {
         return Err(RenderError::InvalidGranularMosaicCache(format!(
             "unsupported cache kind {kind}"
         )));
     }
-    if algorithm != GRANULAR_MOSAIC_ALGORITHM && algorithm != MULTIMODAL_GRAIN_ALGORITHM {
+    if algorithm != GRANULAR_MOSAIC_ALGORITHM
+        && algorithm != MULTIMODAL_GRAIN_ALGORITHM
+        && algorithm != POOLED_GRAIN_ALGORITHM
+    {
         return Err(RenderError::InvalidGranularMosaicCache(format!(
             "unsupported cache algorithm {algorithm}"
         )));
@@ -478,6 +599,70 @@ mod tests {
         .expect("write cache");
 
         assert!(read_grain_color_descriptor_cache(temp_dir.path()).is_err());
+    }
+
+    #[test]
+    fn pool_descriptor_cache_round_trips_and_tags_the_pooled_algorithm() {
+        use crate::{analyze_grain_pool_cpu, ImageBufferF32};
+
+        let frames = [
+            ImageBufferF32::new(2, 1, vec![[0.1, 0.2, 0.3, 1.0], [0.4, 0.5, 0.6, 1.0]])
+                .expect("frame a"),
+            ImageBufferF32::new(2, 1, vec![[0.7, 0.8, 0.9, 1.0], [0.0, 0.1, 0.2, 1.0]])
+                .expect("frame b"),
+        ];
+        let audio = vec![vec![0.25_f32], vec![0.75_f32]];
+        let pool = analyze_grain_pool_cpu(&frames, &audio, 1).expect("pool");
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let written =
+            write_grain_pool_descriptor_cache(temp_dir.path(), 2, "fnv1a64:carrier-set", &pool)
+                .expect("write pool cache");
+        assert_eq!(written.algorithm, POOLED_GRAIN_ALGORITHM);
+        assert_eq!(written.audio_dims, 1);
+        assert_eq!(written.frame_count, 2);
+        assert_eq!(
+            read_grain_pool_descriptor_cache(temp_dir.path()).expect("read pool cache"),
+            written
+        );
+    }
+
+    #[test]
+    fn pool_descriptor_cache_rejects_a_mismatched_grain_count() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        // header says 2 frames over a 2x1 grid (4 grains) but only 2 grains exist.
+        let cache = serde_json::json!({
+            "version": 1,
+            "kind": "granular_mosaic_pool_descriptors",
+            "algorithm": POOLED_GRAIN_ALGORITHM,
+            "grain_size": 1,
+            "frame_width": 2,
+            "frame_height": 1,
+            "frame_count": 2,
+            "audio_dims": 1,
+            "carrier_set_fingerprint": "fnv1a64:carrier-set",
+            "pool": {
+                "columns": 2,
+                "rows": 1,
+                "grain_size": 1,
+                "frame_width": 2,
+                "frame_height": 1,
+                "audio_dims": 1,
+                "grains": [
+                    { "global_index": 0, "frame_index": 0, "origin_x": 0, "origin_y": 0, "mean_color": [0.1, 0.2, 0.3], "audio": [0.25] },
+                    { "global_index": 1, "frame_index": 0, "origin_x": 1, "origin_y": 0, "mean_color": [0.4, 0.5, 0.6], "audio": [0.25] }
+                ]
+            }
+        });
+        fs::write(
+            temp_dir
+                .path()
+                .join(GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME),
+            serde_json::to_string(&cache).expect("serialize cache"),
+        )
+        .expect("write cache");
+
+        assert!(read_grain_pool_descriptor_cache(temp_dir.path()).is_err());
     }
 
     #[test]

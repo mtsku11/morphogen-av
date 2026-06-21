@@ -84,10 +84,16 @@ The next effect is not another independent processor. It is a stateful temporal 
    (`pooled_av_nearest_grain_cpu_v1`). Grains drawn from across time (whole-clip
    pool) each carry their frame's carrier-audio descriptor, making audio a real
    matching dimension over a combined `[mean_color | audio]` weighted distance.
-   `rearrangement` is a cross-frame value blend. CPU-only this slice. Next:
-   pool sidecar + CLI/queue wiring (mirror 6's 3+4), then an optional Metal
-   render port. Deferred: sliding-window pool scope, variance/gradient dims, and
-   cross-frame scheduling. See `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6b.
+   `rearrangement` is a cross-frame value blend. See
+   `docs/GRANULAR_MOSAIC_MILESTONE.md` step 6b.
+8. Done (6b CLI wiring): `render-granular-mosaic-pool-sequence` renders the
+   pooled path end-to-end (`--audio-weight`, optional both-or-neither
+   `--modulator-rms-cache`/`--carrier-rms-cache`, RMS k=1), backed by a
+   `grain_pool_descriptors.json` sidecar keyed on the whole carrier set. Verified
+   on real footage: audio-weighted vs audio-off selection differs ~26% of pixels.
+   CPU-only. Remaining 6b: persisted queue task variant, SwiftUI exposure, Metal
+   render port; deferred: k>1 audio dims, sliding-window scope, cross-frame
+   scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

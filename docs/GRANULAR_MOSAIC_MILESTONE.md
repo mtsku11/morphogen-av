@@ -32,7 +32,7 @@ The cached audio controls alter per-frame granular settings, not the underlying 
 
 1. Done: route Source A RMS, onset, and spectral descriptors into time-addressed grain controls backed by the existing JSON analysis sidecars.
 2. Done (selection slice): multimodal nearest-neighbor grain selection on mean RGB — see Step 6 below.
-3. Done (6b CPU core): temporal grain pool / joint-AV selection — see Step 6b below. Per-grain carrier audio is now a real matching dimension. Sidecar/CLI/queue wiring and an optional Metal render port are the remaining 6b increments; cross-frame scheduling stays deferred.
+3. Done (6b CPU core + CLI render path): temporal grain pool / joint-AV selection — see Step 6b below. Per-grain carrier audio is now a real matching dimension, rendered by `render-granular-mosaic-pool-sequence` with a pool sidecar. A persisted queue task, SwiftUI exposure, and a Metal render port are the remaining 6b increments; cross-frame scheduling stays deferred.
 
 ## Step 6 — Multimodal Nearest-Neighbor Selection (RGB)
 
@@ -122,9 +122,16 @@ Contract:
 - Determinism: identical frames, audio, settings, `audio_weight`, and seed ⇒
   identical pool, selection, and output.
 
-Deferred (not this CPU-core slice): sidecar persistence, CLI/queue wiring, and
-SwiftUI exposure of the pooled path (a follow-on increment, mirroring step 6's
-3+4); a Metal port (selection stays CPU-side, but the cross-frame render samples
-multiple frames, so the GPU port is its own task); sliding-window pool scope;
-luma-variance/gradient feature dims; and cross-frame scheduling (anti-repeat /
-temporal coherence).
+CLI (landed): `render-granular-mosaic-pool-sequence` renders the pooled path
+CPU-only. `--audio-weight` scales the audio dim; `--modulator-rms-cache` and
+`--carrier-rms-cache` supply the Source A query and Source B pool audio
+respectively (RMS, k=1) — both-or-neither, omit for color-only matching across
+time. A `grain_pool_descriptors.json` sidecar tagged with the pooled algorithm
+and keyed on a whole-carrier-set fingerprint (frames + audio) is written/reused
+under `--grain-cache-dir`.
+
+Deferred: a persisted queue `RenderJob` task variant + SwiftUI exposure of the
+pooled path; a Metal render port (selection stays CPU-side, but the cross-frame
+render samples multiple frames, so the GPU port is its own task); k>1 audio dims
+(add spectral centroid); sliding-window pool scope; luma-variance/gradient
+feature dims; and cross-frame scheduling (anti-repeat / temporal coherence).

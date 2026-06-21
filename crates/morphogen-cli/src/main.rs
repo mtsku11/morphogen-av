@@ -23,18 +23,21 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
-    analyze_grain_colors_cpu, analyze_grains_cpu, feedback_state_path, flow_displace_cpu,
-    flow_feedback_frame_cpu, flow_temporal_supersample_cpu, granular_mosaic_with_selection_cpu,
+    analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
+    flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
+    granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
-    read_grain_selection_cache, select_grains_cpu, select_grains_multimodal_cpu, write_flow_cache,
+    read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
-    write_grain_color_descriptor_cache, write_grain_descriptor_cache, write_grain_selection_cache,
-    FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField, GrainColorDescriptor,
-    GrainDescriptor, GrainSelection, GranularMosaicSettings, ImageBufferF32, RenderError,
-    StructureMode, FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME,
-    GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM,
-    LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
+    write_grain_color_descriptor_cache, write_grain_descriptor_cache,
+    write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
+    FlowFeedbackStateDescriptor, FlowField, GrainColorDescriptor, GrainDescriptor, GrainPool,
+    GrainSelection, GranularMosaicSettings, ImageBufferF32, RenderError, StructureMode,
+    FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM,
+    LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -173,6 +176,37 @@ enum Commands {
         backend: CliRenderBackend,
         #[arg(long, value_enum, default_value_t = CliGrainSelection::Luma)]
         selection: CliGrainSelection,
+    },
+    /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
+    /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's
+    /// frame-time audio, making audio a real selection dimension.
+    RenderGranularMosaicPoolSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Scales every audio dimension in the selection distance.
+        #[arg(long, default_value_t = 1.0)]
+        audio_weight: f32,
+        /// RMS cache for Source A; supplies the per-output-frame query audio.
+        #[arg(long)]
+        modulator_rms_cache: Option<PathBuf>,
+        /// RMS cache for Source B; supplies each pool grain's carrier audio.
+        #[arg(long)]
+        carrier_rms_cache: Option<PathBuf>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        max_frames: Option<usize>,
+        #[arg(long)]
+        grain_cache_dir: Option<PathBuf>,
     },
     RenderFrameSequence {
         modulator_dir: PathBuf,
@@ -661,6 +695,38 @@ fn run() -> Result<(), CliError> {
                 centroid_grain_size_scale,
             ),
             selection_mode: selection.into(),
+        })
+        .map(|_| ()),
+        Commands::RenderGranularMosaicPoolSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            grain_size,
+            rearrangement,
+            variation,
+            seed,
+            audio_weight,
+            modulator_rms_cache,
+            carrier_rms_cache,
+            frame_rate,
+            max_frames,
+            grain_cache_dir,
+        } => render_granular_mosaic_pool_sequence(GranularMosaicPoolSequenceRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            settings: GranularMosaicSettings {
+                grain_size,
+                rearrangement,
+                variation,
+                seed,
+            },
+            audio_weight,
+            modulator_rms_cache: modulator_rms_cache.as_deref(),
+            carrier_rms_cache: carrier_rms_cache.as_deref(),
+            frame_rate,
+            max_frames,
+            grain_cache_dir: grain_cache_dir.as_deref(),
         })
         .map(|_| ()),
         Commands::RenderFrameSequence {
@@ -1821,6 +1887,217 @@ fn render_granular_mosaic_sequence(
         output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+struct GranularMosaicPoolSequenceRequest<'a> {
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_dir: &'a Path,
+    settings: GranularMosaicSettings,
+    audio_weight: f32,
+    modulator_rms_cache: Option<&'a Path>,
+    carrier_rms_cache: Option<&'a Path>,
+    frame_rate: f64,
+    max_frames: Option<usize>,
+    grain_cache_dir: Option<&'a Path>,
+}
+
+/// Render a temporal-grain-pool mosaic sequence (step 6b). The whole-clip pool is
+/// built once from every carrier frame; each grain carries its frame's RMS, and
+/// selection matches that against Source A's frame-time RMS query. CPU-only.
+fn render_granular_mosaic_pool_sequence(
+    request: GranularMosaicPoolSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    let GranularMosaicPoolSequenceRequest {
+        modulator_dir,
+        carrier_dir,
+        output_dir,
+        settings,
+        audio_weight,
+        modulator_rms_cache,
+        carrier_rms_cache,
+        frame_rate,
+        max_frames,
+        grain_cache_dir,
+    } = request;
+    settings.validate()?;
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+    if !audio_weight.is_finite() || audio_weight < 0.0 {
+        return Err(CliError::Message(
+            "audio-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    // Audio matching needs the pool grains and the query to share a descriptor
+    // space, so both caches are required together or omitted together.
+    if modulator_rms_cache.is_some() != carrier_rms_cache.is_some() {
+        return Err(CliError::Message(
+            "pool audio matching needs both --modulator-rms-cache and --carrier-rms-cache (or neither)"
+                .to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(modulator_dir)?;
+    let carrier_frame_paths = collect_image_frames(carrier_dir)?;
+    if modulator_frames.is_empty() || carrier_frame_paths.is_empty() {
+        return Err(CliError::Message(
+            "granular mosaic requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    fs::create_dir_all(output_dir)?;
+    if let Some(cache_root) = grain_cache_dir {
+        fs::create_dir_all(cache_root)?;
+    }
+
+    // The whole-clip pool material: every carrier frame, held in memory so the
+    // cross-frame render can sample any selected grain's source frame.
+    let pool_frames = carrier_frame_paths
+        .iter()
+        .map(|path| load_image_f32(path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let carrier_audio_controls = carrier_rms_cache
+        .map(|path| load_rms_controls(&path.to_string_lossy()))
+        .transpose()?;
+    let frame_audio: Vec<Vec<f32>> = (0..pool_frames.len())
+        .map(|frame_index| match &carrier_audio_controls {
+            Some(controls) => {
+                vec![scalar_at_frame_time(controls, frame_index as f64 / frame_rate)]
+            }
+            None => Vec::new(),
+        })
+        .collect();
+
+    let carrier_set_fingerprint = pool_set_fingerprint(&carrier_frame_paths, &frame_audio)?;
+    let (pool, reused_pool) = resolve_grain_pool(
+        grain_cache_dir,
+        &pool_frames,
+        &frame_audio,
+        settings.grain_size,
+        &carrier_set_fingerprint,
+    )?;
+
+    let modulator_audio_controls = modulator_rms_cache
+        .map(|path| load_rms_controls(&path.to_string_lossy()))
+        .transpose()?;
+
+    let paired_count = modulator_frames.len().min(pool_frames.len());
+    let frame_count = max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+
+    for index in 0..frame_count {
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let carrier = &pool_frames[index];
+        let query_audio: Vec<f32> = match &modulator_audio_controls {
+            Some(controls) => vec![scalar_at_frame_time(controls, index as f64 / frame_rate)],
+            None => Vec::new(),
+        };
+        let selection = select_grains_from_pool_cpu(
+            &modulator,
+            carrier.width,
+            carrier.height,
+            &query_audio,
+            &pool,
+            settings,
+            audio_weight,
+        )?;
+        let image =
+            granular_mosaic_with_pool_selection_cpu(&pool_frames, &pool, carrier, &selection, settings)?;
+        save_png(&image, &output_dir.join(format!("frame_{index:06}.png")))?;
+    }
+
+    if modulator_frames.len() != pool_frames.len() {
+        println!(
+            "source frame counts differ: {} modulator frame(s), {} carrier frame(s); rendered common prefix, pooled over all carrier frames",
+            modulator_frames.len(),
+            pool_frames.len()
+        );
+    }
+    if let Some(cache_root) = grain_cache_dir {
+        println!(
+            "{} grain pool sidecar at {}",
+            if reused_pool { "reused" } else { "wrote" },
+            cache_root.display()
+        );
+    }
+    println!(
+        "rendered granular mosaic pool sequence with {} frame(s) ({}, {} pool frame(s), audio_dims={}, audio_weight={}) from {} modulating {} to {}",
+        frame_count,
+        POOLED_GRAIN_ALGORITHM,
+        pool_frames.len(),
+        pool.audio_dims,
+        audio_weight,
+        modulator_dir.display(),
+        carrier_dir.display(),
+        output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+/// Resolve the temporal grain pool, reusing a matching sidecar or assembling it
+/// from the carrier frames and writing it back. Returns whether it was reused.
+fn resolve_grain_pool(
+    grain_cache_dir: Option<&Path>,
+    pool_frames: &[ImageBufferF32],
+    frame_audio: &[Vec<f32>],
+    grain_size: u32,
+    carrier_set_fingerprint: &str,
+) -> Result<(GrainPool, bool), CliError> {
+    let audio_dims = frame_audio.first().map_or(0, Vec::len);
+    if let Some(cache_root) = grain_cache_dir {
+        if cache_root
+            .join(GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME)
+            .is_file()
+        {
+            let cached = read_grain_pool_descriptor_cache(cache_root)?;
+            let is_current = cached.algorithm == POOLED_GRAIN_ALGORITHM
+                && cached.grain_size == grain_size
+                && cached.frame_count as usize == pool_frames.len()
+                && cached.audio_dims == audio_dims
+                && cached.carrier_set_fingerprint == carrier_set_fingerprint;
+            if is_current {
+                return Ok((cached.pool, true));
+            }
+        }
+    }
+    let pool = analyze_grain_pool_cpu(pool_frames, frame_audio, grain_size)?;
+    if let Some(cache_root) = grain_cache_dir {
+        write_grain_pool_descriptor_cache(
+            cache_root,
+            pool_frames.len() as u32,
+            carrier_set_fingerprint,
+            &pool,
+        )?;
+    }
+    Ok((pool, false))
+}
+
+/// Combined fingerprint over every carrier frame and its per-frame audio, so any
+/// change to a pool frame or its descriptor invalidates a cached pool.
+fn pool_set_fingerprint(
+    carrier_frame_paths: &[PathBuf],
+    frame_audio: &[Vec<f32>],
+) -> Result<String, CliError> {
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    for (path, audio) in carrier_frame_paths.iter().zip(frame_audio.iter()) {
+        update_fnv1a(&mut checksum, image_file_fingerprint(path)?.as_bytes());
+        update_fnv1a(&mut checksum, &[0]);
+        for value in audio {
+            update_fnv1a(&mut checksum, &value.to_bits().to_le_bytes());
+        }
+        update_fnv1a(&mut checksum, &[0]);
+    }
+    Ok(format!("fnv1a64:{checksum:016x}"))
 }
 
 struct GranularMosaicCacheContext<'a> {

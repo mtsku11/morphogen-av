@@ -229,6 +229,109 @@ fn render_granular_mosaic_writes_image_and_frame_sequence() {
 }
 
 #[test]
+fn render_granular_mosaic_pool_sequence_writes_frames_and_pool_sidecar() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let output_dir = temp_dir.path().join("pool-frames");
+    let grain_cache_dir = temp_dir.path().join("pool-cache");
+    fs::create_dir_all(&modulator_dir).expect("create modulator frames");
+    fs::create_dir_all(&carrier_dir).expect("create carrier frames");
+
+    for index in 0..2u32 {
+        let modulator = ImageBuffer::from_fn(4, 2, |x, _| {
+            let value = ((x + index) as u8).wrapping_mul(60);
+            Rgba([value, value, value, u8::MAX])
+        });
+        let carrier = ImageBuffer::from_fn(4, 2, |x, y| {
+            Rgba([
+                (x as u8).wrapping_mul(50).wrapping_add(index as u8 * 30),
+                (y as u8).wrapping_mul(120),
+                ((x + y) as u8).wrapping_mul(40),
+                u8::MAX,
+            ])
+        });
+        modulator
+            .save(modulator_dir.join(format!("frame_{:06}.png", index + 1)))
+            .expect("write modulator frame");
+        carrier
+            .save(carrier_dir.join(format!("frame_{:06}.png", index + 1)))
+            .expect("write carrier frame");
+    }
+
+    // RMS caches for Source A (query) and Source B (pool grains).
+    let modulator_wav = temp_dir.path().join("modulator.wav");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    write_test_wav(&modulator_wav, &[0.0, 0.5, -0.5, 1.0, -1.0, 0.25, -0.25, 0.75]);
+    write_test_wav(&carrier_wav, &[1.0, -1.0, 0.5, -0.5, 0.0, 0.8, -0.8, 0.2]);
+    let modulator_rms = temp_dir.path().join("mod-rms.json");
+    let carrier_rms = temp_dir.path().join("car-rms.json");
+    for (wav, json) in [(&modulator_wav, &modulator_rms), (&carrier_wav, &carrier_rms)] {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "cache-rms",
+                wav.to_string_lossy().as_ref(),
+                json.to_string_lossy().as_ref(),
+                "--window-size",
+                "2",
+                "--hop-size",
+                "2",
+            ])
+            .assert()
+            .success();
+    }
+
+    let modulator_dir_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_dir_arg = carrier_dir.to_string_lossy().to_string();
+    let output_dir_arg = output_dir.to_string_lossy().to_string();
+    let grain_cache_arg = grain_cache_dir.to_string_lossy().to_string();
+    let modulator_rms_arg = modulator_rms.to_string_lossy().to_string();
+    let carrier_rms_arg = carrier_rms.to_string_lossy().to_string();
+    let pool_args = [
+        "render-granular-mosaic-pool-sequence",
+        modulator_dir_arg.as_str(),
+        carrier_dir_arg.as_str(),
+        output_dir_arg.as_str(),
+        "--grain-size",
+        "2",
+        "--audio-weight",
+        "1.0",
+        "--modulator-rms-cache",
+        modulator_rms_arg.as_str(),
+        "--carrier-rms-cache",
+        carrier_rms_arg.as_str(),
+        "--frame-rate",
+        "2.0",
+        "--grain-cache-dir",
+        grain_cache_arg.as_str(),
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(pool_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wrote grain pool sidecar"))
+        .stdout(predicate::str::contains("pooled_av_nearest_grain_cpu_v1"));
+
+    assert!(output_dir.join("frame_000000.png").exists());
+    assert!(output_dir.join("frame_000001.png").exists());
+    let pool_sidecar = grain_cache_dir.join("grain_pool_descriptors.json");
+    assert!(pool_sidecar.exists());
+    let pool_json = fs::read_to_string(&pool_sidecar).expect("read pool sidecar");
+    assert!(pool_json.contains("pooled_av_nearest_grain_cpu_v1"));
+
+    // A second identical run reuses the persisted pool.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(pool_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reused grain pool sidecar"));
+}
+
+#[test]
 fn render_frame_sequence_writes_pngs_and_per_frame_flow_caches() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");
