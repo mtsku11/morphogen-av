@@ -1392,6 +1392,8 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
             "0.25",
             "--coherence-reach",
             "5",
+            "--spatial-coherence-weight",
+            "0.125",
             "--max-frames",
             "2",
             "--frame-rate",
@@ -1417,6 +1419,7 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
     assert_eq!(queued["jobs"][0]["task"]["anti_repeat_cooldown"], 3);
     assert_eq!(queued["jobs"][0]["task"]["coherence_weight"], 0.25);
     assert_eq!(queued["jobs"][0]["task"]["coherence_reach"], 5);
+    assert_eq!(queued["jobs"][0]["task"]["spatial_coherence_weight"], 0.125);
     assert_eq!(
         queued["jobs"][0]["provenance"]["analysis_caches"][0]["kind"],
         "grain_descriptors"
@@ -1465,6 +1468,10 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
     assert_eq!(manifest["granular_mosaic_pool"]["anti_repeat_cooldown"], 3);
     assert_eq!(manifest["granular_mosaic_pool"]["coherence_weight"], 0.25);
     assert_eq!(manifest["granular_mosaic_pool"]["coherence_reach"], 5);
+    assert_eq!(
+        manifest["granular_mosaic_pool"]["spatial_coherence_weight"],
+        0.125
+    );
 
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")

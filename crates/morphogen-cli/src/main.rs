@@ -464,6 +464,10 @@ enum Commands {
         /// Frame distance over which the coherence penalty saturates. Only matters when weight > 0.
         #[arg(long, default_value_t = 8)]
         coherence_reach: u32,
+        /// Spatial-origin coherence reward for grain-origin continuity within a
+        /// frame (0 = off). Shares --coherence-reach as its saturation distance.
+        #[arg(long, default_value_t = 0.0)]
+        spatial_coherence_weight: f32,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long, default_value_t = 24.0)]
@@ -1070,6 +1074,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             max_frames,
             frame_rate,
             no_grain_cache,
@@ -1096,6 +1101,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             max_frames,
             frame_rate,
             write_grain_cache: !no_grain_cache,
@@ -4102,6 +4108,7 @@ struct QueueAddGranularMosaicPoolSequenceRequest<'a> {
     anti_repeat_cooldown: u32,
     coherence_weight: f32,
     coherence_reach: u32,
+    spatial_coherence_weight: f32,
     max_frames: Option<u32>,
     frame_rate: f64,
     write_grain_cache: bool,
@@ -4128,6 +4135,7 @@ fn queue_add_granular_mosaic_pool_sequence(
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         max_frames,
         frame_rate,
         write_grain_cache,
@@ -4170,6 +4178,11 @@ fn queue_add_granular_mosaic_pool_sequence(
     if !coherence_weight.is_finite() || coherence_weight < 0.0 {
         return Err(CliError::Message(
             "coherence-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    if !spatial_coherence_weight.is_finite() || spatial_coherence_weight < 0.0 {
+        return Err(CliError::Message(
+            "spatial-coherence-weight must be a finite, non-negative number".to_string(),
         ));
     }
 
@@ -4232,6 +4245,7 @@ fn queue_add_granular_mosaic_pool_sequence(
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             max_frames,
             frame_rate,
             backend,
@@ -4698,6 +4712,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         max_frames,
         frame_rate,
         backend,
@@ -4744,9 +4759,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 anti_repeat_cooldown,
                 coherence_weight,
                 coherence_reach,
-                // Queue exposure of spatial-origin coherence lands in the next
-                // increment; whole-clip jobs render with it off.
-                spatial_coherence_weight: 0.0,
+                spatial_coherence_weight,
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
@@ -4782,6 +4795,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             backend,
             provenance: Some(&provenance),
         })?;
@@ -5176,6 +5190,7 @@ struct GranularMosaicPoolManifest<'a> {
     anti_repeat_cooldown: u32,
     coherence_weight: f32,
     coherence_reach: u32,
+    spatial_coherence_weight: f32,
     backend: RenderBackend,
     provenance: Option<&'a RenderJobProvenance>,
 }
@@ -5199,6 +5214,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         backend,
         provenance,
     } = manifest;
@@ -5229,6 +5245,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
             "anti_repeat_cooldown": anti_repeat_cooldown,
             "coherence_weight": coherence_weight,
             "coherence_reach": coherence_reach,
+            "spatial_coherence_weight": spatial_coherence_weight,
             "backend": render_backend_label(backend)
         },
         "provenance": provenance,

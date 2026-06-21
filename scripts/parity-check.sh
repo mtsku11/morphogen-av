@@ -96,7 +96,7 @@ fi
 # Provenance: show the knobs the queue persisted into the bundle manifest.
 if [ -f "$manifest" ]; then
   echo "parity: queue manifest granular_mosaic_pool knobs:"
-  grep -E '"(pool_window|anti_repeat_weight|anti_repeat_cooldown|coherence_weight|coherence_reach|audio_weight|modulator_centroid_cache|carrier_centroid_cache|backend)"' \
+  grep -E '"(pool_window|anti_repeat_weight|anti_repeat_cooldown|coherence_weight|coherence_reach|spatial_coherence_weight|audio_weight|modulator_centroid_cache|carrier_centroid_cache|backend)"' \
     "$manifest" | sed 's/^[[:space:]]*/    /'
 fi
 

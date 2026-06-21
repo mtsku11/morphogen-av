@@ -157,6 +157,10 @@ pub enum RenderJobTask {
         /// Frame distance over which the coherence penalty saturates.
         #[serde(default)]
         coherence_reach: u32,
+        /// Spatial-origin coherence weight (rewards grain-origin continuity within
+        /// a frame, sharing `coherence_reach`); `0` = off.
+        #[serde(default)]
+        spatial_coherence_weight: f32,
         max_frames: Option<u32>,
         frame_rate: f64,
         /// Render backend; the Metal path is gated per-frame against the CPU
@@ -409,6 +413,7 @@ mod tests {
             anti_repeat_cooldown: 6,
             coherence_weight: 0.75,
             coherence_reach: 4,
+            spatial_coherence_weight: 0.25,
             max_frames: Some(48),
             frame_rate: 24.0,
             backend: RenderBackend::Metal,
@@ -448,6 +453,7 @@ mod tests {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             backend,
             ..
         } = task
@@ -465,6 +471,7 @@ mod tests {
         assert_eq!(anti_repeat_cooldown, 0);
         assert_eq!(coherence_weight, 0.0);
         assert_eq!(coherence_reach, 0);
+        assert_eq!(spatial_coherence_weight, 0.0);
         assert_eq!(backend, RenderBackend::Cpu);
     }
 
