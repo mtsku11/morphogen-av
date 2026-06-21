@@ -1382,6 +1382,16 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
             modulator_rms_arg.as_str(),
             "--carrier-rms-cache",
             carrier_rms_arg.as_str(),
+            "--pool-window",
+            "2",
+            "--anti-repeat-weight",
+            "0.5",
+            "--anti-repeat-cooldown",
+            "3",
+            "--coherence-weight",
+            "0.25",
+            "--coherence-reach",
+            "5",
             "--max-frames",
             "2",
             "--frame-rate",
@@ -1401,6 +1411,12 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
         "frame_sequence_granular_mosaic_pool"
     );
     assert_eq!(queued["jobs"][0]["task"]["audio_weight"], 1.0);
+    // Pool-selection knobs added in the exposure sweep persist on the queued task.
+    assert_eq!(queued["jobs"][0]["task"]["pool_window"], 2);
+    assert_eq!(queued["jobs"][0]["task"]["anti_repeat_weight"], 0.5);
+    assert_eq!(queued["jobs"][0]["task"]["anti_repeat_cooldown"], 3);
+    assert_eq!(queued["jobs"][0]["task"]["coherence_weight"], 0.25);
+    assert_eq!(queued["jobs"][0]["task"]["coherence_reach"], 5);
     assert_eq!(
         queued["jobs"][0]["provenance"]["analysis_caches"][0]["kind"],
         "grain_descriptors"
@@ -1444,6 +1460,11 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
         "pooled_av_nearest_grain_cpu_v1"
     );
     assert_eq!(manifest["granular_mosaic_pool"]["audio_weight"], 1.0);
+    assert_eq!(manifest["granular_mosaic_pool"]["pool_window"], 2);
+    assert_eq!(manifest["granular_mosaic_pool"]["anti_repeat_weight"], 0.5);
+    assert_eq!(manifest["granular_mosaic_pool"]["anti_repeat_cooldown"], 3);
+    assert_eq!(manifest["granular_mosaic_pool"]["coherence_weight"], 0.25);
+    assert_eq!(manifest["granular_mosaic_pool"]["coherence_reach"], 5);
 
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
