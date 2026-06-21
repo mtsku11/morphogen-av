@@ -11,9 +11,13 @@ pub const MULTIMODAL_GRAIN_ALGORITHM: &str = "multimodal_nearest_grain_cpu_v1";
 
 /// Algorithm identifier for the temporal-grain-pool joint-AV selection path
 /// (step 6b). Grains are drawn from across time and matched on a combined
-/// `[mean_color | audio]` feature vector. Distinct id invalidates stale
+/// `[mean_color | texture | audio]` feature vector. Distinct id invalidates stale
 /// single-frame sidecars.
-pub const POOLED_GRAIN_ALGORITHM: &str = "pooled_av_nearest_grain_cpu_v1";
+///
+/// Bumped to `v2` when the per-grain texture descriptor (luma-variance + gradient
+/// magnitude) was added: the pool sidecar schema changed, so a `v1` sidecar genuinely
+/// lacks the texture dims and must be regenerated rather than silently read as zero.
+pub const POOLED_GRAIN_ALGORITHM: &str = "pooled_av_nearest_grain_cpu_v2";
 
 /// Parameters for deterministic visual grain recomposition. A tile's average
 /// Source A luminance selects a Source B tile; variation blends that choice
@@ -55,9 +59,15 @@ pub struct GrainSelection {
 }
 
 /// A single grain in a temporal pool (step 6b). Carries its source frame, tile
-/// origin, mean color, and the carrier-audio descriptor vector sampled at that
+/// origin, mean color, a 2-dim spatial texture descriptor (`[luma_variance,
+/// gradient_magnitude]`), and the carrier-audio descriptor vector sampled at that
 /// frame's source time (shared by every grain of the same frame). The combined
-/// `[mean_color | audio]` vector is the joint-AV matching feature.
+/// `[mean_color | texture | audio]` vector is the joint matching feature.
+///
+/// `texture` lets selection discriminate grains of equal mean color by their
+/// *spatial busyness* — luma variance and mean gradient magnitude over the tile —
+/// so a smooth Source A region draws smooth carrier grains and a busy region draws
+/// busy ones. It is always computed; a `texture_weight` of zero leaves it inert.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PooledGrainDescriptor {
     pub global_index: u32,
@@ -65,6 +75,7 @@ pub struct PooledGrainDescriptor {
     pub origin_x: u32,
     pub origin_y: u32,
     pub mean_color: [f32; 3],
+    pub texture: [f32; 2],
     pub audio: Vec<f32>,
 }
 
@@ -361,6 +372,7 @@ pub fn analyze_grain_pool_cpu(
                     origin_x,
                     origin_y,
                     mean_color: average_carrier_tile_color(frame, origin_x, origin_y, grain_size),
+                    texture: tile_texture(frame, origin_x, origin_y, grain_size),
                     audio: audio.clone(),
                 });
                 global_index += 1;
@@ -503,9 +515,11 @@ impl TemporalCoherence<'_> {
     }
 }
 
-/// Select pool grains for each output tile by nearest combined `[color | audio]`
-/// descriptor (step 6b). The query is Source A's per-tile mean color plus this
-/// output frame's audio descriptor vector; `audio_weight` scales every audio
+/// Select pool grains for each output tile by nearest combined
+/// `[color | texture | audio]` descriptor (step 6b). The query is Source A's
+/// per-tile mean color, that same tile's 2-dim texture descriptor (luma variance +
+/// gradient magnitude), and this output frame's audio descriptor vector;
+/// `texture_weight` scales both texture dims and `audio_weight` every audio
 /// dimension. Selected indices are global pool indices. `variation` blends the
 /// nearest match with a seeded alternate pool grain, leaving the match exact at
 /// `variation = 0`. `window` bounds which pool frames are eligible; `anti_repeat`
@@ -521,6 +535,7 @@ pub fn select_grains_from_pool_cpu(
     pool: &GrainPool,
     settings: GranularMosaicSettings,
     audio_weight: f32,
+    texture_weight: f32,
     window: PoolSelectionWindow,
     anti_repeat: Option<AntiRepeat<'_>>,
     coherence: Option<TemporalCoherence<'_>>,
@@ -537,6 +552,11 @@ pub fn select_grains_from_pool_cpu(
     if !audio_weight.is_finite() || audio_weight < 0.0 {
         return Err(RenderError::InvalidGranularMosaicSettings(
             "audio_weight must be a finite, non-negative value".to_string(),
+        ));
+    }
+    if !texture_weight.is_finite() || texture_weight < 0.0 {
+        return Err(RenderError::InvalidGranularMosaicSettings(
+            "texture_weight must be a finite, non-negative value".to_string(),
         ));
     }
     if !query_audio.iter().all(|value| value.is_finite()) {
@@ -560,6 +580,14 @@ pub fn select_grains_from_pool_cpu(
                 tile_y,
                 settings.grain_size,
             );
+            let query_texture = average_modulator_tile_texture(
+                modulator,
+                carrier_width,
+                carrier_height,
+                tile_x,
+                tile_y,
+                settings.grain_size,
+            );
             // Resolve this tile's previous pick for temporal coherence: map the
             // tile's prior global selection back to its pool frame and origin.
             let coherence_prev = coherence.as_ref().and_then(|coherence| {
@@ -574,8 +602,10 @@ pub fn select_grains_from_pool_cpu(
             });
             indices.push(select_pool_grain_index(
                 target,
+                query_texture,
                 query_audio,
                 audio_weight,
+                texture_weight,
                 eligible,
                 eligible_start,
                 anti_repeat.as_ref(),
@@ -829,6 +859,99 @@ fn average_carrier_tile_color(
     [total[0] * inverse, total[1] * inverse, total[2] * inverse]
 }
 
+/// Spatial texture descriptor of a carrier tile: `[luma_variance,
+/// gradient_magnitude]`. Variance is the population variance of per-pixel
+/// luminance over the tile; gradient magnitude is the mean of
+/// `sqrt(dx² + dy²)` of forward luma differences within the tile (the tile's
+/// right and bottom edges contribute a zero one-sided difference). Both grow with
+/// spatial busyness and are zero for a flat tile, so they discriminate grains of
+/// equal mean color by structure.
+fn tile_texture(
+    image: &ImageBufferF32,
+    start_x: u32,
+    start_y: u32,
+    grain_size: u32,
+) -> [f32; 2] {
+    let end_x = (start_x + grain_size).min(image.width);
+    let end_y = (start_y + grain_size).min(image.height);
+    let width = (end_x - start_x) as usize;
+    let height = (end_y - start_y) as usize;
+    let mut luma = Vec::with_capacity(width * height);
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            luma.push(luminance(image.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 0.0])));
+        }
+    }
+    texture_from_luma(&luma, width, height)
+}
+
+/// Texture descriptor of a Source A tile, sampled in output-normalized space with
+/// the clamped bilinear border (mirroring [`average_modulator_tile_color`]) so the
+/// query texture is comparable to the carrier-tile texture regardless of modulator
+/// resolution.
+fn average_modulator_tile_texture(
+    modulator: &ImageBufferF32,
+    output_width: u32,
+    output_height: u32,
+    tile_x: u32,
+    tile_y: u32,
+    grain_size: u32,
+) -> [f32; 2] {
+    let start_x = tile_x * grain_size;
+    let start_y = tile_y * grain_size;
+    let end_x = (start_x + grain_size).min(output_width);
+    let end_y = (start_y + grain_size).min(output_height);
+    let width = (end_x - start_x) as usize;
+    let height = (end_y - start_y) as usize;
+    let mut luma = Vec::with_capacity(width * height);
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let pixel = sample_bilinear_clamped(
+                modulator,
+                remap_coordinate(x, output_width, modulator.width),
+                remap_coordinate(y, output_height, modulator.height),
+            );
+            luma.push(luminance(pixel));
+        }
+    }
+    texture_from_luma(&luma, width, height)
+}
+
+/// Shared `[variance, gradient_magnitude]` computation over a row-major luma tile.
+fn texture_from_luma(luma: &[f32], width: usize, height: usize) -> [f32; 2] {
+    if luma.is_empty() {
+        return [0.0, 0.0];
+    }
+    let count = luma.len() as f32;
+    let mut sum = 0.0_f32;
+    let mut sum_sq = 0.0_f32;
+    for &value in luma {
+        sum += value;
+        sum_sq += value * value;
+    }
+    let mean = sum / count;
+    let variance = (sum_sq / count - mean * mean).max(0.0);
+
+    let mut gradient_sum = 0.0_f32;
+    for y in 0..height {
+        for x in 0..width {
+            let here = luma[y * width + x];
+            let dx = if x + 1 < width {
+                luma[y * width + x + 1] - here
+            } else {
+                0.0
+            };
+            let dy = if y + 1 < height {
+                luma[(y + 1) * width + x] - here
+            } else {
+                0.0
+            };
+            gradient_sum += (dx * dx + dy * dy).sqrt();
+        }
+    }
+    [variance, gradient_sum / count]
+}
+
 fn select_color_grain_index(
     target: [f32; 3],
     descriptors: &[GrainColorDescriptor],
@@ -884,8 +1007,10 @@ fn eligible_grain_range(pool: &GrainPool, window: PoolSelectionWindow) -> (usize
 #[allow(clippy::too_many_arguments)]
 fn select_pool_grain_index(
     target_color: [f32; 3],
+    query_texture: [f32; 2],
     query_audio: &[f32],
     audio_weight: f32,
+    texture_weight: f32,
     eligible: &[PooledGrainDescriptor],
     eligible_start: usize,
     anti_repeat: Option<&AntiRepeat<'_>>,
@@ -899,7 +1024,14 @@ fn select_pool_grain_index(
     // seeded alternate both resolve to global indices that stay inside it. The
     // anti-repeat and coherence penalties reshape only the nearest-match distance.
     let distance = |grain: &PooledGrainDescriptor| {
-        let mut distance = pooled_distance_sq(grain, &target_color, query_audio, audio_weight);
+        let mut distance = pooled_distance_sq(
+            grain,
+            &target_color,
+            &query_texture,
+            query_audio,
+            texture_weight,
+            audio_weight,
+        );
         if let Some(anti_repeat) = anti_repeat {
             distance += anti_repeat.penalty(grain.global_index);
         }
@@ -933,20 +1065,27 @@ fn select_pool_grain_index(
     .round() as u32
 }
 
-/// Combined squared distance over the `[color(3) | audio(k)]` feature vector:
-/// equal per-channel color weights and a single scalar `audio_weight` on every
-/// audio dimension. Alloc-free so it stays cheap inside the per-tile nearest
-/// search over the whole pool.
+/// Combined squared distance over the `[color(3) | texture(2) | audio(k)]` feature
+/// vector: equal per-channel color weights, a single scalar `texture_weight` on
+/// both texture dims, and a single scalar `audio_weight` on every audio dimension.
+/// Alloc-free so it stays cheap inside the per-tile nearest search over the whole
+/// pool.
 fn pooled_distance_sq(
     grain: &PooledGrainDescriptor,
     target_color: &[f32; 3],
+    query_texture: &[f32; 2],
     query_audio: &[f32],
+    texture_weight: f32,
     audio_weight: f32,
 ) -> f32 {
     let mut sum = 0.0_f32;
     for (grain_channel, target_channel) in grain.mean_color.iter().zip(target_color.iter()) {
         let delta = grain_channel - target_channel;
         sum += delta * delta;
+    }
+    for (grain_value, query_value) in grain.texture.iter().zip(query_texture.iter()) {
+        let delta = grain_value - query_value;
+        sum += texture_weight * delta * delta;
     }
     for (grain_value, query_value) in grain.audio.iter().zip(query_audio.iter()) {
         let delta = grain_value - query_value;
@@ -989,6 +1128,7 @@ fn validate_pool(pool: &GrainPool, grain_size: u32) -> Result<(), RenderError> {
             || grain.origin_y != expected_y
             || grain.audio.len() != pool.audio_dims
             || !grain.mean_color.iter().all(|value| value.is_finite())
+            || !grain.texture.iter().all(|value| value.is_finite())
             || !grain.audio.iter().all(|value| value.is_finite())
         {
             return Err(RenderError::InvalidGranularMosaicSettings(
@@ -1421,12 +1561,12 @@ mod tests {
         };
 
         // Query audio = frame 1's descriptor; weighted audio picks grain 1.
-        let weighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 1.0, PoolSelectionWindow::WholeClip, None, None)
+        let weighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 1.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("weighted selection");
         assert_eq!(weighted.indices, vec![1]);
 
         // audio_weight 0 ignores audio; the color tie breaks to ascending index.
-        let unweighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 0.0, PoolSelectionWindow::WholeClip, None, None)
+        let unweighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 0.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("unweighted selection");
         assert_eq!(unweighted.indices, vec![0]);
     }
@@ -1448,7 +1588,7 @@ mod tests {
         // k = 1 (RMS only): grain 0's RMS (0.5) is nearest the 0.52 query.
         let rms_only = vec![vec![0.5_f32], vec![0.6_f32]];
         let pool_k1 = analyze_grain_pool_cpu(&frames, &rms_only, 1).expect("k1 pool");
-        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0, PoolSelectionWindow::WholeClip, None, None)
+        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("k1 selection");
         assert_eq!(pick_k1.indices, vec![0]);
 
@@ -1458,9 +1598,81 @@ mod tests {
         let pool_k2 = analyze_grain_pool_cpu(&frames, &rms_centroid, 1).expect("k2 pool");
         assert_eq!(pool_k2.audio_dims, 2);
         let pick_k2 =
-            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0, PoolSelectionWindow::WholeClip, None, None)
+            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
                 .expect("k2 selection");
         assert_eq!(pick_k2.indices, vec![1]);
+    }
+
+    #[test]
+    fn pool_texture_breaks_a_color_tie() {
+        // Two 2x2 single-grain frames with identical mean color (0.5 gray) but
+        // different spatial structure: frame 0 is flat (zero variance/gradient),
+        // frame 1 is a checkerboard (high variance/gradient). The query color
+        // matches both equally, so only the texture dims can decide the
+        // selection — proving texture enters ranking. The modulator carries frame
+        // 1's checkerboard, so its texture query matches frame 1.
+        let flat = ImageBufferF32::new(2, 2, vec![[0.5, 0.5, 0.5, 1.0]; 4]).expect("flat frame");
+        let checker = ImageBufferF32::new(
+            2,
+            2,
+            vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        )
+        .expect("checker frame");
+        let modulator = checker.clone();
+        let frames = [flat, checker];
+        let audio = vec![Vec::new(); 2];
+        let pool = analyze_grain_pool_cpu(&frames, &audio, 2).expect("pool");
+        // Mean color ties: both grains are 0.5 gray.
+        assert_eq!(pool.grains[0].mean_color, [0.5, 0.5, 0.5]);
+        assert_eq!(pool.grains[1].mean_color, [0.5, 0.5, 0.5]);
+        // Frame 0 is flat (zero texture); frame 1 is busy (nonzero on both dims).
+        assert_eq!(pool.grains[0].texture, [0.0, 0.0]);
+        assert!(pool.grains[1].texture[0] > 0.0 && pool.grains[1].texture[1] > 0.0);
+        let settings = GranularMosaicSettings {
+            grain_size: 2,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        // texture_weight 0 ignores texture; the color tie breaks to ascending index.
+        let untextured = select_grains_from_pool_cpu(
+            &modulator,
+            2,
+            2,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("untextured selection");
+        assert_eq!(untextured.indices, vec![0]);
+
+        // texture_weight 1 makes the busy modulator query select the busy grain 1.
+        let textured = select_grains_from_pool_cpu(
+            &modulator,
+            2,
+            2,
+            &[],
+            &pool,
+            settings,
+            0.0,
+            1.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("textured selection");
+        assert_eq!(textured.indices, vec![1]);
     }
 
     #[test]
@@ -1495,6 +1707,7 @@ mod tests {
                 &pool,
                 settings,
                 0.0,
+                0.0,
                 PoolSelectionWindow::Trailing {
                     current_frame: current,
                     frames: 1,
@@ -1515,6 +1728,7 @@ mod tests {
             &[],
             &pool,
             settings,
+            0.0,
             0.0,
             PoolSelectionWindow::WholeClip,
             None,
@@ -1550,6 +1764,7 @@ mod tests {
             &pool,
             settings,
             0.0,
+            0.0,
             PoolSelectionWindow::WholeClip,
             Some(AntiRepeat {
                 last_used_frame: &history,
@@ -1572,6 +1787,7 @@ mod tests {
             &pool,
             settings,
             0.0,
+            0.0,
             PoolSelectionWindow::WholeClip,
             Some(AntiRepeat {
                 last_used_frame: &history,
@@ -1592,6 +1808,7 @@ mod tests {
             &[],
             &pool,
             settings,
+            0.0,
             0.0,
             PoolSelectionWindow::WholeClip,
             None,
@@ -1631,6 +1848,7 @@ mod tests {
             &pool,
             settings,
             0.0,
+            0.0,
             PoolSelectionWindow::WholeClip,
             None,
             Some(TemporalCoherence {
@@ -1654,6 +1872,7 @@ mod tests {
             &pool,
             settings,
             0.0,
+            0.0,
             PoolSelectionWindow::WholeClip,
             None,
             Some(TemporalCoherence {
@@ -1674,6 +1893,7 @@ mod tests {
             &[],
             &pool,
             settings,
+            0.0,
             0.0,
             PoolSelectionWindow::WholeClip,
             None,
@@ -1713,6 +1933,7 @@ mod tests {
             &pool,
             settings,
             0.0,
+            0.0,
             PoolSelectionWindow::WholeClip,
             None,
             Some(TemporalCoherence {
@@ -1737,6 +1958,7 @@ mod tests {
             &pool,
             settings,
             0.0,
+            0.0,
             PoolSelectionWindow::WholeClip,
             None,
             Some(TemporalCoherence {
@@ -1758,6 +1980,7 @@ mod tests {
             &[],
             &pool,
             settings,
+            0.0,
             0.0,
             PoolSelectionWindow::WholeClip,
             None,
@@ -1821,9 +2044,9 @@ mod tests {
             seed: 17,
         };
 
-        let first = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip, None, None)
+        let first = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, 0.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("first selection");
-        let second = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, PoolSelectionWindow::WholeClip, None, None)
+        let second = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, 0.0, PoolSelectionWindow::WholeClip, None, None)
             .expect("second selection");
 
         assert_eq!(first, second);
