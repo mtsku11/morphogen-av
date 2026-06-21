@@ -201,6 +201,12 @@ enum Commands {
         /// RMS cache for Source B; supplies each pool grain's carrier audio.
         #[arg(long)]
         carrier_rms_cache: Option<PathBuf>,
+        /// STFT cache for Source A; appends a spectral-centroid query dimension.
+        #[arg(long)]
+        modulator_centroid_cache: Option<PathBuf>,
+        /// STFT cache for Source B; appends a spectral-centroid dimension to each pool grain.
+        #[arg(long)]
+        carrier_centroid_cache: Option<PathBuf>,
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
         #[arg(long)]
@@ -744,6 +750,8 @@ fn run() -> Result<(), CliError> {
             audio_weight,
             modulator_rms_cache,
             carrier_rms_cache,
+            modulator_centroid_cache,
+            carrier_centroid_cache,
             frame_rate,
             max_frames,
             grain_cache_dir,
@@ -761,6 +769,8 @@ fn run() -> Result<(), CliError> {
             audio_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
+            modulator_centroid_cache: modulator_centroid_cache.as_deref(),
+            carrier_centroid_cache: carrier_centroid_cache.as_deref(),
             frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
@@ -1975,15 +1985,37 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     audio_weight: f32,
     modulator_rms_cache: Option<&'a Path>,
     carrier_rms_cache: Option<&'a Path>,
+    modulator_centroid_cache: Option<&'a Path>,
+    carrier_centroid_cache: Option<&'a Path>,
     frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
     backend: RenderBackend,
 }
 
+/// Build a pool/query audio vector in fixed order `[rms?, centroid?]`, sampling
+/// each supplied descriptor at `time_seconds`. Absent descriptors contribute no
+/// dimension (so k ranges 0..=2); supplying the descriptors symmetrically on the
+/// modulator and carrier sides keeps both indexing the same audio dimensions.
+fn pool_audio_vector(
+    rms: Option<&[TimedScalarControl]>,
+    centroid: Option<&[TimedScalarControl]>,
+    time_seconds: f64,
+) -> Vec<f32> {
+    let mut audio = Vec::with_capacity(2);
+    if let Some(controls) = rms {
+        audio.push(scalar_at_frame_time(controls, time_seconds));
+    }
+    if let Some(controls) = centroid {
+        audio.push(scalar_at_frame_time(controls, time_seconds));
+    }
+    audio
+}
+
 /// Render a temporal-grain-pool mosaic sequence (step 6b). The whole-clip pool is
-/// built once from every carrier frame; each grain carries its frame's RMS, and
-/// selection matches that against Source A's frame-time RMS query. CPU-only.
+/// built once from every carrier frame; each grain carries its frame's audio
+/// descriptor vector (`[rms?, centroid?]`), and selection matches that against
+/// Source A's frame-time query vector.
 fn render_granular_mosaic_pool_sequence(
     request: GranularMosaicPoolSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
@@ -1995,6 +2027,8 @@ fn render_granular_mosaic_pool_sequence(
         audio_weight,
         modulator_rms_cache,
         carrier_rms_cache,
+        modulator_centroid_cache,
+        carrier_centroid_cache,
         frame_rate,
         max_frames,
         grain_cache_dir,
@@ -2017,10 +2051,18 @@ fn render_granular_mosaic_pool_sequence(
         ));
     }
     // Audio matching needs the pool grains and the query to share a descriptor
-    // space, so both caches are required together or omitted together.
+    // space, so each descriptor type is required on both sides or neither. The
+    // audio vector is built in fixed order [rms?, centroid?] so the modulator
+    // query and carrier pool grains index the same dimensions.
     if modulator_rms_cache.is_some() != carrier_rms_cache.is_some() {
         return Err(CliError::Message(
             "pool audio matching needs both --modulator-rms-cache and --carrier-rms-cache (or neither)"
+                .to_string(),
+        ));
+    }
+    if modulator_centroid_cache.is_some() != carrier_centroid_cache.is_some() {
+        return Err(CliError::Message(
+            "pool centroid matching needs both --modulator-centroid-cache and --carrier-centroid-cache (or neither)"
                 .to_string(),
         ));
     }
@@ -2045,15 +2087,19 @@ fn render_granular_mosaic_pool_sequence(
         .map(|path| load_image_f32(path))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let carrier_audio_controls = carrier_rms_cache
+    let carrier_rms_controls = carrier_rms_cache
         .map(|path| load_rms_controls(&path.to_string_lossy()))
         .transpose()?;
+    let carrier_centroid_controls = carrier_centroid_cache
+        .map(|path| load_centroid_controls(&path.to_string_lossy()))
+        .transpose()?;
     let frame_audio: Vec<Vec<f32>> = (0..pool_frames.len())
-        .map(|frame_index| match &carrier_audio_controls {
-            Some(controls) => {
-                vec![scalar_at_frame_time(controls, frame_index as f64 / frame_rate)]
-            }
-            None => Vec::new(),
+        .map(|frame_index| {
+            pool_audio_vector(
+                carrier_rms_controls.as_deref(),
+                carrier_centroid_controls.as_deref(),
+                frame_index as f64 / frame_rate,
+            )
         })
         .collect();
 
@@ -2066,8 +2112,11 @@ fn render_granular_mosaic_pool_sequence(
         &carrier_set_fingerprint,
     )?;
 
-    let modulator_audio_controls = modulator_rms_cache
+    let modulator_rms_controls = modulator_rms_cache
         .map(|path| load_rms_controls(&path.to_string_lossy()))
+        .transpose()?;
+    let modulator_centroid_controls = modulator_centroid_cache
+        .map(|path| load_centroid_controls(&path.to_string_lossy()))
         .transpose()?;
 
     let paired_count = modulator_frames.len().min(pool_frames.len());
@@ -2078,10 +2127,11 @@ fn render_granular_mosaic_pool_sequence(
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = &pool_frames[index];
-        let query_audio: Vec<f32> = match &modulator_audio_controls {
-            Some(controls) => vec![scalar_at_frame_time(controls, index as f64 / frame_rate)],
-            None => Vec::new(),
-        };
+        let query_audio = pool_audio_vector(
+            modulator_rms_controls.as_deref(),
+            modulator_centroid_controls.as_deref(),
+            index as f64 / frame_rate,
+        );
         let selection = select_grains_from_pool_cpu(
             &modulator,
             carrier.width,
@@ -4466,6 +4516,10 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 audio_weight,
                 modulator_rms_cache: modulator_rms_cache.as_deref().map(Path::new),
                 carrier_rms_cache: carrier_rms_cache.as_deref().map(Path::new),
+                // Queue jobs persist only RMS caches today; centroid (k=2) is a
+                // direct-render knob until the queue task carries centroid paths.
+                modulator_centroid_cache: None,
+                carrier_centroid_cache: None,
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),

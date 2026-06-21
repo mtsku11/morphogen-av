@@ -1239,6 +1239,38 @@ mod tests {
     }
 
     #[test]
+    fn pool_second_audio_dim_changes_selection() {
+        // Same frames and color (a color tie), but adding a second audio dim
+        // (e.g. spectral centroid alongside RMS) flips which grain wins — proving
+        // k > 1 audio dims discriminate, not just k = 1.
+        let frames = [rgb_image(&[[0.5, 0.5, 0.5]]), rgb_image(&[[0.5, 0.5, 0.5]])];
+        let modulator = rgb_image(&[[0.5, 0.5, 0.5]]);
+        let settings = GranularMosaicSettings {
+            grain_size: 1,
+            rearrangement: 1.0,
+            variation: 0.0,
+            seed: 0,
+        };
+
+        // k = 1 (RMS only): grain 0's RMS (0.5) is nearest the 0.52 query.
+        let rms_only = vec![vec![0.5_f32], vec![0.6_f32]];
+        let pool_k1 = analyze_grain_pool_cpu(&frames, &rms_only, 1).expect("k1 pool");
+        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0)
+            .expect("k1 selection");
+        assert_eq!(pick_k1.indices, vec![0]);
+
+        // k = 2 ([RMS, centroid]): grain 1's centroid (0.9) matches the query,
+        // overturning the RMS-only winner.
+        let rms_centroid = vec![vec![0.5_f32, 0.0], vec![0.6, 0.9]];
+        let pool_k2 = analyze_grain_pool_cpu(&frames, &rms_centroid, 1).expect("k2 pool");
+        assert_eq!(pool_k2.audio_dims, 2);
+        let pick_k2 =
+            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0)
+                .expect("k2 selection");
+        assert_eq!(pick_k2.indices, vec![1]);
+    }
+
+    #[test]
     fn pool_render_rearrangement_blends_across_frames() {
         // A whole-frame grain (grain_size == frame size) from frame 1 is selected
         // while the current carrier is frame 0. rearrangement = 0 must yield the

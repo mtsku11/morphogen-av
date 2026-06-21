@@ -16,6 +16,18 @@ _Last updated: 2026-06-21_
 
 ## What just landed
 
+- **Granular step 6b k>1 audio dims (render/CLI path):**
+  `render-granular-mosaic-pool-sequence` accepts optional
+  `--modulator-centroid-cache` / `--carrier-centroid-cache` (STFT caches)
+  alongside RMS. The audio vector is `[rms?, centroid?]` (each descriptor
+  independently both-or-neither across modulator/carrier), k=0..=2; one
+  `audio_weight` scales every dim. CPU core was already k-generic; the Metal
+  kernel is untouched (audio drives only CPU-side selection). New render-crate
+  test proves a centroid dim flips selection vs RMS-only. Verified end-to-end: on
+  a 4-frame solid-color carrier + constant-amplitude chirp (flat RMS, rising
+  centroid), k=1 vs k=2 give different mosaics (k=1 frame0 mean greenish, k=2
+  pulled to blue/white = higher-centroid frames). Render tests 51 → 52
+  (workspace 137). Queue/SwiftUI centroid exposure deferred.
 - **Granular step 6b Metal backend in queue + SwiftUI:** the persisted
   `frame_sequence_granular_mosaic_pool` job gained a `backend` field (serde
   default CPU). `queue-add-granular-mosaic-pool-sequence --backend metal` is
@@ -73,9 +85,10 @@ _Last updated: 2026-06-21_
 ## In flight
 
 On branch `granular-6b-deferred-features`: working through the deferred 6b items.
-Done: Metal backend in queue + SwiftUI (above). Next in this branch: k>1 audio
-dims (add spectral centroid), then sliding-window pool scope, then cross-frame
-scheduling. Items 3–4 have design forks to confirm before building.
+Done: Metal backend in queue + SwiftUI; k>1 audio dims on the render/CLI path
+(both above). Next in this branch: sliding-window pool scope, then cross-frame
+scheduling — both have design forks to confirm before building. Also deferred:
+queue/SwiftUI exposure of the centroid (k=2) caches.
 
 ## Candidate next steps
 

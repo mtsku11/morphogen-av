@@ -114,7 +114,16 @@ The next effect is not another independent processor. It is a stateful temporal 
     parity-gated frame-by-frame in the run path (manifest records the backend),
     and the macOS Render panel has a CPU/Metal selector for the pool job.
     Verified end-to-end on generated footage.
-    Deferred: k>1 audio dims, sliding-window scope, cross-frame scheduling.
+13. Done (6b k>1 audio dims, render/CLI path): `render-granular-mosaic-pool-sequence`
+    accepts optional `--modulator-centroid-cache` / `--carrier-centroid-cache`
+    (STFT caches) beside RMS; the audio vector is `[rms?, centroid?]` (each
+    descriptor independently both-or-neither), k=0..=2, one `audio_weight` for
+    all dims. CPU core already k-generic; Metal kernel unaffected (audio drives
+    only CPU-side selection). Verified: k=1 vs k=2 differ on a solid-color carrier
+    + chirp (flat RMS, rising centroid); new render-crate test proves a centroid
+    dim flips selection vs RMS-only.
+    Deferred: queue/SwiftUI exposure of centroid caches, sliding-window scope,
+    cross-frame scheduling.
 
 ### Structure-Preserving Morph (Flow Feedback Enhancement)
 

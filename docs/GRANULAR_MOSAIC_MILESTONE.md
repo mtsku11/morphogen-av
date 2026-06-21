@@ -157,6 +157,17 @@ accepts `--backend metal`, gating every frame against
 frame in the run path; the manifest records the backend), and the macOS Render
 panel exposes a CPU/Metal selector for the pool job.
 
-Deferred: k>1 audio dims (add spectral centroid); sliding-window pool scope;
-luma-variance/gradient feature dims; cross-frame scheduling (anti-repeat /
-temporal coherence).
+k>1 audio dims (landed on the render/CLI path): `render-granular-mosaic-pool-sequence`
+accepts optional `--modulator-centroid-cache` / `--carrier-centroid-cache` (STFT
+caches) alongside the RMS caches. The audio feature vector is built in fixed
+order `[rms?, centroid?]` (each descriptor independently both-or-neither across
+modulator/carrier), so k ranges 0..=2; `audio_weight` scales every dim equally.
+The CPU core was already k-generic and the Metal kernel is unaffected (audio only
+drives CPU-side selection). Verified: on a 4-frame solid-color carrier with a
+constant-amplitude chirp (flat RMS, rising centroid), k=1 (RMS) and k=2
+(RMS+centroid) produce different mosaics — the centroid query pulls selection
+toward the higher-centroid frames. Queue/SwiftUI exposure of centroid deferred.
+
+Deferred: queue/SwiftUI exposure of the centroid (k=2) caches; sliding-window
+pool scope; luma-variance/gradient feature dims; cross-frame scheduling
+(anti-repeat / temporal coherence).
