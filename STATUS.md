@@ -8,13 +8,40 @@ _Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **173 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **186 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **32 passing, 0 failing** (Swift shell + service tests).
+- `swift test`: **34 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the video-vocoder commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Convolutional AV Blending (image kernel) — full vertical slice (CPU + CLI +
+  Metal + queue + SwiftUI).** The roadmap's "tiny direct convolution for image
+  kernels" MVP, A→B and **spatial** (the first effect where A modulates B with a
+  *kernel*, not a scalar). Each Source A frame is box-downsampled into a normalized
+  K×K luma kernel (bright A regions = heavy taps; black A falls back to uniform);
+  Source B's frame is directly convolved with it (centered, clamped border,
+  correlation-style) and blended by `amount`. `--amount 0` (or `K=1`) = exact
+  Source B passthrough. New `conv_blend.rs` in morphogen-render (`ConvolutionKernel`
+  + `analyze_convolution_kernel_cpu` + `convolution_blend_cpu`, 7 tests) +
+  parity-gated `convolution_blend` Metal kernel (new `.metal` + runtime fn +
+  parity/preflight tests) + `render-convolutional-blend-sequence` CLI (A frames +
+  B frames → PNG seq, `--kernel-size`/`--amount`/`--backend`) + persisted
+  `frame_sequence_convolution_blend` queue job (backend serde-default CPU;
+  queue-add/run writing a frames/ bundle + manifest carrying the convolution
+  algorithm id + kernel_size/amount/backend) + a macOS Render-panel section
+  (A/B pickers, kernel + amount steppers, CPU/Metal backend). Algorithm id
+  `image_kernel_convolution_blend_cpu_v1`. **Off-vs-on readout is cross-sequence,
+  not within-sequence** — a spatial blur on a static carrier is invisible to
+  `frame-delta.py`; instead render `--amount 0` vs `--amount 1` (K=5) on a
+  checkerboard carrier + gradient modulator and diff OFF vs ON frame 0: mean
+  per-channel **91.5/255** (the 5×5 kernel collapses the Nyquist checkerboard
+  toward gray — Read confirms), OFF deterministic across renders, CPU==Metal
+  byte-identical, queue add→run byte-identical to the direct render (smoke test
+  pins it + the manifest knobs). Workspace 173 → 186; Swift 32 → 34. MVP
+  feature-complete for the image carrier. Contract:
+  `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
 
 - **Audio-to-Video Descriptor Routing — full vertical slice (CPU + CLI + Metal +
   queue + SwiftUI).** The roadmap's "RMS controls displacement amount" MVP, A→B
@@ -255,9 +282,13 @@ Routing** (RMS→displacement) is now a feature-complete MVP vertical slice too
 (CPU + CLI + parity-gated Metal + queue + SwiftUI); its deferred items are
 spatially varying displacement fields (sine/radial/Source-A flow), other
 descriptor targets (centroid→hue, onset→cut), and sample-accurate descriptor
-curves (HQ tier). The next unstarted roadmap effect is **Convolutional
-Audio/Video Blending** (tiny direct convolution) or **Video-to-Audio Descriptor
-Routing** (frame-luma → audio gain/pan).
+curves (HQ tier). **Convolutional AV Blending (image kernel)** is now a
+feature-complete MVP vertical slice too (CPU + CLI + parity-gated Metal + queue +
+SwiftUI); its deferred items are the **audio-impulse** half of the MVP (Source A
+IR × Source B audio, CPU-only), FFT convolution (HQ tier), and per-channel/color
+or separable kernels. The next unstarted roadmap effect is **Video-to-Audio
+Descriptor Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh /
+Motion-Vector Reuse** (flow-field reuse on decoded float frames).
 
 ## Candidate next steps
 

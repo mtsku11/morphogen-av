@@ -85,6 +85,12 @@
 - Output: convolved audio or spatial image blend.
 - Cached analysis: kernels, spectra, frame provenance.
 - First MVP version: tiny direct convolution for audio or image kernels.
+  **Landed (image)** (CPU + CLI + parity-gated Metal + queue + SwiftUI) — see
+  `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`. Each Source A frame is box-downsampled
+  into a normalized K×K luma kernel; Source B's frame is directly convolved with
+  it and blended by `amount` (`amount 0` = passthrough). Algorithm id
+  `image_kernel_convolution_blend_cpu_v1`. The **audio-impulse** half of the MVP
+  (Source A IR × Source B audio) is the remaining deferred slice.
 - Future high-quality version: FFT convolution and Metal spatial kernels.
 
 ## Scanline / Rutt-Etra Style Carrier Modulation
