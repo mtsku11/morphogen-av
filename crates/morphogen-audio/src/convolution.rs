@@ -16,8 +16,16 @@
 use crate::fft::convolve_via_fft;
 use crate::{AudioBufferF32, AudioError};
 
-/// Audio-impulse convolution-blend render id.
+/// Audio-impulse convolution-blend render id (mono mode: one downmixed IR applied
+/// to every carrier channel).
 pub const IMPULSE_CONVOLUTION_BLEND_ALGORITHM: &str = "impulse_response_convolution_blend_cpu_v1";
+
+/// Render id for the per-channel **true-stereo** mode: each carrier channel is
+/// convolved with its own IR drawn from the matching Source A channel (cycling A's
+/// channels when the counts differ). A distinct transform from the mono downmix,
+/// so a distinct id.
+pub const PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM: &str =
+    "per_channel_impulse_response_convolution_blend_cpu_v1";
 
 /// Tolerance the FFT method is gated against the direct reference within. The
 /// two paths are the same convolution; this bounds their floating-point drift
@@ -34,6 +42,19 @@ pub enum ConvolutionMethod {
     /// impulse responses. Gated against [`ConvolutionMethod::Direct`] within
     /// [`FFT_DIRECT_PARITY_EPSILON`].
     Fft,
+}
+
+/// Selects how Source A's impulse response is mapped onto the carrier channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IrMode {
+    /// Downmix A to one mono IR and apply it to every carrier channel
+    /// ([`IMPULSE_CONVOLUTION_BLEND_ALGORITHM`]).
+    #[default]
+    Mono,
+    /// Build one IR per Source A channel and convolve carrier channel `c` with
+    /// A's channel `c % A.channels` (true-stereo; cycles A's channels when the
+    /// counts differ) ([`PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM`]).
+    PerChannel,
 }
 
 pub fn convolve_mono(input: &[f32], impulse: &[f32]) -> Result<Vec<f32>, AudioError> {
@@ -136,23 +157,30 @@ fn resample_lanczos(taps: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32
         .collect()
 }
 
-/// Build the normalized mono impulse from Source A: downmix, optional head
-/// truncation (in A's sample domain), optional Lanczos resampling to
-/// `target_rate`, then L1 normalization (so `Σ|tap| = 1`, bounding the wet path —
-/// applied *after* resampling so the bound survives). A silent A (`Σ|tap| ≈ 0`)
-/// falls back to a unit impulse `[1.0]` (identity ⇒ wet = B).
-fn normalized_impulse(
-    modulator: &AudioBufferF32,
+/// Extract Source A's channel `channel` as a raw tap sequence (no normalization).
+fn channel_taps(buffer: &AudioBufferF32, channel: usize) -> Vec<f32> {
+    (0..buffer.frames)
+        .map(|frame| buffer.samples[frame * buffer.channels + channel])
+        .collect()
+}
+
+/// Normalize a raw tap sequence into an IR: optional head truncation, optional
+/// Lanczos resampling from `source_rate` to `target_rate`, then L1 normalization
+/// (so `Σ|tap| = 1`, bounding the wet path — applied *after* resampling so the
+/// bound survives). A silent source (`Σ|tap| ≈ 0`) falls back to a unit impulse
+/// `[1.0]` (identity ⇒ wet = source channel).
+fn normalize_taps(
+    mut taps: Vec<f32>,
+    source_rate: u32,
     target_rate: u32,
     max_samples: Option<usize>,
     resample: bool,
 ) -> Vec<f32> {
-    let mut taps = downmix_mono(modulator);
     if let Some(limit) = max_samples {
         taps.truncate(limit);
     }
     if resample {
-        taps = resample_lanczos(&taps, modulator.sample_rate, target_rate);
+        taps = resample_lanczos(&taps, source_rate, target_rate);
     }
     let l1: f32 = taps.iter().map(|t| t.abs()).sum();
     if l1 > 0.0 {
@@ -161,15 +189,33 @@ fn normalized_impulse(
         }
         taps
     } else {
-        // Silent A (or NaN-free zero) ⇒ identity impulse.
+        // Silent source (or NaN-free zero) ⇒ identity impulse.
         vec![1.0]
     }
 }
 
-/// Convolution-reverb blend: convolve every Source B channel with the
-/// L1-normalized mono IR derived from Source A, blended wet/dry by `amount`. The
-/// output extends past B by `L − 1` samples (the reverb tail); the dry signal is
-/// B zero-padded to that length. `amount = 0` returns B untouched.
+/// Build the normalized mono impulse from Source A: downmix then [`normalize_taps`].
+fn normalized_impulse(
+    modulator: &AudioBufferF32,
+    target_rate: u32,
+    max_samples: Option<usize>,
+    resample: bool,
+) -> Vec<f32> {
+    normalize_taps(
+        downmix_mono(modulator),
+        modulator.sample_rate,
+        target_rate,
+        max_samples,
+        resample,
+    )
+}
+
+/// Convolution-reverb blend: convolve each Source B channel with an L1-normalized
+/// IR derived from Source A, blended wet/dry by `amount`. In [`IrMode::Mono`] one
+/// downmixed IR is applied to every channel; in [`IrMode::PerChannel`] carrier
+/// channel `c` uses A's channel `c % A.channels` (true-stereo, cycling A's
+/// channels). The output extends past B by `L − 1` samples (the reverb tail); the
+/// dry signal is B zero-padded to that length. `amount = 0` returns B untouched.
 pub fn impulse_convolution_blend(
     modulator: &AudioBufferF32,
     carrier: &AudioBufferF32,
@@ -177,6 +223,7 @@ pub fn impulse_convolution_blend(
     max_impulse_samples: Option<usize>,
     method: ConvolutionMethod,
     resample_impulse: bool,
+    ir_mode: IrMode,
 ) -> Result<AudioBufferF32, AudioError> {
     validate_amount(amount)?;
     if amount == 0.0 {
@@ -197,16 +244,41 @@ pub fn impulse_convolution_blend(
         return Ok(carrier.clone());
     }
 
-    let impulse = normalized_impulse(
-        modulator,
-        carrier.sample_rate,
-        max_impulse_samples,
-        resample_impulse,
-    );
+    // One IR per A channel (per-channel) or a single downmixed IR (mono). Pad all
+    // to a common length so every channel's convolution yields the same out_frames
+    // (zero-padding an IR leaves the convolution result unchanged, just longer).
+    let raw_impulses: Vec<Vec<f32>> = match ir_mode {
+        IrMode::Mono => vec![normalized_impulse(
+            modulator,
+            carrier.sample_rate,
+            max_impulse_samples,
+            resample_impulse,
+        )],
+        IrMode::PerChannel => (0..modulator.channels)
+            .map(|channel| {
+                normalize_taps(
+                    channel_taps(modulator, channel),
+                    modulator.sample_rate,
+                    carrier.sample_rate,
+                    max_impulse_samples,
+                    resample_impulse,
+                )
+            })
+            .collect(),
+    };
+    let impulse_len = raw_impulses.iter().map(Vec::len).max().unwrap_or(1);
+    let impulses: Vec<Vec<f32>> = raw_impulses
+        .into_iter()
+        .map(|mut impulse| {
+            impulse.resize(impulse_len, 0.0);
+            impulse
+        })
+        .collect();
+
     let channels = carrier.channels;
     let out_frames = carrier
         .frames
-        .checked_add(impulse.len())
+        .checked_add(impulse_len)
         .and_then(|len| len.checked_sub(1))
         .ok_or_else(|| {
             AudioError::InvalidSettings("convolution output is too large".to_string())
@@ -214,12 +286,13 @@ pub fn impulse_convolution_blend(
 
     let mut samples = vec![0.0_f32; out_frames * channels];
     for channel in 0..channels {
+        let impulse = &impulses[channel % impulses.len()];
         let dry: Vec<f32> = (0..carrier.frames)
             .map(|frame| carrier.samples[frame * channels + channel])
             .collect();
         let wet = match method {
-            ConvolutionMethod::Direct => convolve_mono(&dry, &impulse)?,
-            ConvolutionMethod::Fft => convolve_via_fft(&dry, &impulse)?,
+            ConvolutionMethod::Direct => convolve_mono(&dry, impulse)?,
+            ConvolutionMethod::Fft => convolve_via_fft(&dry, impulse)?,
         };
         for (frame, &wet_sample) in wet.iter().enumerate() {
             let dry_sample = dry.get(frame).copied().unwrap_or(0.0);
@@ -252,6 +325,7 @@ mod tests {
             max,
             ConvolutionMethod::Direct,
             false,
+            IrMode::Mono,
         )
     }
 
@@ -384,6 +458,7 @@ mod tests {
             None,
             ConvolutionMethod::Direct,
             false,
+            IrMode::Mono,
         )
         .expect("direct blend");
         let fft = impulse_convolution_blend(
@@ -393,6 +468,7 @@ mod tests {
             None,
             ConvolutionMethod::Fft,
             false,
+            IrMode::Mono,
         )
         .expect("fft blend");
         assert_eq!(direct.frames, fft.frames);
@@ -444,6 +520,7 @@ mod tests {
             None,
             ConvolutionMethod::Direct,
             false,
+            IrMode::Mono,
         )
         .is_err());
         let out = impulse_convolution_blend(
@@ -453,6 +530,7 @@ mod tests {
             None,
             ConvolutionMethod::Direct,
             true,
+            IrMode::Mono,
         )
         .expect("resampled blend");
         assert_eq!(out.sample_rate, carrier.sample_rate);
@@ -461,5 +539,70 @@ mod tests {
             peak <= 1.0 + 1e-6,
             "resampled L1 IR amplified past carrier peak: {peak}"
         );
+    }
+
+    /// Convenience: per-channel (true-stereo) direct blend, no resampling.
+    fn blend_per_channel(
+        modulator: &AudioBufferF32,
+        carrier: &AudioBufferF32,
+        amount: f32,
+    ) -> Result<AudioBufferF32, AudioError> {
+        impulse_convolution_blend(
+            modulator,
+            carrier,
+            amount,
+            None,
+            ConvolutionMethod::Direct,
+            false,
+            IrMode::PerChannel,
+        )
+    }
+
+    #[test]
+    fn per_channel_applies_distinct_ir_to_each_channel() {
+        // A stereo IR: left = unit at lag 0 ([1, 0]), right = unit at lag 1
+        // ([0, 1]). Interleaved L,R per frame. After L1 each stays itself.
+        let modulator = buf(2, 48_000, vec![1.0, 0.0, 0.0, 1.0]);
+        // Carrier stereo: L = [0.2, 0.4], R = [0.6, -0.8].
+        let carrier = buf(2, 48_000, vec![0.2, 0.6, 0.4, -0.8]);
+        let out = blend_per_channel(&modulator, &carrier, 1.0).expect("per-channel blend");
+        // out_frames = 2 + 2 - 1 = 3. Left convolved with [1,0] = L itself padded;
+        // right convolved with [0,1] = R delayed one sample.
+        assert_eq!(out.frames, 3);
+        let left: Vec<f32> = (0..3).map(|f| out.samples[f * 2]).collect();
+        let right: Vec<f32> = (0..3).map(|f| out.samples[f * 2 + 1]).collect();
+        assert!((left[0] - 0.2).abs() < 1e-6 && (left[1] - 0.4).abs() < 1e-6 && left[2].abs() < 1e-6);
+        assert!(right[0].abs() < 1e-6 && (right[1] - 0.6).abs() < 1e-6 && (right[2] + 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn per_channel_differs_from_mono_when_channels_differ() {
+        let modulator = buf(2, 48_000, vec![1.0, 0.0, 0.0, 1.0]);
+        let carrier = buf(2, 48_000, vec![0.2, 0.6, 0.4, -0.8]);
+        let mono = blend(&modulator, &carrier, 1.0, None).expect("mono blend");
+        let per_channel = blend_per_channel(&modulator, &carrier, 1.0).expect("per-channel blend");
+        assert_ne!(mono.samples, per_channel.samples);
+    }
+
+    #[test]
+    fn per_channel_cycles_mono_a_over_stereo_b() {
+        // A mono ⇒ a single IR; per-channel must apply it to every B channel,
+        // i.e. the same result as mono mode (channel index cycles modulo 1).
+        let modulator = buf(1, 48_000, vec![0.5, 0.25, -0.1]);
+        let carrier = buf(2, 48_000, vec![0.2, 0.6, 0.4, -0.8, 0.1, 0.3]);
+        let mono = blend(&modulator, &carrier, 1.0, None).expect("mono blend");
+        let per_channel = blend_per_channel(&modulator, &carrier, 1.0).expect("per-channel blend");
+        assert_eq!(mono.samples, per_channel.samples);
+    }
+
+    #[test]
+    fn per_channel_bounds_gain_per_channel() {
+        // Each channel's IR is L1-normalized independently, so the wet peak per
+        // channel never exceeds that channel's dry peak.
+        let modulator = buf(2, 48_000, vec![3.0, -1.0, 2.0, 4.0, -2.0, 1.0]);
+        let carrier = buf(2, 48_000, vec![0.9, -0.7, -0.9, 0.7, 0.5, -0.5]);
+        let out = blend_per_channel(&modulator, &carrier, 1.0).expect("per-channel blend");
+        let peak = out.samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak <= 0.9 + 1e-6, "per-channel L1 IR amplified past carrier peak: {peak}");
     }
 }
