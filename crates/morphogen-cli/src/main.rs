@@ -7,10 +7,11 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use image::{ImageBuffer, ImageReader, Rgba};
 use morphogen_audio::{
-    centroid_filter_cross_synth, load_wav_f32, onset_strength_from_stft, rms_envelope,
-    rms_gain_cross_synth, save_wav_f32, spectral_centroid_from_magnitudes, stft_magnitude_cache,
-    AudioAnalysisCache, AudioBufferF32, AudioDescriptorFrame, FilterType, OnsetStrengthCache,
-    StftAnalysisCache, StftConfig, WindowFunction, CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
+    centroid_filter_cross_synth, impulse_convolution_blend, load_wav_f32,
+    onset_strength_from_stft, rms_envelope, rms_gain_cross_synth, save_wav_f32,
+    spectral_centroid_from_magnitudes, stft_magnitude_cache, AudioAnalysisCache, AudioBufferF32,
+    AudioDescriptorFrame, FilterType, OnsetStrengthCache, StftAnalysisCache, StftConfig,
+    WindowFunction, CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
     RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 use morphogen_core::{
@@ -137,6 +138,16 @@ enum Commands {
         stft_hop: usize,
         #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
         window: CliWindowFunction,
+    },
+    /// Convolve carrier audio (Source B) with Source A's impulse response.
+    RenderAudioImpulseConvolution {
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_impulse_samples: Option<usize>,
     },
     RenderTest {
         output_path: PathBuf,
@@ -1054,6 +1065,19 @@ fn run() -> Result<(), CliError> {
                 window: window.into(),
             },
         ),
+        Commands::RenderAudioImpulseConvolution {
+            modulator_wav,
+            carrier_wav,
+            output_wav,
+            amount,
+            max_impulse_samples,
+        } => render_audio_impulse_convolution(
+            &modulator_wav,
+            &carrier_wav,
+            &output_wav,
+            amount,
+            max_impulse_samples,
+        ),
         Commands::RenderTest { output_path } => render_test(&output_path),
         Commands::MetalRenderTest { output_path } => metal_render_test(&output_path),
         Commands::RenderTwoSource {
@@ -1843,6 +1867,27 @@ fn render_spectral_cross_synth(
     save_wav_f32(output_wav, &output)?;
     println!(
         "rendered spectral cross-synth ({algorithm}) from carrier {} to {}",
+        carrier_wav.display(),
+        output_wav.display()
+    );
+    Ok(())
+}
+
+fn render_audio_impulse_convolution(
+    modulator_wav: &Path,
+    carrier_wav: &Path,
+    output_wav: &Path,
+    amount: f32,
+    max_impulse_samples: Option<usize>,
+) -> Result<(), CliError> {
+    let modulator = load_wav_f32(modulator_wav)?;
+    let carrier = load_wav_f32(carrier_wav)?;
+    let output = impulse_convolution_blend(&modulator, &carrier, amount, max_impulse_samples)?;
+
+    write_parent_dirs(output_wav)?;
+    save_wav_f32(output_wav, &output)?;
+    println!(
+        "rendered audio impulse convolution ({IMPULSE_CONVOLUTION_BLEND_ALGORITHM}) from carrier {} to {}",
         carrier_wav.display(),
         output_wav.display()
     );
