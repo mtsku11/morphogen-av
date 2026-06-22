@@ -13,7 +13,23 @@ This is the roadmap's "luma-band gain routing" MVP for the Video Vocoder
 (`docs/EFFECTS_ROADMAP.md`). It is a **stateless, per-frame** effect — no
 cross-frame state, no checkpoint representation needed.
 
-## First Render Contract
+## Modes
+
+Two tonal-routing modes share the same A→B framing, selected by `--mode`:
+
+- **`match`** (default) — **histogram specification / tonal envelope transfer**.
+  Remap B's luma so its distribution *becomes* A's:
+  `out_luma = CDF_A^{-1}(CDF_B(L))`. There is no neutral point, so it stays
+  strong even when both clips have spread histograms (the gain mode goes timid
+  there). This is the headline look; see "Mode: histogram specification" below.
+- **`gain`** — **per-band gain routing** (the original MVP). A's luma histogram
+  becomes a per-band gain envelope reweighting B's tonal bands; see "Mode:
+  per-band gain routing" below.
+
+Both preserve hue (RGB scaled by a per-pixel luma multiplier), clamp to `[0,1]`,
+and treat `amount = 0` as an exact Source B passthrough.
+
+## Mode: per-band gain routing (`--mode gain`)
 
 For each output frame:
 
@@ -43,6 +59,20 @@ For each output frame:
 - Uniform A at `amount = 1` ⇒ all gains 1 ⇒ output ≈ Source B (within rounding).
 - Given identical inputs and settings, output is deterministic.
 
+## Mode: histogram specification (`--mode match`, default)
+
+For each output frame, build 256-level luma CDFs of Source A and Source B, then a
+monotone tone map `T(L) = CDF_A^{-1}(CDF_B(L))` (for carrier luma `L`, take its
+rank `CDF_B(L)` and read the modulator luma at that rank). Apply per pixel:
+`target = lerp(L, T(L), amount)`, `gain = target / max(L, 1e-4)`,
+`out_rgb = clamp(carrier_rgb * gain, 0, 1)` (hue preserved; pure black stays
+black). `--bands` is ignored in this mode.
+
+- `amount = 0` ⇒ exact Source B passthrough; `amount = 1` ⇒ B's tonal
+  distribution fully remapped onto A's.
+- Determinism: identical A, B, `amount` ⇒ identical output.
+- The tone map is a 256-entry LUT — a trivial, parity-exact Metal port.
+
 ## Initial Scope
 
 - CPU reference renderer and focused synthetic tests, **then** a parity-gated
@@ -56,25 +86,34 @@ For each output frame:
 - `frame_sequence_video_vocoder` persisted queue task, writing a ProRes-ready
   image-sequence bundle with timing, source, and histogram-sidecar provenance.
 - Metal kernel gated frame-by-frame against the CPU reference before export.
-- Parameters: band count `N` (`--bands`, default 8) and `amount`
-  (`--amount`, default 1.0; `0` = passthrough).
-- macOS Render panel exposure (a `Video Vocoder` section: bands + amount).
+- Parameters: `--mode match|gain` (default `match`), band count `N` (`--bands`,
+  default 8, `gain` mode only), and `amount` (`--amount`, default 1.0;
+  `0` = passthrough).
+- macOS Render panel exposure (a `Video Vocoder` section: mode + bands + amount).
 
 ## Algorithm Identifiers
 
-- `luma_band_gain_vocoder_cpu_v1` — the CPU reference selection/render id, and the
-  histogram-sidecar algorithm id. Distinct from every granular/flow id. Changing
-  `N`, the luma convention, or the binning invalidates stale sidecars.
+- `luma_band_gain_vocoder_cpu_v1` — the `gain` mode render id, and the luma-band
+  histogram-sidecar algorithm id. Changing `N`, the luma convention, or the
+  binning invalidates stale sidecars.
+- `luma_histogram_spec_vocoder_cpu_v1` — the `match` mode render id (the default).
+  256-level CDF matching; no reusable analysis sidecar in this slice (both CDFs
+  are cheap per-frame).
+
+Both are distinct from every granular/flow id.
 
 ## Acceptance Criteria
 
-1. **Passthrough identity.** `amount = 0` ⇒ output byte-identical to Source B.
-2. **Neutral flat modulator.** A uniform-luma A at `amount = 1` ⇒ output equal to
-   Source B within ±1/255 (gains all ≈ 1).
-3. **Directional routing.** An A concentrated in highlights boosts Source B's
-   bright bands and attenuates its dark bands (and the inverse for a shadow-heavy
-   A) — visible in a Read frame and measurable by `frame-delta.py` against the
-   passthrough.
+1. **Passthrough identity.** `amount = 0` ⇒ output byte-identical to Source B
+   (both modes).
+2. **Neutral flat modulator (gain mode).** A uniform-luma A at `amount = 1` ⇒
+   output equal to Source B within ±1/255 (gains all ≈ 1).
+3. **Directional routing (gain mode).** An A concentrated in highlights boosts
+   Source B's bright bands and attenuates its dark bands (and the inverse for a
+   shadow-heavy A) — visible in a Read frame.
+   **Tonal transfer (match mode).** A brighter A lifts a darker B's tone toward
+   A's distribution (and a darker A crushes a brighter B) — strong even when both
+   histograms are spread; verified on harp→cello.
 4. **Soft continuity.** No hard luma steps in the output (gain is `C0`-continuous
    in luma); a smooth carrier ramp stays smooth.
 5. **Determinism.** Identical A, B, `N`, `amount` ⇒ identical output; sidecar

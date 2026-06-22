@@ -30,8 +30,8 @@ use morphogen_render::{
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
     select_grains_from_pool_cpu, select_grains_multimodal_cpu, video_vocoder_cpu,
-    analyze_luma_band_envelope_cpu, AntiRepeat, TemporalCoherence, VideoVocoderSettings,
-    write_flow_cache,
+    analyze_luma_band_envelope_cpu, histogram_specification_cpu, AntiRepeat, TemporalCoherence,
+    VideoVocoderSettings, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
@@ -191,6 +191,8 @@ enum Commands {
         bands: u32,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
     },
     /// Render a video-vocoder PNG-frame sequence (per-frame luma-band gain
     /// routing). Source A's per-frame luma envelope reweights Source B's bands.
@@ -202,6 +204,8 @@ enum Commands {
         bands: u32,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
         #[arg(long)]
         max_frames: Option<usize>,
     },
@@ -633,6 +637,16 @@ impl From<CliGrainSelection> for GrainSelectionMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliVocoderMode {
+    /// Tonal envelope transfer: remap B's luma distribution to match A's
+    /// (histogram specification). The headline look; ignores `--bands`.
+    #[default]
+    Match,
+    /// Per-band gain routing: A's luma histogram scales B's tonal bands.
+    Gain,
+}
+
 /// Algorithm identifier stamped on sidecars and provenance for a selection mode.
 fn grain_selection_algorithm(mode: GrainSelectionMode) -> &'static str {
     match mode {
@@ -836,11 +850,13 @@ fn run() -> Result<(), CliError> {
             output_path,
             bands,
             amount,
+            mode,
         } => render_video_vocoder(
             &modulator_image,
             &carrier_image,
             &output_path,
             VideoVocoderSettings { bands, amount },
+            mode,
         ),
         Commands::RenderVideoVocoderSequence {
             modulator_dir,
@@ -848,12 +864,14 @@ fn run() -> Result<(), CliError> {
             output_dir,
             bands,
             amount,
+            mode,
             max_frames,
         } => render_video_vocoder_sequence(
             &modulator_dir,
             &carrier_dir,
             &output_dir,
             VideoVocoderSettings { bands, amount },
+            mode,
             max_frames,
         )
         .map(|_| ()),
@@ -1696,17 +1714,26 @@ fn render_video_vocoder(
     carrier_image: &Path,
     output_path: &Path,
     settings: VideoVocoderSettings,
+    mode: CliVocoderMode,
 ) -> Result<(), CliError> {
     settings.validate()?;
     let modulator = load_image_f32(modulator_image)?;
     let carrier = load_image_f32(carrier_image)?;
-    let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
-    let rendered = video_vocoder_cpu(&carrier, &envelope, settings)?;
+    let rendered = match mode {
+        CliVocoderMode::Gain => {
+            let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
+            video_vocoder_cpu(&carrier, &envelope, settings)?
+        }
+        CliVocoderMode::Match => {
+            histogram_specification_cpu(&modulator, &carrier, settings.amount)?
+        }
+    };
 
     write_parent_dirs(output_path)?;
     save_png(&rendered, output_path)?;
     println!(
-        "rendered video vocoder ({} bands, amount {}) from {} modulating {} to {}",
+        "rendered video vocoder ({:?} mode, {} bands, amount {}) from {} modulating {} to {}",
+        mode,
         settings.bands,
         settings.amount,
         modulator_image.display(),
@@ -1721,6 +1748,7 @@ fn render_video_vocoder_sequence(
     carrier_dir: &Path,
     output_dir: &Path,
     settings: VideoVocoderSettings,
+    mode: CliVocoderMode,
     max_frames: Option<usize>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     settings.validate()?;
@@ -1747,8 +1775,15 @@ fn render_video_vocoder_sequence(
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
-        let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
-        let rendered = video_vocoder_cpu(&carrier, &envelope, settings)?;
+        let rendered = match mode {
+            CliVocoderMode::Gain => {
+                let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
+                video_vocoder_cpu(&carrier, &envelope, settings)?
+            }
+            CliVocoderMode::Match => {
+                histogram_specification_cpu(&modulator, &carrier, settings.amount)?
+            }
+        };
         save_png(
             &rendered,
             &output_dir.join(format!("frame_{index:06}.png")),
@@ -1763,8 +1798,9 @@ fn render_video_vocoder_sequence(
         );
     }
     println!(
-        "rendered video vocoder sequence with {} frame(s) ({} bands, amount {}) from {} modulating {} to {}",
+        "rendered video vocoder sequence with {} frame(s) ({:?} mode, {} bands, amount {}) from {} modulating {} to {}",
         frame_count,
+        mode,
         settings.bands,
         settings.amount,
         modulator_dir.display(),

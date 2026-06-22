@@ -144,6 +144,78 @@ pub fn video_vocoder_cpu(
     ImageBufferF32::new(carrier.width, carrier.height, pixels)
 }
 
+/// Number of luma levels used to build the histogram-specification tone map.
+const SPEC_LEVELS: usize = 256;
+
+/// Nondecreasing luma CDF over `SPEC_LEVELS` levels (entries in `[0, 1]`).
+fn luma_cdf(image: &ImageBufferF32) -> Vec<f32> {
+    let mut histogram = vec![0.0_f32; SPEC_LEVELS];
+    for &pixel in &image.pixels {
+        let luma = luminance(pixel).clamp(0.0, 1.0);
+        let index = ((luma * (SPEC_LEVELS - 1) as f32).round() as usize).min(SPEC_LEVELS - 1);
+        histogram[index] += 1.0;
+    }
+    let total: f32 = histogram.iter().sum();
+    let mut cdf = vec![0.0_f32; SPEC_LEVELS];
+    let mut accumulated = 0.0_f32;
+    for (slot, &count) in cdf.iter_mut().zip(histogram.iter()) {
+        accumulated += count;
+        *slot = if total > 0.0 { accumulated / total } else { 0.0 };
+    }
+    cdf
+}
+
+/// Tonal envelope transfer (histogram specification): remap each carrier luma so
+/// Source B's luma distribution matches Source A's — `out_luma = CDF_A^-1(CDF_B(L))`.
+/// Unlike the gain path there is no neutral point, so it stays strong even when
+/// both clips have spread histograms. `amount` blends from the carrier (0) to the
+/// fully matched tone (1); RGB is scaled to preserve hue (pure black stays black).
+pub fn histogram_specification_cpu(
+    modulator: &ImageBufferF32,
+    carrier: &ImageBufferF32,
+    amount: f32,
+) -> Result<ImageBufferF32, RenderError> {
+    if !amount.is_finite() || amount < 0.0 {
+        return Err(RenderError::InvalidVideoVocoderSettings(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    let a_cdf = luma_cdf(modulator);
+    let b_cdf = luma_cdf(carrier);
+
+    // Monotone tone map: for each carrier level, the matching modulator level is
+    // the smallest whose CDF reaches the carrier level's rank. b_cdf is
+    // nondecreasing, so a_level only advances (O(levels)).
+    let mut tone = vec![0.0_f32; SPEC_LEVELS];
+    let mut a_level = 0usize;
+    for (b_level, slot) in tone.iter_mut().enumerate() {
+        let target = b_cdf[b_level];
+        while a_level + 1 < SPEC_LEVELS && a_cdf[a_level] < target {
+            a_level += 1;
+        }
+        *slot = a_level as f32 / (SPEC_LEVELS - 1) as f32;
+    }
+
+    let pixels = carrier
+        .pixels
+        .iter()
+        .map(|&pixel| {
+            let luma = luminance(pixel).clamp(0.0, 1.0);
+            let index = ((luma * (SPEC_LEVELS - 1) as f32).round() as usize).min(SPEC_LEVELS - 1);
+            let target_luma = lerp(luma, tone[index], amount);
+            let gain = if luma > 1.0e-4 { target_luma / luma } else { 1.0 };
+            [
+                (pixel[0] * gain).clamp(0.0, 1.0),
+                (pixel[1] * gain).clamp(0.0, 1.0),
+                (pixel[2] * gain).clamp(0.0, 1.0),
+                pixel[3],
+            ]
+        })
+        .collect();
+
+    ImageBufferF32::new(carrier.width, carrier.height, pixels)
+}
+
 /// Convenience: analyze Source A then apply to Source B in one call (the
 /// still-image path). The sequence/queue paths analyze once into a reusable
 /// sidecar instead.
@@ -261,6 +333,33 @@ mod tests {
             amount: 1.0,
         };
         assert!(video_vocoder_cpu(&carrier, &envelope, settings).is_err());
+    }
+
+    #[test]
+    fn histogram_spec_amount_zero_preserves_carrier() {
+        let modulator = solid(4, 4, [1.0, 1.0, 1.0, 1.0]);
+        let carrier = ImageBufferF32::from_fn(5, 1, |x, _| {
+            let v = x as f32 / 4.0;
+            [v, v * 0.5, 0.2, 1.0]
+        })
+        .expect("carrier");
+        let out = histogram_specification_cpu(&modulator, &carrier, 0.0).expect("render");
+        assert_eq!(out.pixels, carrier.pixels);
+    }
+
+    #[test]
+    fn histogram_spec_pulls_carrier_toward_modulator_tone() {
+        // A bright modulator over a dark carrier should lift the carrier's tone.
+        let modulator = solid(4, 4, [0.9, 0.9, 0.9, 1.0]);
+        let carrier = ImageBufferF32::from_fn(8, 1, |x, _| {
+            let v = 0.1 + 0.2 * (x as f32 / 7.0); // dark range 0.1..0.3
+            [v, v, v, 1.0]
+        })
+        .expect("carrier");
+        let before: f32 = carrier.pixels.iter().map(|p| p[0]).sum();
+        let out = histogram_specification_cpu(&modulator, &carrier, 1.0).expect("render");
+        let after: f32 = out.pixels.iter().map(|p| p[0]).sum();
+        assert!(after > before, "matched mean {after} should exceed {before}");
     }
 
     #[test]
