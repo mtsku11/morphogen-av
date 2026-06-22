@@ -16,6 +16,22 @@ _Last updated: 2026-06-22_
 
 ## What just landed
 
+- **CLI module split (behavior-preserving refactor).** The monolithic
+  `crates/morphogen-cli/src/main.rs` (8127 lines) was decomposed into eight
+  modules with no logic change — the `run()` dispatch body is unchanged:
+  `error.rs` (CliError), `imaging.rs` (PNG/image/fingerprint leaf utils),
+  `args.rs` (Cli/Commands + all `Cli*` value-enums + From impls + mode/algorithm
+  helpers), `project.rs` (init/probe/extract/cache/inspect/proxy), `audio.rs`
+  (cross-synth + impulse-convolution render & queue), `render.rs` (all direct
+  `render_*` handlers + granular controls + provenance + feedback + shared render
+  consts), `queue.rs` (queue add/run + manifests + checkpoints + bundle writers;
+  depends one-directionally on render). `main.rs` is now **786 lines** (imports +
+  `main` + `run` dispatch). Cross-module request structs got `pub(crate)` fields.
+  Verified: cli tests 34/34, clippy clean, `cargo test --workspace` green
+  (baseline unchanged). A new effect now adds its command to `args.rs`, render
+  handler to `render.rs`, queue handler to `queue.rs` — bounded files, not a
+  monolith.
+
 - **Convolutional AV Blending (per-channel colour kernels + true-stereo IRs +
   large-K Metal verify) — three vertical slices.** The remaining deferred HQ
   items. **Colour kernels** (`--kernel-mode color`): a separate K×K kernel from
