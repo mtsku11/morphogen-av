@@ -578,6 +578,69 @@ struct RenderPanelView: View {
           }
         }
 
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Audio-to-Video Descriptor Routing")
+            .font(.subheadline.weight(.semibold))
+            .help("Source A's RMS envelope drives the per-frame displacement amount applied to Source B's frames.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseAudioRouteModulatorWAV()
+            } label: {
+              Label("Source A WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseAudioRouteCarrierDirectory()
+            } label: {
+              Label("Source B Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseAudioRouteOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.audioRouteAmount, in: 0...4, step: 0.1) {
+              Text("Amount \(state.audioRouteAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; scales the loudest-frame displacement.")
+
+            Stepper(value: $state.audioRouteShiftX, in: -128...128, step: 1) {
+              Text("Shift X \(state.audioRouteShiftX, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.audioRouteShiftY, in: -128...128, step: 1) {
+              Text("Shift Y \(state.audioRouteShiftY, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+          }
+
+          Picker("Backend", selection: $state.audioRouteBackend) {
+            ForEach(FeedbackRenderBackendOption.allCases) { backend in
+              Text(backend.rawValue).tag(backend)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 200)
+          .help("Metal is gated per-frame against the CPU reference.")
+
+          Text(state.audioRouteSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runAudioVideoRouteRender()
+          } label: {
+            Label("Run Audio→Video Route", systemImage: "slider.horizontal.3")
+          }
+        }
+
         HStack {
           Button {
             state.checkProResExportPlan()

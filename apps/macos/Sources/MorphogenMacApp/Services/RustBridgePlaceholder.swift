@@ -58,6 +58,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultAudioVideoRouteSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-audio-video-route-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -498,6 +504,103 @@ enum RustBridgePlaceholder {
       request.window.cliValue
     ]
 
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedAudioVideoRouteSequenceRender(
+    request: AudioVideoRouteSequenceRenderQueueCommandRequest
+  ) throws -> AudioVideoRouteSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddAudioVideoRouteSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-audio-video-route-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return AudioVideoRouteSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddAudioVideoRouteSequenceArguments(
+    request: AudioVideoRouteSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.amount.isFinite && request.amount >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "amount must be finite and greater than or equal to zero"
+      )
+    }
+    guard request.shiftX.isFinite && request.shiftY.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shift X and Y must be finite")
+    }
+    guard request.rmsWindow > 0 && request.rmsHop > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "RMS window and hop must be greater than zero"
+      )
+    }
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive and finite")
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-audio-video-route-sequence",
+      request.queueURL.path,
+      request.modulatorWAVURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--amount",
+      cliNumber(request.amount),
+      "--shift-x",
+      cliNumber(request.shiftX),
+      "--shift-y",
+      cliNumber(request.shiftY),
+      "--rms-window",
+      String(request.rmsWindow),
+      "--rms-hop",
+      String(request.rmsHop),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -1128,6 +1231,28 @@ struct SpectralCrossSynthRenderQueueCommandRequest {
 }
 
 struct SpectralCrossSynthRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct AudioVideoRouteSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorWAVURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let amount: Double
+  let shiftX: Double
+  let shiftY: Double
+  let rmsWindow: Int
+  let rmsHop: Int
+  let frameRate: Double
+  let maxFrames: Int?
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct AudioVideoRouteSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

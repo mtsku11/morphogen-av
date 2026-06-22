@@ -91,6 +91,18 @@ final class AppState: ObservableObject {
   @Published var crossSynthSTFTHop = 256
   @Published var crossSynthWindow: CrossSynthWindowOption = .hann
   @Published var crossSynthSummary = "No spectral cross-synth rendered"
+
+  @Published var audioRouteModulatorURL: URL?
+  @Published var audioRouteCarrierURL: URL?
+  @Published var audioRouteOutputURL: URL?
+  @Published var audioRouteAmount = 1.0
+  @Published var audioRouteShiftX = 8.0
+  @Published var audioRouteShiftY = 0.0
+  @Published var audioRouteRmsWindow = 2048
+  @Published var audioRouteRmsHop = 512
+  @Published var audioRouteFrameRate = 30.0
+  @Published var audioRouteBackend: FeedbackRenderBackendOption = .cpu
+  @Published var audioRouteSummary = "No audio→video route rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
   @Published var mediaProxyFrameRate = 12.0
@@ -355,6 +367,42 @@ final class AppState: ObservableObject {
 
     crossSynthOutputURL = url
     statusMessage = "Cross-synth output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseAudioRouteModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source A WAV",
+      message: "Select the modulator audio whose RMS drives displacement."
+    ) else {
+      statusMessage = "Source A WAV selection cancelled."
+      return
+    }
+
+    audioRouteModulatorURL = url
+    statusMessage = "Audio-route Source A WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseAudioRouteCarrierDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source B Frames",
+      message: "Select the carrier PNG frames to displace."
+    ) else {
+      statusMessage = "Source B frame selection cancelled."
+      return
+    }
+
+    audioRouteCarrierURL = url
+    statusMessage = "Audio-route Source B frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseAudioRouteOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Audio-route output selection cancelled."
+      return
+    }
+
+    audioRouteOutputURL = url
+    statusMessage = "Audio-route output selected: \(url.lastPathComponent)"
   }
 
   func chooseMediaProxyOutputDirectory() {
@@ -748,6 +796,56 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
           self.crossSynthSummary = "Spectral cross-synth render failed: \(error.localizedDescription)"
           self.statusMessage = "Spectral cross-synth render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runAudioVideoRouteRender() {
+    guard let modulatorURL = audioRouteModulatorURL else {
+      statusMessage = "Select a Source A WAV before rendering the audio→video route."
+      return
+    }
+    guard let carrierURL = audioRouteCarrierURL else {
+      statusMessage = "Select a Source B frame directory before rendering the audio→video route."
+      return
+    }
+    guard let outputURL = audioRouteOutputURL else {
+      statusMessage = "Choose an output directory before rendering the audio→video route."
+      return
+    }
+
+    let request = AudioVideoRouteSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultAudioVideoRouteSequenceRenderQueueURL(),
+      modulatorWAVURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      amount: audioRouteAmount,
+      shiftX: audioRouteShiftX,
+      shiftY: audioRouteShiftY,
+      rmsWindow: audioRouteRmsWindow,
+      rmsHop: audioRouteRmsHop,
+      frameRate: audioRouteFrameRate,
+      maxFrames: nil,
+      backend: audioRouteBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing audio→video route render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedAudioVideoRouteSequenceRender(
+          request: request
+        )
+        DispatchQueue.main.async {
+          self.audioRouteSummary = "Audio→video route bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Audio→video route render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.audioRouteSummary = "Audio→video route render failed: \(error.localizedDescription)"
+          self.statusMessage = "Audio→video route render failed: \(error.localizedDescription)"
         }
       }
     }

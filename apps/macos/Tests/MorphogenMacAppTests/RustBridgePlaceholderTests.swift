@@ -305,6 +305,69 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedAudioVideoRouteArgumentsIncludeShiftAndBackend() throws {
+    let request = AudioVideoRouteSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/audio-route-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 0.75,
+      shiftX: 8,
+      shiftY: -2,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      frameRate: 30,
+      maxFrames: 48,
+      backend: .metal,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioVideoRouteSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      [
+        "cargo", "run", "--quiet", "-p", "morphogen-cli", "--",
+        "queue-add-audio-video-route-sequence"
+      ]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/audio-route-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[9], "/tmp/source-b-frames")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
+    XCTAssertEqual(Self.value(after: "--shift-x", in: arguments), "8")
+    XCTAssertEqual(Self.value(after: "--shift-y", in: arguments), "-2")
+    XCTAssertEqual(Self.value(after: "--rms-window", in: arguments), "2048")
+    XCTAssertEqual(Self.value(after: "--rms-hop", in: arguments), "512")
+    XCTAssertEqual(Self.value(after: "--frame-rate", in: arguments), "30")
+    XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
+    XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
+  }
+
+  func testQueuedAudioVideoRouteArgumentsRejectInvalidValues() {
+    let base = AudioVideoRouteSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/audio-route-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: -1, // negative amount
+      shiftX: 8,
+      shiftY: 0,
+      rmsWindow: 0, // must be > 0
+      rmsHop: 512,
+      frameRate: 30,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddAudioVideoRouteSequenceArguments(request: base)
+    )
+  }
+
   func testQueuedGranularMosaicPoolSequenceArgumentsOmitAudioCachesWhenColorOnly() throws {
     let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),
