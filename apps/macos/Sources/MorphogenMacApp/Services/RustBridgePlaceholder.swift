@@ -46,6 +46,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultVideoVocoderSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-video-vocoder-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -299,6 +305,99 @@ enum RustBridgePlaceholder {
       arguments.append("--carrier-centroid-cache")
       arguments.append(carrierCentroidCacheURL.path)
     }
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedVideoVocoderSequenceRender(
+    request: VideoVocoderSequenceRenderQueueCommandRequest
+  ) throws -> VideoVocoderSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddVideoVocoderSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-video-vocoder-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return VideoVocoderSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddVideoVocoderSequenceArguments(
+    request: VideoVocoderSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.bands > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("band count must be greater than zero")
+    }
+    guard request.amount.isFinite && request.amount >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "amount must be finite and greater than or equal to zero"
+      )
+    }
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive and finite")
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+    guard !(request.backend == .metal && request.mode == .gain) else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "the Metal backend is only available in Match mode; use Gain mode on the CPU backend"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-video-vocoder-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--bands",
+      String(request.bands),
+      "--amount",
+      cliNumber(request.amount),
+      "--mode",
+      request.mode.cliValue,
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--backend",
+      request.backend.cliValue
+    ]
+
     if let maxFrames = request.maxFrames {
       arguments.append("--max-frames")
       arguments.append(String(maxFrames))
@@ -891,6 +990,26 @@ struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
 }
 
 struct GranularMosaicPoolSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct VideoVocoderSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let bands: Int
+  let amount: Double
+  let mode: VideoVocoderModeOption
+  let maxFrames: Int?
+  let frameRate: Double
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct VideoVocoderSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String
