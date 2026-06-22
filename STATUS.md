@@ -8,13 +8,36 @@ _Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **186 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **198 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **34 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the video-vocoder commits. Manual-testing clips
+- `swift test`: **37 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the audio-impulse-convolution commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Convolutional AV Blending (audio impulse) — full vertical slice (CPU + CLI +
+  queue + SwiftUI; CPU-only, no Metal like the cross-synth).** The roadmap's
+  "tiny direct convolution for audio kernels" MVP — the other half of
+  Convolutional AV Blending. Source A is an **impulse response**: downmix to mono,
+  optional `--max-impulse-samples` head-truncation, then **L1-normalize** (so
+  `Σ|tap| = 1`, which bounds the wet path — no clip blow-up); a silent A falls
+  back to a unit-impulse identity. Each Source B channel is convolved with that IR
+  (reusing `convolve_mono`), blended wet/dry by `amount`; the output extends past
+  B by `L − 1` (the reverb tail). `--amount 0` = exact B passthrough. New logic in
+  `morphogen-audio/src/convolution.rs` (`impulse_convolution_blend`, 9 tests) +
+  `render-audio-impulse-convolution` CLI + persisted `audio_impulse_convolution`
+  queue task (add/run writing `audio/impulse_convolution.wav` + manifest knobs) +
+  a macOS Render-panel section (A IR / B / output pickers, amount + max-IR
+  steppers). Algorithm id `impulse_response_convolution_blend_cpu_v1`. **Off-vs-on
+  readout (audio, not the image's cross-sequence trick):** a straight OFF
+  (`--amount 0`) vs ON (`--amount 1`) WAV compare — ON is **longer by L − 1**
+  (4800 → 5039 for a 240-tap IR) and a positive lowpass IR drops **RMS
+  0.574 → 0.027** / peak 0.90 → 0.08 (L1-bounded), OFF byte-identical to B,
+  deterministic re-render byte-identical, queue add→run byte-identical to the
+  direct render (smoke test pins it + the manifest knobs). Workspace 186 → 198;
+  Swift 34 → 37. Both MVP halves now landed. Contract:
+  `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
 
 - **Convolutional AV Blending (image kernel) — full vertical slice (CPU + CLI +
   Metal + queue + SwiftUI).** The roadmap's "tiny direct convolution for image
