@@ -8,13 +8,37 @@ _Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **163 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **173 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **30 passing, 0 failing** (Swift shell + service tests).
+- `swift test`: **32 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the video-vocoder commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Audio-to-Video Descriptor Routing — full vertical slice (CPU + CLI + Metal +
+  queue + SwiftUI).** The roadmap's "RMS controls displacement amount" MVP, A→B
+  cross-modal (A's *audio* shapes B's *video*, the complement to the cross-synth's
+  A-audio→B-audio). The only new logic is **routing**: A's peak-normalized RMS
+  envelope, hold-last per output frame at `--fps`, becomes the scalar `amount`
+  fed to the **existing, already-parity-gated** flow displace op over a uniform
+  displacement field (`--shift-x/--shift-y`). `--amount 0` (or silent A) = exact
+  Source B passthrough. Because the pixel transform is the proven
+  `flow_displace_cpu`/`flow_displace_metal`, **Metal came nearly free** —
+  `--backend metal` reuses the displace kernel, gated per-frame against CPU.
+  `audio_route.rs` in morphogen-render (`RmsDisplacementEnvelope` +
+  `uniform_displacement_field`, 7 tests) + `render-audio-video-route-sequence`
+  CLI (WAV A + PNG-seq B → PNG seq) + persisted `frame_sequence_audio_video_route`
+  queue job (backend serde-default CPU; queue-add/run writing a frames/ bundle +
+  manifest carrying the routing algorithm id + every knob) + a macOS Render-panel
+  section (Source A WAV / Source B frames / amount+shift steppers / CPU-Metal
+  backend). Algorithm id `rms_displacement_route_cpu_v1`. Off-vs-on verified on a
+  static-gradient readout: amount 0 frame-delta **0.000/255** (passthrough),
+  ramped-A on **0.656/255** (displacement tracks the loud→quiet envelope),
+  large-shift frame visibly displaced (Read); OFF deterministic, CPU==Metal
+  byte-identical, queue add→run byte-identical to the direct render (smoke test
+  pins it + the manifest knobs). Workspace 163 → 173; Swift 30 → 32. MVP
+  feature-complete. Contract: `docs/AUDIO_VIDEO_ROUTE_MILESTONE.md`.
 
 - **Spectral Audio Cross-Synthesis — full vertical slice (CPU + CLI + queue +
   SwiftUI).** The roadmap's "RMS or centroid controls a simple filter/gain path"
@@ -226,9 +250,14 @@ sidecar (currently recomputed per frame), spatial-frequency (multiband) routing,
 and the reverse/cross-clip look exploration. **Spectral Audio Cross-Synthesis**
 is now a feature-complete MVP vertical slice (CPU + CLI + queue + SwiftUI, gain +
 filter modes). Its deferred HQ tier is phase-vocoder cross-synthesis (needs a
-complex-STFT + inverse + Accelerate-FFT path first). The next unstarted roadmap
-effect is **Audio-to-Video Descriptor Routing** (RMS→displacement) or
-**Convolutional Audio/Video Blending**.
+complex-STFT + inverse + Accelerate-FFT path first). **Audio-to-Video Descriptor
+Routing** (RMS→displacement) is now a feature-complete MVP vertical slice too
+(CPU + CLI + parity-gated Metal + queue + SwiftUI); its deferred items are
+spatially varying displacement fields (sine/radial/Source-A flow), other
+descriptor targets (centroid→hue, onset→cut), and sample-accurate descriptor
+curves (HQ tier). The next unstarted roadmap effect is **Convolutional
+Audio/Video Blending** (tiny direct convolution) or **Video-to-Audio Descriptor
+Routing** (frame-luma → audio gain/pan).
 
 ## Candidate next steps
 

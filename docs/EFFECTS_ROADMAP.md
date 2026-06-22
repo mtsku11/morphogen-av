@@ -54,7 +54,10 @@
 - Carrier input: Source B video parameters.
 - Output: video parameters modulated by RMS, centroid, or onsets.
 - Cached analysis: RMS envelopes, onset strength, spectral descriptors.
-- First MVP version: RMS controls displacement amount.
+- First MVP version: RMS controls displacement amount. **Landed** (CPU + CLI +
+  parity-gated Metal + queue + SwiftUI) — see `docs/AUDIO_VIDEO_ROUTE_MILESTONE.md`.
+  A's peak-normalized RMS envelope drives the per-frame displacement amount fed
+  to the existing flow displace; uniform field, `amount 0` = passthrough.
 - Future high-quality version: sample-accurate descriptor curves routed into render nodes.
 
 ## Video-to-Audio Descriptor Routing
