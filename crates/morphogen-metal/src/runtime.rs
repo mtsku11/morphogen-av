@@ -9,8 +9,9 @@ use morphogen_render::{
 
 use crate::{
     FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
-    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME,
-    FLOW_DISPLACE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_POOL_KERNEL_NAME,
+    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
+    CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
+    GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_POOL_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_SHADER_SOURCE, GRANULAR_MOSAIC_SHADER_SOURCE,
     VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
@@ -56,6 +57,14 @@ struct VideoVocoderParams {
     amount: f32,
     width: u32,
     height: u32,
+}
+
+#[repr(C)]
+struct ConvolutionBlendParams {
+    amount: f32,
+    width: u32,
+    height: u32,
+    kernel_size: u32,
 }
 
 pub fn flow_displace_metal(
@@ -222,6 +231,112 @@ pub fn video_vocoder_match_metal(
         1,
         std::mem::size_of::<VideoVocoderParams>() as u64,
         (&params as *const VideoVocoderParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
+/// Convolutional AV blend, image-kernel mode. Convolves the carrier with a
+/// precomputed normalized `weights` kernel (`kernel_size × kernel_size`, from
+/// `morphogen_render::analyze_convolution_kernel_cpu`) and blends by `amount`.
+/// The CPU reference `convolution_blend_cpu` evaluates identical math; the CLI
+/// gates this output against it per frame before export.
+pub fn convolution_blend_metal(
+    carrier: &ImageBufferF32,
+    weights: &[f32],
+    kernel_size: u32,
+    amount: f32,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if kernel_size == 0 || kernel_size % 2 == 0 {
+        return Err(MetalDispatchError::InvalidConvolutionSettings(
+            "kernel_size must be odd and greater than zero".to_string(),
+        ));
+    }
+    if weights.len() != (kernel_size * kernel_size) as usize {
+        return Err(MetalDispatchError::InvalidConvolutionSettings(format!(
+            "weights length {} does not match kernel_size {}",
+            weights.len(),
+            kernel_size
+        )));
+    }
+
+    let plan = FlowDisplaceDispatchPlan::new(carrier.width, carrier.height, amount)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(CONVOLUTION_BLEND_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(CONVOLUTION_BLEND_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let carrier_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&carrier_texture, carrier)?;
+
+    let weights_byte_len = std::mem::size_of_val(weights);
+    let weights_buffer = device.new_buffer_with_data(
+        weights.as_ptr().cast(),
+        weights_byte_len as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&carrier_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_buffer(0, Some(&weights_buffer), 0);
+
+    let params = ConvolutionBlendParams {
+        amount: plan.amount,
+        width: plan.width,
+        height: plan.height,
+        kernel_size,
+    };
+    encoder.set_bytes(
+        1,
+        std::mem::size_of::<ConvolutionBlendParams>() as u64,
+        (&params as *const ConvolutionBlendParams).cast(),
     );
     encoder.dispatch_thread_groups(
         MTLSize::new(
@@ -859,7 +974,8 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
-        analyze_grain_pool_cpu, apply_tone_map_cpu, flow_displace_cpu, flow_feedback_frame_cpu,
+        analyze_convolution_kernel_cpu, analyze_grain_pool_cpu, apply_tone_map_cpu,
+        convolution_blend_cpu, flow_displace_cpu, flow_feedback_frame_cpu,
         granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
         luma_specification_tone_map, select_grains_from_pool_cpu, FlowFeedbackSettings, FlowField,
         GrainSelection, GranularMosaicSettings, ImageBufferF32, StructureMode,
@@ -1027,6 +1143,48 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_convolution_blend_matches_cpu_reference() {
+        // A high-frequency carrier (so a blur actually changes pixels) and a
+        // structured modulator (so the kernel is non-uniform); parity at 1/255.
+        let carrier = ImageBufferF32::from_fn(7, 6, |x, y| {
+            let v = if (x + y) % 2 == 0 { 0.85 } else { 0.15 };
+            [v, v * 0.6, 1.0 - v, 1.0]
+        })
+        .expect("carrier");
+        let modulator = ImageBufferF32::from_fn(9, 9, |x, y| {
+            let v = ((x + 2 * y) as f32 / 24.0).clamp(0.0, 1.0);
+            [v, v, v, 1.0]
+        })
+        .expect("modulator");
+
+        let kernel = analyze_convolution_kernel_cpu(&modulator, 3).expect("kernel");
+        let cpu = convolution_blend_cpu(&carrier, &kernel, 1.0).expect("cpu render");
+        let gpu = match convolution_blend_metal(&carrier, &kernel.weights, kernel.size, 1.0) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal convolution blend parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal convolution blend render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_convolution_blend_rejects_even_kernel_size() {
+        let carrier = ImageBufferF32::new(2, 2, vec![[0.5, 0.5, 0.5, 1.0]; 4]).expect("carrier");
+        let error = convolution_blend_metal(&carrier, &[0.25; 4], 2, 1.0)
+            .expect_err("even kernel size must be rejected");
+        assert!(
+            matches!(error, MetalDispatchError::InvalidConvolutionSettings(_)),
+            "expected InvalidConvolutionSettings, got {error:?}"
+        );
     }
 
     #[test]
