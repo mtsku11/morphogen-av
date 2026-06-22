@@ -267,6 +267,19 @@ pub enum RenderJobTask {
         #[serde(default)]
         window: CrossSynthWindow,
     },
+    /// Audio impulse convolution: Source B (carrier) convolved with Source A's
+    /// L1-normalized mono impulse response, blended wet/dry by `amount`
+    /// (convolution-reverb-style). CPU-only — no Metal path to parity-gate.
+    AudioImpulseConvolution {
+        modulator_wav: String,
+        carrier_wav: String,
+        output_directory: String,
+        /// Blend from Source B passthrough (`0`) to full wet (`1`).
+        amount: f32,
+        /// Optional head-truncation of the impulse response (samples).
+        #[serde(default)]
+        max_impulse_samples: Option<u32>,
+    },
 }
 
 /// Selects the spectral cross-synth descriptor→target mapping.
@@ -694,6 +707,45 @@ mod tests {
         assert_eq!(mode, CrossSynthMode::Gain);
         assert_eq!(filter_type, CrossSynthFilterType::Lowpass);
         assert_eq!(window, CrossSynthWindow::Hann);
+    }
+
+    #[test]
+    fn audio_impulse_convolution_task_round_trips() {
+        let task = RenderJobTask::AudioImpulseConvolution {
+            modulator_wav: "/tmp/ir.wav".to_string(),
+            carrier_wav: "/tmp/b.wav".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            amount: 0.5,
+            max_impulse_samples: Some(4096),
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize impulse-convolution task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize impulse-convolution task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn audio_impulse_convolution_task_defaults_max_impulse_samples_to_none() {
+        let json = r#"{
+            "type": "audio_impulse_convolution",
+            "modulator_wav": "/tmp/ir.wav",
+            "carrier_wav": "/tmp/b.wav",
+            "output_directory": "/tmp/out",
+            "amount": 1.0
+        }"#;
+
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize impulse-convolution task");
+        let RenderJobTask::AudioImpulseConvolution {
+            max_impulse_samples,
+            ..
+        } = task
+        else {
+            panic!("expected impulse-convolution task");
+        };
+        assert_eq!(max_impulse_samples, None);
     }
 
     #[test]
