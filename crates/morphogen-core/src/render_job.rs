@@ -193,6 +193,68 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    /// Spectral audio cross-synthesis: Source A's analysis envelope shapes Source
+    /// B's audio. `gain` scales B's amplitude by A's peak-normalized RMS envelope;
+    /// `filter` sweeps a one-pole filter on B from A's spectral-centroid envelope.
+    /// Time-domain MVP (CPU-only; the STFT is magnitude-only so there is no Metal
+    /// path and nothing to parity-gate).
+    AudioSpectralCrossSynth {
+        modulator_wav: String,
+        carrier_wav: String,
+        output_directory: String,
+        /// `gain` or `filter`. Defaults to [`CrossSynthMode::Gain`].
+        #[serde(default)]
+        mode: CrossSynthMode,
+        /// Blend from Source B passthrough (`0`) to full shaping (`1`).
+        amount: f32,
+        /// One-pole filter response (`filter` mode). Defaults to
+        /// [`CrossSynthFilterType::Lowpass`].
+        #[serde(default)]
+        filter_type: CrossSynthFilterType,
+        /// RMS analysis window/hop for A's envelope (`gain` mode).
+        rms_window: u32,
+        rms_hop: u32,
+        /// STFT analysis parameters for A's centroid envelope (`filter` mode).
+        fft_size: u32,
+        stft_hop: u32,
+        /// STFT window function (`filter` mode). Defaults to
+        /// [`CrossSynthWindow::Hann`].
+        #[serde(default)]
+        window: CrossSynthWindow,
+    },
+}
+
+/// Selects the spectral cross-synth descriptor→target mapping.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossSynthMode {
+    /// A's peak-normalized RMS envelope scales B's amplitude
+    /// (`rms_gain_cross_synth_cpu_v1`).
+    #[default]
+    Gain,
+    /// A's spectral-centroid envelope sweeps a one-pole filter on B
+    /// (`centroid_filter_cross_synth_cpu_v1`).
+    Filter,
+}
+
+/// One-pole filter response for `filter`-mode cross-synth.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossSynthFilterType {
+    #[default]
+    Lowpass,
+    Highpass,
+}
+
+/// STFT window function for `filter`-mode cross-synth analysis. Mirrors the audio
+/// crate's window set; lives in core so a persisted job is self-contained.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossSynthWindow {
+    #[default]
+    Hann,
+    Hamming,
+    Rectangular,
 }
 
 /// Selects the video-vocoder tonal-routing mode.
@@ -535,6 +597,58 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize vocoder task");
 
         assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn spectral_cross_synth_task_round_trips() {
+        let task = RenderJobTask::AudioSpectralCrossSynth {
+            modulator_wav: "/tmp/a.wav".to_string(),
+            carrier_wav: "/tmp/b.wav".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            mode: CrossSynthMode::Filter,
+            amount: 0.5,
+            filter_type: CrossSynthFilterType::Highpass,
+            rms_window: 2048,
+            rms_hop: 512,
+            fft_size: 1024,
+            stft_hop: 256,
+            window: CrossSynthWindow::Hamming,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize cross-synth task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize cross-synth task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn spectral_cross_synth_task_defaults_mode_filter_type_and_window() {
+        let json = r#"{
+            "type": "audio_spectral_cross_synth",
+            "modulator_wav": "/tmp/a.wav",
+            "carrier_wav": "/tmp/b.wav",
+            "output_directory": "/tmp/out",
+            "amount": 1.0,
+            "rms_window": 2048,
+            "rms_hop": 512,
+            "fft_size": 1024,
+            "stft_hop": 256
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize cross-synth task");
+        let RenderJobTask::AudioSpectralCrossSynth {
+            mode,
+            filter_type,
+            window,
+            ..
+        } = task
+        else {
+            panic!("expected cross-synth task");
+        };
+        assert_eq!(mode, CrossSynthMode::Gain);
+        assert_eq!(filter_type, CrossSynthFilterType::Lowpass);
+        assert_eq!(window, CrossSynthWindow::Hann);
     }
 
     #[test]

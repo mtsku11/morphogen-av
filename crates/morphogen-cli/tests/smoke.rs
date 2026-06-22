@@ -2046,6 +2046,82 @@ fn failed_frame_sequence_job_records_a_durable_failure() {
         .contains("No such file"));
 }
 
+#[test]
+fn queue_spectral_cross_synth_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_wav = temp_dir.path().join("modulator.wav");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    // A silent->loud envelope over a steady carrier (gain mode, small buffers).
+    write_test_wav(&modulator_wav, &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+    write_test_wav(&carrier_wav, &[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+
+    let modulator_arg = modulator_wav.to_string_lossy().to_string();
+    let carrier_arg = carrier_wav.to_string_lossy().to_string();
+    let direct_wav = temp_dir.path().join("direct.wav");
+    let direct_arg = direct_wav.to_string_lossy().to_string();
+    let common = [
+        "--mode", "gain", "--amount", "1", "--rms-window", "4", "--rms-hop", "4",
+    ];
+
+    // Direct render.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-spectral-cross-synth",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+
+    // Queue add + run.
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-spectral-cross-synth",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-spectral-cross-synth", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render is byte-identical to the direct render (path-independent).
+    let queued_wav = output_root.join("job-0001/audio/cross_synth.wav");
+    assert_eq!(
+        fs::read(&queued_wav).expect("read queued wav"),
+        fs::read(&direct_wav).expect("read direct wav"),
+        "queue render must be byte-identical to the direct render"
+    );
+
+    // Manifest records the algorithm + knobs.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "audio_spectral_cross_synth");
+    assert_eq!(manifest["audio_stems"][0], "audio/cross_synth.wav");
+    let knobs = &manifest["spectral_cross_synth"];
+    assert_eq!(knobs["algorithm"], "rms_gain_cross_synth_cpu_v1");
+    assert_eq!(knobs["mode"], "gain");
+    assert_eq!(knobs["amount"], 1.0);
+    assert_eq!(knobs["rms_window"], 4);
+    assert_eq!(knobs["rms_hop"], 4);
+}
+
 fn write_test_wav(path: &Path, samples: &[f32]) {
     let spec = hound::WavSpec {
         channels: 1,

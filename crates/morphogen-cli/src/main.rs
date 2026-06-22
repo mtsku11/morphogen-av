@@ -14,7 +14,8 @@ use morphogen_audio::{
     RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 use morphogen_core::{
-    AnalysisCacheEntry, AnalysisKind, ExportFormat, FlowSource, GrainSelectionMode,
+    AnalysisCacheEntry, AnalysisKind, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow,
+    ExportFormat, FlowSource, GrainSelectionMode,
     GranularAudioModulation, MediaProxy, Project, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance,
     RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
@@ -565,6 +566,30 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    QueueAddSpectralCrossSynth {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
+        mode: CliCrossSynthMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: usize,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: usize,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        stft_hop: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueRunTest {
         queue_path: PathBuf,
         output_dir: PathBuf,
@@ -584,6 +609,9 @@ enum Commands {
         queue_path: PathBuf,
     },
     QueueRunVideoVocoderSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunSpectralCrossSynth {
         queue_path: PathBuf,
     },
     QueueCancel {
@@ -659,6 +687,51 @@ impl From<CliFilterType> for FilterType {
             CliFilterType::Lowpass => Self::Lowpass,
             CliFilterType::Highpass => Self::Highpass,
         }
+    }
+}
+
+impl From<CliCrossSynthMode> for CrossSynthMode {
+    fn from(value: CliCrossSynthMode) -> Self {
+        match value {
+            CliCrossSynthMode::Gain => Self::Gain,
+            CliCrossSynthMode::Filter => Self::Filter,
+        }
+    }
+}
+
+impl From<CliFilterType> for CrossSynthFilterType {
+    fn from(value: CliFilterType) -> Self {
+        match value {
+            CliFilterType::Lowpass => Self::Lowpass,
+            CliFilterType::Highpass => Self::Highpass,
+        }
+    }
+}
+
+impl From<CliWindowFunction> for CrossSynthWindow {
+    fn from(value: CliWindowFunction) -> Self {
+        match value {
+            CliWindowFunction::Hann => Self::Hann,
+            CliWindowFunction::Hamming => Self::Hamming,
+            CliWindowFunction::Rectangular => Self::Rectangular,
+        }
+    }
+}
+
+// Core ↔ audio enums are both foreign to this crate, so the orphan rule forbids
+// `From` impls; free helpers convert a persisted job's analysis knobs at run time.
+fn cross_synth_filter_type(value: CrossSynthFilterType) -> FilterType {
+    match value {
+        CrossSynthFilterType::Lowpass => FilterType::Lowpass,
+        CrossSynthFilterType::Highpass => FilterType::Highpass,
+    }
+}
+
+fn cross_synth_window(value: CrossSynthWindow) -> WindowFunction {
+    match value {
+        CrossSynthWindow::Hann => WindowFunction::Hann,
+        CrossSynthWindow::Hamming => WindowFunction::Hamming,
+        CrossSynthWindow::Rectangular => WindowFunction::Rectangular,
     }
 }
 
@@ -1338,6 +1411,35 @@ fn run() -> Result<(), CliError> {
             project_path: project_path.as_deref(),
             backend: backend.into(),
         }),
+        Commands::QueueAddSpectralCrossSynth {
+            queue_path,
+            modulator_wav,
+            carrier_wav,
+            output_root_dir,
+            mode,
+            amount,
+            filter_type,
+            rms_window,
+            rms_hop,
+            fft_size,
+            stft_hop,
+            window,
+            project_path,
+        } => queue_add_spectral_cross_synth(QueueAddSpectralCrossSynthRequest {
+            queue_path: &queue_path,
+            modulator_wav: &modulator_wav,
+            carrier_wav: &carrier_wav,
+            output_root_dir: &output_root_dir,
+            mode: mode.into(),
+            amount,
+            filter_type: filter_type.into(),
+            rms_window,
+            rms_hop,
+            fft_size,
+            stft_hop,
+            window: window.into(),
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueRunTest {
             queue_path,
             output_dir,
@@ -1355,6 +1457,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunVideoVocoderSequence { queue_path } => {
             queue_run_video_vocoder_sequence(&queue_path)
+        }
+        Commands::QueueRunSpectralCrossSynth { queue_path } => {
+            queue_run_spectral_cross_synth(&queue_path)
         }
         Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
@@ -5508,6 +5613,289 @@ fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), CliError> {
     }
 }
 
+struct QueueAddSpectralCrossSynthRequest<'a> {
+    queue_path: &'a Path,
+    modulator_wav: &'a Path,
+    carrier_wav: &'a Path,
+    output_root_dir: &'a Path,
+    mode: CrossSynthMode,
+    amount: f32,
+    filter_type: CrossSynthFilterType,
+    rms_window: usize,
+    rms_hop: usize,
+    fft_size: usize,
+    stft_hop: usize,
+    window: CrossSynthWindow,
+    project_path: Option<&'a Path>,
+}
+
+fn queue_add_spectral_cross_synth(
+    request: QueueAddSpectralCrossSynthRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddSpectralCrossSynthRequest {
+        queue_path,
+        modulator_wav,
+        carrier_wav,
+        output_root_dir,
+        mode,
+        amount,
+        filter_type,
+        rms_window,
+        rms_hop,
+        fft_size,
+        stft_hop,
+        window,
+        project_path,
+    } = request;
+    if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+        return Err(CliError::Message(
+            "amount must be finite and within [0, 1]".to_string(),
+        ));
+    }
+    if rms_window == 0 || rms_hop == 0 {
+        return Err(CliError::Message(
+            "rms-window and rms-hop must be greater than zero".to_string(),
+        ));
+    }
+    StftConfig {
+        fft_size,
+        hop_size: stft_hop,
+        window: cross_synth_window(window),
+    }
+    .validate()?;
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-audio".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_wav.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-audio".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_wav.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 0,
+            height: 0,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::Wav { bit_depth: 32 },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::AudioSpectralCrossSynth {
+            modulator_wav: modulator_wav.to_string_lossy().to_string(),
+            carrier_wav: carrier_wav.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            mode,
+            amount,
+            filter_type,
+            rms_window: rms_window as u32,
+            rms_hop: rms_hop as u32,
+            fft_size: fft_size as u32,
+            stft_hop: stft_hop as u32,
+            window,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued spectral cross-synth render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+fn queue_run_spectral_cross_synth(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::AudioSpectralCrossSynth { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running spectral cross-synth jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::AudioSpectralCrossSynth {
+        modulator_wav,
+        carrier_wav,
+        output_directory,
+        mode,
+        amount,
+        filter_type,
+        rms_window,
+        rms_hop,
+        fft_size,
+        stft_hop,
+        window,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a spectral cross-synth render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let modulator = load_wav_f32(&modulator_wav)?;
+        let carrier = load_wav_f32(&carrier_wav)?;
+        let stft_config = StftConfig {
+            fft_size: fft_size as usize,
+            hop_size: stft_hop as usize,
+            window: cross_synth_window(window),
+        };
+        let (output, algorithm) = match mode {
+            CrossSynthMode::Gain => (
+                rms_gain_cross_synth(
+                    &modulator,
+                    &carrier,
+                    rms_window as usize,
+                    rms_hop as usize,
+                    amount,
+                )?,
+                RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+            ),
+            CrossSynthMode::Filter => (
+                centroid_filter_cross_synth(
+                    &modulator,
+                    &carrier,
+                    stft_config,
+                    cross_synth_filter_type(filter_type),
+                    amount,
+                )?,
+                CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
+            ),
+        };
+
+        let stem_rel = "audio/cross_synth.wav";
+        let stem_path = output_dir.join(stem_rel);
+        write_parent_dirs(&stem_path)?;
+        save_wav_f32(&stem_path, &output)?;
+
+        let sample_rate = output.sample_rate;
+        let audio_sample_count = output.frames as u64;
+        let duration_seconds = if sample_rate > 0 {
+            output.frames as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+        let timing = RenderTimingMetadata {
+            frame_rate: 0.0,
+            frame_count: 0,
+            start_seconds: 0.0,
+            duration_seconds,
+            sample_rate,
+            audio_sample_count,
+        };
+        let mode_label = match mode {
+            CrossSynthMode::Gain => "gain",
+            CrossSynthMode::Filter => "filter",
+        };
+        let filter_label = match filter_type {
+            CrossSynthFilterType::Lowpass => "lowpass",
+            CrossSynthFilterType::Highpass => "highpass",
+        };
+        let window_label = match window {
+            CrossSynthWindow::Hann => "hann",
+            CrossSynthWindow::Hamming => "hamming",
+            CrossSynthWindow::Rectangular => "rectangular",
+        };
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "audio_spectral_cross_synth",
+            "frames": [],
+            "audio_stems": [stem_rel],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "spectral_cross_synth": {
+                "algorithm": algorithm,
+                "mode": mode_label,
+                "amount": amount,
+                "filter_type": filter_label,
+                "rms_window": rms_window,
+                "rms_hop": rms_hop,
+                "fft_size": fft_size,
+                "stft_hop": stft_hop,
+                "window": window_label
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths: Vec::new(),
+            audio_stem_paths: vec![stem_rel.to_string()],
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued spectral cross-synth job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("spectral cross-synth job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
     let mut queue = RenderQueue::load_json(queue_path)?;
     let job_index = queue
@@ -5990,6 +6378,7 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 "frame_sequence_granular_mosaic_pool"
             }
             RenderJobTask::FrameSequenceVideoVocoder { .. } => "frame_sequence_video_vocoder",
+            RenderJobTask::AudioSpectralCrossSynth { .. } => "audio_spectral_cross_synth",
         };
         let provenance_summary = job
             .provenance
