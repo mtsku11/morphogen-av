@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod audio_route;
+pub mod conv_blend;
 pub mod cpu_reference;
 pub mod error;
 pub mod feedback_state;
@@ -13,6 +15,15 @@ pub mod optical_flow;
 pub mod sampler;
 pub mod video_vocoder;
 
+pub use audio_route::{
+    uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+};
+pub use conv_blend::{
+    analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu, convolution_blend_color_cpu,
+    convolution_blend_color_from_modulator_cpu, convolution_blend_cpu,
+    convolution_blend_from_modulator_cpu, ConvolutionBlendSettings, ConvolutionKernel,
+    CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
+};
 pub use cpu_reference::{
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     FlowFeedbackSettings, StructureMode,

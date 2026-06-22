@@ -18,6 +18,8 @@ pub enum RenderError {
     InvalidGranularMosaicCache(String),
     #[error("invalid video vocoder settings: {0}")]
     InvalidVideoVocoderSettings(String),
+    #[error("invalid convolution blend settings: {0}")]
+    InvalidConvolutionSettings(String),
     #[error("render inputs are incompatible: {0}")]
     IncompatibleInputs(String),
     #[error("I/O error: {0}")]

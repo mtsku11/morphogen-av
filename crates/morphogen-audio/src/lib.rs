@@ -3,8 +3,10 @@
 pub mod backend;
 pub mod buffer;
 pub mod convolution;
+pub mod cross_synth;
 pub mod descriptors;
 pub mod error;
+pub mod fft;
 pub mod onset;
 pub mod rms;
 pub mod spectral;
@@ -12,8 +14,17 @@ pub mod stft;
 pub mod wav;
 
 pub use buffer::AudioBufferF32;
+pub use convolution::{
+    convolve_mono, impulse_convolution_blend, ConvolutionMethod, IrMode,
+    IMPULSE_CONVOLUTION_BLEND_ALGORITHM, PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+};
+pub use cross_synth::{
+    centroid_filter_cross_synth, rms_gain_cross_synth, FilterType,
+    CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+};
 pub use descriptors::{AudioAnalysisCache, AudioDescriptorFrame};
 pub use error::AudioError;
+pub use fft::convolve_via_fft;
 pub use onset::{onset_strength_from_stft, OnsetStrengthCache, OnsetStrengthFrame};
 pub use rms::rms_envelope;
 pub use spectral::{spectral_centroid, spectral_centroid_from_magnitudes};

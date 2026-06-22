@@ -20,7 +20,9 @@ pub use media::{MediaProxy, MediaSource, SourceRole};
 pub use node::{Node, NodeId, NodeKind, SignalType};
 pub use project::{Project, ProjectMetadata};
 pub use render_job::{
-    ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, RenderBackend, RenderJob,
+    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, ExportFormat,
+    FlowSource,
+    GrainSelectionMode, GranularAudioModulation, IrMode, KernelMode, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderSettings, RenderTimingMetadata, VideoVocoderMode,

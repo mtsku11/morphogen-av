@@ -247,6 +247,320 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedSpectralCrossSynthArgumentsIncludeModeAndAnalysisKnobs() throws {
+    let request = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cross-synth-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .filter,
+      amount: 0.75,
+      filterType: .highpass,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      fftSize: 1024,
+      stftHop: 256,
+      window: .hamming,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-spectral-cross-synth"]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/cross-synth-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(Self.value(after: "--mode", in: arguments), "filter")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
+    XCTAssertEqual(Self.value(after: "--filter-type", in: arguments), "highpass")
+    XCTAssertEqual(Self.value(after: "--rms-window", in: arguments), "2048")
+    XCTAssertEqual(Self.value(after: "--rms-hop", in: arguments), "512")
+    XCTAssertEqual(Self.value(after: "--fft-size", in: arguments), "1024")
+    XCTAssertEqual(Self.value(after: "--stft-hop", in: arguments), "256")
+    XCTAssertEqual(Self.value(after: "--window", in: arguments), "hamming")
+  }
+
+  func testQueuedSpectralCrossSynthArgumentsRejectInvalidValues() {
+    let base = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cross-synth-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .gain,
+      amount: 1.5, // out of [0, 1]
+      filterType: .lowpass,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      fftSize: 1000, // not a power of two
+      stftHop: 256,
+      window: .hann,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: base)
+    )
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsIncludeAmountAndMaxSamples() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 0.5,
+      maxImpulseSamples: 4096,
+      useFFT: false,
+      resampleImpulse: false,
+      usePerChannelIR: false,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-audio-impulse-convolution"]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/impulse-conv-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.5")
+    XCTAssertEqual(Self.value(after: "--max-impulse-samples", in: arguments), "4096")
+    // Direct, non-resampling defaults omit the HQ-tier flags.
+    XCTAssertFalse(arguments.contains("--method"))
+    XCTAssertFalse(arguments.contains("--resample-impulse"))
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsIncludeFFTAndResample() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.0,
+      maxImpulseSamples: nil,
+      useFFT: true,
+      resampleImpulse: true,
+      usePerChannelIR: false,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertEqual(Self.value(after: "--method", in: arguments), "fft")
+    XCTAssertTrue(arguments.contains("--resample-impulse"))
+    // Mono is the default; per-channel must not be emitted unless requested.
+    XCTAssertFalse(arguments.contains("--ir-mode"))
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsIncludePerChannelIR() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.0,
+      maxImpulseSamples: nil,
+      useFFT: false,
+      resampleImpulse: false,
+      usePerChannelIR: true,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertEqual(Self.value(after: "--ir-mode", in: arguments), "per-channel")
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsOmitMaxSamplesWhenNil() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.0,
+      maxImpulseSamples: nil,
+      useFFT: false,
+      resampleImpulse: false,
+      usePerChannelIR: false,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertFalse(arguments.contains("--max-impulse-samples"))
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsRejectInvalidValues() {
+    let base = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.5, // out of [0, 1]
+      maxImpulseSamples: nil,
+      useFFT: false,
+      resampleImpulse: false,
+      usePerChannelIR: false,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(request: base)
+    )
+  }
+
+  func testQueuedAudioVideoRouteArgumentsIncludeShiftAndBackend() throws {
+    let request = AudioVideoRouteSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/audio-route-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 0.75,
+      shiftX: 8,
+      shiftY: -2,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      frameRate: 30,
+      maxFrames: 48,
+      backend: .metal,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioVideoRouteSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      [
+        "cargo", "run", "--quiet", "-p", "morphogen-cli", "--",
+        "queue-add-audio-video-route-sequence"
+      ]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/audio-route-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[9], "/tmp/source-b-frames")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
+    XCTAssertEqual(Self.value(after: "--shift-x", in: arguments), "8")
+    XCTAssertEqual(Self.value(after: "--shift-y", in: arguments), "-2")
+    XCTAssertEqual(Self.value(after: "--rms-window", in: arguments), "2048")
+    XCTAssertEqual(Self.value(after: "--rms-hop", in: arguments), "512")
+    XCTAssertEqual(Self.value(after: "--frame-rate", in: arguments), "30")
+    XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
+    XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
+  }
+
+  func testQueuedAudioVideoRouteArgumentsRejectInvalidValues() {
+    let base = AudioVideoRouteSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/audio-route-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: -1, // negative amount
+      shiftX: 8,
+      shiftY: 0,
+      rmsWindow: 0, // must be > 0
+      rmsHop: 512,
+      frameRate: 30,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddAudioVideoRouteSequenceArguments(request: base)
+    )
+  }
+
+  func testQueuedConvolutionalBlendArgumentsIncludeKernelAndBackend() throws {
+    let request = ConvolutionalBlendSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/conv-blend-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      kernelSize: 5,
+      amount: 0.75,
+      useColorKernels: false,
+      maxFrames: 24,
+      backend: .metal,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddConvolutionalBlendSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      [
+        "cargo", "run", "--quiet", "-p", "morphogen-cli", "--",
+        "queue-add-convolutional-blend-sequence"
+      ]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/conv-blend-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a-frames")
+    XCTAssertEqual(arguments[9], "/tmp/source-b-frames")
+    XCTAssertEqual(Self.value(after: "--kernel-size", in: arguments), "5")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
+    XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
+    XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "24")
+    // Luma is the default; no kernel-mode flag is emitted.
+    XCTAssertFalse(arguments.contains("--kernel-mode"))
+  }
+
+  func testQueuedConvolutionalBlendArgumentsIncludeColourMode() throws {
+    let request = ConvolutionalBlendSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/conv-blend-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      kernelSize: 3,
+      amount: 1.0,
+      useColorKernels: true,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddConvolutionalBlendSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(Self.value(after: "--kernel-mode", in: arguments), "color")
+  }
+
+  func testQueuedConvolutionalBlendArgumentsRejectEvenKernel() {
+    let base = ConvolutionalBlendSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/conv-blend-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      kernelSize: 4, // even -> not centerable
+      amount: 1.0,
+      useColorKernels: false,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddConvolutionalBlendSequenceArguments(request: base)
+    )
+  }
+
   func testQueuedGranularMosaicPoolSequenceArgumentsOmitAudioCachesWhenColorOnly() throws {
     let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),

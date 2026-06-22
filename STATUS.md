@@ -8,13 +8,150 @@ _Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **155 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **223 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **28 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the video-vocoder commits. Manual-testing clips
-  (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
+- `swift test`: **40 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the colour-kernel / per-channel-IR commits. Manual-testing
+  clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Convolutional AV Blending (per-channel colour kernels + true-stereo IRs +
+  large-K Metal verify) — three vertical slices.** The remaining deferred HQ
+  items. **Colour kernels** (`--kernel-mode color`): a separate K×K kernel from
+  each of A's R/G/B channels, applied channel-wise (chromatic structure transfer);
+  parity-gated `convolution_blend_color` Metal kernel (three weight buffers), algo
+  id `image_color_kernel_convolution_blend_cpu_v1`; CPU + CLI + queue + SwiftUI.
+  Off-vs-on (luma vs colour, K=7): **mean 24/255, max 130**, 0 vs identical.
+  **Per-channel IRs** (`--ir-mode per-channel`): each carrier channel convolved
+  with its own IR from the matching A channel (cycling when counts differ),
+  CPU-only, algo id `per_channel_impulse_response_convolution_blend_cpu_v1`; CPU +
+  CLI + queue + SwiftUI. Off-vs-on (mono vs per-channel, stereo identity/smear IR):
+  **max abs diff 0.48 (L) / 0.35 (R)**, 0 vs identical. **Large-K Metal:** the
+  existing image kernel already convolves arbitrary odd K (no cap) — proved with a
+  K=11 CPU + Metal parity test; a tiled perf kernel is deferred (not a correctness
+  gap). Both new modes serde-default to luma/mono so existing jobs keep meaning.
+  Workspace 208 → 223; Swift 38 → 40. Contract:
+  `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
+
+- **Convolutional AV Blending (audio HQ tier: FFT method + IR resampling) —
+  full vertical slice (CPU + CLI + queue + SwiftUI; CPU-only).** The two deferred
+  audio items. **FFT** (`--method fft`): a new pure-Rust radix-2 Cooley-Tukey FFT
+  (`morphogen-audio/src/fft.rs`, forward+inverse over f64, no new deps — the STFT
+  is magnitude-only with no inverse) computes the per-channel convolution in the
+  frequency domain; same transform as the direct `O(B·L)` loop, gated against it
+  within `FFT_DIRECT_PARITY_EPSILON` (1e-4). **IR resampling**
+  (`--resample-impulse`, opt-in): a deterministic 3-lobe Lanczos resampler maps
+  A's IR to B's rate (L1 after resampling so the gain bound survives), instead of
+  the default hard error on a rate mismatch. New `ConvolutionMethod` enum (audio +
+  core), serde-default `method`/`resample_impulse` on the `audio_impulse_convolution`
+  job, CLI flags on render/queue-add, manifest records both. Algorithm id
+  unchanged (`impulse_response_convolution_blend_cpu_v1` — method is an
+  implementation choice, the audio analogue of `backend`). **Off-vs-on readout:**
+  FFT vs direct on a 400-tap IR/1000-sample carrier = **max abs diff 5.96e-8**
+  (≪ 1e-4; identical length/RMS/peak — FFT *is* the direct path); resample off =
+  hard error, on = a 24 kHz IR reconstructs the native-48 kHz IR result within
+  **7.8e-6**. FFT+resample queue add→run byte-identical to the direct render
+  (smoke test pins it + the manifest knobs). Workspace 198 → 208; Swift 37 → 38.
+  Contract: `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
+
+- **Convolutional AV Blending (audio impulse) — full vertical slice (CPU + CLI +
+  queue + SwiftUI; CPU-only, no Metal like the cross-synth).** The roadmap's
+  "tiny direct convolution for audio kernels" MVP — the other half of
+  Convolutional AV Blending. Source A is an **impulse response**: downmix to mono,
+  optional `--max-impulse-samples` head-truncation, then **L1-normalize** (so
+  `Σ|tap| = 1`, which bounds the wet path — no clip blow-up); a silent A falls
+  back to a unit-impulse identity. Each Source B channel is convolved with that IR
+  (reusing `convolve_mono`), blended wet/dry by `amount`; the output extends past
+  B by `L − 1` (the reverb tail). `--amount 0` = exact B passthrough. New logic in
+  `morphogen-audio/src/convolution.rs` (`impulse_convolution_blend`, 9 tests) +
+  `render-audio-impulse-convolution` CLI + persisted `audio_impulse_convolution`
+  queue task (add/run writing `audio/impulse_convolution.wav` + manifest knobs) +
+  a macOS Render-panel section (A IR / B / output pickers, amount + max-IR
+  steppers). Algorithm id `impulse_response_convolution_blend_cpu_v1`. **Off-vs-on
+  readout (audio, not the image's cross-sequence trick):** a straight OFF
+  (`--amount 0`) vs ON (`--amount 1`) WAV compare — ON is **longer by L − 1**
+  (4800 → 5039 for a 240-tap IR) and a positive lowpass IR drops **RMS
+  0.574 → 0.027** / peak 0.90 → 0.08 (L1-bounded), OFF byte-identical to B,
+  deterministic re-render byte-identical, queue add→run byte-identical to the
+  direct render (smoke test pins it + the manifest knobs). Workspace 186 → 198;
+  Swift 34 → 37. Both MVP halves now landed. Contract:
+  `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
+
+- **Convolutional AV Blending (image kernel) — full vertical slice (CPU + CLI +
+  Metal + queue + SwiftUI).** The roadmap's "tiny direct convolution for image
+  kernels" MVP, A→B and **spatial** (the first effect where A modulates B with a
+  *kernel*, not a scalar). Each Source A frame is box-downsampled into a normalized
+  K×K luma kernel (bright A regions = heavy taps; black A falls back to uniform);
+  Source B's frame is directly convolved with it (centered, clamped border,
+  correlation-style) and blended by `amount`. `--amount 0` (or `K=1`) = exact
+  Source B passthrough. New `conv_blend.rs` in morphogen-render (`ConvolutionKernel`
+  + `analyze_convolution_kernel_cpu` + `convolution_blend_cpu`, 7 tests) +
+  parity-gated `convolution_blend` Metal kernel (new `.metal` + runtime fn +
+  parity/preflight tests) + `render-convolutional-blend-sequence` CLI (A frames +
+  B frames → PNG seq, `--kernel-size`/`--amount`/`--backend`) + persisted
+  `frame_sequence_convolution_blend` queue job (backend serde-default CPU;
+  queue-add/run writing a frames/ bundle + manifest carrying the convolution
+  algorithm id + kernel_size/amount/backend) + a macOS Render-panel section
+  (A/B pickers, kernel + amount steppers, CPU/Metal backend). Algorithm id
+  `image_kernel_convolution_blend_cpu_v1`. **Off-vs-on readout is cross-sequence,
+  not within-sequence** — a spatial blur on a static carrier is invisible to
+  `frame-delta.py`; instead render `--amount 0` vs `--amount 1` (K=5) on a
+  checkerboard carrier + gradient modulator and diff OFF vs ON frame 0: mean
+  per-channel **91.5/255** (the 5×5 kernel collapses the Nyquist checkerboard
+  toward gray — Read confirms), OFF deterministic across renders, CPU==Metal
+  byte-identical, queue add→run byte-identical to the direct render (smoke test
+  pins it + the manifest knobs). Workspace 173 → 186; Swift 32 → 34. MVP
+  feature-complete for the image carrier. Contract:
+  `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
+
+- **Audio-to-Video Descriptor Routing — full vertical slice (CPU + CLI + Metal +
+  queue + SwiftUI).** The roadmap's "RMS controls displacement amount" MVP, A→B
+  cross-modal (A's *audio* shapes B's *video*, the complement to the cross-synth's
+  A-audio→B-audio). The only new logic is **routing**: A's peak-normalized RMS
+  envelope, hold-last per output frame at `--fps`, becomes the scalar `amount`
+  fed to the **existing, already-parity-gated** flow displace op over a uniform
+  displacement field (`--shift-x/--shift-y`). `--amount 0` (or silent A) = exact
+  Source B passthrough. Because the pixel transform is the proven
+  `flow_displace_cpu`/`flow_displace_metal`, **Metal came nearly free** —
+  `--backend metal` reuses the displace kernel, gated per-frame against CPU.
+  `audio_route.rs` in morphogen-render (`RmsDisplacementEnvelope` +
+  `uniform_displacement_field`, 7 tests) + `render-audio-video-route-sequence`
+  CLI (WAV A + PNG-seq B → PNG seq) + persisted `frame_sequence_audio_video_route`
+  queue job (backend serde-default CPU; queue-add/run writing a frames/ bundle +
+  manifest carrying the routing algorithm id + every knob) + a macOS Render-panel
+  section (Source A WAV / Source B frames / amount+shift steppers / CPU-Metal
+  backend). Algorithm id `rms_displacement_route_cpu_v1`. Off-vs-on verified on a
+  static-gradient readout: amount 0 frame-delta **0.000/255** (passthrough),
+  ramped-A on **0.656/255** (displacement tracks the loud→quiet envelope),
+  large-shift frame visibly displaced (Read); OFF deterministic, CPU==Metal
+  byte-identical, queue add→run byte-identical to the direct render (smoke test
+  pins it + the manifest knobs). Workspace 163 → 173; Swift 30 → 32. MVP
+  feature-complete. Contract: `docs/AUDIO_VIDEO_ROUTE_MILESTONE.md`.
+
+- **Spectral Audio Cross-Synthesis — full vertical slice (CPU + CLI + queue +
+  SwiftUI).** The roadmap's "RMS or centroid controls a simple filter/gain path"
+  MVP, A→B, **time-domain by constraint** (our STFT is magnitude-only with no
+  inverse, so phase-vocoder resynthesis stays the deferred HQ tier). Two modes
+  share the framing (output follows B; A's descriptor resolved by time-based
+  hold-last; `amount=0` = byte-identical passthrough): **`gain`** = A's
+  peak-normalized RMS envelope scales B's amplitude; **`filter`** = A's
+  spectral-centroid envelope (normalized to Nyquist) sweeps a per-sample one-pole
+  LP/HP cutoff on B. CPU-only (audio is not a GPU target — no Metal, nothing to
+  parity-gate). `cross_synth.rs` in morphogen-audio (5 tests) +
+  `render-spectral-cross-synth` CLI (WAV A + WAV B → WAV out) + persisted
+  `audio_spectral_cross_synth` queue job (core enums `CrossSynthMode` /
+  `CrossSynthFilterType` / `CrossSynthWindow`, all serde-defaulted;
+  `queue-add-/queue-run-spectral-cross-synth` writing `audio/cross_synth.wav` +
+  a manifest carrying every knob) + a macOS Render-panel section (mode/amount/
+  filter-type + WAV pickers). Algorithm ids `rms_gain_cross_synth_cpu_v1` /
+  `centroid_filter_cross_synth_cpu_v1`. Off-vs-on verified numerically (audio has
+  no PNG): gain half-amplitude ratio **1.00 → 3.11** (output tracks A's
+  loud→silent ramp); filter output centroid **5640 → 1962 Hz** (dark A lowpasses
+  bright B). Queue add→run byte-identical to the direct render (both modes; smoke
+  test pins it + the manifest knobs). Workspace 155 → 163; Swift 28 → 30. This
+  effect is now feature-complete for the MVP. Contract:
+  `docs/SPECTRAL_CROSS_SYNTH_MILESTONE.md`.
 
 - **Video Vocoder — full vertical slice (CPU + CLI + Metal + queue + SwiftUI).**
   The roadmap's "luma-band gain routing" effect, built A→B. Two modes share the
@@ -199,8 +336,24 @@ feature-complete end-to-end (CPU + CLI + parity-gated Metal for match mode + que
 job + SwiftUI). Granular step 6b remains feature-complete. The vocoder's
 deferred items: gain-mode Metal port, a reusable Source-A luma-band histogram
 sidecar (currently recomputed per frame), spatial-frequency (multiband) routing,
-and the reverse/cross-clip look exploration. The next new effect is **Spectral
-Audio Cross-Synthesis** (RMS/centroid filter path).
+and the reverse/cross-clip look exploration. **Spectral Audio Cross-Synthesis**
+is now a feature-complete MVP vertical slice (CPU + CLI + queue + SwiftUI, gain +
+filter modes). Its deferred HQ tier is phase-vocoder cross-synthesis (needs a
+complex-STFT + inverse + Accelerate-FFT path first). **Audio-to-Video Descriptor
+Routing** (RMS→displacement) is now a feature-complete MVP vertical slice too
+(CPU + CLI + parity-gated Metal + queue + SwiftUI); its deferred items are
+spatially varying displacement fields (sine/radial/Source-A flow), other
+descriptor targets (centroid→hue, onset→cut), and sample-accurate descriptor
+curves (HQ tier). **Convolutional AV Blending** is now feature-complete across
+both MVP halves, the audio HQ tier (FFT method + Lanczos IR resampling), **and
+the HQ image/audio modes** — per-channel **colour kernels** (`--kernel-mode
+color`, parity-gated Metal) and per-channel **true-stereo IRs** (`--ir-mode
+per-channel`, CPU-only), each CPU + CLI + queue + SwiftUI. The image Metal kernel
+already handles large K (no cap; proved by a K=11 parity test). Its only remaining
+deferred items are a *tiled* large-K Metal kernel (perf only, not correctness) and
+separable image kernels. The next unstarted roadmap effect is **Video-to-Audio
+Descriptor Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh /
+Motion-Vector Reuse** (flow-field reuse on decoded float frames).
 
 ## Candidate next steps
 

@@ -52,6 +52,30 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultSpectralCrossSynthRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-spectral-cross-synth-queue.json"
+    )
+  }
+
+  static func defaultAudioImpulseConvolutionRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-audio-impulse-convolution-queue.json"
+    )
+  }
+
+  static func defaultAudioVideoRouteSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-audio-video-route-sequence-queue.json"
+    )
+  }
+
+  static func defaultConvolutionalBlendSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-convolutional-blend-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -398,6 +422,371 @@ enum RustBridgePlaceholder {
       request.backend.cliValue
     ]
 
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedSpectralCrossSynthRender(
+    request: SpectralCrossSynthRenderQueueCommandRequest
+  ) throws -> SpectralCrossSynthRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddSpectralCrossSynthArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-spectral-cross-synth",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return SpectralCrossSynthRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddSpectralCrossSynthArguments(
+    request: SpectralCrossSynthRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.amount.isFinite && request.amount >= 0 && request.amount <= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("amount must be finite and within [0, 1]")
+    }
+    guard request.rmsWindow > 0 && request.rmsHop > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "RMS window and hop must be greater than zero"
+      )
+    }
+    guard request.fftSize > 0 && (request.fftSize & (request.fftSize - 1)) == 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("FFT size must be a power of two")
+    }
+    guard request.stftHop > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("STFT hop must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-spectral-cross-synth",
+      request.queueURL.path,
+      request.modulatorWAVURL.path,
+      request.carrierWAVURL.path,
+      request.outputRootDirectoryURL.path,
+      "--mode",
+      request.mode.cliValue,
+      "--amount",
+      cliNumber(request.amount),
+      "--filter-type",
+      request.filterType.cliValue,
+      "--rms-window",
+      String(request.rmsWindow),
+      "--rms-hop",
+      String(request.rmsHop),
+      "--fft-size",
+      String(request.fftSize),
+      "--stft-hop",
+      String(request.stftHop),
+      "--window",
+      request.window.cliValue
+    ]
+
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedAudioImpulseConvolutionRender(
+    request: AudioImpulseConvolutionRenderQueueCommandRequest
+  ) throws -> AudioImpulseConvolutionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddAudioImpulseConvolutionArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-audio-impulse-convolution",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return AudioImpulseConvolutionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddAudioImpulseConvolutionArguments(
+    request: AudioImpulseConvolutionRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.amount.isFinite && request.amount >= 0 && request.amount <= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("amount must be finite and within [0, 1]")
+    }
+    if let maxImpulseSamples = request.maxImpulseSamples {
+      guard maxImpulseSamples > 0 else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "max impulse samples must be greater than zero"
+        )
+      }
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-audio-impulse-convolution",
+      request.queueURL.path,
+      request.modulatorWAVURL.path,
+      request.carrierWAVURL.path,
+      request.outputRootDirectoryURL.path,
+      "--amount",
+      cliNumber(request.amount)
+    ]
+
+    if let maxImpulseSamples = request.maxImpulseSamples {
+      arguments.append("--max-impulse-samples")
+      arguments.append(String(maxImpulseSamples))
+    }
+
+    if request.useFFT {
+      arguments.append("--method")
+      arguments.append("fft")
+    }
+
+    if request.resampleImpulse {
+      arguments.append("--resample-impulse")
+    }
+
+    if request.usePerChannelIR {
+      arguments.append("--ir-mode")
+      arguments.append("per-channel")
+    }
+
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedAudioVideoRouteSequenceRender(
+    request: AudioVideoRouteSequenceRenderQueueCommandRequest
+  ) throws -> AudioVideoRouteSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddAudioVideoRouteSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-audio-video-route-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return AudioVideoRouteSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddAudioVideoRouteSequenceArguments(
+    request: AudioVideoRouteSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.amount.isFinite && request.amount >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "amount must be finite and greater than or equal to zero"
+      )
+    }
+    guard request.shiftX.isFinite && request.shiftY.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shift X and Y must be finite")
+    }
+    guard request.rmsWindow > 0 && request.rmsHop > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "RMS window and hop must be greater than zero"
+      )
+    }
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive and finite")
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-audio-video-route-sequence",
+      request.queueURL.path,
+      request.modulatorWAVURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--amount",
+      cliNumber(request.amount),
+      "--shift-x",
+      cliNumber(request.shiftX),
+      "--shift-y",
+      cliNumber(request.shiftY),
+      "--rms-window",
+      String(request.rmsWindow),
+      "--rms-hop",
+      String(request.rmsHop),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedConvolutionalBlendSequenceRender(
+    request: ConvolutionalBlendSequenceRenderQueueCommandRequest
+  ) throws -> ConvolutionalBlendSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddConvolutionalBlendSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-convolutional-blend-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return ConvolutionalBlendSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddConvolutionalBlendSequenceArguments(
+    request: ConvolutionalBlendSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.kernelSize >= 1 && request.kernelSize % 2 == 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "kernel size must be odd and greater than or equal to one"
+      )
+    }
+    guard request.amount.isFinite && request.amount >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "amount must be finite and greater than or equal to zero"
+      )
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-convolutional-blend-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--kernel-size",
+      String(request.kernelSize),
+      "--amount",
+      cliNumber(request.amount),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if request.useColorKernels {
+      arguments.append("--kernel-mode")
+      arguments.append("color")
+    }
     if let maxFrames = request.maxFrames {
       arguments.append("--max-frames")
       arguments.append(String(maxFrames))
@@ -1010,6 +1399,91 @@ struct VideoVocoderSequenceRenderQueueCommandRequest {
 }
 
 struct VideoVocoderSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct SpectralCrossSynthRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorWAVURL: URL
+  let carrierWAVURL: URL
+  let outputRootDirectoryURL: URL
+  let mode: CrossSynthModeOption
+  let amount: Double
+  let filterType: CrossSynthFilterTypeOption
+  let rmsWindow: Int
+  let rmsHop: Int
+  let fftSize: Int
+  let stftHop: Int
+  let window: CrossSynthWindowOption
+  let projectURL: URL?
+}
+
+struct SpectralCrossSynthRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct AudioImpulseConvolutionRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorWAVURL: URL
+  let carrierWAVURL: URL
+  let outputRootDirectoryURL: URL
+  let amount: Double
+  let maxImpulseSamples: Int?
+  /// Use the FFT method (HQ tier) instead of the default direct convolution.
+  let useFFT: Bool
+  /// Resample A's IR to B's sample rate instead of erroring on a rate mismatch.
+  let resampleImpulse: Bool
+  /// Use a per-channel (true-stereo) IR instead of one mono downmix IR.
+  let usePerChannelIR: Bool
+  let projectURL: URL?
+}
+
+struct AudioImpulseConvolutionRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct AudioVideoRouteSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorWAVURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let amount: Double
+  let shiftX: Double
+  let shiftY: Double
+  let rmsWindow: Int
+  let rmsHop: Int
+  let frameRate: Double
+  let maxFrames: Int?
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct AudioVideoRouteSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct ConvolutionalBlendSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let kernelSize: Int
+  let amount: Double
+  let useColorKernels: Bool
+  let maxFrames: Int?
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct ConvolutionalBlendSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

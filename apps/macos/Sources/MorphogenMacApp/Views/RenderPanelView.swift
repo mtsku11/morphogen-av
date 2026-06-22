@@ -516,6 +516,254 @@ struct RenderPanelView: View {
           }
         }
 
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Spectral Audio Cross-Synthesis")
+            .font(.subheadline.weight(.semibold))
+
+          Picker("Mode", selection: $state.crossSynthMode) {
+            ForEach(CrossSynthModeOption.allCases) { mode in
+              Text(mode.rawValue).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Gain: A's RMS envelope drives B's amplitude. Filter: A's spectral centroid sweeps a one-pole cutoff on B.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseCrossSynthModulatorWAV()
+            } label: {
+              Label("Source A WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseCrossSynthCarrierWAV()
+            } label: {
+              Label("Source B WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseCrossSynthOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.crossSynthAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.crossSynthAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = full shaping.")
+
+            Picker("Filter", selection: $state.crossSynthFilterType) {
+              ForEach(CrossSynthFilterTypeOption.allCases) { type in
+                Text(type.rawValue).tag(type)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 200)
+            .disabled(state.crossSynthMode == .gain)
+            .help("One-pole response (Filter mode only).")
+          }
+
+          Text(state.crossSynthSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runSpectralCrossSynthRender()
+          } label: {
+            Label("Run Cross-Synth", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Audio Impulse Convolution")
+            .font(.subheadline.weight(.semibold))
+            .help("Convolve Source B (carrier) with Source A's L1-normalized impulse response. amount 0 = passthrough; the wet tail extends the output.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseImpulseConvModulatorWAV()
+            } label: {
+              Label("Source A IR", systemImage: "waveform")
+            }
+            Button {
+              state.chooseImpulseConvCarrierWAV()
+            } label: {
+              Label("Source B WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseImpulseConvOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.impulseConvAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.impulseConvAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = full wet convolution.")
+
+            Stepper(value: $state.impulseConvMaxSamples, in: 0...192_000, step: 1024) {
+              Text("Max IR \(state.impulseConvMaxSamples == 0 ? "full" : String(state.impulseConvMaxSamples))")
+            }
+            .frame(width: 200, alignment: .leading)
+            .help("Truncate the impulse response to its head (samples); 0 = use the whole IR.")
+          }
+
+          HStack(spacing: 16) {
+            Toggle("FFT method (HQ)", isOn: $state.impulseConvUseFFT)
+              .help("Frequency-domain convolution for long IRs; gated against the direct path.")
+
+            Toggle("Resample IR", isOn: $state.impulseConvResample)
+              .help("Resample A's IR to B's sample rate (Lanczos) instead of erroring on a mismatch.")
+
+            Toggle("Per-channel IR", isOn: $state.impulseConvPerChannel)
+              .help("True-stereo: convolve each carrier channel with its own IR from Source A instead of one mono downmix.")
+          }
+
+          Text(state.impulseConvSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runAudioImpulseConvolutionRender()
+          } label: {
+            Label("Run Impulse Convolution", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Audio-to-Video Descriptor Routing")
+            .font(.subheadline.weight(.semibold))
+            .help("Source A's RMS envelope drives the per-frame displacement amount applied to Source B's frames.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseAudioRouteModulatorWAV()
+            } label: {
+              Label("Source A WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseAudioRouteCarrierDirectory()
+            } label: {
+              Label("Source B Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseAudioRouteOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.audioRouteAmount, in: 0...4, step: 0.1) {
+              Text("Amount \(state.audioRouteAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; scales the loudest-frame displacement.")
+
+            Stepper(value: $state.audioRouteShiftX, in: -128...128, step: 1) {
+              Text("Shift X \(state.audioRouteShiftX, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.audioRouteShiftY, in: -128...128, step: 1) {
+              Text("Shift Y \(state.audioRouteShiftY, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+          }
+
+          Picker("Backend", selection: $state.audioRouteBackend) {
+            ForEach(FeedbackRenderBackendOption.allCases) { backend in
+              Text(backend.rawValue).tag(backend)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 200)
+          .help("Metal is gated per-frame against the CPU reference.")
+
+          Text(state.audioRouteSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runAudioVideoRouteRender()
+          } label: {
+            Label("Run Audio→Video Route", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Convolutional AV Blending")
+            .font(.subheadline.weight(.semibold))
+            .help("Each Source A frame supplies a normalized KxK luma kernel that Source B's frame is convolved with.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseConvBlendModulatorDirectory()
+            } label: {
+              Label("Source A Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseConvBlendCarrierDirectory()
+            } label: {
+              Label("Source B Frames", systemImage: "photo.on.rectangle.angled")
+            }
+            Button {
+              state.chooseConvBlendOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.convBlendKernelSize, in: 1...15, step: 2) {
+              Text("Kernel \(state.convBlendKernelSize)×\(state.convBlendKernelSize)")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("Odd kernel edge length; larger spreads the blend wider.")
+
+            Stepper(value: $state.convBlendAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.convBlendAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = fully convolved.")
+          }
+
+          Toggle("Colour kernels (per R/G/B)", isOn: $state.convBlendColorMode)
+            .help("Extract a separate kernel from each of Source A's R/G/B channels instead of one luma kernel.")
+
+          Picker("Backend", selection: $state.convBlendBackend) {
+            ForEach(FeedbackRenderBackendOption.allCases) { backend in
+              Text(backend.rawValue).tag(backend)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 200)
+          .help("Metal is gated per-frame against the CPU reference.")
+
+          Text(state.convBlendSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runConvolutionalBlendRender()
+          } label: {
+            Label("Run Convolution Blend", systemImage: "square.grid.3x3.fill")
+          }
+        }
+
         HStack {
           Button {
             state.checkProResExportPlan()

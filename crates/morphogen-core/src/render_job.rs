@@ -193,6 +193,185 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    /// Audio-to-video descriptor routing: Source A's peak-normalized RMS envelope
+    /// drives the per-frame displacement amount applied to Source B's frames via
+    /// the parity-gated flow displace. See `docs/AUDIO_VIDEO_ROUTE_MILESTONE.md`.
+    FrameSequenceAudioVideoRoute {
+        /// Source A audio (WAV); its RMS envelope is the modulator.
+        modulator_wav: String,
+        /// Source B video frames (PNG sequence) to displace.
+        carrier_frame_directory: String,
+        output_directory: String,
+        /// Global displacement scale; multiplies the normalized RMS gain
+        /// (`0` = Source B passthrough).
+        amount: f32,
+        /// Uniform displacement field x/y components in pixels at full amount.
+        shift_x: f32,
+        shift_y: f32,
+        /// RMS analysis window / hop (samples) for Source A.
+        rms_window: u32,
+        rms_hop: u32,
+        /// Output frame rate; maps frame index → time for the envelope lookup.
+        frame_rate: f64,
+        max_frames: Option<u32>,
+        /// Render backend; the displace Metal path is gated per-frame against the
+        /// CPU reference. Defaults to CPU so legacy jobs keep their meaning.
+        #[serde(default)]
+        backend: RenderBackend,
+    },
+    /// Convolutional AV blending (image kernel): each Source A frame supplies a
+    /// normalized KxK luma kernel that Source B's matching frame is convolved with
+    /// (parity-gated), blended by `amount`. See `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
+    FrameSequenceConvolutionBlend {
+        /// Source A video frames (PNG sequence); each supplies the kernel.
+        modulator_frame_directory: String,
+        /// Source B video frames (PNG sequence) to convolve.
+        carrier_frame_directory: String,
+        output_directory: String,
+        /// Kernel edge length (odd, >= 1).
+        kernel_size: u32,
+        /// Wet/dry blend from Source B passthrough (`0`) to fully convolved (`1`).
+        amount: f32,
+        max_frames: Option<u32>,
+        /// Render backend; the convolution Metal path is gated per-frame against
+        /// the CPU reference. Defaults to CPU so legacy jobs keep their meaning.
+        #[serde(default)]
+        backend: RenderBackend,
+        /// Kernel extraction: one luma kernel (default) or a per-channel colour
+        /// kernel from each of A's R/G/B channels. Defaults to
+        /// [`KernelMode::Luma`] so jobs serialized before colour mode keep meaning.
+        #[serde(default)]
+        kernel_mode: KernelMode,
+    },
+    /// Spectral audio cross-synthesis: Source A's analysis envelope shapes Source
+    /// B's audio. `gain` scales B's amplitude by A's peak-normalized RMS envelope;
+    /// `filter` sweeps a one-pole filter on B from A's spectral-centroid envelope.
+    /// Time-domain MVP (CPU-only; the STFT is magnitude-only so there is no Metal
+    /// path and nothing to parity-gate).
+    AudioSpectralCrossSynth {
+        modulator_wav: String,
+        carrier_wav: String,
+        output_directory: String,
+        /// `gain` or `filter`. Defaults to [`CrossSynthMode::Gain`].
+        #[serde(default)]
+        mode: CrossSynthMode,
+        /// Blend from Source B passthrough (`0`) to full shaping (`1`).
+        amount: f32,
+        /// One-pole filter response (`filter` mode). Defaults to
+        /// [`CrossSynthFilterType::Lowpass`].
+        #[serde(default)]
+        filter_type: CrossSynthFilterType,
+        /// RMS analysis window/hop for A's envelope (`gain` mode).
+        rms_window: u32,
+        rms_hop: u32,
+        /// STFT analysis parameters for A's centroid envelope (`filter` mode).
+        fft_size: u32,
+        stft_hop: u32,
+        /// STFT window function (`filter` mode). Defaults to
+        /// [`CrossSynthWindow::Hann`].
+        #[serde(default)]
+        window: CrossSynthWindow,
+    },
+    /// Audio impulse convolution: Source B (carrier) convolved with Source A's
+    /// L1-normalized mono impulse response, blended wet/dry by `amount`
+    /// (convolution-reverb-style). CPU-only — no Metal path to parity-gate.
+    AudioImpulseConvolution {
+        modulator_wav: String,
+        carrier_wav: String,
+        output_directory: String,
+        /// Blend from Source B passthrough (`0`) to full wet (`1`).
+        amount: f32,
+        /// Optional head-truncation of the impulse response (samples).
+        #[serde(default)]
+        max_impulse_samples: Option<u32>,
+        /// Convolution implementation. Defaults to [`ConvolutionMethod::Direct`].
+        #[serde(default)]
+        method: ConvolutionMethod,
+        /// Resample A's IR to B's sample rate (Lanczos) instead of erroring on a
+        /// rate mismatch. Defaults to `false`.
+        #[serde(default)]
+        resample_impulse: bool,
+        /// IR channel mapping: one mono downmix IR (default) or a per-channel
+        /// true-stereo IR from each Source A channel. Defaults to
+        /// [`IrMode::Mono`] so jobs serialized before this keep their meaning.
+        #[serde(default)]
+        ir_mode: IrMode,
+    },
+}
+
+/// Selects how Source A's impulse response is mapped onto the carrier channels.
+/// The serde default is [`IrMode::Mono`] (one downmixed IR for all channels).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IrMode {
+    /// One downmixed mono IR applied to every carrier channel
+    /// (`impulse_response_convolution_blend_cpu_v1`).
+    #[default]
+    Mono,
+    /// One IR per Source A channel, applied channel-wise (true-stereo)
+    /// (`per_channel_impulse_response_convolution_blend_cpu_v1`).
+    PerChannel,
+}
+
+/// Selects the audio-impulse convolution implementation. The serde default is
+/// [`ConvolutionMethod::Direct`] (the reference path) so jobs serialized before
+/// the FFT HQ tier keep their direct-convolution meaning.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConvolutionMethod {
+    /// Direct time-domain convolution (`O(B·L)`).
+    #[default]
+    Direct,
+    /// Frequency-domain convolution via FFT (`O(N log N)`), gated against direct.
+    Fft,
+}
+
+/// Selects the convolution-blend kernel extraction. The serde default is
+/// [`KernelMode::Luma`] (one luminance kernel applied to all channels) so jobs
+/// serialized before colour mode keep their meaning.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelMode {
+    /// One luma-derived K×K kernel applied to every carrier channel
+    /// (`image_kernel_convolution_blend_cpu_v1`).
+    #[default]
+    Luma,
+    /// A separate K×K kernel from each of A's R/G/B channels, applied channel-wise
+    /// (`image_color_kernel_convolution_blend_cpu_v1`).
+    Color,
+}
+
+/// Selects the spectral cross-synth descriptor→target mapping.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossSynthMode {
+    /// A's peak-normalized RMS envelope scales B's amplitude
+    /// (`rms_gain_cross_synth_cpu_v1`).
+    #[default]
+    Gain,
+    /// A's spectral-centroid envelope sweeps a one-pole filter on B
+    /// (`centroid_filter_cross_synth_cpu_v1`).
+    Filter,
+}
+
+/// One-pole filter response for `filter`-mode cross-synth.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossSynthFilterType {
+    #[default]
+    Lowpass,
+    Highpass,
+}
+
+/// STFT window function for `filter`-mode cross-synth analysis. Mirrors the audio
+/// crate's window set; lives in core so a persisted job is self-contained.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossSynthWindow {
+    #[default]
+    Hann,
+    Hamming,
+    Rectangular,
 }
 
 /// Selects the video-vocoder tonal-routing mode.
@@ -538,6 +717,106 @@ mod tests {
     }
 
     #[test]
+    fn spectral_cross_synth_task_round_trips() {
+        let task = RenderJobTask::AudioSpectralCrossSynth {
+            modulator_wav: "/tmp/a.wav".to_string(),
+            carrier_wav: "/tmp/b.wav".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            mode: CrossSynthMode::Filter,
+            amount: 0.5,
+            filter_type: CrossSynthFilterType::Highpass,
+            rms_window: 2048,
+            rms_hop: 512,
+            fft_size: 1024,
+            stft_hop: 256,
+            window: CrossSynthWindow::Hamming,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize cross-synth task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize cross-synth task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn spectral_cross_synth_task_defaults_mode_filter_type_and_window() {
+        let json = r#"{
+            "type": "audio_spectral_cross_synth",
+            "modulator_wav": "/tmp/a.wav",
+            "carrier_wav": "/tmp/b.wav",
+            "output_directory": "/tmp/out",
+            "amount": 1.0,
+            "rms_window": 2048,
+            "rms_hop": 512,
+            "fft_size": 1024,
+            "stft_hop": 256
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize cross-synth task");
+        let RenderJobTask::AudioSpectralCrossSynth {
+            mode,
+            filter_type,
+            window,
+            ..
+        } = task
+        else {
+            panic!("expected cross-synth task");
+        };
+        assert_eq!(mode, CrossSynthMode::Gain);
+        assert_eq!(filter_type, CrossSynthFilterType::Lowpass);
+        assert_eq!(window, CrossSynthWindow::Hann);
+    }
+
+    #[test]
+    fn audio_impulse_convolution_task_round_trips() {
+        let task = RenderJobTask::AudioImpulseConvolution {
+            modulator_wav: "/tmp/ir.wav".to_string(),
+            carrier_wav: "/tmp/b.wav".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            amount: 0.5,
+            max_impulse_samples: Some(4096),
+            method: ConvolutionMethod::Fft,
+            resample_impulse: true,
+            ir_mode: IrMode::PerChannel,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize impulse-convolution task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize impulse-convolution task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn audio_impulse_convolution_task_defaults_max_impulse_samples_to_none() {
+        let json = r#"{
+            "type": "audio_impulse_convolution",
+            "modulator_wav": "/tmp/ir.wav",
+            "carrier_wav": "/tmp/b.wav",
+            "output_directory": "/tmp/out",
+            "amount": 1.0
+        }"#;
+
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize impulse-convolution task");
+        let RenderJobTask::AudioImpulseConvolution {
+            max_impulse_samples,
+            method,
+            resample_impulse,
+            ir_mode,
+            ..
+        } = task
+        else {
+            panic!("expected impulse-convolution task");
+        };
+        assert_eq!(max_impulse_samples, None);
+        assert_eq!(method, ConvolutionMethod::Direct);
+        assert!(!resample_impulse);
+        assert_eq!(ir_mode, IrMode::Mono);
+    }
+
+    #[test]
     fn video_vocoder_task_defaults_mode_to_match_and_backend_to_cpu() {
         let json = r#"{
             "type": "frame_sequence_video_vocoder",
@@ -556,6 +835,98 @@ mod tests {
         };
         assert_eq!(mode, VideoVocoderMode::Match);
         assert_eq!(backend, RenderBackend::Cpu);
+    }
+
+    #[test]
+    fn audio_video_route_task_round_trips() {
+        let task = RenderJobTask::FrameSequenceAudioVideoRoute {
+            modulator_wav: "/tmp/a.wav".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            amount: 0.5,
+            shift_x: 8.0,
+            shift_y: -2.0,
+            rms_window: 2048,
+            rms_hop: 512,
+            frame_rate: 30.0,
+            max_frames: Some(48),
+            backend: RenderBackend::Metal,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize audio-route task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize audio-route task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn audio_video_route_task_defaults_backend_to_cpu() {
+        let json = r#"{
+            "type": "frame_sequence_audio_video_route",
+            "modulator_wav": "/tmp/a.wav",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "amount": 1.0,
+            "shift_x": 8.0,
+            "shift_y": 0.0,
+            "rms_window": 2048,
+            "rms_hop": 512,
+            "frame_rate": 30.0,
+            "max_frames": null
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize audio-route task");
+        let RenderJobTask::FrameSequenceAudioVideoRoute { backend, .. } = task else {
+            panic!("expected audio-route task");
+        };
+        assert_eq!(backend, RenderBackend::Cpu);
+    }
+
+    #[test]
+    fn convolution_blend_task_round_trips() {
+        let task = RenderJobTask::FrameSequenceConvolutionBlend {
+            modulator_frame_directory: "/tmp/mod".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            kernel_size: 5,
+            amount: 0.5,
+            max_frames: Some(24),
+            backend: RenderBackend::Metal,
+            kernel_mode: KernelMode::Color,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize convolution-blend task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize convolution-blend task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn convolution_blend_task_defaults_backend_to_cpu() {
+        let json = r#"{
+            "type": "frame_sequence_convolution_blend",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "kernel_size": 3,
+            "amount": 1.0,
+            "max_frames": null
+        }"#;
+
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize convolution-blend task");
+        let RenderJobTask::FrameSequenceConvolutionBlend {
+            backend,
+            kernel_mode,
+            ..
+        } = task
+        else {
+            panic!("expected convolution-blend task");
+        };
+        assert_eq!(backend, RenderBackend::Cpu);
+        assert_eq!(kernel_mode, KernelMode::Luma);
     }
 
     #[test]

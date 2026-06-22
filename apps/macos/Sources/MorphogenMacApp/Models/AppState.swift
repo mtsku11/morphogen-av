@@ -78,6 +78,50 @@ final class AppState: ObservableObject {
   @Published var vocoderAmount = 1.0
   @Published var vocoderBackend: FeedbackRenderBackendOption = .cpu
   @Published var vocoderSummary = "No video vocoder sequence rendered"
+
+  @Published var crossSynthModulatorURL: URL?
+  @Published var crossSynthCarrierURL: URL?
+  @Published var crossSynthOutputURL: URL?
+  @Published var crossSynthMode: CrossSynthModeOption = .gain
+  @Published var crossSynthAmount = 1.0
+  @Published var crossSynthFilterType: CrossSynthFilterTypeOption = .lowpass
+  @Published var crossSynthRmsWindow = 2048
+  @Published var crossSynthRmsHop = 512
+  @Published var crossSynthFFTSize = 1024
+  @Published var crossSynthSTFTHop = 256
+  @Published var crossSynthWindow: CrossSynthWindowOption = .hann
+  @Published var crossSynthSummary = "No spectral cross-synth rendered"
+
+  @Published var impulseConvModulatorURL: URL?
+  @Published var impulseConvCarrierURL: URL?
+  @Published var impulseConvOutputURL: URL?
+  @Published var impulseConvAmount = 1.0
+  @Published var impulseConvMaxSamples = 0
+  @Published var impulseConvUseFFT = false
+  @Published var impulseConvResample = false
+  @Published var impulseConvPerChannel = false
+  @Published var impulseConvSummary = "No audio impulse convolution rendered"
+
+  @Published var audioRouteModulatorURL: URL?
+  @Published var audioRouteCarrierURL: URL?
+  @Published var audioRouteOutputURL: URL?
+  @Published var audioRouteAmount = 1.0
+  @Published var audioRouteShiftX = 8.0
+  @Published var audioRouteShiftY = 0.0
+  @Published var audioRouteRmsWindow = 2048
+  @Published var audioRouteRmsHop = 512
+  @Published var audioRouteFrameRate = 30.0
+  @Published var audioRouteBackend: FeedbackRenderBackendOption = .cpu
+  @Published var audioRouteSummary = "No audio→video route rendered"
+
+  @Published var convBlendModulatorURL: URL?
+  @Published var convBlendCarrierURL: URL?
+  @Published var convBlendOutputURL: URL?
+  @Published var convBlendKernelSize = 3
+  @Published var convBlendAmount = 1.0
+  @Published var convBlendColorMode = false
+  @Published var convBlendBackend: FeedbackRenderBackendOption = .cpu
+  @Published var convBlendSummary = "No convolutional blend rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
   @Published var mediaProxyFrameRate = 12.0
@@ -306,6 +350,114 @@ final class AppState: ObservableObject {
     frameSequenceOutputURL = url
     frameSequenceOutputPath = url.path
     statusMessage = "Frame sequence output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseCrossSynthModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source A WAV",
+      message: "Select the modulator audio (analysis source)."
+    ) else {
+      statusMessage = "Source A WAV selection cancelled."
+      return
+    }
+
+    crossSynthModulatorURL = url
+    statusMessage = "Cross-synth Source A WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseCrossSynthCarrierWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source B WAV",
+      message: "Select the carrier audio (material to reshape)."
+    ) else {
+      statusMessage = "Source B WAV selection cancelled."
+      return
+    }
+
+    crossSynthCarrierURL = url
+    statusMessage = "Cross-synth Source B WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseCrossSynthOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Cross-synth output selection cancelled."
+      return
+    }
+
+    crossSynthOutputURL = url
+    statusMessage = "Cross-synth output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseImpulseConvModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source A WAV (impulse response)",
+      message: "Select the impulse response audio (convolution kernel)."
+    ) else {
+      statusMessage = "Impulse response WAV selection cancelled."
+      return
+    }
+
+    impulseConvModulatorURL = url
+    statusMessage = "Impulse-convolution Source A WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseImpulseConvCarrierWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source B WAV",
+      message: "Select the carrier audio (material to convolve)."
+    ) else {
+      statusMessage = "Source B WAV selection cancelled."
+      return
+    }
+
+    impulseConvCarrierURL = url
+    statusMessage = "Impulse-convolution Source B WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseImpulseConvOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Impulse-convolution output selection cancelled."
+      return
+    }
+
+    impulseConvOutputURL = url
+    statusMessage = "Impulse-convolution output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseAudioRouteModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source A WAV",
+      message: "Select the modulator audio whose RMS drives displacement."
+    ) else {
+      statusMessage = "Source A WAV selection cancelled."
+      return
+    }
+
+    audioRouteModulatorURL = url
+    statusMessage = "Audio-route Source A WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseAudioRouteCarrierDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source B Frames",
+      message: "Select the carrier PNG frames to displace."
+    ) else {
+      statusMessage = "Source B frame selection cancelled."
+      return
+    }
+
+    audioRouteCarrierURL = url
+    statusMessage = "Audio-route Source B frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseAudioRouteOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Audio-route output selection cancelled."
+      return
+    }
+
+    audioRouteOutputURL = url
+    statusMessage = "Audio-route output selected: \(url.lastPathComponent)"
   }
 
   func chooseMediaProxyOutputDirectory() {
@@ -650,6 +802,237 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
           self.vocoderSummary = "Video vocoder render failed: \(error.localizedDescription)"
           self.statusMessage = "Video vocoder render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runSpectralCrossSynthRender() {
+    guard let modulatorURL = crossSynthModulatorURL else {
+      statusMessage = "Select a Source A WAV before rendering the spectral cross-synth."
+      return
+    }
+    guard let carrierURL = crossSynthCarrierURL else {
+      statusMessage = "Select a Source B WAV before rendering the spectral cross-synth."
+      return
+    }
+    guard let outputURL = crossSynthOutputURL else {
+      statusMessage = "Choose an output directory before rendering the spectral cross-synth."
+      return
+    }
+
+    let request = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultSpectralCrossSynthRenderQueueURL(),
+      modulatorWAVURL: modulatorURL,
+      carrierWAVURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      mode: crossSynthMode,
+      amount: crossSynthAmount,
+      filterType: crossSynthFilterType,
+      rmsWindow: crossSynthRmsWindow,
+      rmsHop: crossSynthRmsHop,
+      fftSize: crossSynthFFTSize,
+      stftHop: crossSynthSTFTHop,
+      window: crossSynthWindow,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing spectral cross-synth render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedSpectralCrossSynthRender(request: request)
+        let modeText = self.crossSynthMode == .gain ? "RMS-gain" : "centroid-filter"
+        DispatchQueue.main.async {
+          self.crossSynthSummary = "Cross-synth (\(modeText)) bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Spectral cross-synth render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.crossSynthSummary = "Spectral cross-synth render failed: \(error.localizedDescription)"
+          self.statusMessage = "Spectral cross-synth render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runAudioImpulseConvolutionRender() {
+    guard let modulatorURL = impulseConvModulatorURL else {
+      statusMessage = "Select a Source A WAV (impulse response) before rendering."
+      return
+    }
+    guard let carrierURL = impulseConvCarrierURL else {
+      statusMessage = "Select a Source B WAV before rendering the audio impulse convolution."
+      return
+    }
+    guard let outputURL = impulseConvOutputURL else {
+      statusMessage = "Choose an output directory before rendering the audio impulse convolution."
+      return
+    }
+
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultAudioImpulseConvolutionRenderQueueURL(),
+      modulatorWAVURL: modulatorURL,
+      carrierWAVURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      amount: impulseConvAmount,
+      maxImpulseSamples: impulseConvMaxSamples > 0 ? impulseConvMaxSamples : nil,
+      useFFT: impulseConvUseFFT,
+      resampleImpulse: impulseConvResample,
+      usePerChannelIR: impulseConvPerChannel,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing audio impulse convolution render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedAudioImpulseConvolutionRender(
+          request: request
+        )
+        DispatchQueue.main.async {
+          self.impulseConvSummary = "Impulse-convolution bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Audio impulse convolution render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.impulseConvSummary =
+            "Audio impulse convolution render failed: \(error.localizedDescription)"
+          self.statusMessage =
+            "Audio impulse convolution render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runAudioVideoRouteRender() {
+    guard let modulatorURL = audioRouteModulatorURL else {
+      statusMessage = "Select a Source A WAV before rendering the audio→video route."
+      return
+    }
+    guard let carrierURL = audioRouteCarrierURL else {
+      statusMessage = "Select a Source B frame directory before rendering the audio→video route."
+      return
+    }
+    guard let outputURL = audioRouteOutputURL else {
+      statusMessage = "Choose an output directory before rendering the audio→video route."
+      return
+    }
+
+    let request = AudioVideoRouteSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultAudioVideoRouteSequenceRenderQueueURL(),
+      modulatorWAVURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      amount: audioRouteAmount,
+      shiftX: audioRouteShiftX,
+      shiftY: audioRouteShiftY,
+      rmsWindow: audioRouteRmsWindow,
+      rmsHop: audioRouteRmsHop,
+      frameRate: audioRouteFrameRate,
+      maxFrames: nil,
+      backend: audioRouteBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing audio→video route render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedAudioVideoRouteSequenceRender(
+          request: request
+        )
+        DispatchQueue.main.async {
+          self.audioRouteSummary = "Audio→video route bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Audio→video route render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.audioRouteSummary = "Audio→video route render failed: \(error.localizedDescription)"
+          self.statusMessage = "Audio→video route render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func chooseConvBlendModulatorDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source A Frames",
+      message: "Select the modulator PNG frames that supply the convolution kernel."
+    ) else {
+      statusMessage = "Source A frame selection cancelled."
+      return
+    }
+
+    convBlendModulatorURL = url
+    statusMessage = "Convolution Source A frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseConvBlendCarrierDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source B Frames",
+      message: "Select the carrier PNG frames to convolve."
+    ) else {
+      statusMessage = "Source B frame selection cancelled."
+      return
+    }
+
+    convBlendCarrierURL = url
+    statusMessage = "Convolution Source B frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseConvBlendOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Convolution output selection cancelled."
+      return
+    }
+
+    convBlendOutputURL = url
+    statusMessage = "Convolution output selected: \(url.lastPathComponent)"
+  }
+
+  func runConvolutionalBlendRender() {
+    guard let modulatorURL = convBlendModulatorURL else {
+      statusMessage = "Select a Source A frame directory before rendering the convolution blend."
+      return
+    }
+    guard let carrierURL = convBlendCarrierURL else {
+      statusMessage = "Select a Source B frame directory before rendering the convolution blend."
+      return
+    }
+    guard let outputURL = convBlendOutputURL else {
+      statusMessage = "Choose an output directory before rendering the convolution blend."
+      return
+    }
+
+    let request = ConvolutionalBlendSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultConvolutionalBlendSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      kernelSize: convBlendKernelSize,
+      amount: convBlendAmount,
+      useColorKernels: convBlendColorMode,
+      maxFrames: nil,
+      backend: convBlendBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing convolutional blend render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedConvolutionalBlendSequenceRender(
+          request: request
+        )
+        DispatchQueue.main.async {
+          self.convBlendSummary = "Convolution blend bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Convolution blend render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.convBlendSummary = "Convolution blend render failed: \(error.localizedDescription)"
+          self.statusMessage = "Convolution blend render failed: \(error.localizedDescription)"
         }
       }
     }
@@ -1008,6 +1391,57 @@ enum VideoVocoderModeOption: String, CaseIterable, Identifiable {
       return "match"
     case .gain:
       return "gain"
+    }
+  }
+}
+
+enum CrossSynthModeOption: String, CaseIterable, Identifiable {
+  case gain = "Gain (RMS → amplitude)"
+  case filter = "Filter (centroid → cutoff)"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .gain:
+      return "gain"
+    case .filter:
+      return "filter"
+    }
+  }
+}
+
+enum CrossSynthFilterTypeOption: String, CaseIterable, Identifiable {
+  case lowpass = "Lowpass"
+  case highpass = "Highpass"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .lowpass:
+      return "lowpass"
+    case .highpass:
+      return "highpass"
+    }
+  }
+}
+
+enum CrossSynthWindowOption: String, CaseIterable, Identifiable {
+  case hann = "Hann"
+  case hamming = "Hamming"
+  case rectangular = "Rectangular"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .hann:
+      return "hann"
+    case .hamming:
+      return "hamming"
+    case .rectangular:
+      return "rectangular"
     }
   }
 }

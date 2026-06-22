@@ -7,13 +7,18 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use image::{ImageBuffer, ImageReader, Rgba};
 use morphogen_audio::{
-    load_wav_f32, onset_strength_from_stft, rms_envelope, save_wav_f32,
+    centroid_filter_cross_synth, impulse_convolution_blend, load_wav_f32,
+    onset_strength_from_stft, rms_envelope, rms_gain_cross_synth, save_wav_f32,
+    ConvolutionMethod as AudioConvolutionMethod, IrMode as AudioIrMode,
     spectral_centroid_from_magnitudes, stft_magnitude_cache, AudioAnalysisCache, AudioBufferF32,
-    AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache, StftConfig, WindowFunction,
+    AudioDescriptorFrame, FilterType, OnsetStrengthCache, StftAnalysisCache, StftConfig,
+    WindowFunction, CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+    PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 use morphogen_core::{
-    AnalysisCacheEntry, AnalysisKind, ExportFormat, FlowSource, GrainSelectionMode,
-    GranularAudioModulation, MediaProxy, Project, RenderBackend, RenderJob,
+    AnalysisCacheEntry, AnalysisKind, ConvolutionMethod, CrossSynthFilterType, CrossSynthMode,
+    CrossSynthWindow, ExportFormat, FlowSource, GrainSelectionMode,
+    GranularAudioModulation, IrMode, KernelMode, MediaProxy, Project, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance,
     RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
     RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue, RenderSettings,
@@ -23,6 +28,9 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
+    analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
+    convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings,
+    ConvolutionKernel, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
@@ -37,7 +45,8 @@ use morphogen_render::{
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
     FlowFeedbackStateDescriptor, FlowField, GrainColorDescriptor, GrainDescriptor, GrainPool,
     GrainSelection, GranularMosaicSettings, ImageBufferF32, PoolSelectionWindow, RenderError,
-    StructureMode,
+    RmsDisplacementEnvelope, StructureMode, uniform_displacement_field,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
     FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM,
     LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
@@ -110,6 +119,45 @@ enum Commands {
         window_size: usize,
         #[arg(long, default_value_t = 512)]
         hop_size: usize,
+    },
+    RenderSpectralCrossSynth {
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
+        mode: CliCrossSynthMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: usize,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: usize,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        stft_hop: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
+    },
+    /// Convolve carrier audio (Source B) with Source A's impulse response.
+    RenderAudioImpulseConvolution {
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_impulse_samples: Option<usize>,
+        #[arg(long, value_enum, default_value_t = CliConvolutionMethod::Direct)]
+        method: CliConvolutionMethod,
+        #[arg(long)]
+        resample_impulse: bool,
+        /// IR channel mapping: `mono` (one downmix IR) or `per-channel`
+        /// (true-stereo, one IR per Source A channel).
+        #[arg(long, value_enum, default_value_t = CliIrMode::Mono)]
+        ir_mode: CliIrMode,
     },
     RenderTest {
         output_path: PathBuf,
@@ -208,6 +256,63 @@ enum Commands {
         amount: f32,
         #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
         mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
+    /// Render an audio-to-video descriptor-routing sequence: Source A's RMS
+    /// envelope (peak-normalized) drives the per-frame displacement amount
+    /// applied to Source B's frames via the parity-gated flow displace.
+    RenderAudioVideoRouteSequence {
+        /// Source A audio (WAV); its RMS envelope is the modulator.
+        modulator_wav: PathBuf,
+        /// Source B video frames (PNG sequence) to displace.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Global displacement scale; multiplies the normalized RMS gain
+        /// (0 = passthrough, the loudest A frame reaches this amount).
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Uniform displacement field x-component in pixels at full amount.
+        #[arg(long, default_value_t = 8.0)]
+        shift_x: f32,
+        /// Uniform displacement field y-component in pixels at full amount.
+        #[arg(long, default_value_t = 0.0)]
+        shift_y: f32,
+        /// RMS analysis window (samples) for Source A.
+        #[arg(long, default_value_t = 2048)]
+        rms_window: u32,
+        /// RMS analysis hop (samples) for Source A.
+        #[arg(long, default_value_t = 512)]
+        rms_hop: u32,
+        /// Output frame rate; maps frame index → time for the envelope lookup.
+        #[arg(long, default_value_t = 30.0)]
+        fps: f64,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
+    /// Render a convolutional AV blend sequence: each Source A frame supplies a
+    /// normalized KxK luma kernel that Source B's matching frame is convolved
+    /// with (parity-gated). `--amount 0` is an exact Source B passthrough.
+    RenderConvolutionalBlendSequence {
+        /// Source A video frames (PNG sequence); each supplies the kernel.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence) to convolve.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Kernel edge length (odd, >= 1); larger spreads the blend wider.
+        #[arg(long, default_value_t = 3)]
+        kernel_size: u32,
+        /// Wet/dry blend (0 = passthrough, 1 = fully convolved).
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Kernel extraction: `luma` (one luminance kernel for all channels) or
+        /// `color` (a separate kernel per R/G/B channel of Source A).
+        #[arg(long, value_enum, default_value_t = CliKernelMode::Luma)]
+        kernel_mode: CliKernelMode,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -542,6 +647,95 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    QueueAddSpectralCrossSynth {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
+        mode: CliCrossSynthMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: usize,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: usize,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        stft_hop: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddAudioImpulseConvolution {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_impulse_samples: Option<u32>,
+        #[arg(long, value_enum, default_value_t = CliConvolutionMethod::Direct)]
+        method: CliConvolutionMethod,
+        #[arg(long)]
+        resample_impulse: bool,
+        /// IR channel mapping: `mono` or `per-channel` (true-stereo).
+        #[arg(long, value_enum, default_value_t = CliIrMode::Mono)]
+        ir_mode: CliIrMode,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddAudioVideoRouteSequence {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, default_value_t = 8.0)]
+        shift_x: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_y: f32,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: u32,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: u32,
+        #[arg(long, default_value_t = 30.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueAddConvolutionalBlendSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        kernel_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Kernel extraction: `luma` (one luminance kernel) or `color` (per R/G/B).
+        #[arg(long, value_enum, default_value_t = CliKernelMode::Luma)]
+        kernel_mode: CliKernelMode,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueRunConvolutionalBlendSequence {
+        queue_path: PathBuf,
+    },
     QueueRunTest {
         queue_path: PathBuf,
         output_dir: PathBuf,
@@ -561,6 +755,15 @@ enum Commands {
         queue_path: PathBuf,
     },
     QueueRunVideoVocoderSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunSpectralCrossSynth {
+        queue_path: PathBuf,
+    },
+    QueueRunAudioImpulseConvolution {
+        queue_path: PathBuf,
+    },
+    QueueRunAudioVideoRouteSequence {
         queue_path: PathBuf,
     },
     QueueCancel {
@@ -613,6 +816,187 @@ impl From<CliWindowFunction> for WindowFunction {
             CliWindowFunction::Hamming => Self::Hamming,
             CliWindowFunction::Rectangular => Self::Rectangular,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliCrossSynthMode {
+    #[default]
+    Gain,
+    Filter,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliFilterType {
+    #[default]
+    Lowpass,
+    Highpass,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliConvolutionMethod {
+    #[default]
+    Direct,
+    Fft,
+}
+
+impl From<CliConvolutionMethod> for AudioConvolutionMethod {
+    fn from(value: CliConvolutionMethod) -> Self {
+        match value {
+            CliConvolutionMethod::Direct => Self::Direct,
+            CliConvolutionMethod::Fft => Self::Fft,
+        }
+    }
+}
+
+impl From<CliConvolutionMethod> for ConvolutionMethod {
+    fn from(value: CliConvolutionMethod) -> Self {
+        match value {
+            CliConvolutionMethod::Direct => Self::Direct,
+            CliConvolutionMethod::Fft => Self::Fft,
+        }
+    }
+}
+
+/// Map a persisted core convolution method onto the audio-crate enum.
+fn audio_convolution_method(method: ConvolutionMethod) -> AudioConvolutionMethod {
+    match method {
+        ConvolutionMethod::Direct => AudioConvolutionMethod::Direct,
+        ConvolutionMethod::Fft => AudioConvolutionMethod::Fft,
+    }
+}
+
+/// Manifest string for a persisted convolution method.
+fn convolution_method_label(method: ConvolutionMethod) -> &'static str {
+    match method {
+        ConvolutionMethod::Direct => "direct",
+        ConvolutionMethod::Fft => "fft",
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliKernelMode {
+    #[default]
+    Luma,
+    Color,
+}
+
+impl From<CliKernelMode> for KernelMode {
+    fn from(value: CliKernelMode) -> Self {
+        match value {
+            CliKernelMode::Luma => Self::Luma,
+            CliKernelMode::Color => Self::Color,
+        }
+    }
+}
+
+/// Manifest string + algorithm id for a persisted convolution-blend kernel mode.
+fn kernel_mode_label(mode: KernelMode) -> &'static str {
+    match mode {
+        KernelMode::Luma => "luma",
+        KernelMode::Color => "color",
+    }
+}
+
+fn convolution_blend_algorithm(mode: KernelMode) -> &'static str {
+    match mode {
+        KernelMode::Luma => CONVOLUTION_BLEND_ALGORITHM,
+        KernelMode::Color => CONVOLUTION_BLEND_COLOR_ALGORITHM,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliIrMode {
+    #[default]
+    Mono,
+    PerChannel,
+}
+
+impl From<CliIrMode> for IrMode {
+    fn from(value: CliIrMode) -> Self {
+        match value {
+            CliIrMode::Mono => Self::Mono,
+            CliIrMode::PerChannel => Self::PerChannel,
+        }
+    }
+}
+
+/// Map a persisted core IR mode onto the audio-crate enum (orphan rule: both
+/// foreign to this crate, so a free helper rather than `From`).
+fn audio_ir_mode(mode: IrMode) -> AudioIrMode {
+    match mode {
+        IrMode::Mono => AudioIrMode::Mono,
+        IrMode::PerChannel => AudioIrMode::PerChannel,
+    }
+}
+
+/// Manifest string for a persisted IR mode.
+fn ir_mode_label(mode: IrMode) -> &'static str {
+    match mode {
+        IrMode::Mono => "mono",
+        IrMode::PerChannel => "per_channel",
+    }
+}
+
+/// Algorithm id for a persisted IR mode.
+fn impulse_convolution_algorithm(mode: IrMode) -> &'static str {
+    match mode {
+        IrMode::Mono => IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+        IrMode::PerChannel => PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+    }
+}
+
+impl From<CliFilterType> for FilterType {
+    fn from(value: CliFilterType) -> Self {
+        match value {
+            CliFilterType::Lowpass => Self::Lowpass,
+            CliFilterType::Highpass => Self::Highpass,
+        }
+    }
+}
+
+impl From<CliCrossSynthMode> for CrossSynthMode {
+    fn from(value: CliCrossSynthMode) -> Self {
+        match value {
+            CliCrossSynthMode::Gain => Self::Gain,
+            CliCrossSynthMode::Filter => Self::Filter,
+        }
+    }
+}
+
+impl From<CliFilterType> for CrossSynthFilterType {
+    fn from(value: CliFilterType) -> Self {
+        match value {
+            CliFilterType::Lowpass => Self::Lowpass,
+            CliFilterType::Highpass => Self::Highpass,
+        }
+    }
+}
+
+impl From<CliWindowFunction> for CrossSynthWindow {
+    fn from(value: CliWindowFunction) -> Self {
+        match value {
+            CliWindowFunction::Hann => Self::Hann,
+            CliWindowFunction::Hamming => Self::Hamming,
+            CliWindowFunction::Rectangular => Self::Rectangular,
+        }
+    }
+}
+
+// Core ↔ audio enums are both foreign to this crate, so the orphan rule forbids
+// `From` impls; free helpers convert a persisted job's analysis knobs at run time.
+fn cross_synth_filter_type(value: CrossSynthFilterType) -> FilterType {
+    match value {
+        CrossSynthFilterType::Lowpass => FilterType::Lowpass,
+        CrossSynthFilterType::Highpass => FilterType::Highpass,
+    }
+}
+
+fn cross_synth_window(value: CrossSynthWindow) -> WindowFunction {
+    match value {
+        CrossSynthWindow::Hann => WindowFunction::Hann,
+        CrossSynthWindow::Hamming => WindowFunction::Hamming,
+        CrossSynthWindow::Rectangular => WindowFunction::Rectangular,
     }
 }
 
@@ -806,6 +1190,52 @@ fn run() -> Result<(), CliError> {
             window_size,
             hop_size,
         } => cache_rms(&input_wav, &output_json, window_size, hop_size),
+        Commands::RenderSpectralCrossSynth {
+            modulator_wav,
+            carrier_wav,
+            output_wav,
+            mode,
+            amount,
+            filter_type,
+            rms_window,
+            rms_hop,
+            fft_size,
+            stft_hop,
+            window,
+        } => render_spectral_cross_synth(
+            &modulator_wav,
+            &carrier_wav,
+            &output_wav,
+            mode,
+            amount,
+            filter_type.into(),
+            rms_window,
+            rms_hop,
+            StftConfig {
+                fft_size,
+                hop_size: stft_hop,
+                window: window.into(),
+            },
+        ),
+        Commands::RenderAudioImpulseConvolution {
+            modulator_wav,
+            carrier_wav,
+            output_wav,
+            amount,
+            max_impulse_samples,
+            method,
+            resample_impulse,
+            ir_mode,
+        } => render_audio_impulse_convolution(
+            &modulator_wav,
+            &carrier_wav,
+            &output_wav,
+            amount,
+            max_impulse_samples,
+            method.into(),
+            resample_impulse,
+            ir_mode.into(),
+        ),
         Commands::RenderTest { output_path } => render_test(&output_path),
         Commands::MetalRenderTest { output_path } => metal_render_test(&output_path),
         Commands::RenderTwoSource {
@@ -924,6 +1354,54 @@ fn run() -> Result<(), CliError> {
             backend.into(),
             max_frames,
         )
+        .map(|_| ()),
+        Commands::RenderAudioVideoRouteSequence {
+            modulator_wav,
+            carrier_dir,
+            output_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            fps,
+            backend,
+            max_frames,
+        } => render_audio_video_route_sequence(AudioVideoRouteSequenceRequest {
+            modulator_wav: &modulator_wav,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            fps,
+            backend: backend.into(),
+            max_frames,
+        })
+        .map(|_| ()),
+        Commands::RenderConvolutionalBlendSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            kernel_size,
+            amount,
+            kernel_mode,
+            backend,
+            max_frames,
+        } => render_convolutional_blend_sequence(ConvolutionalBlendSequenceRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            settings: ConvolutionBlendSettings {
+                kernel_size,
+                amount,
+            },
+            kernel_mode: kernel_mode.into(),
+            backend: backend.into(),
+            max_frames,
+        })
         .map(|_| ()),
         Commands::RenderGranularMosaicPoolSequence {
             modulator_dir,
@@ -1265,6 +1743,115 @@ fn run() -> Result<(), CliError> {
             project_path: project_path.as_deref(),
             backend: backend.into(),
         }),
+        Commands::QueueAddSpectralCrossSynth {
+            queue_path,
+            modulator_wav,
+            carrier_wav,
+            output_root_dir,
+            mode,
+            amount,
+            filter_type,
+            rms_window,
+            rms_hop,
+            fft_size,
+            stft_hop,
+            window,
+            project_path,
+        } => queue_add_spectral_cross_synth(QueueAddSpectralCrossSynthRequest {
+            queue_path: &queue_path,
+            modulator_wav: &modulator_wav,
+            carrier_wav: &carrier_wav,
+            output_root_dir: &output_root_dir,
+            mode: mode.into(),
+            amount,
+            filter_type: filter_type.into(),
+            rms_window,
+            rms_hop,
+            fft_size,
+            stft_hop,
+            window: window.into(),
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueAddAudioImpulseConvolution {
+            queue_path,
+            modulator_wav,
+            carrier_wav,
+            output_root_dir,
+            amount,
+            max_impulse_samples,
+            method,
+            resample_impulse,
+            ir_mode,
+            project_path,
+        } => queue_add_audio_impulse_convolution(QueueAddAudioImpulseConvolutionRequest {
+            queue_path: &queue_path,
+            modulator_wav: &modulator_wav,
+            carrier_wav: &carrier_wav,
+            output_root_dir: &output_root_dir,
+            amount,
+            max_impulse_samples,
+            method: method.into(),
+            resample_impulse,
+            ir_mode: ir_mode.into(),
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueAddAudioVideoRouteSequence {
+            queue_path,
+            modulator_wav,
+            carrier_dir,
+            output_root_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            frame_rate,
+            max_frames,
+            project_path,
+            backend,
+        } => queue_add_audio_video_route_sequence(QueueAddAudioVideoRouteSequenceRequest {
+            queue_path: &queue_path,
+            modulator_wav: &modulator_wav,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            frame_rate,
+            max_frames,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
+        Commands::QueueAddConvolutionalBlendSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            kernel_size,
+            amount,
+            kernel_mode,
+            max_frames,
+            project_path,
+            backend,
+        } => queue_add_convolutional_blend_sequence(QueueAddConvolutionalBlendSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            settings: ConvolutionBlendSettings {
+                kernel_size,
+                amount,
+            },
+            kernel_mode: kernel_mode.into(),
+            max_frames,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
+        Commands::QueueRunConvolutionalBlendSequence { queue_path } => {
+            queue_run_convolutional_blend_sequence(&queue_path)
+        }
         Commands::QueueRunTest {
             queue_path,
             output_dir,
@@ -1282,6 +1869,15 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunVideoVocoderSequence { queue_path } => {
             queue_run_video_vocoder_sequence(&queue_path)
+        }
+        Commands::QueueRunSpectralCrossSynth { queue_path } => {
+            queue_run_spectral_cross_synth(&queue_path)
+        }
+        Commands::QueueRunAudioImpulseConvolution { queue_path } => {
+            queue_run_audio_impulse_convolution(&queue_path)
+        }
+        Commands::QueueRunAudioVideoRouteSequence { queue_path } => {
+            queue_run_audio_video_route_sequence(&queue_path)
         }
         Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
@@ -1425,6 +2021,75 @@ fn export_audio_stem(input_wav: &Path, output_wav: &Path, gain: f32) -> Result<(
     println!(
         "exported WAV stem from {} to {}",
         input_wav.display(),
+        output_wav.display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_spectral_cross_synth(
+    modulator_wav: &Path,
+    carrier_wav: &Path,
+    output_wav: &Path,
+    mode: CliCrossSynthMode,
+    amount: f32,
+    filter_type: FilterType,
+    rms_window: usize,
+    rms_hop: usize,
+    stft_config: StftConfig,
+) -> Result<(), CliError> {
+    let modulator = load_wav_f32(modulator_wav)?;
+    let carrier = load_wav_f32(carrier_wav)?;
+    let (output, algorithm) = match mode {
+        CliCrossSynthMode::Gain => (
+            rms_gain_cross_synth(&modulator, &carrier, rms_window, rms_hop, amount)?,
+            RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+        ),
+        CliCrossSynthMode::Filter => (
+            centroid_filter_cross_synth(&modulator, &carrier, stft_config, filter_type, amount)?,
+            CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
+        ),
+    };
+
+    write_parent_dirs(output_wav)?;
+    save_wav_f32(output_wav, &output)?;
+    println!(
+        "rendered spectral cross-synth ({algorithm}) from carrier {} to {}",
+        carrier_wav.display(),
+        output_wav.display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_audio_impulse_convolution(
+    modulator_wav: &Path,
+    carrier_wav: &Path,
+    output_wav: &Path,
+    amount: f32,
+    max_impulse_samples: Option<usize>,
+    method: AudioConvolutionMethod,
+    resample_impulse: bool,
+    ir_mode: IrMode,
+) -> Result<(), CliError> {
+    let modulator = load_wav_f32(modulator_wav)?;
+    let carrier = load_wav_f32(carrier_wav)?;
+    let output = impulse_convolution_blend(
+        &modulator,
+        &carrier,
+        amount,
+        max_impulse_samples,
+        method,
+        resample_impulse,
+        audio_ir_mode(ir_mode),
+    )?;
+
+    write_parent_dirs(output_wav)?;
+    save_wav_f32(output_wav, &output)?;
+    println!(
+        "rendered audio impulse convolution ({}) from carrier {} to {}",
+        impulse_convolution_algorithm(ir_mode),
+        carrier_wav.display(),
         output_wav.display()
     );
     Ok(())
@@ -1901,6 +2566,325 @@ fn render_video_vocoder_sequence(
         output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+struct AudioVideoRouteSequenceRequest<'a> {
+    modulator_wav: &'a Path,
+    carrier_dir: &'a Path,
+    output_dir: &'a Path,
+    amount: f32,
+    shift_x: f32,
+    shift_y: f32,
+    rms_window: u32,
+    rms_hop: u32,
+    fps: f64,
+    backend: RenderBackend,
+    max_frames: Option<usize>,
+}
+
+fn render_audio_video_route_sequence(
+    request: AudioVideoRouteSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    if !request.amount.is_finite() || request.amount < 0.0 {
+        return Err(CliError::Message(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.shift_x.is_finite() || !request.shift_y.is_finite() {
+        return Err(CliError::Message(
+            "shift-x and shift-y must be finite".to_string(),
+        ));
+    }
+    if !request.fps.is_finite() || request.fps <= 0.0 {
+        return Err(CliError::Message(
+            "fps must be a finite value greater than zero".to_string(),
+        ));
+    }
+    if matches!(request.max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let buffer = load_wav_f32(request.modulator_wav)?;
+    let rms_frames = rms_envelope(&buffer, request.rms_window as usize, request.rms_hop as usize)?;
+    let samples: Vec<(f64, f32)> = rms_frames
+        .iter()
+        .map(|frame| (frame.time_seconds, frame.rms))
+        .collect();
+    let envelope = RmsDisplacementEnvelope::from_rms_samples(&samples);
+
+    let carrier_frames = collect_image_frames(request.carrier_dir)?;
+    if carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "audio-to-video routing requires at least one PNG frame in the carrier directory"
+                .to_string(),
+        ));
+    }
+    let frame_count = request
+        .max_frames
+        .map(|limit| limit.min(carrier_frames.len()))
+        .unwrap_or(carrier_frames.len());
+    fs::create_dir_all(request.output_dir)?;
+
+    for (index, carrier_path) in carrier_frames.iter().enumerate().take(frame_count) {
+        let carrier = load_image_f32(carrier_path)?;
+        let field =
+            uniform_displacement_field(carrier.width, carrier.height, request.shift_x, request.shift_y)?;
+        let time_seconds = index as f64 / request.fps;
+        let amount = request.amount * envelope.gain_at(time_seconds);
+        let rendered = render_audio_video_route_frame(&carrier, &field, amount, request.backend)?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    println!(
+        "rendered audio→video route sequence with {} frame(s) (amount {}, shift [{}, {}], {:?}) from {} modulating {} to {}",
+        frame_count,
+        request.amount,
+        request.shift_x,
+        request.shift_y,
+        request.backend,
+        request.modulator_wav.display(),
+        request.carrier_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+fn render_audio_video_route_frame(
+    carrier: &ImageBufferF32,
+    field: &FlowField,
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(flow_displace_cpu(carrier, field, amount)?),
+        RenderBackend::Metal => render_audio_video_route_frame_metal(carrier, field, amount),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_audio_video_route_frame_metal(
+    carrier: &ImageBufferF32,
+    field: &FlowField,
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::flow_displace_metal(carrier, field, amount)?;
+    let cpu = flow_displace_cpu(carrier, field, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU displace outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal audio-route render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_audio_video_route_frame_metal(
+    _carrier: &ImageBufferF32,
+    _field: &FlowField,
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+struct ConvolutionalBlendSequenceRequest<'a> {
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_dir: &'a Path,
+    settings: ConvolutionBlendSettings,
+    kernel_mode: KernelMode,
+    backend: RenderBackend,
+    max_frames: Option<usize>,
+}
+
+fn render_convolutional_blend_sequence(
+    request: ConvolutionalBlendSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if matches!(request.max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(request.modulator_dir)?;
+    let carrier_frames = collect_image_frames(request.carrier_dir)?;
+    if modulator_frames.is_empty() || carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "convolutional blend requires at least one PNG frame in each source directory"
+                .to_string(),
+        ));
+    }
+
+    let paired_count = modulator_frames.len().min(carrier_frames.len());
+    let frame_count = request
+        .max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..frame_count {
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let carrier = load_image_f32(&carrier_frames[index])?;
+        let rendered = match request.kernel_mode {
+            KernelMode::Luma => {
+                let kernel =
+                    analyze_convolution_kernel_cpu(&modulator, request.settings.kernel_size)?;
+                render_convolutional_blend_frame(
+                    &carrier,
+                    &kernel,
+                    request.settings.amount,
+                    request.backend,
+                )?
+            }
+            KernelMode::Color => {
+                let kernels =
+                    analyze_convolution_kernels_color_cpu(&modulator, request.settings.kernel_size)?;
+                render_convolutional_blend_color_frame(
+                    &carrier,
+                    &kernels,
+                    request.settings.amount,
+                    request.backend,
+                )?
+            }
+        };
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if modulator_frames.len() != carrier_frames.len() {
+        println!(
+            "source frame counts differ: {} modulator frame(s), {} carrier frame(s); rendered common prefix",
+            modulator_frames.len(),
+            carrier_frames.len()
+        );
+    }
+    println!(
+        "rendered convolutional blend sequence with {} frame(s) (kernel {}, {} mode, amount {}, {:?}) from {} convolving {} to {}",
+        frame_count,
+        request.settings.kernel_size,
+        kernel_mode_label(request.kernel_mode),
+        request.settings.amount,
+        request.backend,
+        request.modulator_dir.display(),
+        request.carrier_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+fn render_convolutional_blend_frame(
+    carrier: &ImageBufferF32,
+    kernel: &ConvolutionKernel,
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(convolution_blend_cpu(carrier, kernel, amount)?),
+        RenderBackend::Metal => render_convolutional_blend_frame_metal(carrier, kernel, amount),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_convolutional_blend_frame_metal(
+    carrier: &ImageBufferF32,
+    kernel: &ConvolutionKernel,
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu =
+        morphogen_metal::convolution_blend_metal(carrier, &kernel.weights, kernel.size, amount)?;
+    let cpu = convolution_blend_cpu(carrier, kernel, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU convolution outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal convolution-blend render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_convolutional_blend_frame_metal(
+    _carrier: &ImageBufferF32,
+    _kernel: &ConvolutionKernel,
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+fn render_convolutional_blend_color_frame(
+    carrier: &ImageBufferF32,
+    kernels: &[ConvolutionKernel; 3],
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(convolution_blend_color_cpu(carrier, kernels, amount)?),
+        RenderBackend::Metal => {
+            render_convolutional_blend_color_frame_metal(carrier, kernels, amount)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_convolutional_blend_color_frame_metal(
+    carrier: &ImageBufferF32,
+    kernels: &[ConvolutionKernel; 3],
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::convolution_blend_color_metal(
+        carrier,
+        &kernels[0].weights,
+        &kernels[1].weights,
+        &kernels[2].weights,
+        kernels[0].size,
+        amount,
+    )?;
+    let cpu = convolution_blend_color_cpu(carrier, kernels, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU colour convolution outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal colour convolution-blend render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_convolutional_blend_color_frame_metal(
+    _carrier: &ImageBufferF32,
+    _kernels: &[ConvolutionKernel; 3],
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 fn granular_audio_modulation_from_cli(
@@ -5400,6 +6384,1001 @@ fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), CliError> {
     }
 }
 
+struct QueueAddAudioVideoRouteSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_wav: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    amount: f32,
+    shift_x: f32,
+    shift_y: f32,
+    rms_window: u32,
+    rms_hop: u32,
+    frame_rate: f64,
+    max_frames: Option<u32>,
+    project_path: Option<&'a Path>,
+    backend: RenderBackend,
+}
+
+fn queue_add_audio_video_route_sequence(
+    request: QueueAddAudioVideoRouteSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddAudioVideoRouteSequenceRequest {
+        queue_path,
+        modulator_wav,
+        carrier_dir,
+        output_root_dir,
+        amount,
+        shift_x,
+        shift_y,
+        rms_window,
+        rms_hop,
+        frame_rate,
+        max_frames,
+        project_path,
+        backend,
+    } = request;
+    if !amount.is_finite() || amount < 0.0 {
+        return Err(CliError::Message(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if !shift_x.is_finite() || !shift_y.is_finite() {
+        return Err(CliError::Message(
+            "shift-x and shift-y must be finite".to_string(),
+        ));
+    }
+    if rms_window == 0 || rms_hop == 0 {
+        return Err(CliError::Message(
+            "rms-window and rms-hop must be greater than zero".to_string(),
+        ));
+    }
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-audio".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_wav.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceAudioVideoRoute {
+            modulator_wav: modulator_wav.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            frame_rate,
+            max_frames,
+            backend,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued audio→video route render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+fn queue_run_audio_video_route_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceAudioVideoRoute { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running audio→video route jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::FrameSequenceAudioVideoRoute {
+        modulator_wav,
+        carrier_frame_directory,
+        output_directory,
+        amount,
+        shift_x,
+        shift_y,
+        rms_window,
+        rms_hop,
+        frame_rate,
+        max_frames,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not an audio→video route render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_audio_video_route_sequence(AudioVideoRouteSequenceRequest {
+            modulator_wav: Path::new(&modulator_wav),
+            carrier_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            fps: frame_rate,
+            backend,
+            max_frames: max_frames.map(|value| value as usize),
+        })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "frame_sequence_audio_video_route",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "audio_video_route": {
+                "algorithm": RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+                "amount": amount,
+                "shift_x": shift_x,
+                "shift_y": shift_y,
+                "rms_window": rms_window,
+                "rms_hop": rms_hop,
+                "backend": render_backend_label(backend)
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued audio→video route job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("audio→video route job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
+struct QueueAddConvolutionalBlendSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    settings: ConvolutionBlendSettings,
+    kernel_mode: KernelMode,
+    max_frames: Option<u32>,
+    project_path: Option<&'a Path>,
+    backend: RenderBackend,
+}
+
+fn queue_add_convolutional_blend_sequence(
+    request: QueueAddConvolutionalBlendSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddConvolutionalBlendSequenceRequest {
+        queue_path,
+        modulator_dir,
+        carrier_dir,
+        output_root_dir,
+        settings,
+        kernel_mode,
+        max_frames,
+        project_path,
+        backend,
+    } = request;
+    settings.validate()?;
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-frames".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceConvolutionBlend {
+            modulator_frame_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            kernel_size: settings.kernel_size,
+            amount: settings.amount,
+            max_frames,
+            backend,
+            kernel_mode,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued convolutional blend render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceConvolutionBlend { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running convolutional blend jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::FrameSequenceConvolutionBlend {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        kernel_size,
+        amount,
+        max_frames,
+        backend,
+        kernel_mode,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a convolutional blend render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result =
+            render_convolutional_blend_sequence(ConvolutionalBlendSequenceRequest {
+                modulator_dir: Path::new(&modulator_frame_directory),
+                carrier_dir: Path::new(&carrier_frame_directory),
+                output_dir: &output_dir.join("frames"),
+                settings: ConvolutionBlendSettings {
+                    kernel_size,
+                    amount,
+                },
+                kernel_mode,
+                backend,
+                max_frames: max_frames.map(|value| value as usize),
+            })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate: 30.0,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / 30.0,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "frame_sequence_convolution_blend",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "convolution_blend": {
+                "algorithm": convolution_blend_algorithm(kernel_mode),
+                "kernel_size": kernel_size,
+                "amount": amount,
+                "kernel_mode": kernel_mode_label(kernel_mode),
+                "backend": render_backend_label(backend)
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued convolutional blend job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("convolutional blend job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
+struct QueueAddSpectralCrossSynthRequest<'a> {
+    queue_path: &'a Path,
+    modulator_wav: &'a Path,
+    carrier_wav: &'a Path,
+    output_root_dir: &'a Path,
+    mode: CrossSynthMode,
+    amount: f32,
+    filter_type: CrossSynthFilterType,
+    rms_window: usize,
+    rms_hop: usize,
+    fft_size: usize,
+    stft_hop: usize,
+    window: CrossSynthWindow,
+    project_path: Option<&'a Path>,
+}
+
+fn queue_add_spectral_cross_synth(
+    request: QueueAddSpectralCrossSynthRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddSpectralCrossSynthRequest {
+        queue_path,
+        modulator_wav,
+        carrier_wav,
+        output_root_dir,
+        mode,
+        amount,
+        filter_type,
+        rms_window,
+        rms_hop,
+        fft_size,
+        stft_hop,
+        window,
+        project_path,
+    } = request;
+    if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+        return Err(CliError::Message(
+            "amount must be finite and within [0, 1]".to_string(),
+        ));
+    }
+    if rms_window == 0 || rms_hop == 0 {
+        return Err(CliError::Message(
+            "rms-window and rms-hop must be greater than zero".to_string(),
+        ));
+    }
+    StftConfig {
+        fft_size,
+        hop_size: stft_hop,
+        window: cross_synth_window(window),
+    }
+    .validate()?;
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-audio".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_wav.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-audio".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_wav.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 0,
+            height: 0,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::Wav { bit_depth: 32 },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::AudioSpectralCrossSynth {
+            modulator_wav: modulator_wav.to_string_lossy().to_string(),
+            carrier_wav: carrier_wav.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            mode,
+            amount,
+            filter_type,
+            rms_window: rms_window as u32,
+            rms_hop: rms_hop as u32,
+            fft_size: fft_size as u32,
+            stft_hop: stft_hop as u32,
+            window,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued spectral cross-synth render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+fn queue_run_spectral_cross_synth(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::AudioSpectralCrossSynth { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running spectral cross-synth jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::AudioSpectralCrossSynth {
+        modulator_wav,
+        carrier_wav,
+        output_directory,
+        mode,
+        amount,
+        filter_type,
+        rms_window,
+        rms_hop,
+        fft_size,
+        stft_hop,
+        window,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a spectral cross-synth render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let modulator = load_wav_f32(&modulator_wav)?;
+        let carrier = load_wav_f32(&carrier_wav)?;
+        let stft_config = StftConfig {
+            fft_size: fft_size as usize,
+            hop_size: stft_hop as usize,
+            window: cross_synth_window(window),
+        };
+        let (output, algorithm) = match mode {
+            CrossSynthMode::Gain => (
+                rms_gain_cross_synth(
+                    &modulator,
+                    &carrier,
+                    rms_window as usize,
+                    rms_hop as usize,
+                    amount,
+                )?,
+                RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+            ),
+            CrossSynthMode::Filter => (
+                centroid_filter_cross_synth(
+                    &modulator,
+                    &carrier,
+                    stft_config,
+                    cross_synth_filter_type(filter_type),
+                    amount,
+                )?,
+                CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
+            ),
+        };
+
+        let stem_rel = "audio/cross_synth.wav";
+        let stem_path = output_dir.join(stem_rel);
+        write_parent_dirs(&stem_path)?;
+        save_wav_f32(&stem_path, &output)?;
+
+        let sample_rate = output.sample_rate;
+        let audio_sample_count = output.frames as u64;
+        let duration_seconds = if sample_rate > 0 {
+            output.frames as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+        let timing = RenderTimingMetadata {
+            frame_rate: 0.0,
+            frame_count: 0,
+            start_seconds: 0.0,
+            duration_seconds,
+            sample_rate,
+            audio_sample_count,
+        };
+        let mode_label = match mode {
+            CrossSynthMode::Gain => "gain",
+            CrossSynthMode::Filter => "filter",
+        };
+        let filter_label = match filter_type {
+            CrossSynthFilterType::Lowpass => "lowpass",
+            CrossSynthFilterType::Highpass => "highpass",
+        };
+        let window_label = match window {
+            CrossSynthWindow::Hann => "hann",
+            CrossSynthWindow::Hamming => "hamming",
+            CrossSynthWindow::Rectangular => "rectangular",
+        };
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "audio_spectral_cross_synth",
+            "frames": [],
+            "audio_stems": [stem_rel],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "spectral_cross_synth": {
+                "algorithm": algorithm,
+                "mode": mode_label,
+                "amount": amount,
+                "filter_type": filter_label,
+                "rms_window": rms_window,
+                "rms_hop": rms_hop,
+                "fft_size": fft_size,
+                "stft_hop": stft_hop,
+                "window": window_label
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths: Vec::new(),
+            audio_stem_paths: vec![stem_rel.to_string()],
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued spectral cross-synth job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("spectral cross-synth job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
+struct QueueAddAudioImpulseConvolutionRequest<'a> {
+    queue_path: &'a Path,
+    modulator_wav: &'a Path,
+    carrier_wav: &'a Path,
+    output_root_dir: &'a Path,
+    amount: f32,
+    max_impulse_samples: Option<u32>,
+    method: ConvolutionMethod,
+    resample_impulse: bool,
+    ir_mode: IrMode,
+    project_path: Option<&'a Path>,
+}
+
+fn queue_add_audio_impulse_convolution(
+    request: QueueAddAudioImpulseConvolutionRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddAudioImpulseConvolutionRequest {
+        queue_path,
+        modulator_wav,
+        carrier_wav,
+        output_root_dir,
+        amount,
+        max_impulse_samples,
+        method,
+        resample_impulse,
+        ir_mode,
+        project_path,
+    } = request;
+    if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+        return Err(CliError::Message(
+            "amount must be finite and within [0, 1]".to_string(),
+        ));
+    }
+    if let Some(0) = max_impulse_samples {
+        return Err(CliError::Message(
+            "max-impulse-samples must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-audio".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_wav.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-audio".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_wav.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 0,
+            height: 0,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::Wav { bit_depth: 32 },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::AudioImpulseConvolution {
+            modulator_wav: modulator_wav.to_string_lossy().to_string(),
+            carrier_wav: carrier_wav.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            amount,
+            max_impulse_samples,
+            method,
+            resample_impulse,
+            ir_mode,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued audio impulse convolution render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+fn queue_run_audio_impulse_convolution(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::AudioImpulseConvolution { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running audio impulse convolution jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::AudioImpulseConvolution {
+        modulator_wav,
+        carrier_wav,
+        output_directory,
+        amount,
+        max_impulse_samples,
+        method,
+        resample_impulse,
+        ir_mode,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not an audio impulse convolution render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let modulator = load_wav_f32(&modulator_wav)?;
+        let carrier = load_wav_f32(&carrier_wav)?;
+        let output = impulse_convolution_blend(
+            &modulator,
+            &carrier,
+            amount,
+            max_impulse_samples.map(|n| n as usize),
+            audio_convolution_method(method),
+            resample_impulse,
+            audio_ir_mode(ir_mode),
+        )?;
+
+        let stem_rel = "audio/impulse_convolution.wav";
+        let stem_path = output_dir.join(stem_rel);
+        write_parent_dirs(&stem_path)?;
+        save_wav_f32(&stem_path, &output)?;
+
+        let sample_rate = output.sample_rate;
+        let audio_sample_count = output.frames as u64;
+        let duration_seconds = if sample_rate > 0 {
+            output.frames as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+        let timing = RenderTimingMetadata {
+            frame_rate: 0.0,
+            frame_count: 0,
+            start_seconds: 0.0,
+            duration_seconds,
+            sample_rate,
+            audio_sample_count,
+        };
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "audio_impulse_convolution",
+            "frames": [],
+            "audio_stems": [stem_rel],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "impulse_convolution": {
+                "algorithm": impulse_convolution_algorithm(ir_mode),
+                "amount": amount,
+                "max_impulse_samples": max_impulse_samples,
+                "method": convolution_method_label(method),
+                "resample_impulse": resample_impulse,
+                "ir_mode": ir_mode_label(ir_mode)
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths: Vec::new(),
+            audio_stem_paths: vec![stem_rel.to_string()],
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued audio impulse convolution job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("audio impulse convolution job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
     let mut queue = RenderQueue::load_json(queue_path)?;
     let job_index = queue
@@ -5882,6 +7861,14 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 "frame_sequence_granular_mosaic_pool"
             }
             RenderJobTask::FrameSequenceVideoVocoder { .. } => "frame_sequence_video_vocoder",
+            RenderJobTask::FrameSequenceAudioVideoRoute { .. } => {
+                "frame_sequence_audio_video_route"
+            }
+            RenderJobTask::FrameSequenceConvolutionBlend { .. } => {
+                "frame_sequence_convolution_blend"
+            }
+            RenderJobTask::AudioSpectralCrossSynth { .. } => "audio_spectral_cross_synth",
+            RenderJobTask::AudioImpulseConvolution { .. } => "audio_impulse_convolution",
         };
         let provenance_summary = job
             .provenance
