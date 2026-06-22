@@ -137,11 +137,37 @@ IR drops high-frequency energy). Report the length delta and the RMS ratio.
 `stdlib wave` can't read hound's float `WAVE_FORMAT_EXTENSIBLE` — parse the RIFF
 manually (see `spectral-cross-synth-readout`).
 
+### HQ tier (audio): FFT method + IR resampling
+
+Both deferred audio items now landed as a full vertical slice (CPU + CLI + queue
++ SwiftUI; CPU-only, no parity-gated Metal).
+
+1. **FFT convolution** (`--method fft`). A pure-Rust radix-2 Cooley-Tukey FFT
+   (`morphogen-audio/src/fft.rs`, forward+inverse over `f64`, no new deps —
+   the crate's STFT is a magnitude-only DFT with no inverse) computes each
+   channel's full linear convolution by zero-padding to a power of two, a
+   forward FFT of carrier + IR, a pointwise complex multiply, and an inverse
+   FFT. Same transform as the direct `O(B·L)` loop, `O(N log N)`; gated against
+   `Direct` within `FFT_DIRECT_PARITY_EPSILON` (1e-4). Measured drift on a
+   400-tap IR over a 1000-sample carrier: **max abs diff 5.96e-8** (identical
+   length/RMS/peak) — the FFT path is the direct path, just faster.
+2. **IR resampling** (`--resample-impulse`, opt-in). A deterministic 3-lobe
+   Lanczos resampler resamples A's IR from its rate to B's rate (kernel widens
+   when downsampling to low-pass against aliasing; weights sum-normalized for
+   DC; L1 applied **after** resampling so the gain bound survives). Default
+   still **errors** on a rate mismatch (no silent re-pitch); the flag enables
+   it. Readout: a 24 kHz IR convolved into a 48 kHz carrier **errors** without
+   the flag; **with** it the IR resamples to 48 kHz and tracks the natively-48
+   kHz IR result within **max abs diff 7.8e-6**.
+
+Both are recorded in the manifest (`method`, `resample_impulse`) and persist on
+the `audio_impulse_convolution` job (serde-default `direct` / `false`). The
+algorithm id is unchanged (`impulse_response_convolution_blend_cpu_v1`): method
+is an implementation choice gated to match (the audio analogue of `backend`),
+not a different transform.
+
 ## Deferred (not this slice)
 
-- **FFT convolution** (the roadmap HQ tier) — large kernels via frequency-domain
-  multiply, vs this direct spatial loop.
-- **IR resampling** — convolving across a sample-rate mismatch (currently errors).
 - **Per-channel / true-stereo IRs** — this MVP downmixes A to one mono IR applied
   to every B channel.
 - **Per-channel / color kernels**, separable kernels, and Source-A *color*

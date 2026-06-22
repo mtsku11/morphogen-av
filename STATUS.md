@@ -8,13 +8,34 @@ _Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **198 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **208 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **37 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the audio-impulse-convolution commits. Manual-testing clips
+- `swift test`: **38 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the impulse-convolution HQ-tier commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Convolutional AV Blending (audio HQ tier: FFT method + IR resampling) —
+  full vertical slice (CPU + CLI + queue + SwiftUI; CPU-only).** The two deferred
+  audio items. **FFT** (`--method fft`): a new pure-Rust radix-2 Cooley-Tukey FFT
+  (`morphogen-audio/src/fft.rs`, forward+inverse over f64, no new deps — the STFT
+  is magnitude-only with no inverse) computes the per-channel convolution in the
+  frequency domain; same transform as the direct `O(B·L)` loop, gated against it
+  within `FFT_DIRECT_PARITY_EPSILON` (1e-4). **IR resampling**
+  (`--resample-impulse`, opt-in): a deterministic 3-lobe Lanczos resampler maps
+  A's IR to B's rate (L1 after resampling so the gain bound survives), instead of
+  the default hard error on a rate mismatch. New `ConvolutionMethod` enum (audio +
+  core), serde-default `method`/`resample_impulse` on the `audio_impulse_convolution`
+  job, CLI flags on render/queue-add, manifest records both. Algorithm id
+  unchanged (`impulse_response_convolution_blend_cpu_v1` — method is an
+  implementation choice, the audio analogue of `backend`). **Off-vs-on readout:**
+  FFT vs direct on a 400-tap IR/1000-sample carrier = **max abs diff 5.96e-8**
+  (≪ 1e-4; identical length/RMS/peak — FFT *is* the direct path); resample off =
+  hard error, on = a 24 kHz IR reconstructs the native-48 kHz IR result within
+  **7.8e-6**. FFT+resample queue add→run byte-identical to the direct render
+  (smoke test pins it + the manifest knobs). Workspace 198 → 208; Swift 37 → 38.
+  Contract: `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
 
 - **Convolutional AV Blending (audio impulse) — full vertical slice (CPU + CLI +
   queue + SwiftUI; CPU-only, no Metal like the cross-synth).** The roadmap's
@@ -305,13 +326,15 @@ Routing** (RMS→displacement) is now a feature-complete MVP vertical slice too
 (CPU + CLI + parity-gated Metal + queue + SwiftUI); its deferred items are
 spatially varying displacement fields (sine/radial/Source-A flow), other
 descriptor targets (centroid→hue, onset→cut), and sample-accurate descriptor
-curves (HQ tier). **Convolutional AV Blending (image kernel)** is now a
-feature-complete MVP vertical slice too (CPU + CLI + parity-gated Metal + queue +
-SwiftUI); its deferred items are the **audio-impulse** half of the MVP (Source A
-IR × Source B audio, CPU-only), FFT convolution (HQ tier), and per-channel/color
-or separable kernels. The next unstarted roadmap effect is **Video-to-Audio
-Descriptor Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh /
-Motion-Vector Reuse** (flow-field reuse on decoded float frames).
+curves (HQ tier). **Convolutional AV Blending** is now feature-complete across
+both MVP halves (image kernel: CPU + parity-gated Metal; audio impulse: CPU-only)
+**and the audio HQ tier** (FFT method + Lanczos IR resampling, CPU + CLI + queue +
+SwiftUI). Its remaining deferred items are image Metal *spatial* kernels for
+larger K (the direct loop ships now), per-channel/color or separable image
+kernels, and per-channel / true-stereo audio IRs (this MVP downmixes A to one
+mono IR). The next unstarted roadmap effect is **Video-to-Audio Descriptor
+Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh / Motion-Vector
+Reuse** (flow-field reuse on decoded float frames).
 
 ## Candidate next steps
 

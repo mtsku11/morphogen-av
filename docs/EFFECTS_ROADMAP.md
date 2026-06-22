@@ -94,7 +94,12 @@
   Source B channel is convolved with it (convolution-reverb-style), blended
   wet/dry by `amount` (`amount 0` = passthrough; the wet tail extends the
   output). CPU-only. Algorithm id `impulse_response_convolution_blend_cpu_v1`.
-- Future high-quality version: FFT convolution and Metal spatial kernels.
+  The audio HQ tier — **FFT convolution** (`--method fft`, a pure-Rust radix-2
+  FFT gated against the direct path within 1e-4) and **IR resampling**
+  (`--resample-impulse`, opt-in deterministic Lanczos) — is **landed** (CPU +
+  CLI + queue + SwiftUI); see `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
+- Future high-quality version: Metal spatial kernels (image); per-channel /
+  true-stereo IRs (audio).
 
 ## Scanline / Rutt-Etra Style Carrier Modulation
 
