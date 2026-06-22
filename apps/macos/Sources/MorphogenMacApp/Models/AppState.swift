@@ -103,6 +103,14 @@ final class AppState: ObservableObject {
   @Published var audioRouteFrameRate = 30.0
   @Published var audioRouteBackend: FeedbackRenderBackendOption = .cpu
   @Published var audioRouteSummary = "No audio→video route rendered"
+
+  @Published var convBlendModulatorURL: URL?
+  @Published var convBlendCarrierURL: URL?
+  @Published var convBlendOutputURL: URL?
+  @Published var convBlendKernelSize = 3
+  @Published var convBlendAmount = 1.0
+  @Published var convBlendBackend: FeedbackRenderBackendOption = .cpu
+  @Published var convBlendSummary = "No convolutional blend rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
   @Published var mediaProxyFrameRate = 12.0
@@ -846,6 +854,88 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
           self.audioRouteSummary = "Audio→video route render failed: \(error.localizedDescription)"
           self.statusMessage = "Audio→video route render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func chooseConvBlendModulatorDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source A Frames",
+      message: "Select the modulator PNG frames that supply the convolution kernel."
+    ) else {
+      statusMessage = "Source A frame selection cancelled."
+      return
+    }
+
+    convBlendModulatorURL = url
+    statusMessage = "Convolution Source A frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseConvBlendCarrierDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source B Frames",
+      message: "Select the carrier PNG frames to convolve."
+    ) else {
+      statusMessage = "Source B frame selection cancelled."
+      return
+    }
+
+    convBlendCarrierURL = url
+    statusMessage = "Convolution Source B frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseConvBlendOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Convolution output selection cancelled."
+      return
+    }
+
+    convBlendOutputURL = url
+    statusMessage = "Convolution output selected: \(url.lastPathComponent)"
+  }
+
+  func runConvolutionalBlendRender() {
+    guard let modulatorURL = convBlendModulatorURL else {
+      statusMessage = "Select a Source A frame directory before rendering the convolution blend."
+      return
+    }
+    guard let carrierURL = convBlendCarrierURL else {
+      statusMessage = "Select a Source B frame directory before rendering the convolution blend."
+      return
+    }
+    guard let outputURL = convBlendOutputURL else {
+      statusMessage = "Choose an output directory before rendering the convolution blend."
+      return
+    }
+
+    let request = ConvolutionalBlendSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultConvolutionalBlendSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      kernelSize: convBlendKernelSize,
+      amount: convBlendAmount,
+      maxFrames: nil,
+      backend: convBlendBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing convolutional blend render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedConvolutionalBlendSequenceRender(
+          request: request
+        )
+        DispatchQueue.main.async {
+          self.convBlendSummary = "Convolution blend bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Convolution blend render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.convBlendSummary = "Convolution blend render failed: \(error.localizedDescription)"
+          self.statusMessage = "Convolution blend render failed: \(error.localizedDescription)"
         }
       }
     }

@@ -64,6 +64,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultConvolutionalBlendSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-convolutional-blend-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -593,6 +599,89 @@ enum RustBridgePlaceholder {
       String(request.rmsHop),
       "--frame-rate",
       cliNumber(request.frameRate),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedConvolutionalBlendSequenceRender(
+    request: ConvolutionalBlendSequenceRenderQueueCommandRequest
+  ) throws -> ConvolutionalBlendSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddConvolutionalBlendSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-convolutional-blend-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return ConvolutionalBlendSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddConvolutionalBlendSequenceArguments(
+    request: ConvolutionalBlendSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.kernelSize >= 1 && request.kernelSize % 2 == 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "kernel size must be odd and greater than or equal to one"
+      )
+    }
+    guard request.amount.isFinite && request.amount >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "amount must be finite and greater than or equal to zero"
+      )
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-convolutional-blend-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--kernel-size",
+      String(request.kernelSize),
+      "--amount",
+      cliNumber(request.amount),
       "--backend",
       request.backend.cliValue
     ]
@@ -1253,6 +1342,24 @@ struct AudioVideoRouteSequenceRenderQueueCommandRequest {
 }
 
 struct AudioVideoRouteSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct ConvolutionalBlendSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let kernelSize: Int
+  let amount: Double
+  let maxFrames: Int?
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct ConvolutionalBlendSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

@@ -641,6 +641,65 @@ struct RenderPanelView: View {
           }
         }
 
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Convolutional AV Blending")
+            .font(.subheadline.weight(.semibold))
+            .help("Each Source A frame supplies a normalized KxK luma kernel that Source B's frame is convolved with.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseConvBlendModulatorDirectory()
+            } label: {
+              Label("Source A Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseConvBlendCarrierDirectory()
+            } label: {
+              Label("Source B Frames", systemImage: "photo.on.rectangle.angled")
+            }
+            Button {
+              state.chooseConvBlendOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.convBlendKernelSize, in: 1...15, step: 2) {
+              Text("Kernel \(state.convBlendKernelSize)×\(state.convBlendKernelSize)")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("Odd kernel edge length; larger spreads the blend wider.")
+
+            Stepper(value: $state.convBlendAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.convBlendAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = fully convolved.")
+          }
+
+          Picker("Backend", selection: $state.convBlendBackend) {
+            ForEach(FeedbackRenderBackendOption.allCases) { backend in
+              Text(backend.rawValue).tag(backend)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 200)
+          .help("Metal is gated per-frame against the CPU reference.")
+
+          Text(state.convBlendSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runConvolutionalBlendRender()
+          } label: {
+            Label("Run Convolution Blend", systemImage: "square.grid.3x3.fill")
+          }
+        }
+
         HStack {
           Button {
             state.checkProResExportPlan()
