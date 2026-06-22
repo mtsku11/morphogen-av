@@ -464,6 +464,58 @@ struct RenderPanelView: View {
           }
         }
 
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Video Vocoder — Tonal Routing")
+            .font(.subheadline.weight(.semibold))
+
+          Picker("Mode", selection: $state.vocoderMode) {
+            ForEach(VideoVocoderModeOption.allCases) { mode in
+              Text(mode.rawValue).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.vocoderBands, in: 1...64, step: 1) {
+              Text("Bands \(state.vocoderBands)")
+            }
+            .frame(width: 150, alignment: .leading)
+            .disabled(state.vocoderMode == .match)
+            .help("Luma band count (Gain mode only; Match mode uses a 256-level tone map).")
+
+            Stepper(value: $state.vocoderAmount, in: 0...4, step: 0.05) {
+              Text("Amount \(state.vocoderAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = full routing.")
+          }
+
+          Text(state.vocoderSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          HStack(spacing: 16) {
+            Picker("Backend", selection: $state.vocoderBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+            .disabled(state.vocoderMode == .gain)
+            .help("Metal is parity-gated and available in Match mode; Gain mode renders on the CPU.")
+
+            Button {
+              state.runVideoVocoderSequenceRender()
+            } label: {
+              Label("Run Vocoder", systemImage: "slider.horizontal.3")
+            }
+          }
+        }
+
         HStack {
           Button {
             state.checkProResExportPlan()

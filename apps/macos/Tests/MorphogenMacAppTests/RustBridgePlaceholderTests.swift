@@ -199,6 +199,54 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("metal"))
   }
 
+  func testQueuedVideoVocoderSequenceArgumentsIncludeModeAndAmount() throws {
+    let request = VideoVocoderSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/vocoder-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      bands: 8,
+      amount: 0.5,
+      mode: .match,
+      maxFrames: 12,
+      frameRate: 24.0,
+      backend: .metal,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddVideoVocoderSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-video-vocoder-sequence"]
+    )
+    XCTAssertEqual(Self.value(after: "--mode", in: arguments), "match")
+    XCTAssertEqual(Self.value(after: "--bands", in: arguments), "8")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.5")
+    XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
+    XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "12")
+  }
+
+  func testQueuedVideoVocoderSequenceArgumentsRejectMetalInGainMode() {
+    let request = VideoVocoderSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/vocoder-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      bands: 8,
+      amount: 1.0,
+      mode: .gain,
+      maxFrames: nil,
+      frameRate: 24.0,
+      backend: .metal,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddVideoVocoderSequenceArguments(request: request)
+    )
+  }
+
   func testQueuedGranularMosaicPoolSequenceArgumentsOmitAudioCachesWhenColorOnly() throws {
     let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),

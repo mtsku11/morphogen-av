@@ -12,6 +12,7 @@ use crate::{
     ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME,
     FLOW_DISPLACE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_POOL_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_SHADER_SOURCE, GRANULAR_MOSAIC_SHADER_SOURCE,
+    VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -48,6 +49,13 @@ struct GranularMosaicPoolParams {
     height: u32,
     grain_size: u32,
     selection_columns: u32,
+}
+
+#[repr(C)]
+struct VideoVocoderParams {
+    amount: f32,
+    width: u32,
+    height: u32,
 }
 
 pub fn flow_displace_metal(
@@ -118,6 +126,102 @@ pub fn flow_displace_metal(
         0,
         std::mem::size_of::<FlowDisplaceParams>() as u64,
         (&params as *const FlowDisplaceParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
+/// Video vocoder, histogram-specification (match) mode. Applies a precomputed
+/// `tone` LUT (from `morphogen_render::luma_specification_tone_map`) to the
+/// carrier on the GPU. The CPU reference `apply_tone_map_cpu` evaluates identical
+/// math; the CLI gates this output against it per frame before export.
+pub fn video_vocoder_match_metal(
+    carrier: &ImageBufferF32,
+    tone: &[f32],
+    amount: f32,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if tone.is_empty() {
+        return Err(MetalDispatchError::IncompatibleInputs(
+            "tone map must be non-empty".to_string(),
+        ));
+    }
+
+    let plan = FlowDisplaceDispatchPlan::new(carrier.width, carrier.height, amount)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(VIDEO_VOCODER_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(VIDEO_VOCODER_MATCH_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let carrier_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&carrier_texture, carrier)?;
+
+    let tone_byte_len = std::mem::size_of_val(tone);
+    let tone_buffer = device.new_buffer_with_data(
+        tone.as_ptr().cast(),
+        tone_byte_len as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&carrier_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_buffer(0, Some(&tone_buffer), 0);
+
+    let params = VideoVocoderParams {
+        amount: plan.amount,
+        width: plan.width,
+        height: plan.height,
+    };
+    encoder.set_bytes(
+        1,
+        std::mem::size_of::<VideoVocoderParams>() as u64,
+        (&params as *const VideoVocoderParams).cast(),
     );
     encoder.dispatch_thread_groups(
         MTLSize::new(
@@ -755,10 +859,10 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
-        analyze_grain_pool_cpu, flow_displace_cpu, flow_feedback_frame_cpu,
+        analyze_grain_pool_cpu, apply_tone_map_cpu, flow_displace_cpu, flow_feedback_frame_cpu,
         granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
-        select_grains_from_pool_cpu, FlowFeedbackSettings, FlowField, GrainSelection,
-        GranularMosaicSettings, ImageBufferF32, StructureMode,
+        luma_specification_tone_map, select_grains_from_pool_cpu, FlowFeedbackSettings, FlowField,
+        GrainSelection, GranularMosaicSettings, ImageBufferF32, StructureMode,
     };
 
     use super::*;
@@ -887,6 +991,39 @@ mod tests {
                 return;
             }
             Err(error) => panic!("metal feedback render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_video_vocoder_match_matches_cpu_reference() {
+        // A textured, full-range carrier and a brighter modulator so the tone map
+        // is non-trivial; parity asserted at the project's 1/255 tolerance.
+        let carrier = ImageBufferF32::from_fn(6, 5, |x, y| {
+            let base = (x as f32) / 5.0;
+            let tint = if (x + y) % 2 == 0 { 0.1 } else { -0.1 };
+            let v = (base + tint).clamp(0.0, 1.0);
+            [v, v * 0.7, 1.0 - v, 1.0]
+        })
+        .expect("carrier");
+        let modulator = ImageBufferF32::from_fn(8, 8, |x, _| {
+            let v = 0.55 + 0.45 * (x as f32 / 7.0); // bright, skewed high
+            [v, v, v, 1.0]
+        })
+        .expect("modulator");
+
+        let tone = luma_specification_tone_map(&modulator, &carrier);
+        let cpu = apply_tone_map_cpu(&carrier, &tone, 1.0).expect("cpu render");
+        let gpu = match video_vocoder_match_metal(&carrier, &tone, 1.0) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal video vocoder parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal video vocoder render failed: {error}"),
         };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);

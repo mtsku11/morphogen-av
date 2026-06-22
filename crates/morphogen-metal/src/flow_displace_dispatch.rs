@@ -9,6 +9,8 @@ pub const GRANULAR_MOSAIC_SHADER_SOURCE: &str = include_str!("../shaders/granula
 pub const GRANULAR_MOSAIC_POOL_KERNEL_NAME: &str = "granular_mosaic_pool";
 pub const GRANULAR_MOSAIC_POOL_SHADER_SOURCE: &str =
     include_str!("../shaders/granular_mosaic_pool.metal");
+pub const VIDEO_VOCODER_MATCH_KERNEL_NAME: &str = "video_vocoder_match";
+pub const VIDEO_VOCODER_SHADER_SOURCE: &str = include_str!("../shaders/video_vocoder.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -83,6 +85,10 @@ pub enum MetalDispatchError {
     MissingGranularMosaicPoolKernelEntryPoint,
     #[error("granular_mosaic_pool.metal does not contain the expected texture and buffer bindings")]
     MissingGranularMosaicPoolBindingLayout,
+    #[error("video_vocoder.metal does not contain the expected kernel entry point")]
+    MissingVideoVocoderKernelEntryPoint,
+    #[error("video_vocoder.metal does not contain the expected texture and buffer bindings")]
+    MissingVideoVocoderBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -250,6 +256,25 @@ pub fn validate_granular_mosaic_pool_shader_source() -> Result<(), MetalDispatch
     Ok(())
 }
 
+pub fn validate_video_vocoder_shader_source() -> Result<(), MetalDispatchError> {
+    if !VIDEO_VOCODER_SHADER_SOURCE.contains("kernel void video_vocoder_match") {
+        return Err(MetalDispatchError::MissingVideoVocoderKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::read> carrier [[texture(0)]]",
+        "texture2d<float, access::write> output [[texture(1)]]",
+        "constant float *tone [[buffer(0)]]",
+        "constant VideoVocoderParams &params [[buffer(1)]]",
+    ] {
+        if !VIDEO_VOCODER_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingVideoVocoderBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -326,5 +351,10 @@ mod tests {
     #[test]
     fn granular_mosaic_pool_shader_has_expected_bindings() {
         validate_granular_mosaic_pool_shader_source().expect("granular pool shader preflight");
+    }
+
+    #[test]
+    fn video_vocoder_shader_has_expected_bindings() {
+        validate_video_vocoder_shader_source().expect("video vocoder shader preflight");
     }
 }

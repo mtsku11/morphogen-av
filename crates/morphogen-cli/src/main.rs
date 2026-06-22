@@ -17,7 +17,7 @@ use morphogen_core::{
     RenderJobAnalysisCacheProvenance,
     RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
     RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue, RenderSettings,
-    RenderTimingMetadata, SourceRole,
+    RenderTimingMetadata, SourceRole, VideoVocoderMode,
 };
 use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
@@ -29,8 +29,9 @@ use morphogen_render::{
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
-    select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, TemporalCoherence,
-    write_flow_cache,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, video_vocoder_cpu,
+    analyze_luma_band_envelope_cpu, apply_tone_map_cpu, luma_specification_tone_map, AntiRepeat,
+    TemporalCoherence, VideoVocoderSettings, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
@@ -178,6 +179,39 @@ enum Commands {
         backend: CliRenderBackend,
         #[arg(long, value_enum, default_value_t = CliGrainSelection::Luma)]
         selection: CliGrainSelection,
+    },
+    /// Render a still video-vocoder frame: Source A's luma histogram becomes a
+    /// per-band gain envelope reweighting Source B's tonal bands (luma-band gain
+    /// routing). `--amount 0` is an exact Source B passthrough.
+    RenderVideoVocoder {
+        modulator_image: PathBuf,
+        carrier_image: PathBuf,
+        output_path: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    /// Render a video-vocoder PNG-frame sequence (per-frame luma-band gain
+    /// routing). Source A's per-frame luma envelope reweights Source B's bands.
+    RenderVideoVocoderSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
     },
     /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
     /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's
@@ -487,6 +521,27 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Enqueue a video-vocoder PNG-frame sequence job (luma-band tonal routing).
+    QueueAddVideoVocoderSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
     QueueRunTest {
         queue_path: PathBuf,
         output_dir: PathBuf,
@@ -503,6 +558,9 @@ enum Commands {
         queue_path: PathBuf,
     },
     QueueRunGranularMosaicPoolSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunVideoVocoderSequence {
         queue_path: PathBuf,
     },
     QueueCancel {
@@ -603,6 +661,34 @@ impl From<CliGrainSelection> for GrainSelectionMode {
         match value {
             CliGrainSelection::Luma => Self::Luma,
             CliGrainSelection::Rgb => Self::MultimodalRgb,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliVocoderMode {
+    /// Tonal envelope transfer: remap B's luma distribution to match A's
+    /// (histogram specification). The headline look; ignores `--bands`.
+    #[default]
+    Match,
+    /// Per-band gain routing: A's luma histogram scales B's tonal bands.
+    Gain,
+}
+
+impl From<CliVocoderMode> for VideoVocoderMode {
+    fn from(value: CliVocoderMode) -> Self {
+        match value {
+            CliVocoderMode::Match => Self::Match,
+            CliVocoderMode::Gain => Self::Gain,
+        }
+    }
+}
+
+impl From<VideoVocoderMode> for CliVocoderMode {
+    fn from(value: VideoVocoderMode) -> Self {
+        match value {
+            VideoVocoderMode::Match => Self::Match,
+            VideoVocoderMode::Gain => Self::Gain,
         }
     }
 }
@@ -803,6 +889,41 @@ fn run() -> Result<(), CliError> {
             ),
             selection_mode: selection.into(),
         })
+        .map(|_| ()),
+        Commands::RenderVideoVocoder {
+            modulator_image,
+            carrier_image,
+            output_path,
+            bands,
+            amount,
+            mode,
+            backend,
+        } => render_video_vocoder(
+            &modulator_image,
+            &carrier_image,
+            &output_path,
+            VideoVocoderSettings { bands, amount },
+            mode,
+            backend.into(),
+        ),
+        Commands::RenderVideoVocoderSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            bands,
+            amount,
+            mode,
+            backend,
+            max_frames,
+        } => render_video_vocoder_sequence(
+            &modulator_dir,
+            &carrier_dir,
+            &output_dir,
+            VideoVocoderSettings { bands, amount },
+            mode,
+            backend.into(),
+            max_frames,
+        )
         .map(|_| ()),
         Commands::RenderGranularMosaicPoolSequence {
             modulator_dir,
@@ -1120,6 +1241,30 @@ fn run() -> Result<(), CliError> {
             project_path: project_path.as_deref(),
             backend: backend.into(),
         }),
+        Commands::QueueAddVideoVocoderSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            bands,
+            amount,
+            mode,
+            max_frames,
+            frame_rate,
+            project_path,
+            backend,
+        } => queue_add_video_vocoder_sequence(QueueAddVideoVocoderSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            settings: VideoVocoderSettings { bands, amount },
+            mode: mode.into(),
+            max_frames,
+            frame_rate,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
         Commands::QueueRunTest {
             queue_path,
             output_dir,
@@ -1134,6 +1279,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunGranularMosaicPoolSequence { queue_path } => {
             queue_run_granular_mosaic_pool_sequence(&queue_path)
+        }
+        Commands::QueueRunVideoVocoderSequence { queue_path } => {
+            queue_run_video_vocoder_sequence(&queue_path)
         }
         Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
@@ -1636,6 +1784,123 @@ fn render_granular_mosaic(
         output_path.display()
     );
     Ok(())
+}
+
+fn render_video_vocoder_frame(
+    modulator: &ImageBufferF32,
+    carrier: &ImageBufferF32,
+    settings: VideoVocoderSettings,
+    mode: CliVocoderMode,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match mode {
+        CliVocoderMode::Gain => {
+            if backend == RenderBackend::Metal {
+                return Err(CliError::Message(
+                    "the Metal backend is only implemented for --mode match; use --backend cpu for gain mode".to_string(),
+                ));
+            }
+            let envelope = analyze_luma_band_envelope_cpu(modulator, settings.bands)?;
+            Ok(video_vocoder_cpu(carrier, &envelope, settings)?)
+        }
+        CliVocoderMode::Match => {
+            let tone = luma_specification_tone_map(modulator, carrier);
+            match backend {
+                RenderBackend::Cpu => Ok(apply_tone_map_cpu(carrier, &tone, settings.amount)?),
+                RenderBackend::Metal => {
+                    render_video_vocoder_match_metal(carrier, &tone, settings.amount)
+                }
+            }
+        }
+    }
+}
+
+fn render_video_vocoder(
+    modulator_image: &Path,
+    carrier_image: &Path,
+    output_path: &Path,
+    settings: VideoVocoderSettings,
+    mode: CliVocoderMode,
+    backend: RenderBackend,
+) -> Result<(), CliError> {
+    settings.validate()?;
+    let modulator = load_image_f32(modulator_image)?;
+    let carrier = load_image_f32(carrier_image)?;
+    let rendered = render_video_vocoder_frame(&modulator, &carrier, settings, mode, backend)?;
+
+    write_parent_dirs(output_path)?;
+    save_png(&rendered, output_path)?;
+    println!(
+        "rendered video vocoder ({:?} mode, {} bands, amount {}) from {} modulating {} to {}",
+        mode,
+        settings.bands,
+        settings.amount,
+        modulator_image.display(),
+        carrier_image.display(),
+        output_path.display()
+    );
+    Ok(())
+}
+
+fn render_video_vocoder_sequence(
+    modulator_dir: &Path,
+    carrier_dir: &Path,
+    output_dir: &Path,
+    settings: VideoVocoderSettings,
+    mode: CliVocoderMode,
+    backend: RenderBackend,
+    max_frames: Option<usize>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    settings.validate()?;
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(modulator_dir)?;
+    let carrier_frames = collect_image_frames(carrier_dir)?;
+    if modulator_frames.is_empty() || carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "video vocoder requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    let paired_count = modulator_frames.len().min(carrier_frames.len());
+    let frame_count = max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    fs::create_dir_all(output_dir)?;
+
+    for index in 0..frame_count {
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let carrier = load_image_f32(&carrier_frames[index])?;
+        let rendered =
+            render_video_vocoder_frame(&modulator, &carrier, settings, mode, backend)?;
+        save_png(
+            &rendered,
+            &output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if modulator_frames.len() != carrier_frames.len() {
+        println!(
+            "source frame counts differ: {} modulator frame(s), {} carrier frame(s); rendered common prefix",
+            modulator_frames.len(),
+            carrier_frames.len()
+        );
+    }
+    println!(
+        "rendered video vocoder sequence with {} frame(s) ({:?} mode, {} bands, amount {}) from {} modulating {} to {}",
+        frame_count,
+        mode,
+        settings.bands,
+        settings.amount,
+        modulator_dir.display(),
+        carrier_dir.display(),
+        output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
 }
 
 fn granular_audio_modulation_from_cli(
@@ -2677,6 +2942,39 @@ fn render_granular_mosaic_output_metal(
         )));
     }
     Ok(gpu)
+}
+
+#[cfg(target_os = "macos")]
+fn render_video_vocoder_match_metal(
+    carrier: &ImageBufferF32,
+    tone: &[f32],
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::video_vocoder_match_metal(carrier, tone, amount)?;
+    let cpu = apply_tone_map_cpu(carrier, tone, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU video vocoder outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal video vocoder render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_video_vocoder_match_metal(
+    _carrier: &ImageBufferF32,
+    _tone: &[f32],
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal render backend is only available on macOS".to_string(),
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -4292,6 +4590,113 @@ fn queue_add_granular_mosaic_pool_sequence(
     Ok(())
 }
 
+struct QueueAddVideoVocoderSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    settings: VideoVocoderSettings,
+    mode: VideoVocoderMode,
+    max_frames: Option<u32>,
+    frame_rate: f64,
+    project_path: Option<&'a Path>,
+    backend: RenderBackend,
+}
+
+fn queue_add_video_vocoder_sequence(
+    request: QueueAddVideoVocoderSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddVideoVocoderSequenceRequest {
+        queue_path,
+        modulator_dir,
+        carrier_dir,
+        output_root_dir,
+        settings,
+        mode,
+        max_frames,
+        frame_rate,
+        project_path,
+        backend,
+    } = request;
+    settings.validate()?;
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+    if backend == RenderBackend::Metal && mode == VideoVocoderMode::Gain {
+        return Err(CliError::Message(
+            "the Metal backend is only implemented for --mode match; use --backend cpu for gain mode"
+                .to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-frames".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceVideoVocoder {
+            modulator_frame_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            bands: settings.bands,
+            amount: settings.amount,
+            mode,
+            max_frames,
+            frame_rate,
+            backend,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued video-vocoder render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
 struct QueueAddFeedbackSequenceRequest<'a> {
     queue_path: &'a Path,
     modulator_dir: &'a Path,
@@ -4865,6 +5270,136 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
     }
 }
 
+fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceVideoVocoder { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message("render queue has no queued or running video-vocoder jobs".to_string())
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::FrameSequenceVideoVocoder {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        bands,
+        amount,
+        mode,
+        max_frames,
+        frame_rate,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a video-vocoder render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let settings = VideoVocoderSettings { bands, amount };
+        let render_result = render_video_vocoder_sequence(
+            Path::new(&modulator_frame_directory),
+            Path::new(&carrier_frame_directory),
+            &output_dir.join("frames"),
+            settings,
+            mode.into(),
+            backend,
+            max_frames.map(|value| value as usize),
+        )?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        let algorithm = match mode {
+            VideoVocoderMode::Match => "luma_histogram_spec_vocoder_cpu_v1",
+            VideoVocoderMode::Gain => "luma_band_gain_vocoder_cpu_v1",
+        };
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "frame_sequence_video_vocoder",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "video_vocoder": {
+                "algorithm": algorithm,
+                "mode": match mode { VideoVocoderMode::Match => "match", VideoVocoderMode::Gain => "gain" },
+                "bands": bands,
+                "amount": amount,
+                "backend": render_backend_label(backend)
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued video-vocoder job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("video-vocoder job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
     let mut queue = RenderQueue::load_json(queue_path)?;
     let job_index = queue
@@ -5346,6 +5881,7 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceGranularMosaicPool { .. } => {
                 "frame_sequence_granular_mosaic_pool"
             }
+            RenderJobTask::FrameSequenceVideoVocoder { .. } => "frame_sequence_video_vocoder",
         };
         let provenance_summary = job
             .provenance

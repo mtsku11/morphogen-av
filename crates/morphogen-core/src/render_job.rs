@@ -171,6 +171,41 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    /// Video vocoder: Source A's per-frame luma distribution reweights Source B's
+    /// tonal bands. `match` mode (default) remaps B's luma onto A's via histogram
+    /// specification; `gain` mode applies a per-band gain envelope. The `match`
+    /// render has a parity-gated Metal port selected via `backend`.
+    FrameSequenceVideoVocoder {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        /// Luma band count (`gain` mode only).
+        bands: u32,
+        /// Blend from Source B passthrough (`0`) to full routing (`1`).
+        amount: f32,
+        /// Tonal-routing mode. Defaults to [`VideoVocoderMode::Match`].
+        #[serde(default)]
+        mode: VideoVocoderMode,
+        max_frames: Option<u32>,
+        frame_rate: f64,
+        /// Render backend; the Metal path (match mode) is gated per-frame against
+        /// the CPU reference. Defaults to CPU so legacy jobs keep their meaning.
+        #[serde(default)]
+        backend: RenderBackend,
+    },
+}
+
+/// Selects the video-vocoder tonal-routing mode.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoVocoderMode {
+    /// Histogram specification: remap B's luma distribution onto A's
+    /// (`luma_histogram_spec_vocoder_cpu_v1`). The default headline look.
+    #[default]
+    Match,
+    /// Per-band gain routing: A's luma histogram scales B's tonal bands
+    /// (`luma_band_gain_vocoder_cpu_v1`).
+    Gain,
 }
 
 /// Selects the feature space used to match Source A regions to Source B grains.
@@ -478,6 +513,48 @@ mod tests {
         assert_eq!(coherence_weight, 0.0);
         assert_eq!(coherence_reach, 0);
         assert_eq!(spatial_coherence_weight, 0.0);
+        assert_eq!(backend, RenderBackend::Cpu);
+    }
+
+    #[test]
+    fn video_vocoder_task_round_trips() {
+        let task = RenderJobTask::FrameSequenceVideoVocoder {
+            modulator_frame_directory: "/tmp/mod".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            bands: 8,
+            amount: 0.5,
+            mode: VideoVocoderMode::Gain,
+            max_frames: Some(24),
+            frame_rate: 24.0,
+            backend: RenderBackend::Metal,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize vocoder task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize vocoder task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn video_vocoder_task_defaults_mode_to_match_and_backend_to_cpu() {
+        let json = r#"{
+            "type": "frame_sequence_video_vocoder",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "bands": 8,
+            "amount": 1.0,
+            "max_frames": null,
+            "frame_rate": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize vocoder task");
+        let RenderJobTask::FrameSequenceVideoVocoder { mode, backend, .. } = task else {
+            panic!("expected vocoder task");
+        };
+        assert_eq!(mode, VideoVocoderMode::Match);
         assert_eq!(backend, RenderBackend::Cpu);
     }
 

@@ -11,6 +11,7 @@ pub mod image_buffer;
 pub mod luminance_flow;
 pub mod optical_flow;
 pub mod sampler;
+pub mod video_vocoder;
 
 pub use cpu_reference::{
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
@@ -52,6 +53,11 @@ pub use optical_flow::{
     PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
 };
 pub use sampler::sample_bilinear_clamped;
+pub use video_vocoder::{
+    analyze_luma_band_envelope_cpu, apply_tone_map_cpu, histogram_specification_cpu,
+    luma_specification_tone_map, video_vocoder_cpu, video_vocoder_from_modulator_cpu,
+    LumaBandEnvelope, VideoVocoderSettings, TONE_MAP_LEVELS, VIDEO_VOCODER_ALGORITHM,
+};
 
 #[cfg(test)]
 mod tests {

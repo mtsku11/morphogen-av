@@ -24,7 +24,10 @@
 - Carrier input: Source B color, texture, or frequency bands.
 - Output: carrier decomposed and reweighted by modulator descriptors.
 - Cached analysis: luminance pyramids, edge maps, spectral descriptors.
-- First MVP version: luma-band gain routing.
+- First MVP version: luma-band gain routing. **Landed** (CPU + CLI + parity-gated
+  Metal + queue + SwiftUI) — see `docs/VIDEO_VOCODER_MILESTONE.md`. Ships two
+  modes: **`match`** (default, histogram-specification tonal-envelope transfer —
+  the stronger headline look) and **`gain`** (per-band luma-histogram gain).
 - Future high-quality version: multiband spatial-frequency analysis with GPU kernels.
 
 ## AV Granular Mosaicing

@@ -73,6 +73,11 @@ final class AppState: ObservableObject {
   @Published var granularPoolSpatialCoherenceWeight = 0.0
   @Published var granularPoolBackend: FeedbackRenderBackendOption = .cpu
   @Published var granularPoolSummary = "No temporal grain pool sequence rendered"
+  @Published var vocoderMode: VideoVocoderModeOption = .match
+  @Published var vocoderBands = 8
+  @Published var vocoderAmount = 1.0
+  @Published var vocoderBackend: FeedbackRenderBackendOption = .cpu
+  @Published var vocoderSummary = "No video vocoder sequence rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
   @Published var mediaProxyFrameRate = 12.0
@@ -597,6 +602,59 @@ final class AppState: ObservableObject {
     }
   }
 
+  func runVideoVocoderSequenceRender() {
+    guard let modulatorURL = frameSequenceModulatorURL else {
+      statusMessage = "Select Source A frame directory before rendering the video vocoder."
+      return
+    }
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering the video vocoder."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering the video vocoder."
+      return
+    }
+
+    let request = VideoVocoderSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultVideoVocoderSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      bands: vocoderBands,
+      amount: vocoderAmount,
+      mode: vocoderMode,
+      maxFrames: frameSequenceMaxFrames,
+      frameRate: proResFrameRate.framesPerSecond,
+      backend: vocoderBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing video vocoder render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedVideoVocoderSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        let modeText = self.vocoderMode == .match ? "tonal-match" : "band-gain"
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.vocoderSummary = "\(bundle.frameCount) vocoder frame(s) (\(modeText)) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued video vocoder sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Video vocoder render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.vocoderSummary = "Video vocoder render failed: \(error.localizedDescription)"
+          self.statusMessage = "Video vocoder render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   func applyFeedbackPreset(_ preset: FeedbackPresetOption) {
     guard let settings = preset.settings else {
       return
@@ -934,6 +992,22 @@ enum FeedbackRenderBackendOption: String, CaseIterable, Identifiable {
       return "cpu"
     case .metal:
       return "metal"
+    }
+  }
+}
+
+enum VideoVocoderModeOption: String, CaseIterable, Identifiable {
+  case match = "Match (tonal transfer)"
+  case gain = "Gain (band routing)"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .match:
+      return "match"
+    case .gain:
+      return "gain"
     }
   }
 }

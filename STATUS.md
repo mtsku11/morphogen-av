@@ -4,17 +4,37 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-21_
+_Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **142 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **155 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **26 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the texture-dims commits. Manual-testing clips
+- `swift test`: **28 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the video-vocoder commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Video Vocoder — full vertical slice (CPU + CLI + Metal + queue + SwiftUI).**
+  The roadmap's "luma-band gain routing" effect, built A→B. Two modes share the
+  framing: **`match`** (default) = histogram specification (remap B's luma
+  distribution onto A's via a 256-level CDF tone map — no neutral point, so it
+  stays strong on real footage) and **`gain`** = per-band luma-histogram gain
+  routing. Both preserve hue, clamp, and treat `amount=0` as a byte-identical
+  passthrough. `render-video-vocoder[-sequence]` (CPU + parity-gated
+  `--backend metal` for match), persisted `frame_sequence_video_vocoder` queue job
+  (`queue-add-/queue-run-video-vocoder-sequence`, manifest carries mode/algorithm/
+  bands/amount/backend), and a Render-panel section (mode/bands/amount/backend).
+  **Why match over gain:** on harp→cello, gain reads as a timid grade (natural
+  histograms keep `N·a_hist≈1`); match imposes A's whole tonal palette (lifts the
+  dark cello frame onto harp's daylight palette) — chosen after a side-by-side
+  prototype. Verified: amount=0 byte-identical (direct pixel sample); match
+  off-vs-on routes correctly; Metal byte-identical to CPU on HD frames (0.0/255);
+  queue add→run byte-identical to direct. Algorithm ids
+  `luma_histogram_spec_vocoder_cpu_v1` (match) / `luma_band_gain_vocoder_cpu_v1`
+  (gain). gain-mode Metal deferred (errors clearly). Workspace 142→155; Swift
+  26→28. Contract: `docs/VIDEO_VOCODER_MILESTONE.md`.
 
 - **Granular step 6b luma-variance + gradient texture dims (render/CLI + queue +
   SwiftUI):** the final 6b feature, landed as a full vertical slice. Each pooled
@@ -174,15 +194,13 @@ _Last updated: 2026-06-21_
 
 ## In flight
 
-On `main`. Granular step 6b is now feature-complete end-to-end: CPU core + CLI
-render path + queue task + SwiftUI exposure + parity-gated Metal port, plus k>1
-audio dims, trailing pool window, all three cross-frame schedulers (anti-repeat +
-frame coherence + spatial-origin coherence), and the luma-variance/gradient
-texture dims — every selection knob plumbed through the persisted queue job and
-the macOS Render panel. **No 6b refinements remain.** The spatial-origin coherence
-and texture-dims commits (render/CLI, queue, SwiftUI, docs) are local, not yet
-pushed. The next vertical slice is a new roadmap effect (Video Vocoder or Spectral
-Audio Cross-Synthesis).
+On `main` (local commits, not yet pushed). The **Video Vocoder** MVP is now
+feature-complete end-to-end (CPU + CLI + parity-gated Metal for match mode + queue
+job + SwiftUI). Granular step 6b remains feature-complete. The vocoder's
+deferred items: gain-mode Metal port, a reusable Source-A luma-band histogram
+sidecar (currently recomputed per frame), spatial-frequency (multiband) routing,
+and the reverse/cross-clip look exploration. The next new effect is **Spectral
+Audio Cross-Synthesis** (RMS/centroid filter path).
 
 ## Candidate next steps
 
