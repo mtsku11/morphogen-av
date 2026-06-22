@@ -7,9 +7,11 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use image::{ImageBuffer, ImageReader, Rgba};
 use morphogen_audio::{
-    load_wav_f32, onset_strength_from_stft, rms_envelope, save_wav_f32,
-    spectral_centroid_from_magnitudes, stft_magnitude_cache, AudioAnalysisCache, AudioBufferF32,
-    AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache, StftConfig, WindowFunction,
+    centroid_filter_cross_synth, load_wav_f32, onset_strength_from_stft, rms_envelope,
+    rms_gain_cross_synth, save_wav_f32, spectral_centroid_from_magnitudes, stft_magnitude_cache,
+    AudioAnalysisCache, AudioBufferF32, AudioDescriptorFrame, FilterType, OnsetStrengthCache,
+    StftAnalysisCache, StftConfig, WindowFunction, CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
+    RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 use morphogen_core::{
     AnalysisCacheEntry, AnalysisKind, ExportFormat, FlowSource, GrainSelectionMode,
@@ -110,6 +112,27 @@ enum Commands {
         window_size: usize,
         #[arg(long, default_value_t = 512)]
         hop_size: usize,
+    },
+    RenderSpectralCrossSynth {
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
+        mode: CliCrossSynthMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: usize,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: usize,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        stft_hop: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
     },
     RenderTest {
         output_path: PathBuf,
@@ -617,6 +640,29 @@ impl From<CliWindowFunction> for WindowFunction {
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliCrossSynthMode {
+    #[default]
+    Gain,
+    Filter,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliFilterType {
+    #[default]
+    Lowpass,
+    Highpass,
+}
+
+impl From<CliFilterType> for FilterType {
+    fn from(value: CliFilterType) -> Self {
+        match value {
+            CliFilterType::Lowpass => Self::Lowpass,
+            CliFilterType::Highpass => Self::Highpass,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
 enum CliRenderBackend {
     #[default]
     Cpu,
@@ -806,6 +852,33 @@ fn run() -> Result<(), CliError> {
             window_size,
             hop_size,
         } => cache_rms(&input_wav, &output_json, window_size, hop_size),
+        Commands::RenderSpectralCrossSynth {
+            modulator_wav,
+            carrier_wav,
+            output_wav,
+            mode,
+            amount,
+            filter_type,
+            rms_window,
+            rms_hop,
+            fft_size,
+            stft_hop,
+            window,
+        } => render_spectral_cross_synth(
+            &modulator_wav,
+            &carrier_wav,
+            &output_wav,
+            mode,
+            amount,
+            filter_type.into(),
+            rms_window,
+            rms_hop,
+            StftConfig {
+                fft_size,
+                hop_size: stft_hop,
+                window: window.into(),
+            },
+        ),
         Commands::RenderTest { output_path } => render_test(&output_path),
         Commands::MetalRenderTest { output_path } => metal_render_test(&output_path),
         Commands::RenderTwoSource {
@@ -1425,6 +1498,41 @@ fn export_audio_stem(input_wav: &Path, output_wav: &Path, gain: f32) -> Result<(
     println!(
         "exported WAV stem from {} to {}",
         input_wav.display(),
+        output_wav.display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_spectral_cross_synth(
+    modulator_wav: &Path,
+    carrier_wav: &Path,
+    output_wav: &Path,
+    mode: CliCrossSynthMode,
+    amount: f32,
+    filter_type: FilterType,
+    rms_window: usize,
+    rms_hop: usize,
+    stft_config: StftConfig,
+) -> Result<(), CliError> {
+    let modulator = load_wav_f32(modulator_wav)?;
+    let carrier = load_wav_f32(carrier_wav)?;
+    let (output, algorithm) = match mode {
+        CliCrossSynthMode::Gain => (
+            rms_gain_cross_synth(&modulator, &carrier, rms_window, rms_hop, amount)?,
+            RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+        ),
+        CliCrossSynthMode::Filter => (
+            centroid_filter_cross_synth(&modulator, &carrier, stft_config, filter_type, amount)?,
+            CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
+        ),
+    };
+
+    write_parent_dirs(output_wav)?;
+    save_wav_f32(output_wav, &output)?;
+    println!(
+        "rendered spectral cross-synth ({algorithm}) from carrier {} to {}",
+        carrier_wav.display(),
         output_wav.display()
     );
     Ok(())
