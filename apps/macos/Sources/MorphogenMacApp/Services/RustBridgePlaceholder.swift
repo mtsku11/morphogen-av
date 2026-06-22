@@ -778,6 +778,10 @@ enum RustBridgePlaceholder {
       request.backend.cliValue
     ]
 
+    if request.useColorKernels {
+      arguments.append("--kernel-mode")
+      arguments.append("color")
+    }
     if let maxFrames = request.maxFrames {
       arguments.append("--max-frames")
       arguments.append(String(maxFrames))
@@ -1466,6 +1470,7 @@ struct ConvolutionalBlendSequenceRenderQueueCommandRequest {
   let outputRootDirectoryURL: URL
   let kernelSize: Int
   let amount: Double
+  let useColorKernels: Bool
   let maxFrames: Int?
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?

@@ -466,6 +466,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
       kernelSize: 5,
       amount: 0.75,
+      useColorKernels: false,
       maxFrames: 24,
       backend: .metal,
       projectURL: nil
@@ -489,6 +490,29 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
     XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "24")
+    // Luma is the default; no kernel-mode flag is emitted.
+    XCTAssertFalse(arguments.contains("--kernel-mode"))
+  }
+
+  func testQueuedConvolutionalBlendArgumentsIncludeColourMode() throws {
+    let request = ConvolutionalBlendSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/conv-blend-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      kernelSize: 3,
+      amount: 1.0,
+      useColorKernels: true,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddConvolutionalBlendSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(Self.value(after: "--kernel-mode", in: arguments), "color")
   }
 
   func testQueuedConvolutionalBlendArgumentsRejectEvenKernel() {
@@ -499,6 +523,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
       kernelSize: 4, // even -> not centerable
       amount: 1.0,
+      useColorKernels: false,
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil

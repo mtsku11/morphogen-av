@@ -738,6 +738,9 @@ struct RenderPanelView: View {
             .help("0 = Source B passthrough; 1 = fully convolved.")
           }
 
+          Toggle("Colour kernels (per R/G/B)", isOn: $state.convBlendColorMode)
+            .help("Extract a separate kernel from each of Source A's R/G/B channels instead of one luma kernel.")
+
           Picker("Backend", selection: $state.convBlendBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
               Text(backend.rawValue).tag(backend)

@@ -118,6 +118,7 @@ final class AppState: ObservableObject {
   @Published var convBlendOutputURL: URL?
   @Published var convBlendKernelSize = 3
   @Published var convBlendAmount = 1.0
+  @Published var convBlendColorMode = false
   @Published var convBlendBackend: FeedbackRenderBackendOption = .cpu
   @Published var convBlendSummary = "No convolutional blend rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
@@ -1009,6 +1010,7 @@ final class AppState: ObservableObject {
       outputRootDirectoryURL: outputURL,
       kernelSize: convBlendKernelSize,
       amount: convBlendAmount,
+      useColorKernels: convBlendColorMode,
       maxFrames: nil,
       backend: convBlendBackend,
       projectURL: projectURL
