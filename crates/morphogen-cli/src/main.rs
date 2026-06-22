@@ -41,6 +41,7 @@ use morphogen_render::{
     FlowFeedbackStateDescriptor, FlowField, GrainColorDescriptor, GrainDescriptor, GrainPool,
     GrainSelection, GranularMosaicSettings, ImageBufferF32, PoolSelectionWindow, RenderError,
     RmsDisplacementEnvelope, StructureMode, uniform_displacement_field,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
     FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM,
     LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
@@ -623,6 +624,30 @@ enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    QueueAddAudioVideoRouteSequence {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, default_value_t = 8.0)]
+        shift_x: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_y: f32,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: u32,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: u32,
+        #[arg(long, default_value_t = 30.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
     QueueRunTest {
         queue_path: PathBuf,
         output_dir: PathBuf,
@@ -645,6 +670,9 @@ enum Commands {
         queue_path: PathBuf,
     },
     QueueRunSpectralCrossSynth {
+        queue_path: PathBuf,
+    },
+    QueueRunAudioVideoRouteSequence {
         queue_path: PathBuf,
     },
     QueueCancel {
@@ -1499,6 +1527,35 @@ fn run() -> Result<(), CliError> {
             window: window.into(),
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddAudioVideoRouteSequence {
+            queue_path,
+            modulator_wav,
+            carrier_dir,
+            output_root_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            frame_rate,
+            max_frames,
+            project_path,
+            backend,
+        } => queue_add_audio_video_route_sequence(QueueAddAudioVideoRouteSequenceRequest {
+            queue_path: &queue_path,
+            modulator_wav: &modulator_wav,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            frame_rate,
+            max_frames,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
         Commands::QueueRunTest {
             queue_path,
             output_dir,
@@ -1519,6 +1576,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunSpectralCrossSynth { queue_path } => {
             queue_run_spectral_cross_synth(&queue_path)
+        }
+        Commands::QueueRunAudioVideoRouteSequence { queue_path } => {
+            queue_run_audio_video_route_sequence(&queue_path)
         }
         Commands::QueueCancel { queue_path, job_id } => queue_cancel(&queue_path, &job_id),
         Commands::QueueInspect { queue_path } => queue_inspect(&queue_path),
@@ -5803,6 +5863,264 @@ fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), CliError> {
     }
 }
 
+struct QueueAddAudioVideoRouteSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_wav: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    amount: f32,
+    shift_x: f32,
+    shift_y: f32,
+    rms_window: u32,
+    rms_hop: u32,
+    frame_rate: f64,
+    max_frames: Option<u32>,
+    project_path: Option<&'a Path>,
+    backend: RenderBackend,
+}
+
+fn queue_add_audio_video_route_sequence(
+    request: QueueAddAudioVideoRouteSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddAudioVideoRouteSequenceRequest {
+        queue_path,
+        modulator_wav,
+        carrier_dir,
+        output_root_dir,
+        amount,
+        shift_x,
+        shift_y,
+        rms_window,
+        rms_hop,
+        frame_rate,
+        max_frames,
+        project_path,
+        backend,
+    } = request;
+    if !amount.is_finite() || amount < 0.0 {
+        return Err(CliError::Message(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if !shift_x.is_finite() || !shift_y.is_finite() {
+        return Err(CliError::Message(
+            "shift-x and shift-y must be finite".to_string(),
+        ));
+    }
+    if rms_window == 0 || rms_hop == 0 {
+        return Err(CliError::Message(
+            "rms-window and rms-hop must be greater than zero".to_string(),
+        ));
+    }
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-audio".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_wav.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceAudioVideoRoute {
+            modulator_wav: modulator_wav.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            frame_rate,
+            max_frames,
+            backend,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued audio→video route render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+fn queue_run_audio_video_route_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceAudioVideoRoute { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running audio→video route jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::FrameSequenceAudioVideoRoute {
+        modulator_wav,
+        carrier_frame_directory,
+        output_directory,
+        amount,
+        shift_x,
+        shift_y,
+        rms_window,
+        rms_hop,
+        frame_rate,
+        max_frames,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not an audio→video route render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_audio_video_route_sequence(AudioVideoRouteSequenceRequest {
+            modulator_wav: Path::new(&modulator_wav),
+            carrier_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            fps: frame_rate,
+            backend,
+            max_frames: max_frames.map(|value| value as usize),
+        })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "frame_sequence_audio_video_route",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "audio_video_route": {
+                "algorithm": RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+                "amount": amount,
+                "shift_x": shift_x,
+                "shift_y": shift_y,
+                "rms_window": rms_window,
+                "rms_hop": rms_hop,
+                "backend": render_backend_label(backend)
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued audio→video route job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("audio→video route job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 struct QueueAddSpectralCrossSynthRequest<'a> {
     queue_path: &'a Path,
     modulator_wav: &'a Path,
@@ -6568,6 +6886,9 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 "frame_sequence_granular_mosaic_pool"
             }
             RenderJobTask::FrameSequenceVideoVocoder { .. } => "frame_sequence_video_vocoder",
+            RenderJobTask::FrameSequenceAudioVideoRoute { .. } => {
+                "frame_sequence_audio_video_route"
+            }
             RenderJobTask::AudioSpectralCrossSynth { .. } => "audio_spectral_cross_synth",
         };
         let provenance_summary = job

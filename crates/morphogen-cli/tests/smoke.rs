@@ -2122,6 +2122,109 @@ fn queue_spectral_cross_synth_matches_direct_and_records_knobs() {
     assert_eq!(knobs["rms_hop"], 4);
 }
 
+#[test]
+fn queue_audio_video_route_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_wav = temp_dir.path().join("modulator.wav");
+    // A loud modulator ⇒ full normalized gain ⇒ a non-trivial displacement.
+    write_test_wav(&modulator_wav, &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+
+    // Two carrier frames (render-test writes a 256x256 displaced gradient PNG).
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let frame_arg = carrier_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let modulator_arg = modulator_wav.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+
+    // Direct render.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-audio-video-route-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+            "--amount",
+            "1",
+            "--shift-x",
+            "8",
+            "--rms-window",
+            "4",
+            "--rms-hop",
+            "4",
+            "--fps",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    // Queue add + run (the queue uses --frame-rate where the direct uses --fps).
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-audio-video-route-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--amount",
+            "1",
+            "--shift-x",
+            "8",
+            "--rms-window",
+            "4",
+            "--rms-hop",
+            "4",
+            "--frame-rate",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-audio-video-route-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Every queued frame is byte-identical to the direct render (path-independent).
+    for frame in ["frame_000000.png", "frame_000001.png"] {
+        let queued = output_root.join("job-0001/frames").join(frame);
+        let direct = direct_dir.join(frame);
+        assert_eq!(
+            fs::read(&queued).expect("read queued frame"),
+            fs::read(&direct).expect("read direct frame"),
+            "queue render must be byte-identical to the direct render ({frame})"
+        );
+    }
+
+    // Manifest records the routing algorithm + knobs.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_audio_video_route");
+    let knobs = &manifest["audio_video_route"];
+    assert_eq!(knobs["algorithm"], "rms_displacement_route_cpu_v1");
+    assert_eq!(knobs["amount"], 1.0);
+    assert_eq!(knobs["shift_x"], 8.0);
+    assert_eq!(knobs["shift_y"], 0.0);
+    assert_eq!(knobs["rms_window"], 4);
+    assert_eq!(knobs["rms_hop"], 4);
+}
+
 fn write_test_wav(path: &Path, samples: &[f32]) {
     let spec = hound::WavSpec {
         channels: 1,

@@ -193,6 +193,32 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    /// Audio-to-video descriptor routing: Source A's peak-normalized RMS envelope
+    /// drives the per-frame displacement amount applied to Source B's frames via
+    /// the parity-gated flow displace. See `docs/AUDIO_VIDEO_ROUTE_MILESTONE.md`.
+    FrameSequenceAudioVideoRoute {
+        /// Source A audio (WAV); its RMS envelope is the modulator.
+        modulator_wav: String,
+        /// Source B video frames (PNG sequence) to displace.
+        carrier_frame_directory: String,
+        output_directory: String,
+        /// Global displacement scale; multiplies the normalized RMS gain
+        /// (`0` = Source B passthrough).
+        amount: f32,
+        /// Uniform displacement field x/y components in pixels at full amount.
+        shift_x: f32,
+        shift_y: f32,
+        /// RMS analysis window / hop (samples) for Source A.
+        rms_window: u32,
+        rms_hop: u32,
+        /// Output frame rate; maps frame index → time for the envelope lookup.
+        frame_rate: f64,
+        max_frames: Option<u32>,
+        /// Render backend; the displace Metal path is gated per-frame against the
+        /// CPU reference. Defaults to CPU so legacy jobs keep their meaning.
+        #[serde(default)]
+        backend: RenderBackend,
+    },
     /// Spectral audio cross-synthesis: Source A's analysis envelope shapes Source
     /// B's audio. `gain` scales B's amplitude by A's peak-normalized RMS envelope;
     /// `filter` sweeps a one-pole filter on B from A's spectral-centroid envelope.
@@ -669,6 +695,52 @@ mod tests {
             panic!("expected vocoder task");
         };
         assert_eq!(mode, VideoVocoderMode::Match);
+        assert_eq!(backend, RenderBackend::Cpu);
+    }
+
+    #[test]
+    fn audio_video_route_task_round_trips() {
+        let task = RenderJobTask::FrameSequenceAudioVideoRoute {
+            modulator_wav: "/tmp/a.wav".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            amount: 0.5,
+            shift_x: 8.0,
+            shift_y: -2.0,
+            rms_window: 2048,
+            rms_hop: 512,
+            frame_rate: 30.0,
+            max_frames: Some(48),
+            backend: RenderBackend::Metal,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize audio-route task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize audio-route task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn audio_video_route_task_defaults_backend_to_cpu() {
+        let json = r#"{
+            "type": "frame_sequence_audio_video_route",
+            "modulator_wav": "/tmp/a.wav",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "amount": 1.0,
+            "shift_x": 8.0,
+            "shift_y": 0.0,
+            "rms_window": 2048,
+            "rms_hop": 512,
+            "frame_rate": 30.0,
+            "max_frames": null
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize audio-route task");
+        let RenderJobTask::FrameSequenceAudioVideoRoute { backend, .. } = task else {
+            panic!("expected audio-route task");
+        };
         assert_eq!(backend, RenderBackend::Cpu);
     }
 
