@@ -516,6 +516,68 @@ struct RenderPanelView: View {
           }
         }
 
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Spectral Audio Cross-Synthesis")
+            .font(.subheadline.weight(.semibold))
+
+          Picker("Mode", selection: $state.crossSynthMode) {
+            ForEach(CrossSynthModeOption.allCases) { mode in
+              Text(mode.rawValue).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Gain: A's RMS envelope drives B's amplitude. Filter: A's spectral centroid sweeps a one-pole cutoff on B.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseCrossSynthModulatorWAV()
+            } label: {
+              Label("Source A WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseCrossSynthCarrierWAV()
+            } label: {
+              Label("Source B WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseCrossSynthOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.crossSynthAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.crossSynthAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = full shaping.")
+
+            Picker("Filter", selection: $state.crossSynthFilterType) {
+              ForEach(CrossSynthFilterTypeOption.allCases) { type in
+                Text(type.rawValue).tag(type)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 200)
+            .disabled(state.crossSynthMode == .gain)
+            .help("One-pole response (Filter mode only).")
+          }
+
+          Text(state.crossSynthSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runSpectralCrossSynthRender()
+          } label: {
+            Label("Run Cross-Synth", systemImage: "slider.horizontal.3")
+          }
+        }
+
         HStack {
           Button {
             state.checkProResExportPlan()

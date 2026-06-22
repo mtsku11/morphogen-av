@@ -247,6 +247,64 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedSpectralCrossSynthArgumentsIncludeModeAndAnalysisKnobs() throws {
+    let request = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cross-synth-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .filter,
+      amount: 0.75,
+      filterType: .highpass,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      fftSize: 1024,
+      stftHop: 256,
+      window: .hamming,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-spectral-cross-synth"]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/cross-synth-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(Self.value(after: "--mode", in: arguments), "filter")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
+    XCTAssertEqual(Self.value(after: "--filter-type", in: arguments), "highpass")
+    XCTAssertEqual(Self.value(after: "--rms-window", in: arguments), "2048")
+    XCTAssertEqual(Self.value(after: "--rms-hop", in: arguments), "512")
+    XCTAssertEqual(Self.value(after: "--fft-size", in: arguments), "1024")
+    XCTAssertEqual(Self.value(after: "--stft-hop", in: arguments), "256")
+    XCTAssertEqual(Self.value(after: "--window", in: arguments), "hamming")
+  }
+
+  func testQueuedSpectralCrossSynthArgumentsRejectInvalidValues() {
+    let base = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cross-synth-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .gain,
+      amount: 1.5, // out of [0, 1]
+      filterType: .lowpass,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      fftSize: 1000, // not a power of two
+      stftHop: 256,
+      window: .hann,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: base)
+    )
+  }
+
   func testQueuedGranularMosaicPoolSequenceArgumentsOmitAudioCachesWhenColorOnly() throws {
     let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),

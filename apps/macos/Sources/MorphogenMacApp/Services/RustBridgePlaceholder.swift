@@ -52,6 +52,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultSpectralCrossSynthRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-spectral-cross-synth-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -402,6 +408,96 @@ enum RustBridgePlaceholder {
       arguments.append("--max-frames")
       arguments.append(String(maxFrames))
     }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedSpectralCrossSynthRender(
+    request: SpectralCrossSynthRenderQueueCommandRequest
+  ) throws -> SpectralCrossSynthRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddSpectralCrossSynthArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-spectral-cross-synth",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return SpectralCrossSynthRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddSpectralCrossSynthArguments(
+    request: SpectralCrossSynthRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.amount.isFinite && request.amount >= 0 && request.amount <= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("amount must be finite and within [0, 1]")
+    }
+    guard request.rmsWindow > 0 && request.rmsHop > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "RMS window and hop must be greater than zero"
+      )
+    }
+    guard request.fftSize > 0 && (request.fftSize & (request.fftSize - 1)) == 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("FFT size must be a power of two")
+    }
+    guard request.stftHop > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("STFT hop must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-spectral-cross-synth",
+      request.queueURL.path,
+      request.modulatorWAVURL.path,
+      request.carrierWAVURL.path,
+      request.outputRootDirectoryURL.path,
+      "--mode",
+      request.mode.cliValue,
+      "--amount",
+      cliNumber(request.amount),
+      "--filter-type",
+      request.filterType.cliValue,
+      "--rms-window",
+      String(request.rmsWindow),
+      "--rms-hop",
+      String(request.rmsHop),
+      "--fft-size",
+      String(request.fftSize),
+      "--stft-hop",
+      String(request.stftHop),
+      "--window",
+      request.window.cliValue
+    ]
+
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -1010,6 +1106,28 @@ struct VideoVocoderSequenceRenderQueueCommandRequest {
 }
 
 struct VideoVocoderSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct SpectralCrossSynthRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorWAVURL: URL
+  let carrierWAVURL: URL
+  let outputRootDirectoryURL: URL
+  let mode: CrossSynthModeOption
+  let amount: Double
+  let filterType: CrossSynthFilterTypeOption
+  let rmsWindow: Int
+  let rmsHop: Int
+  let fftSize: Int
+  let stftHop: Int
+  let window: CrossSynthWindowOption
+  let projectURL: URL?
+}
+
+struct SpectralCrossSynthRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String
