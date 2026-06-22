@@ -40,7 +40,7 @@ use morphogen_render::{
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
     FlowFeedbackStateDescriptor, FlowField, GrainColorDescriptor, GrainDescriptor, GrainPool,
     GrainSelection, GranularMosaicSettings, ImageBufferF32, PoolSelectionWindow, RenderError,
-    StructureMode,
+    RmsDisplacementEnvelope, StructureMode, uniform_displacement_field,
     FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM,
     LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
@@ -232,6 +232,39 @@ enum Commands {
         amount: f32,
         #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
         mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
+    /// Render an audio-to-video descriptor-routing sequence: Source A's RMS
+    /// envelope (peak-normalized) drives the per-frame displacement amount
+    /// applied to Source B's frames via the parity-gated flow displace.
+    RenderAudioVideoRouteSequence {
+        /// Source A audio (WAV); its RMS envelope is the modulator.
+        modulator_wav: PathBuf,
+        /// Source B video frames (PNG sequence) to displace.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Global displacement scale; multiplies the normalized RMS gain
+        /// (0 = passthrough, the loudest A frame reaches this amount).
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Uniform displacement field x-component in pixels at full amount.
+        #[arg(long, default_value_t = 8.0)]
+        shift_x: f32,
+        /// Uniform displacement field y-component in pixels at full amount.
+        #[arg(long, default_value_t = 0.0)]
+        shift_y: f32,
+        /// RMS analysis window (samples) for Source A.
+        #[arg(long, default_value_t = 2048)]
+        rms_window: u32,
+        /// RMS analysis hop (samples) for Source A.
+        #[arg(long, default_value_t = 512)]
+        rms_hop: u32,
+        /// Output frame rate; maps frame index → time for the envelope lookup.
+        #[arg(long, default_value_t = 30.0)]
+        fps: f64,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -1070,6 +1103,32 @@ fn run() -> Result<(), CliError> {
             backend.into(),
             max_frames,
         )
+        .map(|_| ()),
+        Commands::RenderAudioVideoRouteSequence {
+            modulator_wav,
+            carrier_dir,
+            output_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            fps,
+            backend,
+            max_frames,
+        } => render_audio_video_route_sequence(AudioVideoRouteSequenceRequest {
+            modulator_wav: &modulator_wav,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            amount,
+            shift_x,
+            shift_y,
+            rms_window,
+            rms_hop,
+            fps,
+            backend: backend.into(),
+            max_frames,
+        })
         .map(|_| ()),
         Commands::RenderGranularMosaicPoolSequence {
             modulator_dir,
@@ -2114,6 +2173,137 @@ fn render_video_vocoder_sequence(
         output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+struct AudioVideoRouteSequenceRequest<'a> {
+    modulator_wav: &'a Path,
+    carrier_dir: &'a Path,
+    output_dir: &'a Path,
+    amount: f32,
+    shift_x: f32,
+    shift_y: f32,
+    rms_window: u32,
+    rms_hop: u32,
+    fps: f64,
+    backend: RenderBackend,
+    max_frames: Option<usize>,
+}
+
+fn render_audio_video_route_sequence(
+    request: AudioVideoRouteSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    if !request.amount.is_finite() || request.amount < 0.0 {
+        return Err(CliError::Message(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.shift_x.is_finite() || !request.shift_y.is_finite() {
+        return Err(CliError::Message(
+            "shift-x and shift-y must be finite".to_string(),
+        ));
+    }
+    if !request.fps.is_finite() || request.fps <= 0.0 {
+        return Err(CliError::Message(
+            "fps must be a finite value greater than zero".to_string(),
+        ));
+    }
+    if matches!(request.max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let buffer = load_wav_f32(request.modulator_wav)?;
+    let rms_frames = rms_envelope(&buffer, request.rms_window as usize, request.rms_hop as usize)?;
+    let samples: Vec<(f64, f32)> = rms_frames
+        .iter()
+        .map(|frame| (frame.time_seconds, frame.rms))
+        .collect();
+    let envelope = RmsDisplacementEnvelope::from_rms_samples(&samples);
+
+    let carrier_frames = collect_image_frames(request.carrier_dir)?;
+    if carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "audio-to-video routing requires at least one PNG frame in the carrier directory"
+                .to_string(),
+        ));
+    }
+    let frame_count = request
+        .max_frames
+        .map(|limit| limit.min(carrier_frames.len()))
+        .unwrap_or(carrier_frames.len());
+    fs::create_dir_all(request.output_dir)?;
+
+    for (index, carrier_path) in carrier_frames.iter().enumerate().take(frame_count) {
+        let carrier = load_image_f32(carrier_path)?;
+        let field =
+            uniform_displacement_field(carrier.width, carrier.height, request.shift_x, request.shift_y)?;
+        let time_seconds = index as f64 / request.fps;
+        let amount = request.amount * envelope.gain_at(time_seconds);
+        let rendered = render_audio_video_route_frame(&carrier, &field, amount, request.backend)?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    println!(
+        "rendered audio→video route sequence with {} frame(s) (amount {}, shift [{}, {}], {:?}) from {} modulating {} to {}",
+        frame_count,
+        request.amount,
+        request.shift_x,
+        request.shift_y,
+        request.backend,
+        request.modulator_wav.display(),
+        request.carrier_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+fn render_audio_video_route_frame(
+    carrier: &ImageBufferF32,
+    field: &FlowField,
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(flow_displace_cpu(carrier, field, amount)?),
+        RenderBackend::Metal => render_audio_video_route_frame_metal(carrier, field, amount),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_audio_video_route_frame_metal(
+    carrier: &ImageBufferF32,
+    field: &FlowField,
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::flow_displace_metal(carrier, field, amount)?;
+    let cpu = flow_displace_cpu(carrier, field, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU displace outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal audio-route render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_audio_video_route_frame_metal(
+    _carrier: &ImageBufferF32,
+    _field: &FlowField,
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 fn granular_audio_modulation_from_cli(
