@@ -29,7 +29,8 @@ use morphogen_render::{
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
-    select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, TemporalCoherence,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, video_vocoder_cpu,
+    analyze_luma_band_envelope_cpu, AntiRepeat, TemporalCoherence, VideoVocoderSettings,
     write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
@@ -178,6 +179,31 @@ enum Commands {
         backend: CliRenderBackend,
         #[arg(long, value_enum, default_value_t = CliGrainSelection::Luma)]
         selection: CliGrainSelection,
+    },
+    /// Render a still video-vocoder frame: Source A's luma histogram becomes a
+    /// per-band gain envelope reweighting Source B's tonal bands (luma-band gain
+    /// routing). `--amount 0` is an exact Source B passthrough.
+    RenderVideoVocoder {
+        modulator_image: PathBuf,
+        carrier_image: PathBuf,
+        output_path: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+    },
+    /// Render a video-vocoder PNG-frame sequence (per-frame luma-band gain
+    /// routing). Source A's per-frame luma envelope reweights Source B's bands.
+    RenderVideoVocoderSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_frames: Option<usize>,
     },
     /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
     /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's
@@ -803,6 +829,33 @@ fn run() -> Result<(), CliError> {
             ),
             selection_mode: selection.into(),
         })
+        .map(|_| ()),
+        Commands::RenderVideoVocoder {
+            modulator_image,
+            carrier_image,
+            output_path,
+            bands,
+            amount,
+        } => render_video_vocoder(
+            &modulator_image,
+            &carrier_image,
+            &output_path,
+            VideoVocoderSettings { bands, amount },
+        ),
+        Commands::RenderVideoVocoderSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            bands,
+            amount,
+            max_frames,
+        } => render_video_vocoder_sequence(
+            &modulator_dir,
+            &carrier_dir,
+            &output_dir,
+            VideoVocoderSettings { bands, amount },
+            max_frames,
+        )
         .map(|_| ()),
         Commands::RenderGranularMosaicPoolSequence {
             modulator_dir,
@@ -1636,6 +1689,89 @@ fn render_granular_mosaic(
         output_path.display()
     );
     Ok(())
+}
+
+fn render_video_vocoder(
+    modulator_image: &Path,
+    carrier_image: &Path,
+    output_path: &Path,
+    settings: VideoVocoderSettings,
+) -> Result<(), CliError> {
+    settings.validate()?;
+    let modulator = load_image_f32(modulator_image)?;
+    let carrier = load_image_f32(carrier_image)?;
+    let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
+    let rendered = video_vocoder_cpu(&carrier, &envelope, settings)?;
+
+    write_parent_dirs(output_path)?;
+    save_png(&rendered, output_path)?;
+    println!(
+        "rendered video vocoder ({} bands, amount {}) from {} modulating {} to {}",
+        settings.bands,
+        settings.amount,
+        modulator_image.display(),
+        carrier_image.display(),
+        output_path.display()
+    );
+    Ok(())
+}
+
+fn render_video_vocoder_sequence(
+    modulator_dir: &Path,
+    carrier_dir: &Path,
+    output_dir: &Path,
+    settings: VideoVocoderSettings,
+    max_frames: Option<usize>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    settings.validate()?;
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(modulator_dir)?;
+    let carrier_frames = collect_image_frames(carrier_dir)?;
+    if modulator_frames.is_empty() || carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "video vocoder requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    let paired_count = modulator_frames.len().min(carrier_frames.len());
+    let frame_count = max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    fs::create_dir_all(output_dir)?;
+
+    for index in 0..frame_count {
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let carrier = load_image_f32(&carrier_frames[index])?;
+        let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
+        let rendered = video_vocoder_cpu(&carrier, &envelope, settings)?;
+        save_png(
+            &rendered,
+            &output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if modulator_frames.len() != carrier_frames.len() {
+        println!(
+            "source frame counts differ: {} modulator frame(s), {} carrier frame(s); rendered common prefix",
+            modulator_frames.len(),
+            carrier_frames.len()
+        );
+    }
+    println!(
+        "rendered video vocoder sequence with {} frame(s) ({} bands, amount {}) from {} modulating {} to {}",
+        frame_count,
+        settings.bands,
+        settings.amount,
+        modulator_dir.display(),
+        carrier_dir.display(),
+        output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
 }
 
 fn granular_audio_modulation_from_cli(
