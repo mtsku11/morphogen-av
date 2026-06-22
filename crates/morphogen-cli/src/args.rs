@@ -1,0 +1,1077 @@
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand, ValueEnum};
+use morphogen_audio::{
+    ConvolutionMethod as AudioConvolutionMethod, FilterType, IrMode as AudioIrMode, WindowFunction,
+    IMPULSE_CONVOLUTION_BLEND_ALGORITHM, PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+};
+use morphogen_core::{
+    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
+    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoVocoderMode,
+};
+use morphogen_render::{
+    StructureMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
+    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+};
+#[derive(Debug, Parser)]
+#[command(name = "morphogen")]
+#[command(about = "Morphogen AV engine validation CLI")]
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    pub(crate) command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum Commands {
+    InitExample {
+        output_path: PathBuf,
+    },
+    Probe {
+        media_path: PathBuf,
+    },
+    ExtractFrames {
+        input: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 12.0)]
+        fps: f64,
+        #[arg(long)]
+        max_frames: Option<u32>,
+    },
+    ExtractAudio {
+        input: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, default_value_t = 48_000)]
+        sample_rate: u32,
+        #[arg(long)]
+        max_duration_seconds: Option<f64>,
+    },
+    ExportAudioStem {
+        input_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        gain: f32,
+    },
+    CacheStft {
+        input_wav: PathBuf,
+        output_json: PathBuf,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        hop_size: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
+    },
+    CacheOnsets {
+        input_wav: PathBuf,
+        output_json: PathBuf,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        hop_size: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
+    },
+    CacheRms {
+        input_wav: PathBuf,
+        output_json: PathBuf,
+        #[arg(long, default_value_t = 2048)]
+        window_size: usize,
+        #[arg(long, default_value_t = 512)]
+        hop_size: usize,
+    },
+    RenderSpectralCrossSynth {
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
+        mode: CliCrossSynthMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: usize,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: usize,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        stft_hop: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
+    },
+    /// Convolve carrier audio (Source B) with Source A's impulse response.
+    RenderAudioImpulseConvolution {
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_impulse_samples: Option<usize>,
+        #[arg(long, value_enum, default_value_t = CliConvolutionMethod::Direct)]
+        method: CliConvolutionMethod,
+        #[arg(long)]
+        resample_impulse: bool,
+        /// IR channel mapping: `mono` (one downmix IR) or `per-channel`
+        /// (true-stereo, one IR per Source A channel).
+        #[arg(long, value_enum, default_value_t = CliIrMode::Mono)]
+        ir_mode: CliIrMode,
+    },
+    RenderTest {
+        output_path: PathBuf,
+    },
+    MetalRenderTest {
+        output_path: PathBuf,
+    },
+    RenderTwoSource {
+        modulator_image: PathBuf,
+        carrier_image: PathBuf,
+        output_path: PathBuf,
+        #[arg(long, default_value_t = 16.0)]
+        amount: f32,
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
+    },
+    RenderGranularMosaic {
+        modulator_image: PathBuf,
+        carrier_image: PathBuf,
+        output_path: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        grain_cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long, value_enum, default_value_t = CliGrainSelection::Luma)]
+        selection: CliGrainSelection,
+    },
+    RenderGranularMosaicSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        rms_cache: Option<PathBuf>,
+        #[arg(long)]
+        onset_cache: Option<PathBuf>,
+        #[arg(long)]
+        stft_cache: Option<PathBuf>,
+        #[arg(long, default_value_t = 0.0)]
+        rms_variation_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        onset_rearrangement_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        centroid_grain_size_scale: f32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        max_frames: Option<usize>,
+        #[arg(long)]
+        grain_cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long, value_enum, default_value_t = CliGrainSelection::Luma)]
+        selection: CliGrainSelection,
+    },
+    /// Render a still video-vocoder frame: Source A's luma histogram becomes a
+    /// per-band gain envelope reweighting Source B's tonal bands (luma-band gain
+    /// routing). `--amount 0` is an exact Source B passthrough.
+    RenderVideoVocoder {
+        modulator_image: PathBuf,
+        carrier_image: PathBuf,
+        output_path: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    /// Render a video-vocoder PNG-frame sequence (per-frame luma-band gain
+    /// routing). Source A's per-frame luma envelope reweights Source B's bands.
+    RenderVideoVocoderSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
+    /// Render an audio-to-video descriptor-routing sequence: Source A's RMS
+    /// envelope (peak-normalized) drives the per-frame displacement amount
+    /// applied to Source B's frames via the parity-gated flow displace.
+    RenderAudioVideoRouteSequence {
+        /// Source A audio (WAV); its RMS envelope is the modulator.
+        modulator_wav: PathBuf,
+        /// Source B video frames (PNG sequence) to displace.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Global displacement scale; multiplies the normalized RMS gain
+        /// (0 = passthrough, the loudest A frame reaches this amount).
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Uniform displacement field x-component in pixels at full amount.
+        #[arg(long, default_value_t = 8.0)]
+        shift_x: f32,
+        /// Uniform displacement field y-component in pixels at full amount.
+        #[arg(long, default_value_t = 0.0)]
+        shift_y: f32,
+        /// RMS analysis window (samples) for Source A.
+        #[arg(long, default_value_t = 2048)]
+        rms_window: u32,
+        /// RMS analysis hop (samples) for Source A.
+        #[arg(long, default_value_t = 512)]
+        rms_hop: u32,
+        /// Output frame rate; maps frame index → time for the envelope lookup.
+        #[arg(long, default_value_t = 30.0)]
+        fps: f64,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
+    /// Render a convolutional AV blend sequence: each Source A frame supplies a
+    /// normalized KxK luma kernel that Source B's matching frame is convolved
+    /// with (parity-gated). `--amount 0` is an exact Source B passthrough.
+    RenderConvolutionalBlendSequence {
+        /// Source A video frames (PNG sequence); each supplies the kernel.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence) to convolve.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Kernel edge length (odd, >= 1); larger spreads the blend wider.
+        #[arg(long, default_value_t = 3)]
+        kernel_size: u32,
+        /// Wet/dry blend (0 = passthrough, 1 = fully convolved).
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Kernel extraction: `luma` (one luminance kernel for all channels) or
+        /// `color` (a separate kernel per R/G/B channel of Source A).
+        #[arg(long, value_enum, default_value_t = CliKernelMode::Luma)]
+        kernel_mode: CliKernelMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
+    /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
+    /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's
+    /// frame-time audio, making audio a real selection dimension.
+    RenderGranularMosaicPoolSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Scales every audio dimension in the selection distance.
+        #[arg(long, default_value_t = 1.0)]
+        audio_weight: f32,
+        /// Scales both texture dimensions (luma variance + gradient magnitude) in
+        /// the selection distance, so Source A's per-tile spatial busyness matches
+        /// carrier grains of similar structure (0 = off, the default).
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
+        /// RMS cache for Source A; supplies the per-output-frame query audio.
+        #[arg(long)]
+        modulator_rms_cache: Option<PathBuf>,
+        /// RMS cache for Source B; supplies each pool grain's carrier audio.
+        #[arg(long)]
+        carrier_rms_cache: Option<PathBuf>,
+        /// STFT cache for Source A; appends a spectral-centroid query dimension.
+        #[arg(long)]
+        modulator_centroid_cache: Option<PathBuf>,
+        /// STFT cache for Source B; appends a spectral-centroid dimension to each pool grain.
+        #[arg(long)]
+        carrier_centroid_cache: Option<PathBuf>,
+        /// Trailing pool window in frames: each output frame may only draw grains
+        /// from the last N carrier frames (0 = whole-clip, the default).
+        #[arg(long, default_value_t = 0)]
+        pool_window: u32,
+        /// Anti-repeat penalty added to the squared feature distance of grains
+        /// used in recent output frames (0 = off, the default). Pushes temporal
+        /// diversity so the mosaic keeps finding fresh material.
+        #[arg(long, default_value_t = 0.0)]
+        anti_repeat_weight: f32,
+        /// Number of frames a selected grain stays penalized (penalty decays
+        /// linearly to zero). Only matters when --anti-repeat-weight > 0.
+        #[arg(long, default_value_t = 8)]
+        anti_repeat_cooldown: u32,
+        /// Temporal-coherence reward (the smooth-motion complement to anti-repeat):
+        /// penalty added to the squared feature distance of grains whose source
+        /// frame is far from each tile's previous pick (0 = off, the default).
+        /// Keeps each tile's source frame drifting smoothly instead of jumping.
+        #[arg(long, default_value_t = 0.0)]
+        coherence_weight: f32,
+        /// Frame distance over which the coherence penalty saturates (penalty grows
+        /// linearly to the weight). Only matters when --coherence-weight > 0.
+        #[arg(long, default_value_t = 8)]
+        coherence_reach: u32,
+        /// Spatial-origin coherence reward: penalty added to the squared feature
+        /// distance of grains whose origin is far (in grain-tile units) from each
+        /// tile's previous pick (0 = off, the default). Shares --coherence-reach as
+        /// its saturation distance; keeps a tile's pick from teleporting across the
+        /// frame even when it stays on a nearby source frame.
+        #[arg(long, default_value_t = 0.0)]
+        spatial_coherence_weight: f32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        max_frames: Option<usize>,
+        #[arg(long)]
+        grain_cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    RenderFrameSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 16.0)]
+        amount: f32,
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
+        #[arg(long)]
+        max_frames: Option<usize>,
+        #[arg(long)]
+        rms_modulator_wav: Option<PathBuf>,
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 2048)]
+        rms_window_size: usize,
+        #[arg(long, default_value_t = 512)]
+        rms_hop_size: usize,
+        #[arg(long, default_value_t = 16.0)]
+        rms_amount_scale: f32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    RenderFeedbackSequence {
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 12.0)]
+        carrier_amount: f32,
+        #[arg(long, default_value_t = 24.0)]
+        feedback_amount: f32,
+        #[arg(long, default_value_t = 0.72)]
+        feedback_mix: f32,
+        #[arg(long, default_value_t = 0.995)]
+        decay: f32,
+        #[arg(long, default_value_t = 1)]
+        iterations: u32,
+        #[arg(long, default_value_t = 0.0)]
+        structure_mix: f32,
+        #[arg(long, value_enum, default_value_t = CliStructureMode::SingleScale)]
+        structure_mode: CliStructureMode,
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
+        #[arg(long, default_value_t = 1)]
+        temporal_supersampling: u32,
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
+        #[arg(long)]
+        max_frames: Option<usize>,
+        #[arg(long)]
+        reset_at_frame: Option<usize>,
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long, value_enum, default_value_t = CliFlowSource::OpticalFlow)]
+        flow_source: CliFlowSource,
+        #[arg(long)]
+        stop_after_frame: bool,
+    },
+    CacheSyntheticFlow {
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 64)]
+        width: u32,
+        #[arg(long, default_value_t = 64)]
+        height: u32,
+    },
+    CacheLuminanceFlow {
+        modulator_image: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+    },
+    QueueInit {
+        queue_path: PathBuf,
+    },
+    QueueAddTest {
+        queue_path: PathBuf,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddFrameSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 16.0)]
+        amount: f32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        no_flow_cache: bool,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddFeedbackSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 12.0)]
+        carrier_amount: f32,
+        #[arg(long, default_value_t = 24.0)]
+        feedback_amount: f32,
+        #[arg(long, default_value_t = 0.72)]
+        feedback_mix: f32,
+        #[arg(long, default_value_t = 0.995)]
+        decay: f32,
+        #[arg(long, default_value_t = 1)]
+        iterations: u32,
+        #[arg(long, default_value_t = 0.0)]
+        structure_mix: f32,
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
+        #[arg(long, default_value_t = 1)]
+        temporal_supersampling: u32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        reset_at_frame: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        no_flow_cache: bool,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long, value_enum, default_value_t = CliFlowSource::OpticalFlow)]
+        flow_source: CliFlowSource,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddGranularMosaicSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        rms_cache: Option<PathBuf>,
+        #[arg(long)]
+        onset_cache: Option<PathBuf>,
+        #[arg(long)]
+        stft_cache: Option<PathBuf>,
+        #[arg(long, default_value_t = 0.0)]
+        rms_variation_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        onset_rearrangement_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        centroid_grain_size_scale: f32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        no_grain_cache: bool,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long, value_enum, default_value_t = CliGrainSelection::Luma)]
+        selection: CliGrainSelection,
+    },
+    /// Persist a step-6b temporal-grain-pool (joint-AV) granular job to the queue.
+    QueueAddGranularMosaicPoolSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 32)]
+        grain_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        rearrangement: f32,
+        #[arg(long, default_value_t = 0.25)]
+        variation: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long, default_value_t = 1.0)]
+        audio_weight: f32,
+        /// Scales both texture dims (luma variance + gradient magnitude); 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
+        #[arg(long)]
+        modulator_rms_cache: Option<PathBuf>,
+        #[arg(long)]
+        carrier_rms_cache: Option<PathBuf>,
+        /// STFT cache for Source A; appends a spectral-centroid query dimension.
+        #[arg(long)]
+        modulator_centroid_cache: Option<PathBuf>,
+        /// STFT cache for Source B; appends a spectral-centroid dimension to each pool grain.
+        #[arg(long)]
+        carrier_centroid_cache: Option<PathBuf>,
+        /// Trailing pool window in frames (0 = whole-clip, the default).
+        #[arg(long, default_value_t = 0)]
+        pool_window: u32,
+        /// Anti-repeat penalty for grains used in recent output frames (0 = off).
+        #[arg(long, default_value_t = 0.0)]
+        anti_repeat_weight: f32,
+        /// Frames a selected grain stays penalized. Only matters when weight > 0.
+        #[arg(long, default_value_t = 8)]
+        anti_repeat_cooldown: u32,
+        /// Temporal-coherence reward for source-frame continuity (0 = off).
+        #[arg(long, default_value_t = 0.0)]
+        coherence_weight: f32,
+        /// Frame distance over which the coherence penalty saturates. Only matters when weight > 0.
+        #[arg(long, default_value_t = 8)]
+        coherence_reach: u32,
+        /// Spatial-origin coherence reward for grain-origin continuity within a
+        /// frame (0 = off). Shares --coherence-reach as its saturation distance.
+        #[arg(long, default_value_t = 0.0)]
+        spatial_coherence_weight: f32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        no_grain_cache: bool,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    /// Enqueue a video-vocoder PNG-frame sequence job (luma-band tonal routing).
+    QueueAddVideoVocoderSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        bands: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
+        mode: CliVocoderMode,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueAddSpectralCrossSynth {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
+        mode: CliCrossSynthMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: usize,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: usize,
+        #[arg(long, default_value_t = 1024)]
+        fft_size: usize,
+        #[arg(long, default_value_t = 256)]
+        stft_hop: usize,
+        #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
+        window: CliWindowFunction,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddAudioImpulseConvolution {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_wav: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_impulse_samples: Option<u32>,
+        #[arg(long, value_enum, default_value_t = CliConvolutionMethod::Direct)]
+        method: CliConvolutionMethod,
+        #[arg(long)]
+        resample_impulse: bool,
+        /// IR channel mapping: `mono` or `per-channel` (true-stereo).
+        #[arg(long, value_enum, default_value_t = CliIrMode::Mono)]
+        ir_mode: CliIrMode,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddAudioVideoRouteSequence {
+        queue_path: PathBuf,
+        modulator_wav: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, default_value_t = 8.0)]
+        shift_x: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_y: f32,
+        #[arg(long, default_value_t = 2048)]
+        rms_window: u32,
+        #[arg(long, default_value_t = 512)]
+        rms_hop: u32,
+        #[arg(long, default_value_t = 30.0)]
+        frame_rate: f64,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueAddConvolutionalBlendSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        kernel_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Kernel extraction: `luma` (one luminance kernel) or `color` (per R/G/B).
+        #[arg(long, value_enum, default_value_t = CliKernelMode::Luma)]
+        kernel_mode: CliKernelMode,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueRunConvolutionalBlendSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunTest {
+        queue_path: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long)]
+        stop_after_frame: bool,
+    },
+    QueueRunFrameSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunFeedbackSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunGranularMosaicSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunGranularMosaicPoolSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunVideoVocoderSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunSpectralCrossSynth {
+        queue_path: PathBuf,
+    },
+    QueueRunAudioImpulseConvolution {
+        queue_path: PathBuf,
+    },
+    QueueRunAudioVideoRouteSequence {
+        queue_path: PathBuf,
+    },
+    QueueCancel {
+        queue_path: PathBuf,
+        job_id: String,
+    },
+    QueueInspect {
+        queue_path: PathBuf,
+    },
+    InspectProject {
+        project_path: PathBuf,
+    },
+    ProjectRegisterProxy {
+        project_path: PathBuf,
+        #[arg(
+            long,
+            conflicts_with = "source_role",
+            required_unless_present = "source_role"
+        )]
+        source_id: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            conflicts_with = "source_id",
+            required_unless_present = "source_id"
+        )]
+        source_role: Option<CliSourceRole>,
+        #[arg(long)]
+        frame_dir: PathBuf,
+        #[arg(long)]
+        audio: Option<PathBuf>,
+        /// Analysis-cache reference to record, as `kind=path` (repeatable). Kind is the
+        /// snake_case analysis name, e.g. `audio_rms=cache/source-a/rms.json`.
+        #[arg(long = "analysis-cache")]
+        analysis_cache: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum CliWindowFunction {
+    Hann,
+    Hamming,
+    Rectangular,
+}
+
+impl From<CliWindowFunction> for WindowFunction {
+    fn from(value: CliWindowFunction) -> Self {
+        match value {
+            CliWindowFunction::Hann => Self::Hann,
+            CliWindowFunction::Hamming => Self::Hamming,
+            CliWindowFunction::Rectangular => Self::Rectangular,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliCrossSynthMode {
+    #[default]
+    Gain,
+    Filter,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliFilterType {
+    #[default]
+    Lowpass,
+    Highpass,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliConvolutionMethod {
+    #[default]
+    Direct,
+    Fft,
+}
+
+impl From<CliConvolutionMethod> for AudioConvolutionMethod {
+    fn from(value: CliConvolutionMethod) -> Self {
+        match value {
+            CliConvolutionMethod::Direct => Self::Direct,
+            CliConvolutionMethod::Fft => Self::Fft,
+        }
+    }
+}
+
+impl From<CliConvolutionMethod> for ConvolutionMethod {
+    fn from(value: CliConvolutionMethod) -> Self {
+        match value {
+            CliConvolutionMethod::Direct => Self::Direct,
+            CliConvolutionMethod::Fft => Self::Fft,
+        }
+    }
+}
+
+/// Map a persisted core convolution method onto the audio-crate enum.
+pub(crate) fn audio_convolution_method(method: ConvolutionMethod) -> AudioConvolutionMethod {
+    match method {
+        ConvolutionMethod::Direct => AudioConvolutionMethod::Direct,
+        ConvolutionMethod::Fft => AudioConvolutionMethod::Fft,
+    }
+}
+
+/// Manifest string for a persisted convolution method.
+pub(crate) fn convolution_method_label(method: ConvolutionMethod) -> &'static str {
+    match method {
+        ConvolutionMethod::Direct => "direct",
+        ConvolutionMethod::Fft => "fft",
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliKernelMode {
+    #[default]
+    Luma,
+    Color,
+}
+
+impl From<CliKernelMode> for KernelMode {
+    fn from(value: CliKernelMode) -> Self {
+        match value {
+            CliKernelMode::Luma => Self::Luma,
+            CliKernelMode::Color => Self::Color,
+        }
+    }
+}
+
+/// Manifest string + algorithm id for a persisted convolution-blend kernel mode.
+pub(crate) fn kernel_mode_label(mode: KernelMode) -> &'static str {
+    match mode {
+        KernelMode::Luma => "luma",
+        KernelMode::Color => "color",
+    }
+}
+
+pub(crate) fn convolution_blend_algorithm(mode: KernelMode) -> &'static str {
+    match mode {
+        KernelMode::Luma => CONVOLUTION_BLEND_ALGORITHM,
+        KernelMode::Color => CONVOLUTION_BLEND_COLOR_ALGORITHM,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliIrMode {
+    #[default]
+    Mono,
+    PerChannel,
+}
+
+impl From<CliIrMode> for IrMode {
+    fn from(value: CliIrMode) -> Self {
+        match value {
+            CliIrMode::Mono => Self::Mono,
+            CliIrMode::PerChannel => Self::PerChannel,
+        }
+    }
+}
+
+/// Map a persisted core IR mode onto the audio-crate enum (orphan rule: both
+/// foreign to this crate, so a free helper rather than `From`).
+pub(crate) fn audio_ir_mode(mode: IrMode) -> AudioIrMode {
+    match mode {
+        IrMode::Mono => AudioIrMode::Mono,
+        IrMode::PerChannel => AudioIrMode::PerChannel,
+    }
+}
+
+/// Manifest string for a persisted IR mode.
+pub(crate) fn ir_mode_label(mode: IrMode) -> &'static str {
+    match mode {
+        IrMode::Mono => "mono",
+        IrMode::PerChannel => "per_channel",
+    }
+}
+
+/// Algorithm id for a persisted IR mode.
+pub(crate) fn impulse_convolution_algorithm(mode: IrMode) -> &'static str {
+    match mode {
+        IrMode::Mono => IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+        IrMode::PerChannel => PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+    }
+}
+
+impl From<CliFilterType> for FilterType {
+    fn from(value: CliFilterType) -> Self {
+        match value {
+            CliFilterType::Lowpass => Self::Lowpass,
+            CliFilterType::Highpass => Self::Highpass,
+        }
+    }
+}
+
+impl From<CliCrossSynthMode> for CrossSynthMode {
+    fn from(value: CliCrossSynthMode) -> Self {
+        match value {
+            CliCrossSynthMode::Gain => Self::Gain,
+            CliCrossSynthMode::Filter => Self::Filter,
+        }
+    }
+}
+
+impl From<CliFilterType> for CrossSynthFilterType {
+    fn from(value: CliFilterType) -> Self {
+        match value {
+            CliFilterType::Lowpass => Self::Lowpass,
+            CliFilterType::Highpass => Self::Highpass,
+        }
+    }
+}
+
+impl From<CliWindowFunction> for CrossSynthWindow {
+    fn from(value: CliWindowFunction) -> Self {
+        match value {
+            CliWindowFunction::Hann => Self::Hann,
+            CliWindowFunction::Hamming => Self::Hamming,
+            CliWindowFunction::Rectangular => Self::Rectangular,
+        }
+    }
+}
+
+// Core ↔ audio enums are both foreign to this crate, so the orphan rule forbids
+// `From` impls; free helpers convert a persisted job's analysis knobs at run time.
+pub(crate) fn cross_synth_filter_type(value: CrossSynthFilterType) -> FilterType {
+    match value {
+        CrossSynthFilterType::Lowpass => FilterType::Lowpass,
+        CrossSynthFilterType::Highpass => FilterType::Highpass,
+    }
+}
+
+pub(crate) fn cross_synth_window(value: CrossSynthWindow) -> WindowFunction {
+    match value {
+        CrossSynthWindow::Hann => WindowFunction::Hann,
+        CrossSynthWindow::Hamming => WindowFunction::Hamming,
+        CrossSynthWindow::Rectangular => WindowFunction::Rectangular,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliRenderBackend {
+    #[default]
+    Cpu,
+    Metal,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum CliSourceRole {
+    Modulator,
+    Carrier,
+}
+
+impl From<CliSourceRole> for SourceRole {
+    fn from(value: CliSourceRole) -> Self {
+        match value {
+            CliSourceRole::Modulator => Self::Modulator,
+            CliSourceRole::Carrier => Self::Carrier,
+        }
+    }
+}
+
+impl From<CliRenderBackend> for RenderBackend {
+    fn from(value: CliRenderBackend) -> Self {
+        match value {
+            CliRenderBackend::Cpu => Self::Cpu,
+            CliRenderBackend::Metal => Self::Metal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliGrainSelection {
+    /// 1-D nearest neighbor on mean luminance.
+    #[default]
+    Luma,
+    /// Multimodal nearest neighbor on mean RGB.
+    Rgb,
+}
+
+impl From<CliGrainSelection> for GrainSelectionMode {
+    fn from(value: CliGrainSelection) -> Self {
+        match value {
+            CliGrainSelection::Luma => Self::Luma,
+            CliGrainSelection::Rgb => Self::MultimodalRgb,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliVocoderMode {
+    /// Tonal envelope transfer: remap B's luma distribution to match A's
+    /// (histogram specification). The headline look; ignores `--bands`.
+    #[default]
+    Match,
+    /// Per-band gain routing: A's luma histogram scales B's tonal bands.
+    Gain,
+}
+
+impl From<CliVocoderMode> for VideoVocoderMode {
+    fn from(value: CliVocoderMode) -> Self {
+        match value {
+            CliVocoderMode::Match => Self::Match,
+            CliVocoderMode::Gain => Self::Gain,
+        }
+    }
+}
+
+impl From<VideoVocoderMode> for CliVocoderMode {
+    fn from(value: VideoVocoderMode) -> Self {
+        match value {
+            VideoVocoderMode::Match => Self::Match,
+            VideoVocoderMode::Gain => Self::Gain,
+        }
+    }
+}
+
+/// Algorithm identifier stamped on sidecars and provenance for a selection mode.
+pub(crate) fn grain_selection_algorithm(mode: GrainSelectionMode) -> &'static str {
+    match mode {
+        GrainSelectionMode::Luma => GRANULAR_MOSAIC_ALGORITHM,
+        GrainSelectionMode::MultimodalRgb => MULTIMODAL_GRAIN_ALGORITHM,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliFlowSource {
+    Luminance,
+    #[default]
+    OpticalFlow,
+}
+
+impl From<CliFlowSource> for FlowSource {
+    fn from(value: CliFlowSource) -> Self {
+        match value {
+            CliFlowSource::Luminance => Self::Luminance,
+            CliFlowSource::OpticalFlow => Self::OpticalFlow,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliStructureMode {
+    #[default]
+    SingleScale,
+    Multiscale,
+}
+
+impl From<CliStructureMode> for StructureMode {
+    fn from(value: CliStructureMode) -> Self {
+        match value {
+            CliStructureMode::SingleScale => Self::SingleScale,
+            CliStructureMode::Multiscale => Self::Multiscale,
+        }
+    }
+}
