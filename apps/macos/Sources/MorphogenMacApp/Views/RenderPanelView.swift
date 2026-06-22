@@ -581,6 +581,56 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Audio Impulse Convolution")
+            .font(.subheadline.weight(.semibold))
+            .help("Convolve Source B (carrier) with Source A's L1-normalized impulse response. amount 0 = passthrough; the wet tail extends the output.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseImpulseConvModulatorWAV()
+            } label: {
+              Label("Source A IR", systemImage: "waveform")
+            }
+            Button {
+              state.chooseImpulseConvCarrierWAV()
+            } label: {
+              Label("Source B WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseImpulseConvOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.impulseConvAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.impulseConvAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = full wet convolution.")
+
+            Stepper(value: $state.impulseConvMaxSamples, in: 0...192_000, step: 1024) {
+              Text("Max IR \(state.impulseConvMaxSamples == 0 ? "full" : String(state.impulseConvMaxSamples))")
+            }
+            .frame(width: 200, alignment: .leading)
+            .help("Truncate the impulse response to its head (samples); 0 = use the whole IR.")
+          }
+
+          Text(state.impulseConvSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runAudioImpulseConvolutionRender()
+          } label: {
+            Label("Run Impulse Convolution", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Audio-to-Video Descriptor Routing")
             .font(.subheadline.weight(.semibold))
             .help("Source A's RMS envelope drives the per-frame displacement amount applied to Source B's frames.")

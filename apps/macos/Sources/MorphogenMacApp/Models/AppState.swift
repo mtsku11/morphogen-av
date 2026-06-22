@@ -92,6 +92,13 @@ final class AppState: ObservableObject {
   @Published var crossSynthWindow: CrossSynthWindowOption = .hann
   @Published var crossSynthSummary = "No spectral cross-synth rendered"
 
+  @Published var impulseConvModulatorURL: URL?
+  @Published var impulseConvCarrierURL: URL?
+  @Published var impulseConvOutputURL: URL?
+  @Published var impulseConvAmount = 1.0
+  @Published var impulseConvMaxSamples = 0
+  @Published var impulseConvSummary = "No audio impulse convolution rendered"
+
   @Published var audioRouteModulatorURL: URL?
   @Published var audioRouteCarrierURL: URL?
   @Published var audioRouteOutputURL: URL?
@@ -375,6 +382,42 @@ final class AppState: ObservableObject {
 
     crossSynthOutputURL = url
     statusMessage = "Cross-synth output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseImpulseConvModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source A WAV (impulse response)",
+      message: "Select the impulse response audio (convolution kernel)."
+    ) else {
+      statusMessage = "Impulse response WAV selection cancelled."
+      return
+    }
+
+    impulseConvModulatorURL = url
+    statusMessage = "Impulse-convolution Source A WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseImpulseConvCarrierWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source B WAV",
+      message: "Select the carrier audio (material to convolve)."
+    ) else {
+      statusMessage = "Source B WAV selection cancelled."
+      return
+    }
+
+    impulseConvCarrierURL = url
+    statusMessage = "Impulse-convolution Source B WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseImpulseConvOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Impulse-convolution output selection cancelled."
+      return
+    }
+
+    impulseConvOutputURL = url
+    statusMessage = "Impulse-convolution output selected: \(url.lastPathComponent)"
   }
 
   func chooseAudioRouteModulatorWAV() {
@@ -804,6 +847,52 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
           self.crossSynthSummary = "Spectral cross-synth render failed: \(error.localizedDescription)"
           self.statusMessage = "Spectral cross-synth render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runAudioImpulseConvolutionRender() {
+    guard let modulatorURL = impulseConvModulatorURL else {
+      statusMessage = "Select a Source A WAV (impulse response) before rendering."
+      return
+    }
+    guard let carrierURL = impulseConvCarrierURL else {
+      statusMessage = "Select a Source B WAV before rendering the audio impulse convolution."
+      return
+    }
+    guard let outputURL = impulseConvOutputURL else {
+      statusMessage = "Choose an output directory before rendering the audio impulse convolution."
+      return
+    }
+
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultAudioImpulseConvolutionRenderQueueURL(),
+      modulatorWAVURL: modulatorURL,
+      carrierWAVURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      amount: impulseConvAmount,
+      maxImpulseSamples: impulseConvMaxSamples > 0 ? impulseConvMaxSamples : nil,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing audio impulse convolution render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedAudioImpulseConvolutionRender(
+          request: request
+        )
+        DispatchQueue.main.async {
+          self.impulseConvSummary = "Impulse-convolution bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Audio impulse convolution render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.impulseConvSummary =
+            "Audio impulse convolution render failed: \(error.localizedDescription)"
+          self.statusMessage =
+            "Audio impulse convolution render failed: \(error.localizedDescription)"
         }
       }
     }

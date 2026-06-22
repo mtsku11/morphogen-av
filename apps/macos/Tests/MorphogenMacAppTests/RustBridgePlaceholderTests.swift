@@ -305,6 +305,66 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedAudioImpulseConvolutionArgumentsIncludeAmountAndMaxSamples() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 0.5,
+      maxImpulseSamples: 4096,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-audio-impulse-convolution"]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/impulse-conv-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.5")
+    XCTAssertEqual(Self.value(after: "--max-impulse-samples", in: arguments), "4096")
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsOmitMaxSamplesWhenNil() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.0,
+      maxImpulseSamples: nil,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertFalse(arguments.contains("--max-impulse-samples"))
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsRejectInvalidValues() {
+    let base = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.5, // out of [0, 1]
+      maxImpulseSamples: nil,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(request: base)
+    )
+  }
+
   func testQueuedAudioVideoRouteArgumentsIncludeShiftAndBackend() throws {
     let request = AudioVideoRouteSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/audio-route-queue.json"),
