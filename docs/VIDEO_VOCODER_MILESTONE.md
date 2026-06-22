@@ -20,8 +20,9 @@ For each output frame:
 1. **Modulator envelope (Source A).** Partition normalized luma `[0,1]` into `N`
    equal bands; band `b` covers `[b/N, (b+1)/N)`. Compute Source A's luma
    histogram over the frame: `a_hist[b]` = fraction of A's pixels whose luma
-   falls in band `b` (∑ `a_hist[b]` = 1). A's luma is the Rec. 601 luma already
-   used by the granular path. A may be any resolution; every A pixel contributes
+   falls in band `b` (∑ `a_hist[b]` = 1). A's luma is the Rec. 709 luma already
+   used by the granular path (`0.2126 R + 0.7152 G + 0.0722 B`). A may be any
+   resolution; every A pixel contributes
    once (no resampling needed for a histogram).
 2. **Per-band gain.** `gain[b] = lerp(1.0, N * a_hist[b], amount)`. The `N *`
    normalization makes a **flat/uniform A** yield `gain[b] = 1` for all `b`
