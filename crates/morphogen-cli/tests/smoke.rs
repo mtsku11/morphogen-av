@@ -2192,6 +2192,82 @@ fn queue_audio_impulse_convolution_matches_direct_and_records_knobs() {
     assert_eq!(knobs["algorithm"], "impulse_response_convolution_blend_cpu_v1");
     assert_eq!(knobs["amount"], 1.0);
     assert_eq!(knobs["max_impulse_samples"], 8);
+    // HQ-tier knobs default to the direct, non-resampling MVP path.
+    assert_eq!(knobs["method"], "direct");
+    assert_eq!(knobs["resample_impulse"], false);
+}
+
+#[test]
+fn queue_audio_impulse_convolution_fft_resample_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    // 24 kHz IR + 48 kHz carrier ⇒ the rate mismatch forces --resample-impulse.
+    let modulator_wav = temp_dir.path().join("ir.wav");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    write_test_wav_at(&modulator_wav, 24_000, &[1.0, 0.5, -0.25, 0.1]);
+    write_test_wav_at(
+        &carrier_wav,
+        48_000,
+        &[0.3, -0.2, 0.4, -0.1, 0.6, -0.5, 0.2, -0.3],
+    );
+
+    let modulator_arg = modulator_wav.to_string_lossy().to_string();
+    let carrier_arg = carrier_wav.to_string_lossy().to_string();
+    let direct_wav = temp_dir.path().join("direct.wav");
+    let direct_arg = direct_wav.to_string_lossy().to_string();
+    let common = ["--amount", "1", "--method", "fft", "--resample-impulse"];
+
+    // Direct (CLI) render with the FFT method + IR resampling.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-audio-impulse-convolution",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+
+    // Queue add + run with the same flags.
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-audio-impulse-convolution",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-audio-impulse-convolution", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render byte-identical to the direct render (path-independent, even on
+    // the FFT + resampling path).
+    let queued_wav = output_root.join("job-0001/audio/impulse_convolution.wav");
+    assert_eq!(
+        fs::read(&queued_wav).expect("read queued wav"),
+        fs::read(&direct_wav).expect("read direct wav"),
+        "FFT+resample queue render must be byte-identical to the direct render"
+    );
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["impulse_convolution"];
+    assert_eq!(knobs["method"], "fft");
+    assert_eq!(knobs["resample_impulse"], true);
 }
 
 #[test]
@@ -2388,9 +2464,13 @@ fn queue_convolution_blend_matches_direct_and_records_knobs() {
 }
 
 fn write_test_wav(path: &Path, samples: &[f32]) {
+    write_test_wav_at(path, 4, samples);
+}
+
+fn write_test_wav_at(path: &Path, sample_rate: u32, samples: &[f32]) {
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate: 4,
+        sample_rate,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };

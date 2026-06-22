@@ -279,7 +279,27 @@ pub enum RenderJobTask {
         /// Optional head-truncation of the impulse response (samples).
         #[serde(default)]
         max_impulse_samples: Option<u32>,
+        /// Convolution implementation. Defaults to [`ConvolutionMethod::Direct`].
+        #[serde(default)]
+        method: ConvolutionMethod,
+        /// Resample A's IR to B's sample rate (Lanczos) instead of erroring on a
+        /// rate mismatch. Defaults to `false`.
+        #[serde(default)]
+        resample_impulse: bool,
     },
+}
+
+/// Selects the audio-impulse convolution implementation. The serde default is
+/// [`ConvolutionMethod::Direct`] (the reference path) so jobs serialized before
+/// the FFT HQ tier keep their direct-convolution meaning.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConvolutionMethod {
+    /// Direct time-domain convolution (`O(B·L)`).
+    #[default]
+    Direct,
+    /// Frequency-domain convolution via FFT (`O(N log N)`), gated against direct.
+    Fft,
 }
 
 /// Selects the spectral cross-synth descriptor→target mapping.
@@ -717,6 +737,8 @@ mod tests {
             output_directory: "/tmp/out".to_string(),
             amount: 0.5,
             max_impulse_samples: Some(4096),
+            method: ConvolutionMethod::Fft,
+            resample_impulse: true,
         };
 
         let json = serde_json::to_string(&task).expect("serialize impulse-convolution task");
@@ -740,12 +762,16 @@ mod tests {
             serde_json::from_str(json).expect("deserialize impulse-convolution task");
         let RenderJobTask::AudioImpulseConvolution {
             max_impulse_samples,
+            method,
+            resample_impulse,
             ..
         } = task
         else {
             panic!("expected impulse-convolution task");
         };
         assert_eq!(max_impulse_samples, None);
+        assert_eq!(method, ConvolutionMethod::Direct);
+        assert!(!resample_impulse);
     }
 
     #[test]

@@ -9,14 +9,15 @@ use image::{ImageBuffer, ImageReader, Rgba};
 use morphogen_audio::{
     centroid_filter_cross_synth, impulse_convolution_blend, load_wav_f32,
     onset_strength_from_stft, rms_envelope, rms_gain_cross_synth, save_wav_f32,
+    ConvolutionMethod as AudioConvolutionMethod,
     spectral_centroid_from_magnitudes, stft_magnitude_cache, AudioAnalysisCache, AudioBufferF32,
     AudioDescriptorFrame, FilterType, OnsetStrengthCache, StftAnalysisCache, StftConfig,
     WindowFunction, CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
     RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 use morphogen_core::{
-    AnalysisCacheEntry, AnalysisKind, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow,
-    ExportFormat, FlowSource, GrainSelectionMode,
+    AnalysisCacheEntry, AnalysisKind, ConvolutionMethod, CrossSynthFilterType, CrossSynthMode,
+    CrossSynthWindow, ExportFormat, FlowSource, GrainSelectionMode,
     GranularAudioModulation, MediaProxy, Project, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance,
     RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
@@ -148,6 +149,10 @@ enum Commands {
         amount: f32,
         #[arg(long)]
         max_impulse_samples: Option<usize>,
+        #[arg(long, value_enum, default_value_t = CliConvolutionMethod::Direct)]
+        method: CliConvolutionMethod,
+        #[arg(long)]
+        resample_impulse: bool,
     },
     RenderTest {
         output_path: PathBuf,
@@ -666,6 +671,10 @@ enum Commands {
         amount: f32,
         #[arg(long)]
         max_impulse_samples: Option<u32>,
+        #[arg(long, value_enum, default_value_t = CliConvolutionMethod::Direct)]
+        method: CliConvolutionMethod,
+        #[arg(long)]
+        resample_impulse: bool,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -807,6 +816,47 @@ enum CliFilterType {
     #[default]
     Lowpass,
     Highpass,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliConvolutionMethod {
+    #[default]
+    Direct,
+    Fft,
+}
+
+impl From<CliConvolutionMethod> for AudioConvolutionMethod {
+    fn from(value: CliConvolutionMethod) -> Self {
+        match value {
+            CliConvolutionMethod::Direct => Self::Direct,
+            CliConvolutionMethod::Fft => Self::Fft,
+        }
+    }
+}
+
+impl From<CliConvolutionMethod> for ConvolutionMethod {
+    fn from(value: CliConvolutionMethod) -> Self {
+        match value {
+            CliConvolutionMethod::Direct => Self::Direct,
+            CliConvolutionMethod::Fft => Self::Fft,
+        }
+    }
+}
+
+/// Map a persisted core convolution method onto the audio-crate enum.
+fn audio_convolution_method(method: ConvolutionMethod) -> AudioConvolutionMethod {
+    match method {
+        ConvolutionMethod::Direct => AudioConvolutionMethod::Direct,
+        ConvolutionMethod::Fft => AudioConvolutionMethod::Fft,
+    }
+}
+
+/// Manifest string for a persisted convolution method.
+fn convolution_method_label(method: ConvolutionMethod) -> &'static str {
+    match method {
+        ConvolutionMethod::Direct => "direct",
+        ConvolutionMethod::Fft => "fft",
+    }
 }
 
 impl From<CliFilterType> for FilterType {
@@ -1086,12 +1136,16 @@ fn run() -> Result<(), CliError> {
             output_wav,
             amount,
             max_impulse_samples,
+            method,
+            resample_impulse,
         } => render_audio_impulse_convolution(
             &modulator_wav,
             &carrier_wav,
             &output_wav,
             amount,
             max_impulse_samples,
+            method.into(),
+            resample_impulse,
         ),
         Commands::RenderTest { output_path } => render_test(&output_path),
         Commands::MetalRenderTest { output_path } => metal_render_test(&output_path),
@@ -1634,6 +1688,8 @@ fn run() -> Result<(), CliError> {
             output_root_dir,
             amount,
             max_impulse_samples,
+            method,
+            resample_impulse,
             project_path,
         } => queue_add_audio_impulse_convolution(QueueAddAudioImpulseConvolutionRequest {
             queue_path: &queue_path,
@@ -1642,6 +1698,8 @@ fn run() -> Result<(), CliError> {
             output_root_dir: &output_root_dir,
             amount,
             max_impulse_samples,
+            method: method.into(),
+            resample_impulse,
             project_path: project_path.as_deref(),
         }),
         Commands::QueueAddAudioVideoRouteSequence {
@@ -1914,10 +1972,19 @@ fn render_audio_impulse_convolution(
     output_wav: &Path,
     amount: f32,
     max_impulse_samples: Option<usize>,
+    method: AudioConvolutionMethod,
+    resample_impulse: bool,
 ) -> Result<(), CliError> {
     let modulator = load_wav_f32(modulator_wav)?;
     let carrier = load_wav_f32(carrier_wav)?;
-    let output = impulse_convolution_blend(&modulator, &carrier, amount, max_impulse_samples)?;
+    let output = impulse_convolution_blend(
+        &modulator,
+        &carrier,
+        amount,
+        max_impulse_samples,
+        method,
+        resample_impulse,
+    )?;
 
     write_parent_dirs(output_wav)?;
     save_wav_f32(output_wav, &output)?;
@@ -6908,6 +6975,8 @@ struct QueueAddAudioImpulseConvolutionRequest<'a> {
     output_root_dir: &'a Path,
     amount: f32,
     max_impulse_samples: Option<u32>,
+    method: ConvolutionMethod,
+    resample_impulse: bool,
     project_path: Option<&'a Path>,
 }
 
@@ -6921,6 +6990,8 @@ fn queue_add_audio_impulse_convolution(
         output_root_dir,
         amount,
         max_impulse_samples,
+        method,
+        resample_impulse,
         project_path,
     } = request;
     if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
@@ -6974,6 +7045,8 @@ fn queue_add_audio_impulse_convolution(
             output_directory: job_output_dir.to_string_lossy().to_string(),
             amount,
             max_impulse_samples,
+            method,
+            resample_impulse,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -7015,6 +7088,8 @@ fn queue_run_audio_impulse_convolution(queue_path: &Path) -> Result<(), CliError
         output_directory,
         amount,
         max_impulse_samples,
+        method,
+        resample_impulse,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -7033,6 +7108,8 @@ fn queue_run_audio_impulse_convolution(queue_path: &Path) -> Result<(), CliError
             &carrier,
             amount,
             max_impulse_samples.map(|n| n as usize),
+            audio_convolution_method(method),
+            resample_impulse,
         )?;
 
         let stem_rel = "audio/impulse_convolution.wav";
@@ -7072,7 +7149,9 @@ fn queue_run_audio_impulse_convolution(queue_path: &Path) -> Result<(), CliError
             "impulse_convolution": {
                 "algorithm": IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
                 "amount": amount,
-                "max_impulse_samples": max_impulse_samples
+                "max_impulse_samples": max_impulse_samples,
+                "method": convolution_method_label(method),
+                "resample_impulse": resample_impulse
             },
             "provenance": queue.jobs[job_index].provenance,
             "deterministic": true
