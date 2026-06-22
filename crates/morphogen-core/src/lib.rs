@@ -23,7 +23,7 @@ pub use render_job::{
     ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
-    RenderSettings, RenderTimingMetadata,
+    RenderSettings, RenderTimingMetadata, VideoVocoderMode,
 };
 pub use render_queue::RenderQueue;
 pub use timeline::{FrameSampleRange, TimeRange, Timeline};

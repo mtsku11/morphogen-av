@@ -1488,6 +1488,107 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
 }
 
 #[test]
+fn video_vocoder_queue_job_persists_knobs_and_writes_bundle_output() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let queue_path = temp_dir.path().join("queue.json");
+    let output_root = temp_dir.path().join("queue-output");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        for directory in [&modulator_dir, &carrier_dir] {
+            let frame_arg = directory.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-video-vocoder-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--bands",
+            "8",
+            "--amount",
+            "0.5",
+            "--mode",
+            "gain",
+            "--max-frames",
+            "2",
+            "--frame-rate",
+            "12",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued video-vocoder render job job-0001",
+        ));
+
+    let queued: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queued vocoder job"))
+            .expect("parse vocoder queue");
+    assert_eq!(
+        queued["jobs"][0]["task"]["type"],
+        "frame_sequence_video_vocoder"
+    );
+    assert_eq!(queued["jobs"][0]["task"]["bands"], 8);
+    assert_eq!(queued["jobs"][0]["task"]["amount"], 0.5);
+    assert_eq!(queued["jobs"][0]["task"]["mode"], "gain");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-video-vocoder-sequence", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued video-vocoder job job-0001",
+        ));
+
+    let bundle_dir = output_root.join("job-0001");
+    assert!(bundle_dir.join("frames/frame_000000.png").exists());
+    assert!(bundle_dir.join("frames/frame_000001.png").exists());
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle_dir.join("manifest.json")).expect("read vocoder manifest"),
+    )
+    .expect("parse vocoder manifest");
+    assert_eq!(manifest["task"], "frame_sequence_video_vocoder");
+    assert_eq!(manifest["timing"]["frame_count"], 2);
+    assert_eq!(
+        manifest["video_vocoder"]["algorithm"],
+        "luma_band_gain_vocoder_cpu_v1"
+    );
+    assert_eq!(manifest["video_vocoder"]["mode"], "gain");
+    assert_eq!(manifest["video_vocoder"]["bands"], 8);
+    assert_eq!(manifest["video_vocoder"]["amount"], 0.5);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-inspect", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "job-0001 task=frame_sequence_video_vocoder status=Complete",
+        ));
+}
+
+#[test]
 fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");
