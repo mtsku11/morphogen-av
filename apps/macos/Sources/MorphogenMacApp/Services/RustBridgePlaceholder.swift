@@ -602,6 +602,11 @@ enum RustBridgePlaceholder {
       arguments.append("--resample-impulse")
     }
 
+    if request.usePerChannelIR {
+      arguments.append("--ir-mode")
+      arguments.append("per-channel")
+    }
+
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -1432,6 +1437,8 @@ struct AudioImpulseConvolutionRenderQueueCommandRequest {
   let useFFT: Bool
   /// Resample A's IR to B's sample rate instead of erroring on a rate mismatch.
   let resampleImpulse: Bool
+  /// Use a per-channel (true-stereo) IR instead of one mono downmix IR.
+  let usePerChannelIR: Bool
   let projectURL: URL?
 }
 

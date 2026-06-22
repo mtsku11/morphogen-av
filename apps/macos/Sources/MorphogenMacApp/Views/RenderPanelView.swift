@@ -623,6 +623,9 @@ struct RenderPanelView: View {
 
             Toggle("Resample IR", isOn: $state.impulseConvResample)
               .help("Resample A's IR to B's sample rate (Lanczos) instead of erroring on a mismatch.")
+
+            Toggle("Per-channel IR", isOn: $state.impulseConvPerChannel)
+              .help("True-stereo: convolve each carrier channel with its own IR from Source A instead of one mono downmix.")
           }
 
           Text(state.impulseConvSummary)

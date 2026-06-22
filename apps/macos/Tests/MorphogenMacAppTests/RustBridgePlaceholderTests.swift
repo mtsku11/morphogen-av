@@ -315,6 +315,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       maxImpulseSamples: 4096,
       useFFT: false,
       resampleImpulse: false,
+      usePerChannelIR: false,
       projectURL: nil
     )
 
@@ -346,6 +347,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       maxImpulseSamples: nil,
       useFFT: true,
       resampleImpulse: true,
+      usePerChannelIR: false,
       projectURL: nil
     )
 
@@ -355,6 +357,29 @@ final class RustBridgePlaceholderTests: XCTestCase {
 
     XCTAssertEqual(Self.value(after: "--method", in: arguments), "fft")
     XCTAssertTrue(arguments.contains("--resample-impulse"))
+    // Mono is the default; per-channel must not be emitted unless requested.
+    XCTAssertFalse(arguments.contains("--ir-mode"))
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsIncludePerChannelIR() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.0,
+      maxImpulseSamples: nil,
+      useFFT: false,
+      resampleImpulse: false,
+      usePerChannelIR: true,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertEqual(Self.value(after: "--ir-mode", in: arguments), "per-channel")
   }
 
   func testQueuedAudioImpulseConvolutionArgumentsOmitMaxSamplesWhenNil() throws {
@@ -367,6 +392,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       maxImpulseSamples: nil,
       useFFT: false,
       resampleImpulse: false,
+      usePerChannelIR: false,
       projectURL: nil
     )
 
@@ -387,6 +413,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       maxImpulseSamples: nil,
       useFFT: false,
       resampleImpulse: false,
+      usePerChannelIR: false,
       projectURL: nil
     )
 
