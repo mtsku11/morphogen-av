@@ -166,10 +166,20 @@ algorithm id is unchanged (`impulse_response_convolution_blend_cpu_v1`): method
 is an implementation choice gated to match (the audio analogue of `backend`),
 not a different transform.
 
+### Large-K Metal (image): already covered by the MVP kernel
+
+The image `convolution_blend` Metal kernel has **no K cap**: it loops over
+`kernel_size` reading from a dynamically-sized `weights` buffer, so a large odd
+K stays byte-parity with the CPU reference exactly like a small one (the naive
+per-pixel O(K²) gather, identical float order on both paths). A threadgroup-tiled
+shared-memory variant would only change *speed*, not output, and would impose its
+own K cap from threadgroup memory — deferred as an optional perf follow-up, not a
+correctness gap. Coverage: `large_kernel_size_convolves_without_cap` (CPU) and
+`metal_convolution_blend_matches_cpu_reference_large_kernel` (K=11 parity).
+
 ## Deferred (not this slice)
 
-- **Per-channel / true-stereo IRs** — this MVP downmixes A to one mono IR applied
-  to every B channel.
-- **Per-channel / color kernels**, separable kernels, and Source-A *color*
-  (not luma) taps. This MVP routes one luma-derived kernel applied to all channels.
+- **Tiled large-K Metal** — a threadgroup-memory gather is a pure perf
+  optimization over the parity-exact naive kernel; only worth it if a measured
+  large-K render is too slow.
 - Queue + SwiftUI exposure land after the CPU + CLI + Metal slice is verified.

@@ -1177,6 +1177,39 @@ mod tests {
     }
 
     #[test]
+    fn metal_convolution_blend_matches_cpu_reference_large_kernel() {
+        // The Metal kernel has no K cap: it loops over `kernel_size` with a
+        // dynamically-sized weights buffer, so a large K stays byte-parity with
+        // the CPU reference exactly like a small one. Guards the "large-K spatial
+        // kernel" claim against a hidden cap or buffer-size regression.
+        let carrier = ImageBufferF32::from_fn(20, 18, |x, y| {
+            let v = if (x + y) % 2 == 0 { 0.85 } else { 0.15 };
+            [v, v * 0.6, 1.0 - v, 1.0]
+        })
+        .expect("carrier");
+        let modulator = ImageBufferF32::from_fn(33, 33, |x, y| {
+            let v = ((x + 2 * y) as f32 / 96.0).clamp(0.0, 1.0);
+            [v, v, v, 1.0]
+        })
+        .expect("modulator");
+
+        let kernel = analyze_convolution_kernel_cpu(&modulator, 11).expect("kernel");
+        let cpu = convolution_blend_cpu(&carrier, &kernel, 1.0).expect("cpu render");
+        let gpu = match convolution_blend_metal(&carrier, &kernel.weights, kernel.size, 1.0) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal large-kernel parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal convolution blend render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
     fn metal_convolution_blend_rejects_even_kernel_size() {
         let carrier = ImageBufferF32::new(2, 2, vec![[0.5, 0.5, 0.5, 1.0]; 4]).expect("carrier");
         let error = convolution_blend_metal(&carrier, &[0.25; 4], 2, 1.0)

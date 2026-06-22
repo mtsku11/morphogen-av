@@ -289,6 +289,40 @@ mod tests {
     }
 
     #[test]
+    fn large_kernel_size_convolves_without_cap() {
+        // The kernel has no upper size cap: a large K is box-downsampled and
+        // applied like any other. A big uniform-ish kernel over a high-frequency
+        // carrier must pull interior pixels hard toward the local mean (a wider
+        // blur than a small kernel), and the output dims follow the carrier.
+        let carrier = ImageBufferF32::from_fn(16, 16, |x, y| {
+            let v = if (x + y) % 2 == 0 { 0.95 } else { 0.05 };
+            [v, v, v, 1.0]
+        })
+        .expect("carrier");
+        let small = ConvolutionKernel {
+            size: 3,
+            weights: vec![1.0 / 9.0; 9],
+        };
+        let large = ConvolutionKernel {
+            size: 11,
+            weights: vec![1.0 / 121.0; 121],
+        };
+        let out_small = convolution_blend_cpu(&carrier, &small, 1.0).expect("small");
+        let out_large = convolution_blend_cpu(&carrier, &large, 1.0).expect("large");
+        assert_eq!(out_large.width, carrier.width);
+        assert_eq!(out_large.height, carrier.height);
+        // A center pixel under an 11x11 average sits far closer to the 0.5 mean
+        // than under a 3x3 average of the same checkerboard.
+        let center = (8 * 16 + 8) as usize;
+        let dev_small = (out_small.pixels[center][0] - 0.5).abs();
+        let dev_large = (out_large.pixels[center][0] - 0.5).abs();
+        assert!(
+            dev_large < dev_small,
+            "large-K deviation {dev_large} should be below small-K {dev_small}"
+        );
+    }
+
+    #[test]
     fn invalid_settings_are_rejected() {
         assert!(ConvolutionBlendSettings {
             kernel_size: 0,
