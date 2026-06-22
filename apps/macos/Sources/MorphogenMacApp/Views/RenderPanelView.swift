@@ -389,6 +389,11 @@ struct RenderPanelView: View {
             .frame(width: 200, alignment: .leading)
             .disabled(!state.granularPoolAudioWeighted)
 
+            Stepper(value: $state.granularPoolTextureWeight, in: 0...8, step: 0.1) {
+              Text("Texture Weight \(state.granularPoolTextureWeight, specifier: "%.1f")")
+            }
+            .frame(width: 200, alignment: .leading)
+
             Toggle("Audio-Weighted (RMS)", isOn: $state.granularPoolAudioWeighted)
               .toggleStyle(.checkbox)
 
@@ -428,7 +433,18 @@ struct RenderPanelView: View {
               Text("Reach \(state.granularPoolCoherenceReach)")
             }
             .frame(width: 150, alignment: .leading)
-            .disabled(state.granularPoolCoherenceWeight <= 0)
+            .disabled(
+              state.granularPoolCoherenceWeight <= 0
+                && state.granularPoolSpatialCoherenceWeight <= 0
+            )
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.granularPoolSpatialCoherenceWeight, in: 0...8, step: 0.1) {
+              Text("Spatial \(state.granularPoolSpatialCoherenceWeight, specifier: "%.1f")")
+            }
+            .frame(width: 190, alignment: .leading)
+            .help("Rewards grain-origin continuity within a frame; shares the coherence Reach.")
           }
 
           HStack(spacing: 16) {

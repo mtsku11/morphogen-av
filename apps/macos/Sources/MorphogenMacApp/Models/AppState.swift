@@ -62,6 +62,7 @@ final class AppState: ObservableObject {
   @Published var granularPoolVariation = 0.25
   @Published var granularPoolSeed = 0
   @Published var granularPoolAudioWeight = 1.0
+  @Published var granularPoolTextureWeight = 0.0
   @Published var granularPoolAudioWeighted = true
   @Published var granularPoolCentroidEnabled = false
   @Published var granularPoolWindow = 0
@@ -69,6 +70,7 @@ final class AppState: ObservableObject {
   @Published var granularPoolAntiRepeatCooldown = 8
   @Published var granularPoolCoherenceWeight = 0.0
   @Published var granularPoolCoherenceReach = 8
+  @Published var granularPoolSpatialCoherenceWeight = 0.0
   @Published var granularPoolBackend: FeedbackRenderBackendOption = .cpu
   @Published var granularPoolSummary = "No temporal grain pool sequence rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
@@ -553,6 +555,7 @@ final class AppState: ObservableObject {
       variation: granularPoolVariation,
       seed: UInt64(max(0, granularPoolSeed)),
       audioWeight: granularPoolAudioWeight,
+      textureWeight: granularPoolTextureWeight,
       modulatorRMSCacheURL: modulatorRMSCacheURL,
       carrierRMSCacheURL: carrierRMSCacheURL,
       modulatorCentroidCacheURL: modulatorCentroidCacheURL,
@@ -562,6 +565,7 @@ final class AppState: ObservableObject {
       antiRepeatCooldown: max(0, granularPoolAntiRepeatCooldown),
       coherenceWeight: granularPoolCoherenceWeight,
       coherenceReach: max(0, granularPoolCoherenceReach),
+      spatialCoherenceWeight: granularPoolSpatialCoherenceWeight,
       maxFrames: frameSequenceMaxFrames,
       frameRate: proResFrameRate.framesPerSecond,
       backend: granularPoolBackend,

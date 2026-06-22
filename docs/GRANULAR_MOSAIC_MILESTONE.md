@@ -68,12 +68,12 @@ Contract:
   global per-frame settings. Audio does **not** enter the matching in this slice.
 - Determinism: identical inputs + settings ⇒ identical selection and output.
 
-Deferred (explicitly not this slice): luma-variance and gradient/edge feature
-dimensions; per-grain carrier-audio descriptors as real matching dimensions (the
-"audiovisual grains selected by descriptor similarity" endgame, a step-6b
-follow-on); and any cross-frame scheduling — anti-repeat diversity or temporal
-coherence. Those introduce cross-frame state and are out of the selection-only
-scope.
+Originally deferred from this slice, all since landed in step 6b: luma-variance
+and gradient/edge feature dimensions (texture dims, `--texture-weight`); per-grain
+carrier-audio descriptors as real matching dimensions (the "audiovisual grains
+selected by descriptor similarity" endgame); and cross-frame scheduling —
+anti-repeat diversity, frame coherence, and spatial-origin coherence. See the
+step-6b subsections below.
 
 ## Step 6b — Temporal Grain Pool (Joint-AV Selection)
 
@@ -92,8 +92,9 @@ A bounded sliding window is a deferred knob.
 
 Contract:
 
-- New algorithm id `pooled_av_nearest_grain_cpu_v1`, distinct from the luma and
-  multimodal ids. The differing id invalidates stale single-frame sidecars.
+- New algorithm id `pooled_av_nearest_grain_cpu_v2` (was `…_v1` before the texture
+  dims were added to the descriptor), distinct from the luma and multimodal ids.
+  The differing id invalidates stale single-frame sidecars and stale v1 pools.
   Luma and multimodal paths stay byte-identical and remain available.
 - A **grain pool** is built from `F` Source B frames that share dimensions and
   grain grid. Each pool grain carries `frame_index`, `origin_x/y`, `mean_color`
@@ -212,9 +213,25 @@ frame-zero behaviour); the penalty reshapes only the nearest-match distance, not
 the seeded alternate, and composes additively with anti-repeat (continuity vs
 diversity). Metal render path unaffected (selection is CPU-side). Verified: a
 render-crate test (coherence pulls selection back to the previous pick's frame,
-overturning the colour-nearest grain; frame zero is a no-op). Spatial-origin
-coherence (continuity in `(origin_x, origin_y)`, not just frame index) is a noted
-deferred refinement.
+overturning the colour-nearest grain; frame zero is a no-op).
+
+Cross-frame scheduling — spatial-origin coherence (landed, render/CLI + queue +
+SwiftUI): the spatial complement to frame coherence. `--spatial-coherence-weight W`
+(`0` = off) adds a second additive continuity term to [`TemporalCoherence`]: a
+candidate grain whose origin differs from that same tile's previous pick adds
+`W * min(dist_tiles, reach) / reach` to its squared feature distance, where
+`dist_tiles` is the Euclidean distance between origins in grain-tile units
+(`origin / grain_size`) and `reach` is the **shared** `--coherence-reach`. This
+keeps a tile's pick from teleporting across the *frame* even when it stays on a
+nearby source frame. Both terms default off; with either weight > 0 the scheduler
+engages (frame zero still empty-history ⇒ byte-identical). The new weight is
+plumbed through the persisted `frame_sequence_granular_mosaic_pool` job (serde
+default 0), `queue-add-`/`queue-run`, the bundle manifest, and the macOS Render
+panel (a Spatial weight stepper sharing the Reach control). Verified: a
+render-crate test (spatial weight overturns the exact-colour grain toward the
+previous pick's origin with frame weight 0; frame zero a no-op); `/parity` OK 4/4
+with frame + spatial coherence engaged (queue == direct); the pool queue smoke
+test and Swift bridge test pin the knob through task/manifest/args.
 
 Queue/SwiftUI exposure of the pool-selection knobs (landed): the persisted
 `frame_sequence_granular_mosaic_pool` job now carries the centroid (k=2) STFT
@@ -232,4 +249,27 @@ identical to the direct render with the same flags; extended pool queue smoke
 test asserts the knobs round-trip through task + manifest; three new Swift bridge
 tests pin the scheduling flags and centroid-cache args.
 
-Deferred: luma-variance/gradient feature dims; spatial-origin coherence.
+Texture feature dims — luma-variance + gradient (landed, render/CLI + queue +
+SwiftUI): each pooled grain carries a 2-dim texture descriptor `[luma_variance,
+gradient_magnitude]` computed over its tile (population variance of per-pixel
+luminance, and the mean of `sqrt(dx²+dy²)` of forward luma differences within the
+tile). `--texture-weight W` (`0` = off) scales **both** dims in the per-tile
+nearest match against Source A's per-tile texture query, so a smooth modulator
+region draws smooth carrier grains and a busy region draws busy ones — a
+discriminator orthogonal to mean colour and audio. Off by default ⇒ byte-identical
+selection. Because the sidecar descriptor schema changed, the pool **algorithm id
+bumped `pooled_av_nearest_grain_cpu_v1` → `…_v2`**: a stale v1 sidecar genuinely
+lacks the texture dims and is regenerated rather than silently read as zero. The
+weight is plumbed through the persisted job (serde default 0), `queue-add-`/
+`queue-run`, the bundle manifest, and the macOS Render panel (a Texture Weight
+stepper). Verified: a render-crate test (a busy modulator query selects the
+checkerboard grain over a flat grain of equal mean colour; weight 0 leaves the
+colour tie); a `--readout texture` fixture (flat vs striped carrier frames at
+equal mean colour) off-vs-on — OFF mean frame-delta 0.0/255 (colour tie pins to
+the flat grain), ON 48.0/255 with the output tracking the modulator's flat↔stripes
+demand (frames Read to confirm); `/parity` OK 8/8 (queue == direct, manifest
+carries `texture_weight`); the pool queue smoke test and Swift bridge test pin the
+knob through task/manifest/args.
+
+With this, granular step 6b is feature-complete — no algorithmic refinements
+remain.

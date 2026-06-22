@@ -56,6 +56,30 @@ Then Read `/tmp/morphogen-verify.png` and confirm it looks right. For changes to
 specific effect, render that effect on a small fixture instead (see `/preview`),
 or extract a frame from a video output with `ffmpeg -i out.mov -frames:v 1 f.png`.
 
+### Required: off-vs-on readout for any output-affecting feature
+
+A new effect, parameter, or **selection/scheduling knob** is not verified by tests
+and parity alone — those prove determinism, not that the knob *does what it
+claims*. You must also show it changing the output, both visually and
+quantitatively, on a readout fixture:
+
+```sh
+scripts/make-fixture.sh /tmp/v --frames 8 --size 96x96 --readout origin   # or default --readout frame
+# render the SAME job with the knob off and on — ALWAYS --variation 0 (the pool
+# render's 0.25 default injects a per-tile random alternate the schedulers never
+# touch; it scatters the readout and hides the knob).
+cargo run -q -p morphogen-cli -- render-granular-mosaic-pool-sequence /tmp/v/modulator /tmp/v/carrier /tmp/v/off --rearrangement 1.0 --variation 0 <knob>=off
+cargo run -q -p morphogen-cli -- render-granular-mosaic-pool-sequence /tmp/v/modulator /tmp/v/carrier /tmp/v/on  --rearrangement 1.0 --variation 0 <knob>=on
+scripts/frame-delta.py /tmp/v/off /tmp/v/on   # quantitative delta
+```
+
+Then **Read sampled frames from both** and state the difference — the number alone
+never proves a look, and a look without a number is unfalsifiable. Pick the
+readout to the knob's axis (`origin` = source location, `frame` = source frame);
+see `/fixture`. Report both in the verdict's `visual:` line. Skip this only for
+changes that cannot alter output (pure refactors, docs, serialization plumbing
+already covered by `/parity`).
+
 ## Step 4 — Verdict block
 
 Print exactly one block, then stop:
@@ -65,6 +89,6 @@ verify — <date>
   gates: <which ran, e.g. clippy + test -p morphogen-render + visual>
   result: <pass / fail>
   tests: <baseline N → now M, or "n/a">
-  visual: <what the rendered frame showed, or "n/a">
+  visual: <what the rendered frame showed; for a knob, off-vs-on delta + what the pixels showed, or "n/a">
   notes: <anything skipped (e.g. shader-check SKIP) or surprising>
 ```

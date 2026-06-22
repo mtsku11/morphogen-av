@@ -197,6 +197,11 @@ enum Commands {
         /// Scales every audio dimension in the selection distance.
         #[arg(long, default_value_t = 1.0)]
         audio_weight: f32,
+        /// Scales both texture dimensions (luma variance + gradient magnitude) in
+        /// the selection distance, so Source A's per-tile spatial busyness matches
+        /// carrier grains of similar structure (0 = off, the default).
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
         /// RMS cache for Source A; supplies the per-output-frame query audio.
         #[arg(long)]
         modulator_rms_cache: Option<PathBuf>,
@@ -232,6 +237,13 @@ enum Commands {
         /// linearly to the weight). Only matters when --coherence-weight > 0.
         #[arg(long, default_value_t = 8)]
         coherence_reach: u32,
+        /// Spatial-origin coherence reward: penalty added to the squared feature
+        /// distance of grains whose origin is far (in grain-tile units) from each
+        /// tile's previous pick (0 = off, the default). Shares --coherence-reach as
+        /// its saturation distance; keeps a tile's pick from teleporting across the
+        /// frame even when it stays on a nearby source frame.
+        #[arg(long, default_value_t = 0.0)]
+        spatial_coherence_weight: f32,
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
         #[arg(long)]
@@ -432,6 +444,9 @@ enum Commands {
         seed: u64,
         #[arg(long, default_value_t = 1.0)]
         audio_weight: f32,
+        /// Scales both texture dims (luma variance + gradient magnitude); 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
         #[arg(long)]
         modulator_rms_cache: Option<PathBuf>,
         #[arg(long)]
@@ -457,6 +472,10 @@ enum Commands {
         /// Frame distance over which the coherence penalty saturates. Only matters when weight > 0.
         #[arg(long, default_value_t = 8)]
         coherence_reach: u32,
+        /// Spatial-origin coherence reward for grain-origin continuity within a
+        /// frame (0 = off). Shares --coherence-reach as its saturation distance.
+        #[arg(long, default_value_t = 0.0)]
+        spatial_coherence_weight: f32,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long, default_value_t = 24.0)]
@@ -794,6 +813,7 @@ fn run() -> Result<(), CliError> {
             variation,
             seed,
             audio_weight,
+            texture_weight,
             modulator_rms_cache,
             carrier_rms_cache,
             modulator_centroid_cache,
@@ -803,6 +823,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             frame_rate,
             max_frames,
             grain_cache_dir,
@@ -818,6 +839,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             audio_weight,
+            texture_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
@@ -827,6 +849,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             frame_rate,
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
@@ -1052,6 +1075,7 @@ fn run() -> Result<(), CliError> {
             variation,
             seed,
             audio_weight,
+            texture_weight,
             modulator_rms_cache,
             carrier_rms_cache,
             modulator_centroid_cache,
@@ -1061,6 +1085,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             max_frames,
             frame_rate,
             no_grain_cache,
@@ -1078,6 +1103,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             audio_weight,
+            texture_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
@@ -1087,6 +1113,7 @@ fn run() -> Result<(), CliError> {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             max_frames,
             frame_rate,
             write_grain_cache: !no_grain_cache,
@@ -2053,6 +2080,7 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     output_dir: &'a Path,
     settings: GranularMosaicSettings,
     audio_weight: f32,
+    texture_weight: f32,
     modulator_rms_cache: Option<&'a Path>,
     carrier_rms_cache: Option<&'a Path>,
     modulator_centroid_cache: Option<&'a Path>,
@@ -2062,6 +2090,7 @@ struct GranularMosaicPoolSequenceRequest<'a> {
     anti_repeat_cooldown: u32,
     coherence_weight: f32,
     coherence_reach: u32,
+    spatial_coherence_weight: f32,
     frame_rate: f64,
     max_frames: Option<usize>,
     grain_cache_dir: Option<&'a Path>,
@@ -2100,6 +2129,7 @@ fn render_granular_mosaic_pool_sequence(
         output_dir,
         settings,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -2109,6 +2139,7 @@ fn render_granular_mosaic_pool_sequence(
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         frame_rate,
         max_frames,
         grain_cache_dir,
@@ -2125,6 +2156,11 @@ fn render_granular_mosaic_pool_sequence(
             "coherence-weight must be a finite, non-negative number".to_string(),
         ));
     }
+    if !spatial_coherence_weight.is_finite() || spatial_coherence_weight < 0.0 {
+        return Err(CliError::Message(
+            "spatial-coherence-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
             "frame-rate must be a positive finite number".to_string(),
@@ -2138,6 +2174,11 @@ fn render_granular_mosaic_pool_sequence(
     if !audio_weight.is_finite() || audio_weight < 0.0 {
         return Err(CliError::Message(
             "audio-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    if !texture_weight.is_finite() || texture_weight < 0.0 {
+        return Err(CliError::Message(
+            "texture-weight must be a finite, non-negative number".to_string(),
         ));
     }
     // Audio matching needs the pool grains and the query to share a descriptor
@@ -2227,7 +2268,8 @@ fn render_granular_mosaic_pool_sequence(
     // Temporal-coherence scheduling state: the global grain index each output tile
     // selected on the previous frame (one entry per tile, row-major). Only tracked
     // when enabled so the default path stays allocation-free and byte-identical.
-    let coherence_enabled = coherence_weight > 0.0 && coherence_reach > 0;
+    let coherence_enabled =
+        (coherence_weight > 0.0 || spatial_coherence_weight > 0.0) && coherence_reach > 0;
     let mut prev_selection: Vec<Option<u32>> = Vec::new();
 
     for index in 0..frame_count {
@@ -2258,6 +2300,7 @@ fn render_granular_mosaic_pool_sequence(
             prev_selection: &prev_selection,
             reach: coherence_reach,
             weight: coherence_weight,
+            spatial_weight: spatial_coherence_weight,
         });
         let selection = select_grains_from_pool_cpu(
             &modulator,
@@ -2267,6 +2310,7 @@ fn render_granular_mosaic_pool_sequence(
             &pool,
             settings,
             audio_weight,
+            texture_weight,
             window,
             anti_repeat,
             coherence,
@@ -2305,12 +2349,13 @@ fn render_granular_mosaic_pool_sequence(
         );
     }
     println!(
-        "rendered granular mosaic pool sequence with {} frame(s) ({}, {} pool frame(s), audio_dims={}, audio_weight={}) from {} modulating {} to {}",
+        "rendered granular mosaic pool sequence with {} frame(s) ({}, {} pool frame(s), audio_dims={}, audio_weight={}, texture_weight={}) from {} modulating {} to {}",
         frame_count,
         POOLED_GRAIN_ALGORITHM,
         pool_frames.len(),
         pool.audio_dims,
         audio_weight,
+        texture_weight,
         modulator_dir.display(),
         carrier_dir.display(),
         output_dir.display()
@@ -4075,6 +4120,7 @@ struct QueueAddGranularMosaicPoolSequenceRequest<'a> {
     output_root_dir: &'a Path,
     settings: GranularMosaicSettings,
     audio_weight: f32,
+    texture_weight: f32,
     modulator_rms_cache: Option<&'a Path>,
     carrier_rms_cache: Option<&'a Path>,
     modulator_centroid_cache: Option<&'a Path>,
@@ -4084,6 +4130,7 @@ struct QueueAddGranularMosaicPoolSequenceRequest<'a> {
     anti_repeat_cooldown: u32,
     coherence_weight: f32,
     coherence_reach: u32,
+    spatial_coherence_weight: f32,
     max_frames: Option<u32>,
     frame_rate: f64,
     write_grain_cache: bool,
@@ -4101,6 +4148,7 @@ fn queue_add_granular_mosaic_pool_sequence(
         output_root_dir,
         settings,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -4110,6 +4158,7 @@ fn queue_add_granular_mosaic_pool_sequence(
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         max_frames,
         frame_rate,
         write_grain_cache,
@@ -4152,6 +4201,16 @@ fn queue_add_granular_mosaic_pool_sequence(
     if !coherence_weight.is_finite() || coherence_weight < 0.0 {
         return Err(CliError::Message(
             "coherence-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    if !spatial_coherence_weight.is_finite() || spatial_coherence_weight < 0.0 {
+        return Err(CliError::Message(
+            "spatial-coherence-weight must be a finite, non-negative number".to_string(),
+        ));
+    }
+    if !texture_weight.is_finite() || texture_weight < 0.0 {
+        return Err(CliError::Message(
+            "texture-weight must be a finite, non-negative number".to_string(),
         ));
     }
 
@@ -4205,6 +4264,7 @@ fn queue_add_granular_mosaic_pool_sequence(
             variation: settings.variation,
             seed: settings.seed,
             audio_weight,
+            texture_weight,
             modulator_rms_cache,
             carrier_rms_cache,
             modulator_centroid_cache,
@@ -4214,6 +4274,7 @@ fn queue_add_granular_mosaic_pool_sequence(
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             max_frames,
             frame_rate,
             backend,
@@ -4671,6 +4732,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
         variation,
         seed,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -4680,6 +4742,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         max_frames,
         frame_rate,
         backend,
@@ -4717,6 +4780,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 output_dir: &output_dir.join("frames"),
                 settings,
                 audio_weight,
+                texture_weight,
                 modulator_rms_cache: modulator_rms_cache.as_deref().map(Path::new),
                 carrier_rms_cache: carrier_rms_cache.as_deref().map(Path::new),
                 modulator_centroid_cache: modulator_centroid_cache.as_deref().map(Path::new),
@@ -4726,6 +4790,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
                 anti_repeat_cooldown,
                 coherence_weight,
                 coherence_reach,
+                spatial_coherence_weight,
                 frame_rate,
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
@@ -4752,6 +4817,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
             timing: &timing,
             settings: &settings,
             audio_weight,
+            texture_weight,
             modulator_rms_cache: modulator_rms_cache.as_deref(),
             carrier_rms_cache: carrier_rms_cache.as_deref(),
             modulator_centroid_cache: modulator_centroid_cache.as_deref(),
@@ -4761,6 +4827,7 @@ fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Result<(), CliE
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             backend,
             provenance: Some(&provenance),
         })?;
@@ -5146,6 +5213,7 @@ struct GranularMosaicPoolManifest<'a> {
     timing: &'a RenderTimingMetadata,
     settings: &'a GranularMosaicSettings,
     audio_weight: f32,
+    texture_weight: f32,
     modulator_rms_cache: Option<&'a str>,
     carrier_rms_cache: Option<&'a str>,
     modulator_centroid_cache: Option<&'a str>,
@@ -5155,6 +5223,7 @@ struct GranularMosaicPoolManifest<'a> {
     anti_repeat_cooldown: u32,
     coherence_weight: f32,
     coherence_reach: u32,
+    spatial_coherence_weight: f32,
     backend: RenderBackend,
     provenance: Option<&'a RenderJobProvenance>,
 }
@@ -5169,6 +5238,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
         timing,
         settings,
         audio_weight,
+        texture_weight,
         modulator_rms_cache,
         carrier_rms_cache,
         modulator_centroid_cache,
@@ -5178,6 +5248,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
         anti_repeat_cooldown,
         coherence_weight,
         coherence_reach,
+        spatial_coherence_weight,
         backend,
         provenance,
     } = manifest;
@@ -5199,6 +5270,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
             "algorithm": POOLED_GRAIN_ALGORITHM,
             "settings": settings,
             "audio_weight": audio_weight,
+            "texture_weight": texture_weight,
             "modulator_rms_cache": modulator_rms_cache,
             "carrier_rms_cache": carrier_rms_cache,
             "modulator_centroid_cache": modulator_centroid_cache,
@@ -5208,6 +5280,7 @@ fn write_granular_mosaic_pool_sequence_manifest(
             "anti_repeat_cooldown": anti_repeat_cooldown,
             "coherence_weight": coherence_weight,
             "coherence_reach": coherence_reach,
+            "spatial_coherence_weight": spatial_coherence_weight,
             "backend": render_backend_label(backend)
         },
         "provenance": provenance,

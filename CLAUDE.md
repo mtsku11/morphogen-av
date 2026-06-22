@@ -48,6 +48,20 @@ The full CLI catalog and key-path map are in **[docs/REFERENCE.md](docs/REFERENC
   compile + a visual PNG check. Overrides the generic verify.
 - **`/preview`** (project-local skill) — render an effect on a small fixture and
   look at the frames; the inner loop for tuning an effect's look.
+- **`/fixture`** (project-local skill, `scripts/make-fixture.sh`) — scaffold a
+  synthetic readout fixture for the granular-pool path. `--readout frame`
+  (solid-colour frames whose output colour reveals the selected source *frame*) or
+  `--readout origin` (coordinate-gradient carrier whose output colour reveals the
+  selected source *location*, for spatial/selection knobs); optional chirp WAVs +
+  RMS/STFT caches for audio/centroid runs. **Render readouts with `--variation 0`**
+  (the pool render's 0.25 default scatters them).
+- **`scripts/frame-delta.py`** — mean frame-to-frame change of a PNG sequence; the
+  quantitative half of the off-vs-on knob check (pair it with Reading the frames).
+- **`/parity`** (project-local skill, `scripts/parity-check.sh`) — prove a
+  granular-pool render is path-independent: render the same job via the direct CLI
+  and the queue add→run path, byte-compare every frame, show the persisted
+  manifest knobs. The exploratory complement to the determinism assertions in
+  `crates/morphogen-cli/tests/smoke.rs`.
 - **`scripts/check-shaders.sh`** — offline-compiles the `.metal` shaders. Skips
   cleanly unless the Xcode Metal Toolchain component is installed
   (`xcodebuild -downloadComponent MetalToolchain`); the runtime tests in
@@ -67,6 +81,12 @@ The full CLI catalog and key-path map are in **[docs/REFERENCE.md](docs/REFERENC
 3. **Verify before "done".** Run `/verify` (typecheck/tests, build if config
    changed). Capture a baseline pass/fail count *before* changing anything and
    report the delta — "no regressions" needs a number. Show evidence, don't assert.
+   For any feature that affects output (an effect, parameter, or selection/
+   scheduling knob), tests + parity prove determinism but **not** that the knob
+   does what it claims — also render it **off vs on** on a readout fixture with
+   `--variation 0`, Read frames from both, and report the `frame-delta.py` number.
+   A look without a number is unfalsifiable; a number without the pixels proves
+   nothing.
 4. **Checkpoint each verified increment** with `/checkpoint` (local commit,
    source files only, no push). Commit/push only when asked; branch off `main`
    first if pushing. Long uncommitted stretches lose work to session cutoffs.

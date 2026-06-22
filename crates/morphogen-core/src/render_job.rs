@@ -130,6 +130,9 @@ pub enum RenderJobTask {
         seed: u64,
         /// Scales every audio dimension in the selection distance.
         audio_weight: f32,
+        /// Scales both texture dims (luma variance + gradient magnitude); `0` = off.
+        #[serde(default)]
+        texture_weight: f32,
         /// RMS cache for Source A; supplies the per-output-frame query audio.
         #[serde(default)]
         modulator_rms_cache: Option<String>,
@@ -157,6 +160,10 @@ pub enum RenderJobTask {
         /// Frame distance over which the coherence penalty saturates.
         #[serde(default)]
         coherence_reach: u32,
+        /// Spatial-origin coherence weight (rewards grain-origin continuity within
+        /// a frame, sharing `coherence_reach`); `0` = off.
+        #[serde(default)]
+        spatial_coherence_weight: f32,
         max_frames: Option<u32>,
         frame_rate: f64,
         /// Render backend; the Metal path is gated per-frame against the CPU
@@ -400,6 +407,7 @@ mod tests {
             variation: 0.0,
             seed: 7,
             audio_weight: 1.0,
+            texture_weight: 0.5,
             modulator_rms_cache: Some("/tmp/a-rms.json".to_string()),
             carrier_rms_cache: Some("/tmp/b-rms.json".to_string()),
             modulator_centroid_cache: Some("/tmp/a-stft.json".to_string()),
@@ -409,6 +417,7 @@ mod tests {
             anti_repeat_cooldown: 6,
             coherence_weight: 0.75,
             coherence_reach: 4,
+            spatial_coherence_weight: 0.25,
             max_frames: Some(48),
             frame_rate: 24.0,
             backend: RenderBackend::Metal,
@@ -439,6 +448,7 @@ mod tests {
 
         let task: RenderJobTask = serde_json::from_str(json).expect("deserialize pool task");
         let RenderJobTask::FrameSequenceGranularMosaicPool {
+            texture_weight,
             modulator_rms_cache,
             carrier_rms_cache,
             modulator_centroid_cache,
@@ -448,6 +458,7 @@ mod tests {
             anti_repeat_cooldown,
             coherence_weight,
             coherence_reach,
+            spatial_coherence_weight,
             backend,
             ..
         } = task
@@ -456,6 +467,7 @@ mod tests {
         };
         assert_eq!(modulator_rms_cache, None);
         assert_eq!(carrier_rms_cache, None);
+        assert_eq!(texture_weight, 0.0);
         // Pool-selection knobs added after the original schema default to off, so
         // jobs serialized before this sweep keep their whole-clip / no-scheduler meaning.
         assert_eq!(modulator_centroid_cache, None);
@@ -465,6 +477,7 @@ mod tests {
         assert_eq!(anti_repeat_cooldown, 0);
         assert_eq!(coherence_weight, 0.0);
         assert_eq!(coherence_reach, 0);
+        assert_eq!(spatial_coherence_weight, 0.0);
         assert_eq!(backend, RenderBackend::Cpu);
     }
 

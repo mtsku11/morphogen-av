@@ -8,14 +8,49 @@ _Last updated: 2026-06-21_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **140 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **142 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **26 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the granular step-6b Metal-port commits. Manual-testing clips
+- Tree clean as of the texture-dims commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
 
+- **Granular step 6b luma-variance + gradient texture dims (render/CLI + queue +
+  SwiftUI):** the final 6b feature, landed as a full vertical slice. Each pooled
+  grain now carries a 2-dim texture descriptor `[luma_variance,
+  gradient_magnitude]` over its tile; `--texture-weight W` (0 = off) scales both
+  dims in the per-tile nearest match, querying Source A's per-tile texture, so a
+  smooth modulator region draws smooth carrier grains and a busy region draws busy
+  ones. Off by default ⇒ byte-identical selection. The pool **algorithm id bumped
+  v1 → v2** (descriptor schema changed), so stale v1 sidecars regenerate rather
+  than read texture as zero. Plumbed through the persisted job (serde default 0),
+  queue-add/run, manifest, and the Render panel (Texture Weight stepper). New
+  render-crate test (texture breaks a mean-colour tie: a busy modulator query
+  picks the checkerboard grain over the flat one; weight 0 leaves the tie). New
+  `--readout texture` fixture mode (flat vs striped frames at equal mean colour);
+  off-vs-on readout: OFF mean frame-delta **0.0/255** (colour tie pins to the flat
+  grain), ON **48.0/255** with the output tracking the modulator's flat↔stripes
+  texture demand (frames Read to confirm); `/parity` OK 8/8 (queue == direct,
+  manifest carries `texture_weight`); smoke + Swift bridge tests pin the knob.
+  Workspace 141 → 142; Swift unchanged at 26 (existing tests extended). **With
+  this, granular step 6b is feature-complete — no algorithmic refinements remain.**
+- **Granular step 6b spatial-origin coherence (render/CLI + queue + SwiftUI):**
+  the spatial complement to frame coherence, landed as a full vertical slice.
+  `--spatial-coherence-weight W` (0 = off) adds a second additive term to
+  `TemporalCoherence`: a candidate grain whose origin differs from that tile's
+  previous pick adds `W*min(dist_tiles,reach)/reach` to its squared feature
+  distance (`dist_tiles` = Euclidean origin distance in grain-tile units, sharing
+  `--coherence-reach`). Keeps a tile's pick from teleporting across the frame even
+  on a nearby source frame. Off by default ⇒ byte-identical; with either coherence
+  weight > 0 the scheduler engages (frame zero still a no-op). Plumbed through the
+  persisted job (serde default 0), queue-add/run, manifest, and the Render panel
+  (Spatial weight stepper sharing Reach). New render-crate test (spatial weight
+  overturns the exact-colour grain toward the previous pick's origin; frame-zero
+  no-op); `/parity` OK 4/4 with frame + spatial coherence (queue == direct);
+  smoke + Swift bridge tests pin the knob. Workspace 140 → 141; Swift unchanged at
+  26 (existing tests extended). With this, the last 6b algorithmic refinement
+  remaining is luma-variance/gradient feature dims.
 - **Granular step 6b pool-selection knobs — queue/SwiftUI exposure sweep:** the
   persisted `frame_sequence_granular_mosaic_pool` job now carries all four
   direct-render pool knobs — centroid (k=2) STFT caches, trailing pool window,
@@ -141,14 +176,13 @@ _Last updated: 2026-06-21_
 
 On `main`. Granular step 6b is now feature-complete end-to-end: CPU core + CLI
 render path + queue task + SwiftUI exposure + parity-gated Metal port, plus k>1
-audio dims, trailing pool window, and both cross-frame schedulers (anti-repeat +
-temporal coherence) — all now plumbed through the persisted queue job and the
-macOS Render panel by the exposure sweep (see "What just landed"). These last
-commits (temporal coherence + the exposure sweep) are local, not yet pushed.
-Remaining 6b refinements are deferred and unscheduled: spatial-origin coherence
-(continuity in grain origin, not just frame index) and luma-variance/gradient
-feature dims. The natural next vertical slice is a new roadmap effect (Video
-Vocoder or Spectral Audio Cross-Synthesis).
+audio dims, trailing pool window, all three cross-frame schedulers (anti-repeat +
+frame coherence + spatial-origin coherence), and the luma-variance/gradient
+texture dims — every selection knob plumbed through the persisted queue job and
+the macOS Render panel. **No 6b refinements remain.** The spatial-origin coherence
+and texture-dims commits (render/CLI, queue, SwiftUI, docs) are local, not yet
+pushed. The next vertical slice is a new roadmap effect (Video Vocoder or Spectral
+Audio Cross-Synthesis).
 
 ## Candidate next steps
 

@@ -220,8 +220,10 @@ enum RustBridgePlaceholder {
       )
     }
     for (name, value) in [
+      ("texture weight", request.textureWeight),
       ("anti-repeat weight", request.antiRepeatWeight),
-      ("coherence weight", request.coherenceWeight)
+      ("coherence weight", request.coherenceWeight),
+      ("spatial coherence weight", request.spatialCoherenceWeight)
     ] {
       guard value.isFinite && value >= 0 else {
         throw RustBridgeError.invalidFrameSequenceRequest(
@@ -261,6 +263,8 @@ enum RustBridgePlaceholder {
       String(request.seed),
       "--audio-weight",
       cliNumber(request.audioWeight),
+      "--texture-weight",
+      cliNumber(request.textureWeight),
       "--pool-window",
       String(request.poolWindow),
       "--anti-repeat-weight",
@@ -271,6 +275,8 @@ enum RustBridgePlaceholder {
       cliNumber(request.coherenceWeight),
       "--coherence-reach",
       String(request.coherenceReach),
+      "--spatial-coherence-weight",
+      cliNumber(request.spatialCoherenceWeight),
       "--frame-rate",
       cliNumber(request.frameRate),
       "--backend",
@@ -864,6 +870,8 @@ struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
   let variation: Double
   let seed: UInt64
   let audioWeight: Double
+  // Texture matching weight; defaulted off so call sites predating it keep meaning.
+  var textureWeight: Double = 0
   let modulatorRMSCacheURL: URL?
   let carrierRMSCacheURL: URL?
   // Pool-selection knobs added in the queue/SwiftUI exposure sweep. Defaulted to
@@ -875,6 +883,7 @@ struct GranularMosaicPoolSequenceRenderQueueCommandRequest {
   var antiRepeatCooldown: Int = 8
   var coherenceWeight: Double = 0
   var coherenceReach: Int = 8
+  var spatialCoherenceWeight: Double = 0
   let maxFrames: Int?
   let frameRate: Double
   let backend: FeedbackRenderBackendOption
