@@ -165,24 +165,16 @@ fn luma_cdf(image: &ImageBufferF32) -> Vec<f32> {
     cdf
 }
 
-/// Tonal envelope transfer (histogram specification): remap each carrier luma so
-/// Source B's luma distribution matches Source A's — `out_luma = CDF_A^-1(CDF_B(L))`.
-/// Unlike the gain path there is no neutral point, so it stays strong even when
-/// both clips have spread histograms. `amount` blends from the carrier (0) to the
-/// fully matched tone (1); RGB is scaled to preserve hue (pure black stays black).
-pub fn histogram_specification_cpu(
+/// The histogram-specification tone map `T(L) = CDF_A^-1(CDF_B(L))` as a
+/// `SPEC_LEVELS`-entry LUT indexed by `round(luma * (SPEC_LEVELS-1))`. Entry `i`
+/// is the Source A luma a carrier level `i` should map to. Shared by the CPU
+/// apply path and the parity-gated Metal kernel so both consume one tone map.
+pub fn luma_specification_tone_map(
     modulator: &ImageBufferF32,
     carrier: &ImageBufferF32,
-    amount: f32,
-) -> Result<ImageBufferF32, RenderError> {
-    if !amount.is_finite() || amount < 0.0 {
-        return Err(RenderError::InvalidVideoVocoderSettings(
-            "amount must be finite and non-negative".to_string(),
-        ));
-    }
+) -> Vec<f32> {
     let a_cdf = luma_cdf(modulator);
     let b_cdf = luma_cdf(carrier);
-
     // Monotone tone map: for each carrier level, the matching modulator level is
     // the smallest whose CDF reaches the carrier level's rank. b_cdf is
     // nondecreasing, so a_level only advances (O(levels)).
@@ -194,6 +186,28 @@ pub fn histogram_specification_cpu(
             a_level += 1;
         }
         *slot = a_level as f32 / (SPEC_LEVELS - 1) as f32;
+    }
+    tone
+}
+
+/// Apply a precomputed specification tone map to the carrier: per pixel, blend
+/// the matched tone by `amount` and scale RGB by `target/luma` (hue preserved,
+/// pure black stays black, output clamped). `amount = 0` is an exact passthrough.
+pub fn apply_tone_map_cpu(
+    carrier: &ImageBufferF32,
+    tone: &[f32],
+    amount: f32,
+) -> Result<ImageBufferF32, RenderError> {
+    if !amount.is_finite() || amount < 0.0 {
+        return Err(RenderError::InvalidVideoVocoderSettings(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if tone.len() != SPEC_LEVELS {
+        return Err(RenderError::InvalidVideoVocoderSettings(format!(
+            "tone map must have {SPEC_LEVELS} entries, got {}",
+            tone.len()
+        )));
     }
 
     let pixels = carrier
@@ -215,6 +229,23 @@ pub fn histogram_specification_cpu(
 
     ImageBufferF32::new(carrier.width, carrier.height, pixels)
 }
+
+/// Tonal envelope transfer (histogram specification): remap each carrier luma so
+/// Source B's luma distribution matches Source A's — `out_luma = CDF_A^-1(CDF_B(L))`.
+/// Unlike the gain path there is no neutral point, so it stays strong even when
+/// both clips have spread histograms. `amount` blends from the carrier (0) to the
+/// fully matched tone (1); RGB is scaled to preserve hue (pure black stays black).
+pub fn histogram_specification_cpu(
+    modulator: &ImageBufferF32,
+    carrier: &ImageBufferF32,
+    amount: f32,
+) -> Result<ImageBufferF32, RenderError> {
+    let tone = luma_specification_tone_map(modulator, carrier);
+    apply_tone_map_cpu(carrier, &tone, amount)
+}
+
+/// Number of entries in a specification tone map (exported for the Metal path).
+pub const TONE_MAP_LEVELS: usize = SPEC_LEVELS;
 
 /// Convenience: analyze Source A then apply to Source B in one call (the
 /// still-image path). The sequence/queue paths analyze once into a reusable

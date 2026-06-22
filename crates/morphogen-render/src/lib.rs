@@ -54,9 +54,9 @@ pub use optical_flow::{
 };
 pub use sampler::sample_bilinear_clamped;
 pub use video_vocoder::{
-    analyze_luma_band_envelope_cpu, histogram_specification_cpu, video_vocoder_cpu,
-    video_vocoder_from_modulator_cpu, LumaBandEnvelope, VideoVocoderSettings,
-    VIDEO_VOCODER_ALGORITHM,
+    analyze_luma_band_envelope_cpu, apply_tone_map_cpu, histogram_specification_cpu,
+    luma_specification_tone_map, video_vocoder_cpu, video_vocoder_from_modulator_cpu,
+    LumaBandEnvelope, VideoVocoderSettings, TONE_MAP_LEVELS, VIDEO_VOCODER_ALGORITHM,
 };
 
 #[cfg(test)]

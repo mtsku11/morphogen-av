@@ -30,8 +30,8 @@ use morphogen_render::{
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
     select_grains_from_pool_cpu, select_grains_multimodal_cpu, video_vocoder_cpu,
-    analyze_luma_band_envelope_cpu, histogram_specification_cpu, AntiRepeat, TemporalCoherence,
-    VideoVocoderSettings, write_flow_cache,
+    analyze_luma_band_envelope_cpu, apply_tone_map_cpu, luma_specification_tone_map, AntiRepeat,
+    TemporalCoherence, VideoVocoderSettings, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
@@ -193,6 +193,8 @@ enum Commands {
         amount: f32,
         #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
         mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     /// Render a video-vocoder PNG-frame sequence (per-frame luma-band gain
     /// routing). Source A's per-frame luma envelope reweights Source B's bands.
@@ -206,6 +208,8 @@ enum Commands {
         amount: f32,
         #[arg(long, value_enum, default_value_t = CliVocoderMode::Match)]
         mode: CliVocoderMode,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
     },
@@ -851,12 +855,14 @@ fn run() -> Result<(), CliError> {
             bands,
             amount,
             mode,
+            backend,
         } => render_video_vocoder(
             &modulator_image,
             &carrier_image,
             &output_path,
             VideoVocoderSettings { bands, amount },
             mode,
+            backend.into(),
         ),
         Commands::RenderVideoVocoderSequence {
             modulator_dir,
@@ -865,6 +871,7 @@ fn run() -> Result<(), CliError> {
             bands,
             amount,
             mode,
+            backend,
             max_frames,
         } => render_video_vocoder_sequence(
             &modulator_dir,
@@ -872,6 +879,7 @@ fn run() -> Result<(), CliError> {
             &output_dir,
             VideoVocoderSettings { bands, amount },
             mode,
+            backend.into(),
             max_frames,
         )
         .map(|_| ()),
@@ -1709,25 +1717,47 @@ fn render_granular_mosaic(
     Ok(())
 }
 
+fn render_video_vocoder_frame(
+    modulator: &ImageBufferF32,
+    carrier: &ImageBufferF32,
+    settings: VideoVocoderSettings,
+    mode: CliVocoderMode,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match mode {
+        CliVocoderMode::Gain => {
+            if backend == RenderBackend::Metal {
+                return Err(CliError::Message(
+                    "the Metal backend is only implemented for --mode match; use --backend cpu for gain mode".to_string(),
+                ));
+            }
+            let envelope = analyze_luma_band_envelope_cpu(modulator, settings.bands)?;
+            Ok(video_vocoder_cpu(carrier, &envelope, settings)?)
+        }
+        CliVocoderMode::Match => {
+            let tone = luma_specification_tone_map(modulator, carrier);
+            match backend {
+                RenderBackend::Cpu => Ok(apply_tone_map_cpu(carrier, &tone, settings.amount)?),
+                RenderBackend::Metal => {
+                    render_video_vocoder_match_metal(carrier, &tone, settings.amount)
+                }
+            }
+        }
+    }
+}
+
 fn render_video_vocoder(
     modulator_image: &Path,
     carrier_image: &Path,
     output_path: &Path,
     settings: VideoVocoderSettings,
     mode: CliVocoderMode,
+    backend: RenderBackend,
 ) -> Result<(), CliError> {
     settings.validate()?;
     let modulator = load_image_f32(modulator_image)?;
     let carrier = load_image_f32(carrier_image)?;
-    let rendered = match mode {
-        CliVocoderMode::Gain => {
-            let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
-            video_vocoder_cpu(&carrier, &envelope, settings)?
-        }
-        CliVocoderMode::Match => {
-            histogram_specification_cpu(&modulator, &carrier, settings.amount)?
-        }
-    };
+    let rendered = render_video_vocoder_frame(&modulator, &carrier, settings, mode, backend)?;
 
     write_parent_dirs(output_path)?;
     save_png(&rendered, output_path)?;
@@ -1749,6 +1779,7 @@ fn render_video_vocoder_sequence(
     output_dir: &Path,
     settings: VideoVocoderSettings,
     mode: CliVocoderMode,
+    backend: RenderBackend,
     max_frames: Option<usize>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     settings.validate()?;
@@ -1775,15 +1806,8 @@ fn render_video_vocoder_sequence(
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
-        let rendered = match mode {
-            CliVocoderMode::Gain => {
-                let envelope = analyze_luma_band_envelope_cpu(&modulator, settings.bands)?;
-                video_vocoder_cpu(&carrier, &envelope, settings)?
-            }
-            CliVocoderMode::Match => {
-                histogram_specification_cpu(&modulator, &carrier, settings.amount)?
-            }
-        };
+        let rendered =
+            render_video_vocoder_frame(&modulator, &carrier, settings, mode, backend)?;
         save_png(
             &rendered,
             &output_dir.join(format!("frame_{index:06}.png")),
@@ -2849,6 +2873,39 @@ fn render_granular_mosaic_output_metal(
         )));
     }
     Ok(gpu)
+}
+
+#[cfg(target_os = "macos")]
+fn render_video_vocoder_match_metal(
+    carrier: &ImageBufferF32,
+    tone: &[f32],
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::video_vocoder_match_metal(carrier, tone, amount)?;
+    let cpu = apply_tone_map_cpu(carrier, tone, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU video vocoder outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal video vocoder render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_video_vocoder_match_metal(
+    _carrier: &ImageBufferF32,
+    _tone: &[f32],
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal render backend is only available on macOS".to_string(),
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
