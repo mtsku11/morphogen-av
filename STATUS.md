@@ -8,13 +8,30 @@ _Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **155 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **160 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **28 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the video-vocoder commits. Manual-testing clips
   (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Spectral Audio Cross-Synthesis — CPU core + CLI slice.** The roadmap's
+  "RMS or centroid controls a simple filter/gain path" MVP, A→B, **time-domain by
+  constraint** (our STFT is magnitude-only with no inverse, so phase-vocoder
+  resynthesis stays the deferred HQ tier). Two modes share the framing (output
+  follows B; A's descriptor resolved by time-based hold-last; `amount=0` =
+  byte-identical passthrough): **`gain`** = A's peak-normalized RMS envelope
+  scales B's amplitude; **`filter`** = A's spectral-centroid envelope (normalized
+  to Nyquist) sweeps a per-sample one-pole LP/HP cutoff on B. CPU-only (audio is
+  not a GPU target — no Metal, nothing to parity-gate). `cross_synth.rs` in
+  morphogen-audio (5 tests) + `render-spectral-cross-synth` CLI (WAV A + WAV B →
+  WAV out). Algorithm ids `rms_gain_cross_synth_cpu_v1` /
+  `centroid_filter_cross_synth_cpu_v1`. Off-vs-on verified numerically (audio has
+  no PNG): gain half-amplitude ratio **1.00 → 3.11** (output tracks A's
+  loud→silent ramp); filter output centroid **5640 → 1962 Hz** (dark A lowpasses
+  bright B). Workspace 155 → 160. Queue + SwiftUI deferred. Contract:
+  `docs/SPECTRAL_CROSS_SYNTH_MILESTONE.md`.
 
 - **Video Vocoder — full vertical slice (CPU + CLI + Metal + queue + SwiftUI).**
   The roadmap's "luma-band gain routing" effect, built A→B. Two modes share the
@@ -199,8 +216,9 @@ feature-complete end-to-end (CPU + CLI + parity-gated Metal for match mode + que
 job + SwiftUI). Granular step 6b remains feature-complete. The vocoder's
 deferred items: gain-mode Metal port, a reusable Source-A luma-band histogram
 sidecar (currently recomputed per frame), spatial-frequency (multiband) routing,
-and the reverse/cross-clip look exploration. The next new effect is **Spectral
-Audio Cross-Synthesis** (RMS/centroid filter path).
+and the reverse/cross-clip look exploration. **Spectral Audio Cross-Synthesis**
+now has its CPU core + CLI slice landed and verified (gain + filter modes); its
+queue task + SwiftUI exposure are the next increment for that effect.
 
 ## Candidate next steps
 
