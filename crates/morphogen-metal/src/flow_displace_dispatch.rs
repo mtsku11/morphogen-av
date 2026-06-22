@@ -14,6 +14,9 @@ pub const VIDEO_VOCODER_SHADER_SOURCE: &str = include_str!("../shaders/video_voc
 pub const CONVOLUTION_BLEND_KERNEL_NAME: &str = "convolution_blend";
 pub const CONVOLUTION_BLEND_SHADER_SOURCE: &str =
     include_str!("../shaders/convolution_blend.metal");
+pub const CONVOLUTION_BLEND_COLOR_KERNEL_NAME: &str = "convolution_blend_color";
+pub const CONVOLUTION_BLEND_COLOR_SHADER_SOURCE: &str =
+    include_str!("../shaders/convolution_blend_color.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -303,6 +306,27 @@ pub fn validate_convolution_blend_shader_source() -> Result<(), MetalDispatchErr
     Ok(())
 }
 
+pub fn validate_convolution_blend_color_shader_source() -> Result<(), MetalDispatchError> {
+    if !CONVOLUTION_BLEND_COLOR_SHADER_SOURCE.contains("kernel void convolution_blend_color") {
+        return Err(MetalDispatchError::MissingConvolutionBlendKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::read> carrier [[texture(0)]]",
+        "texture2d<float, access::write> output [[texture(1)]]",
+        "constant float *weights_r [[buffer(0)]]",
+        "constant float *weights_g [[buffer(1)]]",
+        "constant float *weights_b [[buffer(2)]]",
+        "constant ConvolutionBlendParams &params [[buffer(3)]]",
+    ] {
+        if !CONVOLUTION_BLEND_COLOR_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingConvolutionBlendBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -389,5 +413,11 @@ mod tests {
     #[test]
     fn convolution_blend_shader_has_expected_bindings() {
         validate_convolution_blend_shader_source().expect("convolution blend shader preflight");
+    }
+
+    #[test]
+    fn convolution_blend_color_shader_has_expected_bindings() {
+        validate_convolution_blend_color_shader_source()
+            .expect("colour convolution blend shader preflight");
     }
 }

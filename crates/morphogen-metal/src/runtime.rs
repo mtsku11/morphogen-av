@@ -9,8 +9,10 @@ use morphogen_render::{
 
 use crate::{
     FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
-    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
-    CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
+    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE,
+    CONVOLUTION_BLEND_COLOR_KERNEL_NAME, CONVOLUTION_BLEND_COLOR_SHADER_SOURCE,
+    CONVOLUTION_BLEND_KERNEL_NAME, CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME,
+    FLOW_DISPLACE_SHADER_SOURCE,
     GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_POOL_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_SHADER_SOURCE, GRANULAR_MOSAIC_SHADER_SOURCE,
     VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
@@ -335,6 +337,124 @@ pub fn convolution_blend_metal(
     };
     encoder.set_bytes(
         1,
+        std::mem::size_of::<ConvolutionBlendParams>() as u64,
+        (&params as *const ConvolutionBlendParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
+/// Convolutional AV blend, per-channel **colour** mode. Convolves each carrier
+/// channel (R/G/B) with its own normalized `weights_{r,g,b}` kernel
+/// (`kernel_size × kernel_size`, from
+/// `morphogen_render::analyze_convolution_kernels_color_cpu`) and blends by
+/// `amount`. The CPU reference `convolution_blend_color_cpu` evaluates identical
+/// math; the CLI gates this output against it per frame before export.
+pub fn convolution_blend_color_metal(
+    carrier: &ImageBufferF32,
+    weights_r: &[f32],
+    weights_g: &[f32],
+    weights_b: &[f32],
+    kernel_size: u32,
+    amount: f32,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if kernel_size == 0 || kernel_size % 2 == 0 {
+        return Err(MetalDispatchError::InvalidConvolutionSettings(
+            "kernel_size must be odd and greater than zero".to_string(),
+        ));
+    }
+    let expected = (kernel_size * kernel_size) as usize;
+    for weights in [weights_r, weights_g, weights_b] {
+        if weights.len() != expected {
+            return Err(MetalDispatchError::InvalidConvolutionSettings(format!(
+                "weights length {} does not match kernel_size {}",
+                weights.len(),
+                kernel_size
+            )));
+        }
+    }
+
+    let plan = FlowDisplaceDispatchPlan::new(carrier.width, carrier.height, amount)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(CONVOLUTION_BLEND_COLOR_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(CONVOLUTION_BLEND_COLOR_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let carrier_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&carrier_texture, carrier)?;
+
+    let make_buffer = |weights: &[f32]| {
+        device.new_buffer_with_data(
+            weights.as_ptr().cast(),
+            std::mem::size_of_val(weights) as u64,
+            MTLResourceOptions::StorageModeShared,
+        )
+    };
+    let buffer_r = make_buffer(weights_r);
+    let buffer_g = make_buffer(weights_g);
+    let buffer_b = make_buffer(weights_b);
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&carrier_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_buffer(0, Some(&buffer_r), 0);
+    encoder.set_buffer(1, Some(&buffer_g), 0);
+    encoder.set_buffer(2, Some(&buffer_b), 0);
+
+    let params = ConvolutionBlendParams {
+        amount: plan.amount,
+        width: plan.width,
+        height: plan.height,
+        kernel_size,
+    };
+    encoder.set_bytes(
+        3,
         std::mem::size_of::<ConvolutionBlendParams>() as u64,
         (&params as *const ConvolutionBlendParams).cast(),
     );
@@ -974,7 +1094,8 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
-        analyze_convolution_kernel_cpu, analyze_grain_pool_cpu, apply_tone_map_cpu,
+        analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
+        analyze_grain_pool_cpu, apply_tone_map_cpu, convolution_blend_color_cpu,
         convolution_blend_cpu, flow_displace_cpu, flow_feedback_frame_cpu,
         granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
         luma_specification_tone_map, select_grains_from_pool_cpu, FlowFeedbackSettings, FlowField,
@@ -1207,6 +1328,61 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_convolution_blend_color_matches_cpu_reference() {
+        // A carrier whose channels differ and a modulator whose R/G/B channels
+        // carry different structure, so the three per-channel kernels are all
+        // distinct; parity at 1/255 against the CPU colour reference.
+        let carrier = ImageBufferF32::from_fn(8, 7, |x, y| {
+            let v = if (x + y) % 2 == 0 { 0.85 } else { 0.15 };
+            [v, v * 0.6, 1.0 - v, 1.0]
+        })
+        .expect("carrier");
+        let modulator = ImageBufferF32::from_fn(9, 9, |x, y| {
+            [
+                (x as f32 / 8.0).clamp(0.0, 1.0),
+                (y as f32 / 8.0).clamp(0.0, 1.0),
+                ((x + y) as f32 / 16.0).clamp(0.0, 1.0),
+                1.0,
+            ]
+        })
+        .expect("modulator");
+
+        let kernels = analyze_convolution_kernels_color_cpu(&modulator, 3).expect("kernels");
+        let cpu = convolution_blend_color_cpu(&carrier, &kernels, 1.0).expect("cpu render");
+        let gpu = match convolution_blend_color_metal(
+            &carrier,
+            &kernels[0].weights,
+            &kernels[1].weights,
+            &kernels[2].weights,
+            kernels[0].size,
+            1.0,
+        ) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal colour convolution parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal colour convolution blend render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_convolution_blend_color_rejects_even_kernel_size() {
+        let carrier = ImageBufferF32::new(2, 2, vec![[0.5, 0.5, 0.5, 1.0]; 4]).expect("carrier");
+        let error =
+            convolution_blend_color_metal(&carrier, &[0.25; 4], &[0.25; 4], &[0.25; 4], 2, 1.0)
+                .expect_err("even kernel size must be rejected");
+        assert!(
+            matches!(error, MetalDispatchError::InvalidConvolutionSettings(_)),
+            "expected InvalidConvolutionSettings, got {error:?}"
+        );
     }
 
     #[test]
