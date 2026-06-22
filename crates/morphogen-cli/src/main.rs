@@ -52,7 +52,9 @@ use morphogen_render::{
     LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+
+mod error;
+use error::CliError;
 
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -1117,28 +1119,6 @@ impl From<CliStructureMode> for StructureMode {
     }
 }
 
-#[derive(Debug, Error)]
-enum CliError {
-    #[error("{0}")]
-    Message(String),
-    #[error(transparent)]
-    Core(#[from] morphogen_core::CoreError),
-    #[error(transparent)]
-    Media(#[from] morphogen_media::MediaError),
-    #[error(transparent)]
-    Audio(#[from] morphogen_audio::AudioError),
-    #[error(transparent)]
-    Render(#[from] morphogen_render::RenderError),
-    #[cfg(target_os = "macos")]
-    #[error(transparent)]
-    Metal(#[from] morphogen_metal::MetalDispatchError),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Json(#[from] serde_json::Error),
-    #[error(transparent)]
-    Image(#[from] image::ImageError),
-}
 
 fn main() {
     if let Err(error) = run() {
