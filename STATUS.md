@@ -8,13 +8,31 @@ _Last updated: 2026-06-22_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **208 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **223 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **38 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the impulse-convolution HQ-tier commits. Manual-testing clips
-  (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
+- `swift test`: **40 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the colour-kernel / per-channel-IR commits. Manual-testing
+  clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Convolutional AV Blending (per-channel colour kernels + true-stereo IRs +
+  large-K Metal verify) — three vertical slices.** The remaining deferred HQ
+  items. **Colour kernels** (`--kernel-mode color`): a separate K×K kernel from
+  each of A's R/G/B channels, applied channel-wise (chromatic structure transfer);
+  parity-gated `convolution_blend_color` Metal kernel (three weight buffers), algo
+  id `image_color_kernel_convolution_blend_cpu_v1`; CPU + CLI + queue + SwiftUI.
+  Off-vs-on (luma vs colour, K=7): **mean 24/255, max 130**, 0 vs identical.
+  **Per-channel IRs** (`--ir-mode per-channel`): each carrier channel convolved
+  with its own IR from the matching A channel (cycling when counts differ),
+  CPU-only, algo id `per_channel_impulse_response_convolution_blend_cpu_v1`; CPU +
+  CLI + queue + SwiftUI. Off-vs-on (mono vs per-channel, stereo identity/smear IR):
+  **max abs diff 0.48 (L) / 0.35 (R)**, 0 vs identical. **Large-K Metal:** the
+  existing image kernel already convolves arbitrary odd K (no cap) — proved with a
+  K=11 CPU + Metal parity test; a tiled perf kernel is deferred (not a correctness
+  gap). Both new modes serde-default to luma/mono so existing jobs keep meaning.
+  Workspace 208 → 223; Swift 38 → 40. Contract:
+  `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
 
 - **Convolutional AV Blending (audio HQ tier: FFT method + IR resampling) —
   full vertical slice (CPU + CLI + queue + SwiftUI; CPU-only).** The two deferred
@@ -327,14 +345,15 @@ Routing** (RMS→displacement) is now a feature-complete MVP vertical slice too
 spatially varying displacement fields (sine/radial/Source-A flow), other
 descriptor targets (centroid→hue, onset→cut), and sample-accurate descriptor
 curves (HQ tier). **Convolutional AV Blending** is now feature-complete across
-both MVP halves (image kernel: CPU + parity-gated Metal; audio impulse: CPU-only)
-**and the audio HQ tier** (FFT method + Lanczos IR resampling, CPU + CLI + queue +
-SwiftUI). Its remaining deferred items are image Metal *spatial* kernels for
-larger K (the direct loop ships now), per-channel/color or separable image
-kernels, and per-channel / true-stereo audio IRs (this MVP downmixes A to one
-mono IR). The next unstarted roadmap effect is **Video-to-Audio Descriptor
-Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh / Motion-Vector
-Reuse** (flow-field reuse on decoded float frames).
+both MVP halves, the audio HQ tier (FFT method + Lanczos IR resampling), **and
+the HQ image/audio modes** — per-channel **colour kernels** (`--kernel-mode
+color`, parity-gated Metal) and per-channel **true-stereo IRs** (`--ir-mode
+per-channel`, CPU-only), each CPU + CLI + queue + SwiftUI. The image Metal kernel
+already handles large K (no cap; proved by a K=11 parity test). Its only remaining
+deferred items are a *tiled* large-K Metal kernel (perf only, not correctness) and
+separable image kernels. The next unstarted roadmap effect is **Video-to-Audio
+Descriptor Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh /
+Motion-Vector Reuse** (flow-field reuse on decoded float frames).
 
 ## Candidate next steps
 

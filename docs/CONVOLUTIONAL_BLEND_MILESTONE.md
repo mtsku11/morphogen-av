@@ -166,6 +166,36 @@ algorithm id is unchanged (`impulse_response_convolution_blend_cpu_v1`): method
 is an implementation choice gated to match (the audio analogue of `backend`),
 not a different transform.
 
+### Per-channel colour kernels (image)
+
+A second kernel mode alongside luma. Instead of one luminance-derived K×K kernel
+applied to every carrier channel, **colour mode** extracts a separate K×K kernel
+from each of Source A's **R/G/B** channels (each box-downsampled and L1-normalized
+to unit sum, per-channel black→uniform fallback) and convolves carrier channel
+`c` with kernel `c` — chromatic structure transfer. `--kernel-mode luma|color`
+(default `luma`); a parity-gated Metal kernel `convolution_blend_color` (three
+weight buffers) matches the CPU `convolution_blend_color_cpu`. Distinct algorithm
+id `image_color_kernel_convolution_blend_cpu_v1` (luma's `..._cpu_v1` unchanged,
+so luma caches stay valid). Off-vs-on readout (luma vs colour at K=7 over a
+coarse R/G colour-bar carrier with a structured A): **mean 24/255, max channel
+diff 130**, zero vs an identical render — the R/G bars shift in opposite
+directions per channel (R right, G left) where luma blurs symmetrically.
+
+### Per-channel / true-stereo IRs (audio)
+
+A second IR mode alongside the mono downmix. **Per-channel mode** builds one
+L1-normalized IR from each Source A channel and convolves carrier channel `c`
+with A's channel `c % A.channels` (true stereo; cycles A's channels when the
+counts differ — A mono ⇒ the current broadcast behaviour). Per-channel IRs are
+zero-padded to a common length so `out_frames` is uniform. `--ir-mode
+mono|per-channel` (default `mono`); CPU-only like the rest of the audio half.
+Distinct algorithm id `per_channel_impulse_response_convolution_blend_cpu_v1`.
+Off-vs-on readout (mono vs per-channel on a stereo A whose L IR is identity and R
+IR is a 5-tap smear, over a stereo carrier): per-channel L rms 0.58→0.76
+(identity preserves) and R 0.39→0.27 (smear attenuates), **max abs diff 0.48 (L)
+/ 0.35 (R)**, zero vs an identical render — each channel takes its own IR rather
+than the shared downmix.
+
 ### Large-K Metal (image): already covered by the MVP kernel
 
 The image `convolution_blend` Metal kernel has **no K cap**: it loops over
@@ -182,4 +212,6 @@ correctness gap. Coverage: `large_kernel_size_convolves_without_cap` (CPU) and
 - **Tiled large-K Metal** — a threadgroup-memory gather is a pure perf
   optimization over the parity-exact naive kernel; only worth it if a measured
   large-K render is too slow.
-- Queue + SwiftUI exposure land after the CPU + CLI + Metal slice is verified.
+- **Separable image kernels** and Source-A *colour* (not luma) taps in luma mode —
+  colour mode now extracts per-channel colour taps, but a separable two-pass
+  kernel (only exact for separable kernels) is still unbuilt.

@@ -98,8 +98,14 @@
   FFT gated against the direct path within 1e-4) and **IR resampling**
   (`--resample-impulse`, opt-in deterministic Lanczos) — is **landed** (CPU +
   CLI + queue + SwiftUI); see `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
-- Future high-quality version: Metal spatial kernels (image); per-channel /
-  true-stereo IRs (audio).
+  The HQ image/audio modes are also **landed**: **per-channel colour kernels**
+  (`--kernel-mode color`, a parity-gated `convolution_blend_color` Metal kernel,
+  algorithm id `image_color_kernel_convolution_blend_cpu_v1`) and **per-channel /
+  true-stereo IRs** (`--ir-mode per-channel`, algorithm id
+  `per_channel_impulse_response_convolution_blend_cpu_v1`), both across CPU + CLI
+  + queue + SwiftUI. The image Metal kernel already handles large K (no cap).
+- Future high-quality version: tiled large-K Metal (perf only); separable image
+  kernels.
 
 ## Scanline / Rutt-Etra Style Carrier Modulation
 
