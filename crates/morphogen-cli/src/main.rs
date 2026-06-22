@@ -26,6 +26,8 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
+    analyze_convolution_kernel_cpu, convolution_blend_cpu, ConvolutionBlendSettings,
+    ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
@@ -266,6 +268,26 @@ enum Commands {
         /// Output frame rate; maps frame index → time for the envelope lookup.
         #[arg(long, default_value_t = 30.0)]
         fps: f64,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
+    /// Render a convolutional AV blend sequence: each Source A frame supplies a
+    /// normalized KxK luma kernel that Source B's matching frame is convolved
+    /// with (parity-gated). `--amount 0` is an exact Source B passthrough.
+    RenderConvolutionalBlendSequence {
+        /// Source A video frames (PNG sequence); each supplies the kernel.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence) to convolve.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Kernel edge length (odd, >= 1); larger spreads the blend wider.
+        #[arg(long, default_value_t = 3)]
+        kernel_size: u32,
+        /// Wet/dry blend (0 = passthrough, 1 = fully convolved).
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -1154,6 +1176,26 @@ fn run() -> Result<(), CliError> {
             rms_window,
             rms_hop,
             fps,
+            backend: backend.into(),
+            max_frames,
+        })
+        .map(|_| ()),
+        Commands::RenderConvolutionalBlendSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            kernel_size,
+            amount,
+            backend,
+            max_frames,
+        } => render_convolutional_blend_sequence(ConvolutionalBlendSequenceRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            settings: ConvolutionBlendSettings {
+                kernel_size,
+                amount,
+            },
             backend: backend.into(),
             max_frames,
         })
@@ -2359,6 +2401,119 @@ fn render_audio_video_route_frame_metal(
 fn render_audio_video_route_frame_metal(
     _carrier: &ImageBufferF32,
     _field: &FlowField,
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+struct ConvolutionalBlendSequenceRequest<'a> {
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_dir: &'a Path,
+    settings: ConvolutionBlendSettings,
+    backend: RenderBackend,
+    max_frames: Option<usize>,
+}
+
+fn render_convolutional_blend_sequence(
+    request: ConvolutionalBlendSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if matches!(request.max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(request.modulator_dir)?;
+    let carrier_frames = collect_image_frames(request.carrier_dir)?;
+    if modulator_frames.is_empty() || carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "convolutional blend requires at least one PNG frame in each source directory"
+                .to_string(),
+        ));
+    }
+
+    let paired_count = modulator_frames.len().min(carrier_frames.len());
+    let frame_count = request
+        .max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..frame_count {
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let carrier = load_image_f32(&carrier_frames[index])?;
+        let kernel = analyze_convolution_kernel_cpu(&modulator, request.settings.kernel_size)?;
+        let rendered =
+            render_convolutional_blend_frame(&carrier, &kernel, request.settings.amount, request.backend)?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if modulator_frames.len() != carrier_frames.len() {
+        println!(
+            "source frame counts differ: {} modulator frame(s), {} carrier frame(s); rendered common prefix",
+            modulator_frames.len(),
+            carrier_frames.len()
+        );
+    }
+    println!(
+        "rendered convolutional blend sequence with {} frame(s) (kernel {}, amount {}, {:?}) from {} convolving {} to {}",
+        frame_count,
+        request.settings.kernel_size,
+        request.settings.amount,
+        request.backend,
+        request.modulator_dir.display(),
+        request.carrier_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+fn render_convolutional_blend_frame(
+    carrier: &ImageBufferF32,
+    kernel: &ConvolutionKernel,
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(convolution_blend_cpu(carrier, kernel, amount)?),
+        RenderBackend::Metal => render_convolutional_blend_frame_metal(carrier, kernel, amount),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_convolutional_blend_frame_metal(
+    carrier: &ImageBufferF32,
+    kernel: &ConvolutionKernel,
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu =
+        morphogen_metal::convolution_blend_metal(carrier, &kernel.weights, kernel.size, amount)?;
+    let cpu = convolution_blend_cpu(carrier, kernel, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU convolution outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal convolution-blend render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_convolutional_blend_frame_metal(
+    _carrier: &ImageBufferF32,
+    _kernel: &ConvolutionKernel,
     _amount: f32,
 ) -> Result<ImageBufferF32, CliError> {
     Err(CliError::Message(
