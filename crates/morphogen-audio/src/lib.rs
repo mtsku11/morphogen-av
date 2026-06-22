@@ -13,6 +13,9 @@ pub mod stft;
 pub mod wav;
 
 pub use buffer::AudioBufferF32;
+pub use convolution::{
+    convolve_mono, impulse_convolution_blend, IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+};
 pub use cross_synth::{
     centroid_filter_cross_synth, rms_gain_cross_synth, FilterType,
     CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,

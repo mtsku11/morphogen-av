@@ -85,12 +85,65 @@ high-frequency carrier (where a blur visibly changes pixels), Read a frame from
 each, and report the mean per-pixel difference between the OFF and ON frame —
 off→on ⇒ a nonzero diff that grows with the kernel's spread; `--amount 0` ⇒ 0.
 
+## Audio Impulse Convolution (the other MVP half)
+
+The roadmap MVP's **audio** carrier: Source A is an **impulse response (IR)**,
+Source B is the carrier audio, and the output is B **convolved** with A's IR
+(convolution-reverb-style — B takes on A's resonant/spatial signature), blended
+wet/dry by `amount`. CPU-only: like the spectral cross-synth, the audio path has
+no Metal kernel and nothing to parity-gate. Lives in
+`morphogen-audio` (`convolution.rs`, alongside the low-level `convolve_mono` it
+reuses). Algorithm id `impulse_response_convolution_blend_cpu_v1`.
+
+### The transform
+
+1. **Impulse extraction (Source A).** Downmix A to **mono** (mean across channels
+   per frame), optionally truncate to `--max-impulse-samples` (the head of A —
+   keeps "tiny direct convolution" cheap; `O(B·L)`), then **L1-normalize**
+   (divide every tap by `Σ|tap|`). L1 normalization guarantees the wet path never
+   grows amplitude: `|Σ wₖ·xₙ₋ₖ| ≤ max|x|` when `Σ|wₖ| = 1`. A **silent** A
+   (`Σ|tap| ≈ 0`) falls back to a **unit impulse** `[1.0]` (identity ⇒ wet = B),
+   the audio analogue of the image kernel's black→uniform fallback.
+2. **Convolution (Source B).** Each B channel is convolved with the mono IR via
+   the existing `convolve_mono` (full linear convolution, length
+   `B_frames + L − 1`). Output channel count + sample rate follow B.
+3. **Wet/dry blend.** `out[n] = lerp(dry[n], wet[n], amount)` where `dry` is B
+   zero-padded to the wet length (the reverb tail extends past B). `amount = 0`
+   ⇒ exact B passthrough (early clone, B's original length); `amount = 1` ⇒ pure
+   wet with the full tail. Output is **not** clamped (audio keeps headroom, like
+   the cross-synth).
+
+- **Sample rate must match** (A and B). The IR taps are time-domain samples; a
+  rate mismatch misaligns the impulse in time, so a clear error is returned rather
+  than silently producing a re-pitched IR. Resampling is deferred (HQ).
+- Determinism: identical A, B, `amount`, `max_impulse_samples` ⇒ identical output.
+
+### Acceptance criteria (audio)
+
+1. **Passthrough.** `--amount 0` ⇒ output byte-identical to Source B.
+2. **Convolution transfer.** A known IR yields its known convolution (e.g. a
+   2-tap averager `[0.5, 0.5]` smooths B; a delayed unit tap delays B).
+3. **Bounded gain.** L1-normalized IR ⇒ wet peak `≤` B peak (no clip blow-up).
+4. **Silent-A fallback.** A silent A ⇒ identity (output equals B at `amount 1`).
+5. **Determinism**; no `unwrap()` in library code.
+
+### Verification (off-vs-on, audio)
+
+Audio convolution changes the signal over time, so (unlike the spatial image
+half) the off-vs-on readout is a straight **OFF (`--amount 0`) vs ON
+(`--amount 1`)** comparison of the rendered WAVs: ON is **longer** by `L − 1`
+samples (the tail) and its **RMS / spectral content differs** from B (a lowpass
+IR drops high-frequency energy). Report the length delta and the RMS ratio.
+`stdlib wave` can't read hound's float `WAVE_FORMAT_EXTENSIBLE` — parse the RIFF
+manually (see `spectral-cross-synth-readout`).
+
 ## Deferred (not this slice)
 
-- **Audio impulse convolution** — Source A impulse response × Source B audio
-  (convolution-reverb-style), the other half of the roadmap MVP. CPU-only.
 - **FFT convolution** (the roadmap HQ tier) — large kernels via frequency-domain
   multiply, vs this direct spatial loop.
+- **IR resampling** — convolving across a sample-rate mismatch (currently errors).
+- **Per-channel / true-stereo IRs** — this MVP downmixes A to one mono IR applied
+  to every B channel.
 - **Per-channel / color kernels**, separable kernels, and Source-A *color*
   (not luma) taps. This MVP routes one luma-derived kernel applied to all channels.
 - Queue + SwiftUI exposure land after the CPU + CLI + Metal slice is verified.
