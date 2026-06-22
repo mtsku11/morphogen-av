@@ -593,6 +593,15 @@ enum RustBridgePlaceholder {
       arguments.append(String(maxImpulseSamples))
     }
 
+    if request.useFFT {
+      arguments.append("--method")
+      arguments.append("fft")
+    }
+
+    if request.resampleImpulse {
+      arguments.append("--resample-impulse")
+    }
+
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -1415,6 +1424,10 @@ struct AudioImpulseConvolutionRenderQueueCommandRequest {
   let outputRootDirectoryURL: URL
   let amount: Double
   let maxImpulseSamples: Int?
+  /// Use the FFT method (HQ tier) instead of the default direct convolution.
+  let useFFT: Bool
+  /// Resample A's IR to B's sample rate instead of erroring on a rate mismatch.
+  let resampleImpulse: Bool
   let projectURL: URL?
 }
 

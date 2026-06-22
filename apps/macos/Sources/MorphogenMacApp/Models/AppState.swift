@@ -97,6 +97,8 @@ final class AppState: ObservableObject {
   @Published var impulseConvOutputURL: URL?
   @Published var impulseConvAmount = 1.0
   @Published var impulseConvMaxSamples = 0
+  @Published var impulseConvUseFFT = false
+  @Published var impulseConvResample = false
   @Published var impulseConvSummary = "No audio impulse convolution rendered"
 
   @Published var audioRouteModulatorURL: URL?
@@ -873,6 +875,8 @@ final class AppState: ObservableObject {
       outputRootDirectoryURL: outputURL,
       amount: impulseConvAmount,
       maxImpulseSamples: impulseConvMaxSamples > 0 ? impulseConvMaxSamples : nil,
+      useFFT: impulseConvUseFFT,
+      resampleImpulse: impulseConvResample,
       projectURL: projectURL
     )
 

@@ -617,6 +617,14 @@ struct RenderPanelView: View {
             .help("Truncate the impulse response to its head (samples); 0 = use the whole IR.")
           }
 
+          HStack(spacing: 16) {
+            Toggle("FFT method (HQ)", isOn: $state.impulseConvUseFFT)
+              .help("Frequency-domain convolution for long IRs; gated against the direct path.")
+
+            Toggle("Resample IR", isOn: $state.impulseConvResample)
+              .help("Resample A's IR to B's sample rate (Lanczos) instead of erroring on a mismatch.")
+          }
+
           Text(state.impulseConvSummary)
             .font(.caption)
             .foregroundStyle(.secondary)

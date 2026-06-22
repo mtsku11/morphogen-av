@@ -313,6 +313,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
       outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
       amount: 0.5,
       maxImpulseSamples: 4096,
+      useFFT: false,
+      resampleImpulse: false,
       projectURL: nil
     )
 
@@ -329,6 +331,30 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.5")
     XCTAssertEqual(Self.value(after: "--max-impulse-samples", in: arguments), "4096")
+    // Direct, non-resampling defaults omit the HQ-tier flags.
+    XCTAssertFalse(arguments.contains("--method"))
+    XCTAssertFalse(arguments.contains("--resample-impulse"))
+  }
+
+  func testQueuedAudioImpulseConvolutionArgumentsIncludeFFTAndResample() throws {
+    let request = AudioImpulseConvolutionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      amount: 1.0,
+      maxImpulseSamples: nil,
+      useFFT: true,
+      resampleImpulse: true,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddAudioImpulseConvolutionArguments(
+      request: request
+    )
+
+    XCTAssertEqual(Self.value(after: "--method", in: arguments), "fft")
+    XCTAssertTrue(arguments.contains("--resample-impulse"))
   }
 
   func testQueuedAudioImpulseConvolutionArgumentsOmitMaxSamplesWhenNil() throws {
@@ -339,6 +365,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
       outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
       amount: 1.0,
       maxImpulseSamples: nil,
+      useFFT: false,
+      resampleImpulse: false,
       projectURL: nil
     )
 
@@ -357,6 +385,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
       outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
       amount: 1.5, // out of [0, 1]
       maxImpulseSamples: nil,
+      useFFT: false,
+      resampleImpulse: false,
       projectURL: nil
     )
 
