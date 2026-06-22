@@ -2195,6 +2195,75 @@ fn queue_audio_impulse_convolution_matches_direct_and_records_knobs() {
     // HQ-tier knobs default to the direct, non-resampling MVP path.
     assert_eq!(knobs["method"], "direct");
     assert_eq!(knobs["resample_impulse"], false);
+    assert_eq!(knobs["ir_mode"], "mono");
+}
+
+#[test]
+fn queue_audio_impulse_convolution_per_channel_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_wav = temp_dir.path().join("ir.wav");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    // Stereo IR with distinct channels (L = [1,0], R = [0,1]) and a stereo carrier.
+    write_stereo_test_wav(&modulator_wav, &[(1.0, 0.0), (0.0, 1.0)]);
+    write_stereo_test_wav(&carrier_wav, &[(0.2, 0.6), (0.4, -0.8)]);
+
+    let modulator_arg = modulator_wav.to_string_lossy().to_string();
+    let carrier_arg = carrier_wav.to_string_lossy().to_string();
+    let direct_wav = temp_dir.path().join("direct.wav");
+    let direct_arg = direct_wav.to_string_lossy().to_string();
+    let common = ["--amount", "1", "--ir-mode", "per-channel"];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-audio-impulse-convolution",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-audio-impulse-convolution",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-audio-impulse-convolution", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let queued_wav = output_root.join("job-0001/audio/impulse_convolution.wav");
+    assert_eq!(
+        fs::read(&queued_wav).expect("read queued wav"),
+        fs::read(&direct_wav).expect("read direct wav"),
+        "per-channel queue render must be byte-identical to the direct render"
+    );
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["impulse_convolution"];
+    assert_eq!(
+        knobs["algorithm"],
+        "per_channel_impulse_response_convolution_blend_cpu_v1"
+    );
+    assert_eq!(knobs["ir_mode"], "per_channel");
 }
 
 #[test]
@@ -2557,6 +2626,21 @@ fn queue_convolution_blend_color_mode_matches_direct_and_records_knobs() {
 
 fn write_test_wav(path: &Path, samples: &[f32]) {
     write_test_wav_at(path, 4, samples);
+}
+
+fn write_stereo_test_wav(path: &Path, frames: &[(f32, f32)]) {
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 4,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).expect("create wav");
+    for (left, right) in frames {
+        writer.write_sample(*left).expect("write left");
+        writer.write_sample(*right).expect("write right");
+    }
+    writer.finalize().expect("finalize wav");
 }
 
 fn write_test_wav_at(path: &Path, sample_rate: u32, samples: &[f32]) {

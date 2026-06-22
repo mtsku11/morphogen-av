@@ -291,7 +291,26 @@ pub enum RenderJobTask {
         /// rate mismatch. Defaults to `false`.
         #[serde(default)]
         resample_impulse: bool,
+        /// IR channel mapping: one mono downmix IR (default) or a per-channel
+        /// true-stereo IR from each Source A channel. Defaults to
+        /// [`IrMode::Mono`] so jobs serialized before this keep their meaning.
+        #[serde(default)]
+        ir_mode: IrMode,
     },
+}
+
+/// Selects how Source A's impulse response is mapped onto the carrier channels.
+/// The serde default is [`IrMode::Mono`] (one downmixed IR for all channels).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IrMode {
+    /// One downmixed mono IR applied to every carrier channel
+    /// (`impulse_response_convolution_blend_cpu_v1`).
+    #[default]
+    Mono,
+    /// One IR per Source A channel, applied channel-wise (true-stereo)
+    /// (`per_channel_impulse_response_convolution_blend_cpu_v1`).
+    PerChannel,
 }
 
 /// Selects the audio-impulse convolution implementation. The serde default is
@@ -759,6 +778,7 @@ mod tests {
             max_impulse_samples: Some(4096),
             method: ConvolutionMethod::Fft,
             resample_impulse: true,
+            ir_mode: IrMode::PerChannel,
         };
 
         let json = serde_json::to_string(&task).expect("serialize impulse-convolution task");
@@ -784,6 +804,7 @@ mod tests {
             max_impulse_samples,
             method,
             resample_impulse,
+            ir_mode,
             ..
         } = task
         else {
@@ -792,6 +813,7 @@ mod tests {
         assert_eq!(max_impulse_samples, None);
         assert_eq!(method, ConvolutionMethod::Direct);
         assert!(!resample_impulse);
+        assert_eq!(ir_mode, IrMode::Mono);
     }
 
     #[test]
