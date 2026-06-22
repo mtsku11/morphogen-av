@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod buffer;
 pub mod convolution;
+pub mod cross_synth;
 pub mod descriptors;
 pub mod error;
 pub mod onset;
@@ -12,6 +13,10 @@ pub mod stft;
 pub mod wav;
 
 pub use buffer::AudioBufferF32;
+pub use cross_synth::{
+    centroid_filter_cross_synth, rms_gain_cross_synth, FilterType,
+    CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+};
 pub use descriptors::{AudioAnalysisCache, AudioDescriptorFrame};
 pub use error::AudioError;
 pub use onset::{onset_strength_from_stft, OnsetStrengthCache, OnsetStrengthFrame};
