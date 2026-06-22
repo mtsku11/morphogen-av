@@ -2225,6 +2225,96 @@ fn queue_audio_video_route_matches_direct_and_records_knobs() {
     assert_eq!(knobs["rms_hop"], 4);
 }
 
+#[test]
+fn queue_convolution_blend_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    // Two modulator frames + two carrier frames (render-test writes a 256x256
+    // gradient PNG; the same content makes the kernel + carrier well-defined).
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    for dir in [&modulator_dir, &carrier_dir] {
+        for frame_name in ["frame_000001.png", "frame_000002.png"] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+
+    // Direct render.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-convolutional-blend-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+            "--kernel-size",
+            "5",
+            "--amount",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    // Queue add + run.
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-convolutional-blend-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--kernel-size",
+            "5",
+            "--amount",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-convolutional-blend-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Every queued frame is byte-identical to the direct render (path-independent).
+    for frame in ["frame_000000.png", "frame_000001.png"] {
+        let queued = output_root.join("job-0001/frames").join(frame);
+        let direct = direct_dir.join(frame);
+        assert_eq!(
+            fs::read(&queued).expect("read queued frame"),
+            fs::read(&direct).expect("read direct frame"),
+            "queue render must be byte-identical to the direct render ({frame})"
+        );
+    }
+
+    // Manifest records the convolution algorithm + knobs.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_convolution_blend");
+    let knobs = &manifest["convolution_blend"];
+    assert_eq!(knobs["algorithm"], "image_kernel_convolution_blend_cpu_v1");
+    assert_eq!(knobs["kernel_size"], 5);
+    assert_eq!(knobs["amount"], 1.0);
+    assert_eq!(knobs["backend"], "CPU");
+}
+
 fn write_test_wav(path: &Path, samples: &[f32]) {
     let spec = hound::WavSpec {
         channels: 1,

@@ -27,7 +27,7 @@ use morphogen_media::{
 };
 use morphogen_render::{
     analyze_convolution_kernel_cpu, convolution_blend_cpu, ConvolutionBlendSettings,
-    ConvolutionKernel,
+    ConvolutionKernel, CONVOLUTION_BLEND_ALGORITHM,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
@@ -669,6 +669,25 @@ enum Commands {
         project_path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+    },
+    QueueAddConvolutionalBlendSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        kernel_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueRunConvolutionalBlendSequence {
+        queue_path: PathBuf,
     },
     QueueRunTest {
         queue_path: PathBuf,
@@ -1598,6 +1617,32 @@ fn run() -> Result<(), CliError> {
             project_path: project_path.as_deref(),
             backend: backend.into(),
         }),
+        Commands::QueueAddConvolutionalBlendSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            kernel_size,
+            amount,
+            max_frames,
+            project_path,
+            backend,
+        } => queue_add_convolutional_blend_sequence(QueueAddConvolutionalBlendSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            settings: ConvolutionBlendSettings {
+                kernel_size,
+                amount,
+            },
+            max_frames,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
+        Commands::QueueRunConvolutionalBlendSequence { queue_path } => {
+            queue_run_convolutional_blend_sequence(&queue_path)
+        }
         Commands::QueueRunTest {
             queue_path,
             output_dir,
@@ -6276,6 +6321,223 @@ fn queue_run_audio_video_route_sequence(queue_path: &Path) -> Result<(), CliErro
     }
 }
 
+struct QueueAddConvolutionalBlendSequenceRequest<'a> {
+    queue_path: &'a Path,
+    modulator_dir: &'a Path,
+    carrier_dir: &'a Path,
+    output_root_dir: &'a Path,
+    settings: ConvolutionBlendSettings,
+    max_frames: Option<u32>,
+    project_path: Option<&'a Path>,
+    backend: RenderBackend,
+}
+
+fn queue_add_convolutional_blend_sequence(
+    request: QueueAddConvolutionalBlendSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddConvolutionalBlendSequenceRequest {
+        queue_path,
+        modulator_dir,
+        carrier_dir,
+        output_root_dir,
+        settings,
+        max_frames,
+        project_path,
+        backend,
+    } = request;
+    settings.validate()?;
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-frames".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceConvolutionBlend {
+            modulator_frame_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            kernel_size: settings.kernel_size,
+            amount: settings.amount,
+            max_frames,
+            backend,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued convolutional blend render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceConvolutionBlend { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running convolutional blend jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::FrameSequenceConvolutionBlend {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        kernel_size,
+        amount,
+        max_frames,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a convolutional blend render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result =
+            render_convolutional_blend_sequence(ConvolutionalBlendSequenceRequest {
+                modulator_dir: Path::new(&modulator_frame_directory),
+                carrier_dir: Path::new(&carrier_frame_directory),
+                output_dir: &output_dir.join("frames"),
+                settings: ConvolutionBlendSettings {
+                    kernel_size,
+                    amount,
+                },
+                backend,
+                max_frames: max_frames.map(|value| value as usize),
+            })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate: 30.0,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / 30.0,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "frame_sequence_convolution_blend",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "convolution_blend": {
+                "algorithm": CONVOLUTION_BLEND_ALGORITHM,
+                "kernel_size": kernel_size,
+                "amount": amount,
+                "backend": render_backend_label(backend)
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued convolutional blend job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("convolutional blend job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 struct QueueAddSpectralCrossSynthRequest<'a> {
     queue_path: &'a Path,
     modulator_wav: &'a Path,
@@ -7043,6 +7305,9 @@ fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceVideoVocoder { .. } => "frame_sequence_video_vocoder",
             RenderJobTask::FrameSequenceAudioVideoRoute { .. } => {
                 "frame_sequence_audio_video_route"
+            }
+            RenderJobTask::FrameSequenceConvolutionBlend { .. } => {
+                "frame_sequence_convolution_blend"
             }
             RenderJobTask::AudioSpectralCrossSynth { .. } => "audio_spectral_cross_synth",
         };

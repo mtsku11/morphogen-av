@@ -219,6 +219,25 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    /// Convolutional AV blending (image kernel): each Source A frame supplies a
+    /// normalized KxK luma kernel that Source B's matching frame is convolved with
+    /// (parity-gated), blended by `amount`. See `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.
+    FrameSequenceConvolutionBlend {
+        /// Source A video frames (PNG sequence); each supplies the kernel.
+        modulator_frame_directory: String,
+        /// Source B video frames (PNG sequence) to convolve.
+        carrier_frame_directory: String,
+        output_directory: String,
+        /// Kernel edge length (odd, >= 1).
+        kernel_size: u32,
+        /// Wet/dry blend from Source B passthrough (`0`) to fully convolved (`1`).
+        amount: f32,
+        max_frames: Option<u32>,
+        /// Render backend; the convolution Metal path is gated per-frame against
+        /// the CPU reference. Defaults to CPU so legacy jobs keep their meaning.
+        #[serde(default)]
+        backend: RenderBackend,
+    },
     /// Spectral audio cross-synthesis: Source A's analysis envelope shapes Source
     /// B's audio. `gain` scales B's amplitude by A's peak-normalized RMS envelope;
     /// `filter` sweeps a one-pole filter on B from A's spectral-centroid envelope.
@@ -740,6 +759,45 @@ mod tests {
         let task: RenderJobTask = serde_json::from_str(json).expect("deserialize audio-route task");
         let RenderJobTask::FrameSequenceAudioVideoRoute { backend, .. } = task else {
             panic!("expected audio-route task");
+        };
+        assert_eq!(backend, RenderBackend::Cpu);
+    }
+
+    #[test]
+    fn convolution_blend_task_round_trips() {
+        let task = RenderJobTask::FrameSequenceConvolutionBlend {
+            modulator_frame_directory: "/tmp/mod".to_string(),
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            kernel_size: 5,
+            amount: 0.5,
+            max_frames: Some(24),
+            backend: RenderBackend::Metal,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize convolution-blend task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize convolution-blend task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn convolution_blend_task_defaults_backend_to_cpu() {
+        let json = r#"{
+            "type": "frame_sequence_convolution_blend",
+            "modulator_frame_directory": "/tmp/mod",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "kernel_size": 3,
+            "amount": 1.0,
+            "max_frames": null
+        }"#;
+
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize convolution-blend task");
+        let RenderJobTask::FrameSequenceConvolutionBlend { backend, .. } = task else {
+            panic!("expected convolution-blend task");
         };
         assert_eq!(backend, RenderBackend::Cpu);
     }
