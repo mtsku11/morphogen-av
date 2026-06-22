@@ -22,7 +22,7 @@ pub use project::{Project, ProjectMetadata};
 pub use render_job::{
     ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, ExportFormat,
     FlowSource,
-    GrainSelectionMode, GranularAudioModulation, RenderBackend, RenderJob,
+    GrainSelectionMode, GranularAudioModulation, KernelMode, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderSettings, RenderTimingMetadata, VideoVocoderMode,

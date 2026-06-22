@@ -18,7 +18,7 @@ use morphogen_audio::{
 use morphogen_core::{
     AnalysisCacheEntry, AnalysisKind, ConvolutionMethod, CrossSynthFilterType, CrossSynthMode,
     CrossSynthWindow, ExportFormat, FlowSource, GrainSelectionMode,
-    GranularAudioModulation, MediaProxy, Project, RenderBackend, RenderJob,
+    GranularAudioModulation, KernelMode, MediaProxy, Project, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance,
     RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
     RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue, RenderSettings,
@@ -28,8 +28,9 @@ use morphogen_media::{
     extract_audio_wav_with_max_duration, extract_video_frames, probe_media, MediaError,
 };
 use morphogen_render::{
-    analyze_convolution_kernel_cpu, convolution_blend_cpu, ConvolutionBlendSettings,
-    ConvolutionKernel, CONVOLUTION_BLEND_ALGORITHM,
+    analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
+    convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings,
+    ConvolutionKernel, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
@@ -304,6 +305,10 @@ enum Commands {
         /// Wet/dry blend (0 = passthrough, 1 = fully convolved).
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
+        /// Kernel extraction: `luma` (one luminance kernel for all channels) or
+        /// `color` (a separate kernel per R/G/B channel of Source A).
+        #[arg(long, value_enum, default_value_t = CliKernelMode::Luma)]
+        kernel_mode: CliKernelMode,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -711,6 +716,9 @@ enum Commands {
         kernel_size: u32,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
+        /// Kernel extraction: `luma` (one luminance kernel) or `color` (per R/G/B).
+        #[arg(long, value_enum, default_value_t = CliKernelMode::Luma)]
+        kernel_mode: CliKernelMode,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]
@@ -856,6 +864,37 @@ fn convolution_method_label(method: ConvolutionMethod) -> &'static str {
     match method {
         ConvolutionMethod::Direct => "direct",
         ConvolutionMethod::Fft => "fft",
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliKernelMode {
+    #[default]
+    Luma,
+    Color,
+}
+
+impl From<CliKernelMode> for KernelMode {
+    fn from(value: CliKernelMode) -> Self {
+        match value {
+            CliKernelMode::Luma => Self::Luma,
+            CliKernelMode::Color => Self::Color,
+        }
+    }
+}
+
+/// Manifest string + algorithm id for a persisted convolution-blend kernel mode.
+fn kernel_mode_label(mode: KernelMode) -> &'static str {
+    match mode {
+        KernelMode::Luma => "luma",
+        KernelMode::Color => "color",
+    }
+}
+
+fn convolution_blend_algorithm(mode: KernelMode) -> &'static str {
+    match mode {
+        KernelMode::Luma => CONVOLUTION_BLEND_ALGORITHM,
+        KernelMode::Color => CONVOLUTION_BLEND_COLOR_ALGORITHM,
     }
 }
 
@@ -1298,6 +1337,7 @@ fn run() -> Result<(), CliError> {
             output_dir,
             kernel_size,
             amount,
+            kernel_mode,
             backend,
             max_frames,
         } => render_convolutional_blend_sequence(ConvolutionalBlendSequenceRequest {
@@ -1308,6 +1348,7 @@ fn run() -> Result<(), CliError> {
                 kernel_size,
                 amount,
             },
+            kernel_mode: kernel_mode.into(),
             backend: backend.into(),
             max_frames,
         })
@@ -1738,6 +1779,7 @@ fn run() -> Result<(), CliError> {
             output_root_dir,
             kernel_size,
             amount,
+            kernel_mode,
             max_frames,
             project_path,
             backend,
@@ -1750,6 +1792,7 @@ fn run() -> Result<(), CliError> {
                 kernel_size,
                 amount,
             },
+            kernel_mode: kernel_mode.into(),
             max_frames,
             project_path: project_path.as_deref(),
             backend: backend.into(),
@@ -2605,6 +2648,7 @@ struct ConvolutionalBlendSequenceRequest<'a> {
     carrier_dir: &'a Path,
     output_dir: &'a Path,
     settings: ConvolutionBlendSettings,
+    kernel_mode: KernelMode,
     backend: RenderBackend,
     max_frames: Option<usize>,
 }
@@ -2638,9 +2682,28 @@ fn render_convolutional_blend_sequence(
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
-        let kernel = analyze_convolution_kernel_cpu(&modulator, request.settings.kernel_size)?;
-        let rendered =
-            render_convolutional_blend_frame(&carrier, &kernel, request.settings.amount, request.backend)?;
+        let rendered = match request.kernel_mode {
+            KernelMode::Luma => {
+                let kernel =
+                    analyze_convolution_kernel_cpu(&modulator, request.settings.kernel_size)?;
+                render_convolutional_blend_frame(
+                    &carrier,
+                    &kernel,
+                    request.settings.amount,
+                    request.backend,
+                )?
+            }
+            KernelMode::Color => {
+                let kernels =
+                    analyze_convolution_kernels_color_cpu(&modulator, request.settings.kernel_size)?;
+                render_convolutional_blend_color_frame(
+                    &carrier,
+                    &kernels,
+                    request.settings.amount,
+                    request.backend,
+                )?
+            }
+        };
         save_png(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
@@ -2655,9 +2718,10 @@ fn render_convolutional_blend_sequence(
         );
     }
     println!(
-        "rendered convolutional blend sequence with {} frame(s) (kernel {}, amount {}, {:?}) from {} convolving {} to {}",
+        "rendered convolutional blend sequence with {} frame(s) (kernel {}, {} mode, amount {}, {:?}) from {} convolving {} to {}",
         frame_count,
         request.settings.kernel_size,
+        kernel_mode_label(request.kernel_mode),
         request.settings.amount,
         request.backend,
         request.modulator_dir.display(),
@@ -2706,6 +2770,60 @@ fn render_convolutional_blend_frame_metal(
 fn render_convolutional_blend_frame_metal(
     _carrier: &ImageBufferF32,
     _kernel: &ConvolutionKernel,
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+fn render_convolutional_blend_color_frame(
+    carrier: &ImageBufferF32,
+    kernels: &[ConvolutionKernel; 3],
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(convolution_blend_color_cpu(carrier, kernels, amount)?),
+        RenderBackend::Metal => {
+            render_convolutional_blend_color_frame_metal(carrier, kernels, amount)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_convolutional_blend_color_frame_metal(
+    carrier: &ImageBufferF32,
+    kernels: &[ConvolutionKernel; 3],
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::convolution_blend_color_metal(
+        carrier,
+        &kernels[0].weights,
+        &kernels[1].weights,
+        &kernels[2].weights,
+        kernels[0].size,
+        amount,
+    )?;
+    let cpu = convolution_blend_color_cpu(carrier, kernels, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU colour convolution outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal colour convolution-blend render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_convolutional_blend_color_frame_metal(
+    _carrier: &ImageBufferF32,
+    _kernels: &[ConvolutionKernel; 3],
     _amount: f32,
 ) -> Result<ImageBufferF32, CliError> {
     Err(CliError::Message(
@@ -6474,6 +6592,7 @@ struct QueueAddConvolutionalBlendSequenceRequest<'a> {
     carrier_dir: &'a Path,
     output_root_dir: &'a Path,
     settings: ConvolutionBlendSettings,
+    kernel_mode: KernelMode,
     max_frames: Option<u32>,
     project_path: Option<&'a Path>,
     backend: RenderBackend,
@@ -6488,6 +6607,7 @@ fn queue_add_convolutional_blend_sequence(
         carrier_dir,
         output_root_dir,
         settings,
+        kernel_mode,
         max_frames,
         project_path,
         backend,
@@ -6544,6 +6664,7 @@ fn queue_add_convolutional_blend_sequence(
             amount: settings.amount,
             max_frames,
             backend,
+            kernel_mode,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -6587,6 +6708,7 @@ fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Result<(), CliEr
         amount,
         max_frames,
         backend,
+        kernel_mode,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -6607,6 +6729,7 @@ fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Result<(), CliEr
                     kernel_size,
                     amount,
                 },
+                kernel_mode,
                 backend,
                 max_frames: max_frames.map(|value| value as usize),
             })?;
@@ -6639,9 +6762,10 @@ fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Result<(), CliEr
                 "audio_sample_count": timing.audio_sample_count
             },
             "convolution_blend": {
-                "algorithm": CONVOLUTION_BLEND_ALGORITHM,
+                "algorithm": convolution_blend_algorithm(kernel_mode),
                 "kernel_size": kernel_size,
                 "amount": amount,
+                "kernel_mode": kernel_mode_label(kernel_mode),
                 "backend": render_backend_label(backend)
             },
             "provenance": queue.jobs[job_index].provenance,

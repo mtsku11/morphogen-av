@@ -237,6 +237,11 @@ pub enum RenderJobTask {
         /// the CPU reference. Defaults to CPU so legacy jobs keep their meaning.
         #[serde(default)]
         backend: RenderBackend,
+        /// Kernel extraction: one luma kernel (default) or a per-channel colour
+        /// kernel from each of A's R/G/B channels. Defaults to
+        /// [`KernelMode::Luma`] so jobs serialized before colour mode keep meaning.
+        #[serde(default)]
+        kernel_mode: KernelMode,
     },
     /// Spectral audio cross-synthesis: Source A's analysis envelope shapes Source
     /// B's audio. `gain` scales B's amplitude by A's peak-normalized RMS envelope;
@@ -300,6 +305,21 @@ pub enum ConvolutionMethod {
     Direct,
     /// Frequency-domain convolution via FFT (`O(N log N)`), gated against direct.
     Fft,
+}
+
+/// Selects the convolution-blend kernel extraction. The serde default is
+/// [`KernelMode::Luma`] (one luminance kernel applied to all channels) so jobs
+/// serialized before colour mode keep their meaning.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelMode {
+    /// One luma-derived K×K kernel applied to every carrier channel
+    /// (`image_kernel_convolution_blend_cpu_v1`).
+    #[default]
+    Luma,
+    /// A separate K×K kernel from each of A's R/G/B channels, applied channel-wise
+    /// (`image_color_kernel_convolution_blend_cpu_v1`).
+    Color,
 }
 
 /// Selects the spectral cross-synth descriptor→target mapping.
@@ -851,6 +871,7 @@ mod tests {
             amount: 0.5,
             max_frames: Some(24),
             backend: RenderBackend::Metal,
+            kernel_mode: KernelMode::Color,
         };
 
         let json = serde_json::to_string(&task).expect("serialize convolution-blend task");
@@ -874,10 +895,16 @@ mod tests {
 
         let task: RenderJobTask =
             serde_json::from_str(json).expect("deserialize convolution-blend task");
-        let RenderJobTask::FrameSequenceConvolutionBlend { backend, .. } = task else {
+        let RenderJobTask::FrameSequenceConvolutionBlend {
+            backend,
+            kernel_mode,
+            ..
+        } = task
+        else {
             panic!("expected convolution-blend task");
         };
         assert_eq!(backend, RenderBackend::Cpu);
+        assert_eq!(kernel_mode, KernelMode::Luma);
     }
 
     #[test]
