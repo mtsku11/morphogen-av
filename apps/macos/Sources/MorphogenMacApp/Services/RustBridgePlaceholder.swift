@@ -70,6 +70,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultDatamoshSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-datamosh-sequence-queue.json"
+    )
+  }
+
   static func defaultVideoAudioRouteRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-video-audio-route-queue.json"
@@ -780,6 +786,84 @@ enum RustBridgePlaceholder {
       String(request.rmsHop),
       "--frame-rate",
       cliNumber(request.frameRate),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedDatamoshSequenceRender(
+    request: DatamoshSequenceRenderQueueCommandRequest
+  ) throws -> DatamoshSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddDatamoshSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-datamosh-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return DatamoshSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddDatamoshSequenceArguments(
+    request: DatamoshSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.amount.isFinite && request.amount >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "amount must be finite and greater than or equal to zero"
+      )
+    }
+    if let maxFrames = request.maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-datamosh-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--keyframe-interval",
+      String(request.keyframeInterval),
+      "--amount",
+      cliNumber(request.amount),
       "--backend",
       request.backend.cliValue
     ]
@@ -1569,6 +1653,24 @@ struct AudioVideoRouteSequenceRenderQueueCommandRequest {
 }
 
 struct AudioVideoRouteSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct DatamoshSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let keyframeInterval: Int
+  let amount: Double
+  let maxFrames: Int?
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct DatamoshSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

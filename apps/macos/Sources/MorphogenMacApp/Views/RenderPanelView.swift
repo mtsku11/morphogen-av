@@ -705,6 +705,65 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Controlled Datamosh")
+            .font(.subheadline.weight(.semibold))
+            .help("Source A's per-frame optical flow repeatedly advects Source B's previous output — the \"bloom/melt\" look. Keyframes snap back to Source B.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseDatamoshModulatorDirectory()
+            } label: {
+              Label("Source A Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseDatamoshCarrierDirectory()
+            } label: {
+              Label("Source B Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseDatamoshOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.datamoshKeyframeInterval, in: 0...120, step: 1) {
+              Text("Keyframe Interval \(state.datamoshKeyframeInterval)")
+            }
+            .frame(width: 230, alignment: .leading)
+            .help("1 = Source B passthrough; 0 = full melt from B[0]; N = snap to B every N frames.")
+
+            Stepper(value: $state.datamoshAmount, in: 0...4, step: 0.1) {
+              Text("Amount \(state.datamoshAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("Per-step scale on A's flow; 0 freezes the held frame.")
+          }
+
+          Picker("Backend", selection: $state.datamoshBackend) {
+            ForEach(FeedbackRenderBackendOption.allCases) { backend in
+              Text(backend.rawValue).tag(backend)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 200)
+          .help("Metal is gated per-frame against the CPU reference.")
+
+          Text(state.datamoshSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runDatamoshRender()
+          } label: {
+            Label("Run Datamosh", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Video-to-Audio Descriptor Routing")
             .font(.subheadline.weight(.semibold))
             .help("A Source A visual descriptor (luma or motion) drives Source B's audio: gain (descriptor → amplitude) or pan (descriptor → equal-power stereo position).")
