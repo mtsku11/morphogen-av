@@ -2,19 +2,102 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use morphogen_audio::{
-    centroid_filter_cross_synth, impulse_convolution_blend, load_wav_f32, rms_gain_cross_synth,
-    save_wav_f32, ConvolutionMethod as AudioConvolutionMethod, FilterType, StftConfig,
-    CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+    centroid_filter_cross_synth, impulse_convolution_blend, load_wav_f32, luma_gain_route,
+    luma_pan_route, rms_gain_cross_synth, save_wav_f32, ConvolutionMethod as AudioConvolutionMethod,
+    FilterType, StftConfig, CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, LUMA_GAIN_ROUTE_ALGORITHM,
+    LUMA_PAN_ROUTE_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 use morphogen_core::{
     ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, ExportFormat, IrMode,
     RenderJob, RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance,
     RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue,
-    RenderSettings, RenderTimingMetadata, SourceRole,
+    RenderSettings, RenderTimingMetadata, SourceRole, VideoAudioRouteMode,
 };
+use morphogen_render::ImageBufferF32;
 use crate::args::*;
 use crate::error::CliError;
-use crate::imaging::write_parent_dirs;
+use crate::imaging::{collect_image_frames, load_image_f32, write_parent_dirs};
+
+/// Mean Rec.709 luma of a frame, in `[0,1]`. An empty image yields `0.0`.
+pub(crate) fn frame_mean_luma(image: &ImageBufferF32) -> f32 {
+    if image.pixels.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = image
+        .pixels
+        .iter()
+        .map(|p| (p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722) as f64)
+        .sum();
+    (sum / image.pixels.len() as f64) as f32
+}
+
+/// Read Source A's PNG sequence into `(time_seconds, mean_luma)` samples, where
+/// `time = frame_index / fps`. Shared by the direct render and the queue run.
+pub(crate) fn build_luma_samples(
+    modulator_dir: &Path,
+    fps: f64,
+    max_frames: Option<usize>,
+) -> Result<Vec<(f64, f32)>, CliError> {
+    let mut frames = collect_image_frames(modulator_dir)?;
+    if let Some(cap) = max_frames {
+        frames.truncate(cap);
+    }
+    if frames.is_empty() {
+        return Err(CliError::Message(format!(
+            "no image frames found in {}",
+            modulator_dir.display()
+        )));
+    }
+    let mut samples = Vec::with_capacity(frames.len());
+    for (index, path) in frames.iter().enumerate() {
+        let image = load_image_f32(path)?;
+        samples.push((index as f64 / fps, frame_mean_luma(&image)));
+    }
+    Ok(samples)
+}
+
+/// Apply the selected video-to-audio route, returning `(output, algorithm_id)`.
+fn apply_video_audio_route(
+    carrier: &morphogen_audio::AudioBufferF32,
+    luma_samples: &[(f64, f32)],
+    mode: VideoAudioRouteMode,
+    amount: f32,
+) -> Result<(morphogen_audio::AudioBufferF32, &'static str), CliError> {
+    Ok(match mode {
+        VideoAudioRouteMode::Gain => (
+            luma_gain_route(carrier, luma_samples, amount)?,
+            LUMA_GAIN_ROUTE_ALGORITHM,
+        ),
+        VideoAudioRouteMode::Pan => (
+            luma_pan_route(carrier, luma_samples, amount)?,
+            LUMA_PAN_ROUTE_ALGORITHM,
+        ),
+    })
+}
+
+pub(crate) fn render_video_audio_route(
+    modulator_dir: &Path,
+    carrier_wav: &Path,
+    output_wav: &Path,
+    mode: CliVideoAudioRouteMode,
+    amount: f32,
+    fps: f64,
+    max_frames: Option<usize>,
+) -> Result<(), CliError> {
+    let carrier = load_wav_f32(carrier_wav)?;
+    let luma_samples = build_luma_samples(modulator_dir, fps, max_frames)?;
+    let (output, algorithm) =
+        apply_video_audio_route(&carrier, &luma_samples, mode.into(), amount)?;
+
+    write_parent_dirs(output_wav)?;
+    save_wav_f32(output_wav, &output)?;
+    println!(
+        "rendered video-to-audio route ({algorithm}) from carrier {} to {}",
+        carrier_wav.display(),
+        output_wav.display()
+    );
+    Ok(())
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_spectral_cross_synth(
     modulator_wav: &Path,

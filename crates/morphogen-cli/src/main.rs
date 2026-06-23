@@ -117,6 +117,23 @@ fn run() -> Result<(), CliError> {
             resample_impulse,
             ir_mode.into(),
         ),
+        Commands::RenderVideoAudioRoute {
+            modulator_dir,
+            carrier_wav,
+            output_wav,
+            mode,
+            amount,
+            fps,
+            max_frames,
+        } => render_video_audio_route(
+            &modulator_dir,
+            &carrier_wav,
+            &output_wav,
+            mode,
+            amount,
+            fps,
+            max_frames,
+        ),
         Commands::RenderTest { output_path } => render_test(&output_path),
         Commands::MetalRenderTest { output_path } => metal_render_test(&output_path),
         Commands::RenderTwoSource {

@@ -2242,6 +2242,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             }
             RenderJobTask::AudioSpectralCrossSynth { .. } => "audio_spectral_cross_synth",
             RenderJobTask::AudioImpulseConvolution { .. } => "audio_impulse_convolution",
+            RenderJobTask::VideoAudioRoute { .. } => "video_audio_route",
         };
         let provenance_summary = job
             .provenance

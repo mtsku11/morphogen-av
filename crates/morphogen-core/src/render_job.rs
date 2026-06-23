@@ -297,6 +297,24 @@ pub enum RenderJobTask {
         #[serde(default)]
         ir_mode: IrMode,
     },
+    /// Video-to-Audio Descriptor Routing: Source A's per-frame luma envelope
+    /// drives Source B's audio amplitude (`gain`) or stereo position (`pan`).
+    /// CPU-only — no Metal path to parity-gate.
+    VideoAudioRoute {
+        /// Source A video frames (PNG sequence); each frame's mean luma is the
+        /// modulator descriptor.
+        modulator_directory: String,
+        /// Source B audio (WAV) to shape.
+        carrier_wav: String,
+        output_directory: String,
+        /// `gain` or `pan`. Defaults to [`VideoAudioRouteMode::Gain`].
+        #[serde(default)]
+        mode: VideoAudioRouteMode,
+        /// Blend from Source B passthrough (`0`) to full routing (`1`).
+        amount: f32,
+        /// Frame rate mapping A's frame index to time for the luma lookup.
+        fps: f64,
+    },
 }
 
 /// Selects how Source A's impulse response is mapped onto the carrier channels.
@@ -352,6 +370,20 @@ pub enum CrossSynthMode {
     /// A's spectral-centroid envelope sweeps a one-pole filter on B
     /// (`centroid_filter_cross_synth_cpu_v1`).
     Filter,
+}
+
+/// Mode for Video-to-Audio Descriptor Routing. The serde default is
+/// [`VideoAudioRouteMode::Gain`].
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAudioRouteMode {
+    /// A's peak-normalized per-frame luma envelope scales B's amplitude
+    /// (`luma_gain_route_cpu_v1`).
+    #[default]
+    Gain,
+    /// A's per-frame luma drives an equal-power stereo pan of B
+    /// (`luma_pan_route_cpu_v1`).
+    Pan,
 }
 
 /// One-pole filter response for `filter`-mode cross-synth.

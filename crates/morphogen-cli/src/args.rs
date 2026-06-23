@@ -7,7 +7,8 @@ use morphogen_audio::{
 };
 use morphogen_core::{
     ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
-    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoVocoderMode,
+    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteMode,
+    VideoVocoderMode,
 };
 use morphogen_render::{
     StructureMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
@@ -117,6 +118,26 @@ pub(crate) enum Commands {
         /// (true-stereo, one IR per Source A channel).
         #[arg(long, value_enum, default_value_t = CliIrMode::Mono)]
         ir_mode: CliIrMode,
+    },
+    /// Render a video-to-audio descriptor-routing WAV: Source A's per-frame luma
+    /// envelope (peak-normalized) drives Source B's audio gain or stereo pan.
+    /// `--amount 0` is an exact Source B passthrough.
+    RenderVideoAudioRoute {
+        /// Source A video frames (PNG sequence); each frame's mean luma is the
+        /// modulator.
+        modulator_dir: PathBuf,
+        /// Source B audio (WAV) to shape.
+        carrier_wav: PathBuf,
+        output_wav: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliVideoAudioRouteMode::Gain)]
+        mode: CliVideoAudioRouteMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Frame rate mapping A's frame index to time for the luma lookup.
+        #[arg(long, default_value_t = 30.0)]
+        fps: f64,
+        #[arg(long)]
+        max_frames: Option<usize>,
     },
     RenderTest {
         output_path: PathBuf,
@@ -783,6 +804,24 @@ pub(crate) enum CliCrossSynthMode {
     #[default]
     Gain,
     Filter,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliVideoAudioRouteMode {
+    /// A's per-frame luma envelope scales B's amplitude.
+    #[default]
+    Gain,
+    /// A's per-frame luma drives an equal-power stereo pan of B.
+    Pan,
+}
+
+impl From<CliVideoAudioRouteMode> for VideoAudioRouteMode {
+    fn from(value: CliVideoAudioRouteMode) -> Self {
+        match value {
+            CliVideoAudioRouteMode::Gain => Self::Gain,
+            CliVideoAudioRouteMode::Pan => Self::Pan,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
