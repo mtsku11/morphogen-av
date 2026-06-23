@@ -7,8 +7,8 @@ use morphogen_audio::{
 };
 use morphogen_core::{
     ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
-    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteMode,
-    VideoVocoderMode,
+    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteDescriptor,
+    VideoAudioRouteMode, VideoVocoderMode,
 };
 use morphogen_render::{
     StructureMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
@@ -123,17 +123,20 @@ pub(crate) enum Commands {
     /// envelope (peak-normalized) drives Source B's audio gain or stereo pan.
     /// `--amount 0` is an exact Source B passthrough.
     RenderVideoAudioRoute {
-        /// Source A video frames (PNG sequence); each frame's mean luma is the
+        /// Source A video frames (PNG sequence); each frame's descriptor is the
         /// modulator.
         modulator_dir: PathBuf,
         /// Source B audio (WAV) to shape.
         carrier_wav: PathBuf,
         output_wav: PathBuf,
+        /// Which Source A visual descriptor drives the envelope.
+        #[arg(long, value_enum, default_value_t = CliVideoAudioRouteDescriptor::Luma)]
+        descriptor: CliVideoAudioRouteDescriptor,
         #[arg(long, value_enum, default_value_t = CliVideoAudioRouteMode::Gain)]
         mode: CliVideoAudioRouteMode,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
-        /// Frame rate mapping A's frame index to time for the luma lookup.
+        /// Frame rate mapping A's frame index to time for the descriptor lookup.
         #[arg(long, default_value_t = 30.0)]
         fps: f64,
         #[arg(long)]
@@ -675,6 +678,8 @@ pub(crate) enum Commands {
         modulator_dir: PathBuf,
         carrier_wav: PathBuf,
         output_root_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliVideoAudioRouteDescriptor::Luma)]
+        descriptor: CliVideoAudioRouteDescriptor,
         #[arg(long, value_enum, default_value_t = CliVideoAudioRouteMode::Gain)]
         mode: CliVideoAudioRouteMode,
         #[arg(long, default_value_t = 1.0)]
@@ -837,6 +842,24 @@ impl From<CliVideoAudioRouteMode> for VideoAudioRouteMode {
         match value {
             CliVideoAudioRouteMode::Gain => Self::Gain,
             CliVideoAudioRouteMode::Pan => Self::Pan,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliVideoAudioRouteDescriptor {
+    /// Per-frame mean Rec.709 luma (brightness).
+    #[default]
+    Luma,
+    /// Per-frame mean optical-flow magnitude (motion).
+    Flow,
+}
+
+impl From<CliVideoAudioRouteDescriptor> for VideoAudioRouteDescriptor {
+    fn from(value: CliVideoAudioRouteDescriptor) -> Self {
+        match value {
+            CliVideoAudioRouteDescriptor::Luma => Self::Luma,
+            CliVideoAudioRouteDescriptor::Flow => Self::Flow,
         }
     }
 }

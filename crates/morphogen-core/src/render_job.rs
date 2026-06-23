@@ -297,22 +297,27 @@ pub enum RenderJobTask {
         #[serde(default)]
         ir_mode: IrMode,
     },
-    /// Video-to-Audio Descriptor Routing: Source A's per-frame luma envelope
-    /// drives Source B's audio amplitude (`gain`) or stereo position (`pan`).
-    /// CPU-only — no Metal path to parity-gate.
+    /// Video-to-Audio Descriptor Routing: a per-frame Source A visual descriptor
+    /// envelope drives Source B's audio amplitude (`gain`) or stereo position
+    /// (`pan`). CPU-only — no Metal path to parity-gate.
     VideoAudioRoute {
-        /// Source A video frames (PNG sequence); each frame's mean luma is the
-        /// modulator descriptor.
+        /// Source A video frames (PNG sequence); each frame's descriptor
+        /// (mean luma or optical-flow magnitude) is the modulator signal.
         modulator_directory: String,
         /// Source B audio (WAV) to shape.
         carrier_wav: String,
         output_directory: String,
+        /// Which Source A visual descriptor drives the envelope. Defaults to
+        /// [`VideoAudioRouteDescriptor::Luma`] so jobs serialized before
+        /// optical-flow descriptors keep their mean-luma meaning.
+        #[serde(default)]
+        descriptor: VideoAudioRouteDescriptor,
         /// `gain` or `pan`. Defaults to [`VideoAudioRouteMode::Gain`].
         #[serde(default)]
         mode: VideoAudioRouteMode,
         /// Blend from Source B passthrough (`0`) to full routing (`1`).
         amount: f32,
-        /// Frame rate mapping A's frame index to time for the luma lookup.
+        /// Frame rate mapping A's frame index to time for the descriptor lookup.
         fps: f64,
     },
 }
@@ -377,13 +382,40 @@ pub enum CrossSynthMode {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoAudioRouteMode {
-    /// A's peak-normalized per-frame luma envelope scales B's amplitude
-    /// (`luma_gain_route_cpu_v1`).
+    /// A's peak-normalized per-frame descriptor envelope scales B's amplitude.
     #[default]
     Gain,
-    /// A's per-frame luma drives an equal-power stereo pan of B
-    /// (`luma_pan_route_cpu_v1`).
+    /// A's per-frame descriptor drives an equal-power stereo pan of B.
     Pan,
+}
+
+/// Which Source A visual descriptor drives Video-to-Audio routing. The serde
+/// default is [`VideoAudioRouteDescriptor::Luma`].
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAudioRouteDescriptor {
+    /// Per-frame mean Rec.709 luma (brightness).
+    #[default]
+    Luma,
+    /// Per-frame mean optical-flow magnitude (motion), from the temporal
+    /// Lucas-Kanade estimator (frame zero has no motion ⇒ `0`).
+    Flow,
+}
+
+/// Composes the deterministic algorithm id for Video-to-Audio routing from the
+/// visual descriptor and the audio mapping, following the project's
+/// `{descriptor}_{mapping}_route_cpu_v1` convention. The audio routing math is
+/// descriptor-neutral; the id records which visual signal drove it.
+pub fn video_audio_route_algorithm_id(
+    descriptor: VideoAudioRouteDescriptor,
+    mode: VideoAudioRouteMode,
+) -> &'static str {
+    match (descriptor, mode) {
+        (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Gain) => "luma_gain_route_cpu_v1",
+        (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Pan) => "luma_pan_route_cpu_v1",
+        (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Gain) => "flow_gain_route_cpu_v1",
+        (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Pan) => "flow_pan_route_cpu_v1",
+    }
 }
 
 /// One-pole filter response for `filter`-mode cross-synth.
@@ -806,6 +838,7 @@ mod tests {
             modulator_directory: "/tmp/a".to_string(),
             carrier_wav: "/tmp/b.wav".to_string(),
             output_directory: "/tmp/out".to_string(),
+            descriptor: VideoAudioRouteDescriptor::Flow,
             mode: VideoAudioRouteMode::Pan,
             amount: 0.5,
             fps: 30.0,
@@ -819,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn video_audio_route_task_defaults_mode_gain() {
+    fn video_audio_route_task_defaults_descriptor_luma_mode_gain() {
         let json = r#"{
             "type": "video_audio_route",
             "modulator_directory": "/tmp/a",
@@ -830,10 +863,22 @@ mod tests {
         }"#;
 
         let task: RenderJobTask = serde_json::from_str(json).expect("deserialize video-audio route");
-        let RenderJobTask::VideoAudioRoute { mode, .. } = task else {
+        let RenderJobTask::VideoAudioRoute { descriptor, mode, .. } = task else {
             panic!("expected video-audio route task");
         };
+        assert_eq!(descriptor, VideoAudioRouteDescriptor::Luma);
         assert_eq!(mode, VideoAudioRouteMode::Gain);
+    }
+
+    #[test]
+    fn video_audio_route_algorithm_id_composes_descriptor_and_mode() {
+        use VideoAudioRouteDescriptor::*;
+        use VideoAudioRouteMode::*;
+        // Luma ids are unchanged from the original slice (back-compatible).
+        assert_eq!(video_audio_route_algorithm_id(Luma, Gain), "luma_gain_route_cpu_v1");
+        assert_eq!(video_audio_route_algorithm_id(Luma, Pan), "luma_pan_route_cpu_v1");
+        assert_eq!(video_audio_route_algorithm_id(Flow, Gain), "flow_gain_route_cpu_v1");
+        assert_eq!(video_audio_route_algorithm_id(Flow, Pan), "flow_pan_route_cpu_v1");
     }
 
     #[test]

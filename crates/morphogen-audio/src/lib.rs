@@ -30,9 +30,7 @@ pub use onset::{onset_strength_from_stft, OnsetStrengthCache, OnsetStrengthFrame
 pub use rms::rms_envelope;
 pub use spectral::{spectral_centroid, spectral_centroid_from_magnitudes};
 pub use stft::{stft_magnitude_cache, StftAnalysisCache, StftConfig, StftFrame, WindowFunction};
-pub use video_route::{
-    luma_gain_route, luma_pan_route, LUMA_GAIN_ROUTE_ALGORITHM, LUMA_PAN_ROUTE_ALGORITHM,
-};
+pub use video_route::{descriptor_gain_route, descriptor_pan_route};
 pub use wav::{load_wav_f32, save_wav_f32};
 
 #[cfg(test)]
