@@ -707,7 +707,16 @@ struct RenderPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
           Text("Video-to-Audio Descriptor Routing")
             .font(.subheadline.weight(.semibold))
-            .help("Source A's per-frame luma drives Source B's audio: gain (luma → amplitude) or pan (luma → equal-power stereo position).")
+            .help("A Source A visual descriptor (luma or motion) drives Source B's audio: gain (descriptor → amplitude) or pan (descriptor → equal-power stereo position).")
+
+          Picker("Descriptor", selection: $state.videoAudioRouteDescriptor) {
+            ForEach(VideoAudioRouteDescriptorOption.allCases) { descriptor in
+              Text(descriptor.rawValue).tag(descriptor)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Luma: per-frame mean brightness. Flow: per-frame mean optical-flow magnitude (motion).")
 
           Picker("Mode", selection: $state.videoAudioRouteMode) {
             ForEach(VideoAudioRouteModeOption.allCases) { mode in
@@ -716,7 +725,7 @@ struct RenderPanelView: View {
           }
           .pickerStyle(.segmented)
           .frame(width: 360)
-          .help("Gain: bright A keeps B, dark A attenuates it. Pan: dark A steers left, bright A steers right.")
+          .help("Gain: a strong descriptor keeps B, a weak one attenuates it. Pan: weak steers left, strong steers right.")
 
           HStack(spacing: 16) {
             Button {

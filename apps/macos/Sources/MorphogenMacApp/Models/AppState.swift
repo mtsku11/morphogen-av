@@ -116,6 +116,7 @@ final class AppState: ObservableObject {
   @Published var videoAudioRouteModulatorURL: URL?
   @Published var videoAudioRouteCarrierURL: URL?
   @Published var videoAudioRouteOutputURL: URL?
+  @Published var videoAudioRouteDescriptor: VideoAudioRouteDescriptorOption = .luma
   @Published var videoAudioRouteMode: VideoAudioRouteModeOption = .gain
   @Published var videoAudioRouteAmount = 1.0
   @Published var videoAudioRouteFPS = 30.0
@@ -1017,6 +1018,7 @@ final class AppState: ObservableObject {
       modulatorDirectoryURL: modulatorURL,
       carrierWAVURL: carrierURL,
       outputRootDirectoryURL: outputURL,
+      descriptor: videoAudioRouteDescriptor,
       mode: videoAudioRouteMode,
       amount: videoAudioRouteAmount,
       fps: videoAudioRouteFPS,
@@ -1028,7 +1030,7 @@ final class AppState: ObservableObject {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
         let result = try RustBridgePlaceholder.runQueuedVideoAudioRouteRender(request: request)
-        let modeText = self.videoAudioRouteMode == .gain ? "luma-gain" : "luma-pan"
+        let modeText = "\(self.videoAudioRouteDescriptor.cliValue)-\(self.videoAudioRouteMode.cliValue)"
         DispatchQueue.main.async {
           self.videoAudioRouteSummary = "Video→audio route (\(modeText)) bundle at \(result.bundleURL.path)"
           self.statusMessage = "Video→audio route render complete: \(result.bundleURL.path)"
@@ -1499,8 +1501,8 @@ enum CrossSynthModeOption: String, CaseIterable, Identifiable {
 }
 
 enum VideoAudioRouteModeOption: String, CaseIterable, Identifiable {
-  case gain = "Gain (luma → amplitude)"
-  case pan = "Pan (luma → stereo position)"
+  case gain = "Gain (descriptor → amplitude)"
+  case pan = "Pan (descriptor → stereo position)"
 
   var id: String { rawValue }
 
@@ -1510,6 +1512,22 @@ enum VideoAudioRouteModeOption: String, CaseIterable, Identifiable {
       return "gain"
     case .pan:
       return "pan"
+    }
+  }
+}
+
+enum VideoAudioRouteDescriptorOption: String, CaseIterable, Identifiable {
+  case luma = "Luma (brightness)"
+  case flow = "Flow (motion)"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .luma:
+      return "luma"
+    case .flow:
+      return "flow"
     }
   }
 }

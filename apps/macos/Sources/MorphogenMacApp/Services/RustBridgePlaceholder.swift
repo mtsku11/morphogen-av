@@ -586,6 +586,8 @@ enum RustBridgePlaceholder {
       request.modulatorDirectoryURL.path,
       request.carrierWAVURL.path,
       request.outputRootDirectoryURL.path,
+      "--descriptor",
+      request.descriptor.cliValue,
       "--mode",
       request.mode.cliValue,
       "--amount",
@@ -1509,6 +1511,7 @@ struct VideoAudioRouteRenderQueueCommandRequest {
   let modulatorDirectoryURL: URL
   let carrierWAVURL: URL
   let outputRootDirectoryURL: URL
+  let descriptor: VideoAudioRouteDescriptorOption
   let mode: VideoAudioRouteModeOption
   let amount: Double
   let fps: Double
