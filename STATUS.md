@@ -4,17 +4,44 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-22_
+_Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **223 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **236 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **40 passing, 0 failing** (Swift shell + service tests).
+- `swift test`: **42 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the colour-kernel / per-channel-IR commits. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Video-to-Audio Descriptor Routing — full vertical slice (CPU + CLI + queue +
+  SwiftUI; CPU-only).** The roadmap's "frame-luma controls gain or pan" MVP, the
+  cross-modal mirror of Audio-to-Video routing (there A's audio shaped B's video;
+  here A's *video* shapes B's *audio*). Source A's **peak-normalized per-frame
+  mean Rec.709 luma** envelope (hold-last by frame time at `--fps`) drives Source
+  B's WAV: **`gain`** = luma scales B's amplitude (`out = B·lerp(1,luma,amount)`,
+  the shape of `rms_gain_cross_synth`); **`pan`** = luma drives an equal-power
+  stereo pan of mono-mixed B (`pan=(2·luma−1)·amount`, dark→left, bright→right,
+  output 2-channel). CPU-only (audio has no Metal target). The luma is computed
+  by the CLI (which owns image decoding) and handed to `morphogen-audio` as raw
+  `(time,luma)` samples, keeping the audio crate image-decoupled (the symmetric
+  decoupling `audio_route.rs` keeps from audio). `video_route.rs` in
+  morphogen-audio (`luma_gain_route` / `luma_pan_route`, 10 tests) +
+  `render-video-audio-route` CLI + persisted `video_audio_route` queue job
+  (core `VideoAudioRouteMode` enum serde-default Gain;
+  `queue-add-/queue-run-video-audio-route` writing `audio/video_audio_route.wav`
+  + a manifest carrying algorithm/mode/amount/fps) + a macOS Render-panel section
+  (A frames / B WAV / output pickers, mode + amount + fps). Algorithm ids
+  `luma_gain_route_cpu_v1` / `luma_pan_route_cpu_v1`. `amount 0` = byte-identical
+  passthrough (mono B stays mono). **Off-vs-on readout** (8-frame dark→bright A,
+  steady tone B, fps 8): gain off flat 0.354 RMS, on dark **0.035** / bright
+  **0.330** (amplitude tracks A's luma ramp); pan off mono flat, on dark
+  **L 0.349 / R 0.055** (left), bright **L 0.055 / R 0.349** (right). Queue add→run
+  byte-identical to the direct render (smoke test pins it + the manifest knobs,
+  pan mode). Workspace 223 → 236; Swift 40 → 42. MVP feature-complete. Contract:
+  `docs/VIDEO_AUDIO_ROUTE_MILESTONE.md`.
 
 - **CLI module split (behavior-preserving refactor).** The monolithic
   `crates/morphogen-cli/src/main.rs` (8127 lines) was decomposed into eight
@@ -367,9 +394,13 @@ color`, parity-gated Metal) and per-channel **true-stereo IRs** (`--ir-mode
 per-channel`, CPU-only), each CPU + CLI + queue + SwiftUI. The image Metal kernel
 already handles large K (no cap; proved by a K=11 parity test). Its only remaining
 deferred items are a *tiled* large-K Metal kernel (perf only, not correctness) and
-separable image kernels. The next unstarted roadmap effect is **Video-to-Audio
-Descriptor Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh /
-Motion-Vector Reuse** (flow-field reuse on decoded float frames).
+separable image kernels. **Video-to-Audio Descriptor Routing** (frame-luma →
+audio gain/pan) is now a feature-complete MVP vertical slice (CPU + CLI + queue +
+SwiftUI, gain + pan modes, CPU-only); its deferred items are other visual
+descriptors (edge density, optical-flow magnitude, depth), other audio targets
+(luma→filter/pitch, motion→onset), and time-resampled descriptor curves driving
+spectral processing (HQ tier). The next unstarted roadmap effect is **Controlled
+Datamosh / Motion-Vector Reuse** (flow-field reuse on decoded float frames).
 
 ## Candidate next steps
 

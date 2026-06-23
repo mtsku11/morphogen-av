@@ -66,7 +66,11 @@
 - Carrier input: Source B audio parameters.
 - Output: audio transformed by motion, brightness, edge density, or depth.
 - Cached analysis: luminance, edge maps, optical flow, depth maps.
-- First MVP version: frame-luma controls gain or pan.
+- First MVP version: frame-luma controls gain or pan. **Landed** (CPU + CLI +
+  queue + SwiftUI; CPU-only — audio is not a GPU target) — see
+  `docs/VIDEO_AUDIO_ROUTE_MILESTONE.md`. Source A's peak-normalized per-frame
+  mean luma drives B's amplitude (`gain`) or equal-power stereo pan (`pan`);
+  `amount 0` = byte-identical Source B passthrough.
 - Future high-quality version: time-resampled visual descriptors drive spectral audio processing.
 
 ## Controlled Datamosh / Motion-Vector Reuse
