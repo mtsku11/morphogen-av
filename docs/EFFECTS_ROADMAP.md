@@ -94,10 +94,15 @@
   `N` = pulse), `--amount` scales the flow. A stateful temporal node carrying the
   previous output as RGBA32F; the advect step reuses the parity-gated
   `flow_displace`. Algorithm id `flow_reuse_datamosh_bloom_cpu_v1`.
+- Codec-*simulated* ("block") tier: **Landed** (CPU + CLI + free parity-gated Metal
+  + queue + SwiftUI) — `--block-size` quantizes A's flow to a coarse block grid
+  (one mean vector per block) before the advect, so whole macroblocks slide
+  coherently. `block_size ≤ 1` ≡ the smooth bloom path; id
+  `flow_reuse_datamosh_block_cpu_v1` for blocks ≥ 2px. Still deferred within this
+  tier: block-residual accumulation + per-block keep/drop pseudo-keyframes.
 - Future high-quality version: codec-aware motion-vector extraction and controlled
-  remapping. Two deferred tiers: codec-*simulated* mosh (16×16 block grid +
-  residual accumulation, deterministic) and real bitstream mosh (FFglitch — needs
-  an explicit invariant carve-out).
+  remapping. Remaining deferred tier: real bitstream mosh (FFglitch — needs an
+  explicit invariant carve-out).
 
 ## Convolutional Audio/Video Blending
 

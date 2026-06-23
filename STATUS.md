@@ -8,13 +8,32 @@ _Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **250 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **258 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **44 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the datamosh MVP commits. Manual-testing
+- `swift test`: **45 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the datamosh codec-block-tier commits. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — codec-simulated ("block") tier (full vertical slice).**
+  The first deferred datamosh tier: A's per-frame optical flow is **quantized to a
+  coarse `block_size`×`block_size` grid** (one mean motion vector per block) before
+  the recursive advection, so whole macroblocks slide coherently — the chunky
+  "real datamosh" look vs the smooth per-pixel bloom. The only new pixel logic is
+  `quantize_flow_to_blocks` (a pure flow→flow transform); the heavy displace is
+  still the existing parity-gated kernel, so **Metal came free — no new kernel**.
+  `--block-size` knob on `render-datamosh-sequence` + queue + a macOS Macroblock
+  Size stepper; `block_size ≤ 1` ≡ the smooth bloom path (byte-identical), so the
+  resolved algorithm id (`datamosh_algorithm`) is the new
+  `flow_reuse_datamosh_block_cpu_v1` **only for blocks ≥ 2px**. Job field is
+  `serde(default)` (=0 ≡ smooth) so legacy datamosh jobs keep their meaning.
+  **Off-vs-on readout** (high-motion bouncing-square A over a static stripe+dot B):
+  smooth (block 1) vs blocky (block 16) cross-sequence delta grows **0 → 35.9/255**
+  (frame 0 identical = both `B[0]`); frames Read — block 16 melts into large
+  coherent wavy warps (16px regions slide together) where block 1 shatters into
+  per-pixel speckle. Workspace 250 → 258; Swift 44 → 45. See
+  [[datamosh-codec-block-tier]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
 
 - **Controlled Datamosh / Motion-Vector Reuse — full vertical slice (CPU + CLI +
   Metal + queue + SwiftUI).** The roadmap's "flow-field reuse on decoded float

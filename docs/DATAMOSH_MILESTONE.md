@@ -124,11 +124,34 @@ so determinism holds **per-backend**. Same accepted behavior as the recursive
 accelerated view. Not a correctness gap — byte-identity is the wrong goal for a
 recursive node.
 
+## Codec-simulated ("block") tier — LANDED
+
+The first deferred tier shipped as a knob on the same command. A's per-frame flow
+is **quantized to a coarse `block_size`×`block_size` grid** — one **mean** motion
+vector per block (`quantize_flow_to_blocks`) — before the recursive advection, so
+whole macroblocks slide coherently: the chunky "real datamosh" look rather than
+the smooth per-pixel bloom warp. The only new pixel logic is the flow→flow
+quantization; the advecting displace is still the existing parity-gated kernel, so
+**Metal came free (no new kernel)** — quantize on CPU, displace on the gated GPU
+path. `--block-size` (default `1`); `block_size ≤ 1` makes every pixel its own
+block ⇒ **byte-identical to the smooth bloom path** (the continuity property).
+
+- **Algorithm id:** `datamosh_algorithm(block_size)` resolves to
+  `flow_reuse_datamosh_block_cpu_v1` **only for blocks ≥ 2px**, else the bloom id.
+  Job field is `#[serde(default)]` (=`0` ≡ smooth) so legacy datamosh jobs keep
+  their meaning. The manifest records `block_size` + the resolved id.
+- **Off-vs-on readout:** high-motion bouncing-square A over a static stripe+dot B,
+  smooth (`--block-size 1`) vs blocky (`--block-size 16`), full melt. Cross-sequence
+  smooth-vs-blocky delta grows **0 → 35.9/255** (frame 0 identical, both `B[0]`);
+  frames Read — block 16 melts into large coherent wavy warps (16px regions slide
+  together) where block 1 shatters into per-pixel speckle (noisy per-pixel LK).
+- **Still deferred within this tier:** block-residual accumulation and per-block
+  keep/drop pseudo-keyframes (the residual/quantization-noise half of the
+  macroblock aesthetic) — block-quantized motion is the visual core; residuals are
+  an additive refinement if a use case shows it mattering.
+
 ## Deferred (not this slice)
 
-- **Codec-simulated mosh** (tier 2) — quantize motion to a 16×16 block grid,
-  accumulate block residuals, model keep/drop pseudo-keyframes for the macroblock
-  aesthetic. A deterministic sim, visually closer to authentic datamosh.
 - **Real bitstream mosh** (tier 3, FFglitch) — the only route to authentic
   artifacts; breaks determinism + CPU-parity + no-new-required-tool invariants.
   Needs an explicit invariant carve-out (see `/memory/datamosh-real-vs-simulated.md`).
