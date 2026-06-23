@@ -7,36 +7,41 @@ struct ContentView: View {
     VStack(alignment: .leading, spacing: 16) {
       header
 
-      HStack(alignment: .top, spacing: 16) {
-        VStack(spacing: 12) {
-          SourceSlotView(
-            title: "Source A",
-            role: .modulator,
-            path: $state.sourceAPath,
-            probeSummary: state.sourceAProbeSummary,
-            previewSummary: state.sourceAPreviewSummary,
-            previewImage: state.sourceAPreviewImage,
-            onChoose: { chooseSource(.modulator) }
-          )
+      ScrollView(.vertical) {
+        HStack(alignment: .top, spacing: 16) {
+          VStack(spacing: 12) {
+            SourceSlotView(
+              title: "Source A",
+              role: .modulator,
+              path: $state.sourceAPath,
+              probeSummary: state.sourceAProbeSummary,
+              previewSummary: state.sourceAPreviewSummary,
+              previewImage: state.sourceAPreviewImage,
+              onChoose: { chooseSource(.modulator) }
+            )
 
-          SourceSlotView(
-            title: "Source B",
-            role: .carrier,
-            path: $state.sourceBPath,
-            probeSummary: state.sourceBProbeSummary,
-            previewSummary: state.sourceBPreviewSummary,
-            previewImage: state.sourceBPreviewImage,
-            onChoose: { chooseSource(.carrier) }
-          )
+            SourceSlotView(
+              title: "Source B",
+              role: .carrier,
+              path: $state.sourceBPath,
+              probeSummary: state.sourceBProbeSummary,
+              previewSummary: state.sourceBPreviewSummary,
+              previewImage: state.sourceBPreviewImage,
+              onChoose: { chooseSource(.carrier) }
+            )
 
-          AnalysisPanelView()
+            AnalysisPanelView()
+          }
+          .frame(width: 300)
+
+          VStack(spacing: 16) {
+            NodeGraphPlaceholderView()
+            RenderPanelView(state: state)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: 300)
-
-        VStack(spacing: 16) {
-          NodeGraphPlaceholderView()
-          RenderPanelView(state: state)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 8)
       }
     }
     .padding(20)
