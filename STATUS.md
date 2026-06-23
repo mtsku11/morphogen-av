@@ -8,13 +8,36 @@ _Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **258 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **265 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **45 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the datamosh codec-block-tier commits. Manual-testing
+- `swift test`: **46 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the datamosh block-residual commits. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — block-residual accumulation tier (full vertical slice).**
+  The quantization-noise half of the macroblock aesthetic. Quantizing A's flow to a
+  block mean discards the intra-block detail (`residual = flow − block_mean`); this
+  tier accumulates it in a **per-pixel residual flow buffer** (`accum = accum·decay
+  + residual`) and re-injects it (`effective = block_mean + accum·gain`) into the
+  advecting flow, so macroblocks slide coherently **and** shed a trailing
+  fine-motion haze. Still a **pure flow→flow transform** (`datamosh_residual_flow`),
+  so the displace stays the existing parity-gated kernel and **Metal came free
+  again** (no new kernel — the Metal render ran the residual path, per-frame gate
+  passing). `--residual-gain` / `--residual-decay` on `render-datamosh-sequence` +
+  queue + two macOS steppers. Continuity: `gain 0` short-circuits to the block path
+  (byte-identical); `gain 1` first P-frame ≡ the smooth bloom (raw-flow) displace;
+  `block_size ≤ 1` ≡ bloom (residual is a no-op without quantization). New id
+  `flow_reuse_datamosh_block_residual_cpu_v1` via `datamosh_algorithm(block_size,
+  residual_gain)` — **only** for blocks ≥ 2px **and** gain > 0 (a separate id, no
+  block-id bump); job fields `serde(default)` (=0 ≡ off). **Off-vs-on readout**
+  (high-motion bouncing-square A over a static stripe+dot B, block 16, full melt):
+  residual off (`gain 0`) vs on (`gain 1, decay 0.9`) cross-sequence delta grows
+  **0 → 33.8/255** (frame 0 identical = both `B[0]`); frames Read — the coherent
+  macroblock slide gains a divergent streaky haze (stripes smear, the dot drags
+  into a comet). Workspace 258 → 265; Swift 45 → 46. See
+  [[datamosh-codec-block-tier]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
 
 - **Controlled Datamosh — codec-simulated ("block") tier (full vertical slice).**
   The first deferred datamosh tier: A's per-frame optical flow is **quantized to a

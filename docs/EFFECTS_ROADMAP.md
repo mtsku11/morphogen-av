@@ -98,8 +98,13 @@
   + queue + SwiftUI) — `--block-size` quantizes A's flow to a coarse block grid
   (one mean vector per block) before the advect, so whole macroblocks slide
   coherently. `block_size ≤ 1` ≡ the smooth bloom path; id
-  `flow_reuse_datamosh_block_cpu_v1` for blocks ≥ 2px. Still deferred within this
-  tier: block-residual accumulation + per-block keep/drop pseudo-keyframes.
+  `flow_reuse_datamosh_block_cpu_v1` for blocks ≥ 2px.
+- Block-residual accumulation: **Landed** (CPU + CLI + free parity-gated Metal +
+  queue + SwiftUI) — `--residual-gain`/`--residual-decay` accumulate the
+  intra-block motion discarded by quantization in a per-pixel buffer and re-inject
+  it (a fine-motion haze atop the macroblock slide). `gain 0` ≡ block path; id
+  `flow_reuse_datamosh_block_residual_cpu_v1` (blocks ≥ 2px and gain > 0). Still
+  deferred within this tier: per-block keep/drop pseudo-keyframes.
 - Future high-quality version: codec-aware motion-vector extraction and controlled
   remapping. Remaining deferred tier: real bitstream mosh (FFglitch — needs an
   explicit invariant carve-out).
