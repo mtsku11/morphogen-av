@@ -11,8 +11,8 @@ use morphogen_core::{
     RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    coagulated_blend_frame_cpu, coagulated_blend_temporal_frame_cpu, average_cell_flows,
-    downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
+    coagulated_blend_frame_cpu, coagulated_blend_temporal_frame_cpu, apply_history_smear,
+    average_cell_flows, downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
     CoagulationFlowSource, CoagulationSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
@@ -820,6 +820,8 @@ pub(crate) struct CoagulatedBlendSequenceRequest<'a> {
     pub(crate) advect_amount: f32,
     pub(crate) refresh: f32,
     pub(crate) turbulence: f32,
+    pub(crate) smear: f32,
+    pub(crate) smear_decay: f32,
     pub(crate) max_frames: Option<usize>,
 }
 
@@ -854,12 +856,14 @@ pub(crate) fn render_coagulated_blend_sequence(
         .unwrap_or(paired_count);
     fs::create_dir_all(request.output_dir)?;
 
-    // Stateless when advection is off and the field re-seeds fully every frame; this
-    // keeps the Slice-1 path byte-identical to its dedicated frame function.
-    let temporal = request.advect_amount != 0.0 || request.refresh != 1.0;
+    // Stateless when advection is off, the field re-seeds fully every frame, and
+    // there is no history smear; this keeps the Slice-1 path byte-identical to its
+    // dedicated frame function.
+    let temporal = request.advect_amount != 0.0 || request.refresh != 1.0 || request.smear != 0.0;
     let patch = request.settings.patch_size;
 
     let mut previous_field: Option<CoagulationField> = None;
+    let mut previous_output: Option<ImageBufferF32> = None;
     let mut previous_a: Option<ImageBufferF32> = None;
     let mut previous_b: Option<ImageBufferF32> = None;
 
@@ -872,7 +876,8 @@ pub(crate) fn render_coagulated_blend_sequence(
         } else {
             let cols = source_a.width.div_ceil(patch);
             let rows = source_a.height.div_ceil(patch);
-            let cell_flow = if index == 0 {
+            // Skip flow estimation entirely when advection is off (e.g. smear-only).
+            let cell_flow = if index == 0 || request.advect_amount == 0.0 {
                 None
             } else {
                 Some(coagulation_cell_flow(
@@ -889,7 +894,7 @@ pub(crate) fn render_coagulated_blend_sequence(
                     request.settings.seed,
                 )?)
             };
-            let (frame, field) = coagulated_blend_temporal_frame_cpu(
+            let (composite, field) = coagulated_blend_temporal_frame_cpu(
                 &source_a,
                 &source_b,
                 cell_flow.as_ref(),
@@ -899,7 +904,22 @@ pub(crate) fn render_coagulated_blend_sequence(
                 request.refresh,
             )?;
             previous_field = Some(field);
-            frame
+
+            // Output feedback smear: hold a decayed fraction of the previous output
+            // into this frame, leaving trails as patches move (RGB only; alpha stays
+            // from the composite). smear == 0 ⇒ the composite unchanged.
+            if request.smear != 0.0 {
+                let smeared = apply_history_smear(
+                    &composite,
+                    previous_output.as_ref(),
+                    request.smear,
+                    request.smear_decay,
+                )?;
+                previous_output = Some(smeared.clone());
+                smeared
+            } else {
+                composite
+            }
         };
 
         save_png(

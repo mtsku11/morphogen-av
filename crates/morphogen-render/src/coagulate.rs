@@ -50,6 +50,10 @@ pub struct CoagulationSettings {
     /// Baseline A ownership added to every cell's preference. `0` keeps B dominant
     /// (A only intrudes where its descriptor energy exceeds B's).
     pub bias: f32,
+    /// Per-cell coherent offset of the ownership-field lookup, in fractions of a
+    /// cell (a seeded sub-block jitter that ragged-shifts whole blocks of the patch
+    /// boundary — dirty, datamosh-y edges). `0` samples on the clean grid.
+    pub block_jitter: f32,
     /// Seed for the deterministic per-cell / per-pixel hashes.
     pub seed: u64,
 }
@@ -67,6 +71,7 @@ impl Default for CoagulationSettings {
             edge_hardness: 0.0,
             edge_dither: 0.0,
             bias: 0.0,
+            block_jitter: 0.0,
             seed: 0,
         }
     }
@@ -82,6 +87,7 @@ impl CoagulationSettings {
         for (name, value) in [
             ("color_weight", self.color_weight),
             ("texture_weight", self.texture_weight),
+            ("block_jitter", self.block_jitter),
             ("coherence_strength", self.coherence_strength),
             ("randomness", self.randomness),
             ("coagulation_strength", self.coagulation_strength),
@@ -118,9 +124,15 @@ impl CoagulationField {
     /// Bilinearly sample the upsampled ownership weight at output pixel `(x, y)`,
     /// clamped at the grid borders (the scalar analogue of `sample_bilinear_clamped`).
     pub fn sample(&self, x: u32, y: u32) -> f32 {
+        self.sample_pixel(x as f32, y as f32)
+    }
+
+    /// Bilinearly sample the upsampled ownership weight at fractional pixel
+    /// coordinates (used by the block-jitter offset), clamped at the grid borders.
+    pub fn sample_pixel(&self, px: f32, py: f32) -> f32 {
         // Map the pixel centre into cell-centre space.
-        let fx = (x as f32 + 0.5) / self.patch_size as f32 - 0.5;
-        let fy = (y as f32 + 0.5) / self.patch_size as f32 - 0.5;
+        let fx = (px + 0.5) / self.patch_size as f32 - 0.5;
+        let fy = (py + 0.5) / self.patch_size as f32 - 0.5;
         let x0 = fx.floor();
         let y0 = fy.floor();
         let tx = fx - x0;
@@ -213,9 +225,22 @@ pub fn composite_with_field(
 ) -> Result<ImageBufferF32, RenderError> {
     require_matching_dims(source_a, source_b)?;
     let hardness = settings.edge_hardness.clamp(0.0, 1.0);
+    let jitter = settings.block_jitter;
 
     ImageBufferF32::from_fn(source_a.width, source_a.height, |x, y| {
-        let w_soft = field.sample(x, y).clamp(0.0, 1.0);
+        let (px, py) = if jitter != 0.0 {
+            // Per-cell coherent offset (in pixels): whole blocks of the boundary
+            // shift together, ragged rather than fine per-pixel noise.
+            let cx = u64::from(x / field.patch_size);
+            let cy = u64::from(y / field.patch_size);
+            let span = jitter * field.patch_size as f32;
+            let ox = (hash01(settings.seed ^ JITTER_SALT_X, cx, cy) - 0.5) * 2.0 * span;
+            let oy = (hash01(settings.seed ^ JITTER_SALT_Y, cx, cy) - 0.5) * 2.0 * span;
+            (x as f32 + ox, y as f32 + oy)
+        } else {
+            (x as f32, y as f32)
+        };
+        let w_soft = field.sample_pixel(px, py).clamp(0.0, 1.0);
         let w_eff = if hardness > 0.0 {
             let dither =
                 (hash01(settings.seed ^ EDGE_SALT, u64::from(x), u64::from(y)) - 0.5)
@@ -417,9 +442,50 @@ pub fn coagulated_blend_temporal_frame_cpu(
     Ok((image, field))
 }
 
+/// Output feedback smear (Slice 3): hold a decayed fraction of the previous output
+/// frame into the current composite, leaving trails as coagulated patches move.
+/// Only the RGB channels smear — alpha is taken from the fresh composite so an
+/// opaque blend stays opaque (unlike the flow-feedback engine, which treats alpha as
+/// feedback state). `smear == 0` or no history returns the composite unchanged.
+pub fn apply_history_smear(
+    composite: &ImageBufferF32,
+    previous_output: Option<&ImageBufferF32>,
+    smear: f32,
+    decay: f32,
+) -> Result<ImageBufferF32, RenderError> {
+    let smear = smear.clamp(0.0, 1.0);
+    let decay = decay.clamp(0.0, 1.0);
+    let Some(previous) = previous_output else {
+        return Ok(composite.clone());
+    };
+    if smear == 0.0 {
+        return Ok(composite.clone());
+    }
+    if previous.width != composite.width || previous.height != composite.height {
+        return Err(RenderError::IncompatibleInputs(format!(
+            "previous output is {}x{}, composite is {}x{}",
+            previous.width, previous.height, composite.width, composite.height
+        )));
+    }
+    ImageBufferF32::from_fn(composite.width, composite.height, |x, y| {
+        let c = composite.pixel(x, y).unwrap_or([0.0; 4]);
+        let p = previous.pixel(x, y).unwrap_or([0.0; 4]);
+        let trail = decay * smear;
+        [
+            c[0] * (1.0 - smear) + p[0] * trail,
+            c[1] * (1.0 - smear) + p[1] * trail,
+            c[2] * (1.0 - smear) + p[2] * trail,
+            c[3],
+        ]
+    })
+}
+
 /// Salt mixed into the seed for the per-pixel edge dither so it decorrelates from
 /// the per-cell ownership hash.
 const EDGE_SALT: u64 = 0xA5A5_5A5A_C3C3_3C3C;
+/// Salts for the per-cell block-jitter offsets (decorrelated x/y).
+const JITTER_SALT_X: u64 = 0x1234_5678_9ABC_DEF0;
+const JITTER_SALT_Y: u64 = 0x0FED_CBA9_8765_4321;
 
 fn require_matching_dims(a: &ImageBufferF32, b: &ImageBufferF32) -> Result<(), RenderError> {
     if a.width != b.width || a.height != b.height {
@@ -661,6 +727,68 @@ mod tests {
                 pixel[0]
             );
         }
+    }
+
+    #[test]
+    fn block_jitter_perturbs_edges_deterministically() {
+        let a = solid(32, 32, [1.0, 1.0, 1.0]);
+        let b = solid(32, 32, [0.0, 0.0, 0.0]);
+        let base = CoagulationSettings {
+            patch_size: 4,
+            coagulation_strength: 1.0,
+            randomness: 1.0,
+            bias: 0.5,
+            coherence_passes: 0,
+            seed: 5,
+            ..CoagulationSettings::default()
+        };
+
+        let unjittered = coagulated_blend_frame_cpu(&a, &b, base).expect("unjittered");
+        let jittered = coagulated_blend_frame_cpu(
+            &a,
+            &b,
+            CoagulationSettings {
+                block_jitter: 0.7,
+                ..base
+            },
+        )
+        .expect("jittered");
+        let again = coagulated_blend_frame_cpu(
+            &a,
+            &b,
+            CoagulationSettings {
+                block_jitter: 0.7,
+                ..base
+            },
+        )
+        .expect("again");
+
+        assert_ne!(jittered, unjittered, "block jitter should move the edges");
+        assert_eq!(jittered, again, "block jitter must be deterministic");
+    }
+
+    #[test]
+    fn history_smear_leaves_a_decayed_trail_and_keeps_alpha() {
+        let composite = solid(4, 4, [0.0, 0.0, 0.0]); // patch has moved on; now dark
+        let previous = solid(4, 4, [1.0, 1.0, 1.0]); // patch was bright here last frame
+
+        // No history -> passthrough.
+        assert_eq!(
+            apply_history_smear(&composite, None, 0.5, 0.8).expect("no history"),
+            composite
+        );
+        // smear 0 -> passthrough even with history.
+        assert_eq!(
+            apply_history_smear(&composite, Some(&previous), 0.0, 0.8).expect("zero smear"),
+            composite
+        );
+
+        let smeared =
+            apply_history_smear(&composite, Some(&previous), 0.5, 0.8).expect("smeared");
+        // out = 0*(1-0.5) + 1*(0.8*0.5) = 0.4 ghost; alpha stays 1.
+        let pixel = smeared.pixel(0, 0).expect("pixel");
+        assert!((pixel[0] - 0.4).abs() < 1e-6, "trail value: {}", pixel[0]);
+        assert_eq!(pixel[3], 1.0);
     }
 
     fn intrusion_settings() -> CoagulationSettings {

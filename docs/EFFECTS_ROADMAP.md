@@ -218,9 +218,14 @@ mixture weight `w ∈ [0,1]` (`0` = all B, `1` = all A). Per frame:
   field only advects). Frame-zero = descriptors only; the prior state is the
   unquantized field carried in memory (never a display PNG). `advect_amount 0` +
   `refresh 1` is byte-identical to Slice 1.
-- Slices remaining: dirty-edge block jitter + output feedback smear (Slice 3), then a
-  parity-gated Metal field-update/composite kernel (Slice 4 — advection already has its
-  `flow_displace` twin).
+- Dirty edges + history smear (Slice 3): **Landed** (CPU + CLI). `--block-jitter`
+  applies a per-cell coherent sub-block offset to the ownership-field lookup (whole
+  blocks of the patch boundary shift, ragged/datamosh-y; `0` = clean grid).
+  `--smear`/`--smear-decay` hold a decayed fraction of the previous output into each
+  frame, leaving RGB trails as patches move (alpha stays from the composite so the
+  blend stays opaque; `smear 0` = no trail). Both continuity-safe at `0`.
+- Slice remaining: a parity-gated Metal field-update/composite kernel (Slice 4 —
+  advection already has its `flow_displace` twin).
 - Future high-quality version: curl-noise turbulence advection, multi-class ownership
   (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
   Metal field-update kernel gated against the CPU reference.
