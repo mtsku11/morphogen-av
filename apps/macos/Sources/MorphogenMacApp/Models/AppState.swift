@@ -113,6 +113,13 @@ final class AppState: ObservableObject {
   @Published var audioRouteFrameRate = 30.0
   @Published var audioRouteBackend: FeedbackRenderBackendOption = .cpu
   @Published var audioRouteSummary = "No audio→video route rendered"
+  @Published var videoAudioRouteModulatorURL: URL?
+  @Published var videoAudioRouteCarrierURL: URL?
+  @Published var videoAudioRouteOutputURL: URL?
+  @Published var videoAudioRouteMode: VideoAudioRouteModeOption = .gain
+  @Published var videoAudioRouteAmount = 1.0
+  @Published var videoAudioRouteFPS = 30.0
+  @Published var videoAudioRouteSummary = "No video→audio route rendered"
 
   @Published var convBlendModulatorURL: URL?
   @Published var convBlendCarrierURL: URL?
@@ -458,6 +465,42 @@ final class AppState: ObservableObject {
 
     audioRouteOutputURL = url
     statusMessage = "Audio-route output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseVideoAudioRouteModulatorDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source A Frames",
+      message: "Select the modulator PNG frames whose luma drives the audio."
+    ) else {
+      statusMessage = "Source A frame selection cancelled."
+      return
+    }
+
+    videoAudioRouteModulatorURL = url
+    statusMessage = "Video-route Source A frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseVideoAudioRouteCarrierWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Source B WAV",
+      message: "Select the carrier audio (material to reshape)."
+    ) else {
+      statusMessage = "Source B WAV selection cancelled."
+      return
+    }
+
+    videoAudioRouteCarrierURL = url
+    statusMessage = "Video-route Source B WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseVideoAudioRouteOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Video-route output selection cancelled."
+      return
+    }
+
+    videoAudioRouteOutputURL = url
+    statusMessage = "Video-route output selected: \(url.lastPathComponent)"
   }
 
   func chooseMediaProxyOutputDirectory() {
@@ -955,6 +998,50 @@ final class AppState: ObservableObject {
     }
   }
 
+  func runVideoAudioRouteRender() {
+    guard let modulatorURL = videoAudioRouteModulatorURL else {
+      statusMessage = "Select a Source A frame directory before rendering the video→audio route."
+      return
+    }
+    guard let carrierURL = videoAudioRouteCarrierURL else {
+      statusMessage = "Select a Source B WAV before rendering the video→audio route."
+      return
+    }
+    guard let outputURL = videoAudioRouteOutputURL else {
+      statusMessage = "Choose an output directory before rendering the video→audio route."
+      return
+    }
+
+    let request = VideoAudioRouteRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultVideoAudioRouteRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierWAVURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      mode: videoAudioRouteMode,
+      amount: videoAudioRouteAmount,
+      fps: videoAudioRouteFPS,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing video→audio route render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedVideoAudioRouteRender(request: request)
+        let modeText = self.videoAudioRouteMode == .gain ? "luma-gain" : "luma-pan"
+        DispatchQueue.main.async {
+          self.videoAudioRouteSummary = "Video→audio route (\(modeText)) bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Video→audio route render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.videoAudioRouteSummary = "Video→audio route render failed: \(error.localizedDescription)"
+          self.statusMessage = "Video→audio route render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   func chooseConvBlendModulatorDirectory() {
     guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
       title: "Choose Source A Frames",
@@ -1407,6 +1494,22 @@ enum CrossSynthModeOption: String, CaseIterable, Identifiable {
       return "gain"
     case .filter:
       return "filter"
+    }
+  }
+}
+
+enum VideoAudioRouteModeOption: String, CaseIterable, Identifiable {
+  case gain = "Gain (luma → amplitude)"
+  case pan = "Pan (luma → stereo position)"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .gain:
+      return "gain"
+    case .pan:
+      return "pan"
     }
   }
 }

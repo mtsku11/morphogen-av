@@ -705,6 +705,65 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Video-to-Audio Descriptor Routing")
+            .font(.subheadline.weight(.semibold))
+            .help("Source A's per-frame luma drives Source B's audio: gain (luma → amplitude) or pan (luma → equal-power stereo position).")
+
+          Picker("Mode", selection: $state.videoAudioRouteMode) {
+            ForEach(VideoAudioRouteModeOption.allCases) { mode in
+              Text(mode.rawValue).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Gain: bright A keeps B, dark A attenuates it. Pan: dark A steers left, bright A steers right.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseVideoAudioRouteModulatorDirectory()
+            } label: {
+              Label("Source A Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseVideoAudioRouteCarrierWAV()
+            } label: {
+              Label("Source B WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseVideoAudioRouteOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.videoAudioRouteAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.videoAudioRouteAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = full routing.")
+
+            Stepper(value: $state.videoAudioRouteFPS, in: 1...120, step: 1) {
+              Text("FPS \(state.videoAudioRouteFPS, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Frame rate mapping A's frame index to time for the luma lookup.")
+          }
+
+          Text(state.videoAudioRouteSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runVideoAudioRouteRender()
+          } label: {
+            Label("Run Video→Audio Route", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Convolutional AV Blending")
             .font(.subheadline.weight(.semibold))
             .help("Each Source A frame supplies a normalized KxK luma kernel that Source B's frame is convolved with.")

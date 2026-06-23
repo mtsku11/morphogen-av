@@ -305,6 +305,49 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedVideoAudioRouteArgumentsIncludeModeAmountAndFPS() throws {
+    let request = VideoAudioRouteRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/video-audio-route-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .pan,
+      amount: 0.5,
+      fps: 24.0,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddVideoAudioRouteArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-video-audio-route"]
+    )
+    XCTAssertEqual(arguments[7], "/tmp/video-audio-route-queue.json")
+    XCTAssertEqual(arguments[8], "/tmp/source-a-frames")
+    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(Self.value(after: "--mode", in: arguments), "pan")
+    XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.5")
+    XCTAssertEqual(Self.value(after: "--fps", in: arguments), "24")
+  }
+
+  func testQueuedVideoAudioRouteArgumentsRejectInvalidValues() {
+    let base = VideoAudioRouteRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/video-audio-route-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .gain,
+      amount: 1.5, // out of [0, 1]
+      fps: 0.0, // not greater than zero
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddVideoAudioRouteArguments(request: base)
+    )
+  }
+
   func testQueuedAudioImpulseConvolutionArgumentsIncludeAmountAndMaxSamples() throws {
     let request = AudioImpulseConvolutionRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/impulse-conv-queue.json"),
