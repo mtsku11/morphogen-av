@@ -749,6 +749,27 @@ struct RenderPanelView: View {
             .help("1 = smooth per-pixel bloom; N >= 2 quantizes A's flow to NxN blocks so whole macroblocks slide (the chunky codec-simulated look).")
           }
 
+          HStack(spacing: 16) {
+            Stepper(value: $state.datamoshResidualGain, in: 0...4, step: 0.1) {
+              Text("Residual Gain \(state.datamoshResidualGain, specifier: "%.2f")")
+            }
+            .frame(width: 230, alignment: .leading)
+            .help("Re-inject the intra-block motion discarded by quantization (a fine-motion haze atop the macroblock slide). 0 = block path; needs Macroblock Size >= 2.")
+            Stepper(value: $state.datamoshResidualDecay, in: 0...1, step: 0.05) {
+              Text("Residual Decay \(state.datamoshResidualDecay, specifier: "%.2f")")
+            }
+            .frame(width: 230, alignment: .leading)
+            .help("How long discarded motion lingers in the accumulator: 0 = one-frame kick, ->1 = long-lived drift.")
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.datamoshBlockRefreshThreshold, in: 0...8, step: 0.25) {
+              Text("Block Refresh \(state.datamoshBlockRefreshThreshold, specifier: "%.2f")")
+            }
+            .frame(width: 230, alignment: .leading)
+            .help("Per-block keep/drop: macroblocks whose mean motion is below this snap back to the carrier (intra-block refresh) while busier blocks rot. 0 = no per-block refresh; needs Macroblock Size >= 2.")
+          }
+
           Picker("Backend", selection: $state.datamoshBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
               Text(backend.rawValue).tag(backend)

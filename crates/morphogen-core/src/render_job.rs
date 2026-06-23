@@ -243,6 +243,21 @@ pub enum RenderJobTask {
         /// legacy jobs (no field) keep the smooth bloom meaning.
         #[serde(default)]
         block_size: u32,
+        /// Block-residual gain: re-inject the intra-block motion discarded by
+        /// quantization. `0` = block path (no residual); needs `block_size >= 2`.
+        /// Defaults to `0` so legacy jobs keep their meaning.
+        #[serde(default)]
+        residual_gain: f32,
+        /// Decay on the per-pixel residual accumulator: `0` = one-frame kick,
+        /// `->1` = long-lived drift. Irrelevant when `residual_gain == 0`.
+        #[serde(default)]
+        residual_decay: f32,
+        /// Per-block keep/drop threshold: macroblocks whose mean motion magnitude is
+        /// below this snap back to the carrier (intra-block refresh) while busier
+        /// blocks rot. `0` = no per-block refresh; needs `block_size >= 2`. Defaults
+        /// to `0` so legacy jobs keep their meaning.
+        #[serde(default)]
+        block_refresh_threshold: f32,
     },
     /// Convolutional AV blending (image kernel): each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved with

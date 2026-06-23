@@ -145,16 +145,190 @@ block ⇒ **byte-identical to the smooth bloom path** (the continuity property).
   smooth-vs-blocky delta grows **0 → 35.9/255** (frame 0 identical, both `B[0]`);
   frames Read — block 16 melts into large coherent wavy warps (16px regions slide
   together) where block 1 shatters into per-pixel speckle (noisy per-pixel LK).
-- **Still deferred within this tier:** block-residual accumulation and per-block
-  keep/drop pseudo-keyframes (the residual/quantization-noise half of the
-  macroblock aesthetic) — block-quantized motion is the visual core; residuals are
-  an additive refinement if a use case shows it mattering.
+- **Whole tier now landed:** block-residual accumulation and per-block keep/drop
+  pseudo-keyframes have both since landed (next sections).
+
+## Block-residual accumulation tier — LANDED
+
+The quantization-noise half of the macroblock aesthetic. Quantizing A's flow to a
+block mean (above) **throws away** the intra-block detail `residual = flow −
+block_mean`. This tier stops discarding it: a **per-pixel residual flow buffer**
+accumulates the discarded sub-block motion across frames and re-injects it
+(lagged) into the advecting flow, so macroblocks slide coherently *and* shed a
+trailing haze of the fine motion the coarse grid couldn't represent. Like the
+block tier it stays a **pure flow→flow transform**, so the advecting displace is
+still the existing parity-gated kernel and **Metal comes free again** (quantize +
+accumulate on CPU, displace on the gated GPU path).
+
+Per-pixel, per P-frame (`q` = block mean, `f` = A's raw flow, `accum` = the new
+state buffer):
+
+```
+resid[p]  = f[p] - q[p]                      # discarded intra-block detail
+accum[p]  = accum[p]*residual_decay + resid[p]   # NEW per-pixel state (2ch)
+flow[p]   = q[p] + accum[p]*residual_gain    # feed the parity-gated displace
+```
+
+- **State (invariant):** the per-pixel residual buffer is a second stateful
+  channel alongside `previous_output`, carried as an unquantized 2-channel
+  `FlowField` in memory. **Frame-zero and every keyframe reset it to zero** (an
+  I-frame refresh clears accumulated residual, matching the snap-back to `B`).
+- **Continuity knobs:**
+  - `--residual-gain 0` ⇒ **byte-identical to the block path** (no residual
+    re-injected; the function short-circuits to `datamosh_block_frame_cpu`).
+  - `--residual-gain 1` on the first P-frame ⇒ `accum = resid`, so `flow = q +
+    (f−q) = f` ⇒ that frame is byte-identical to the **smooth bloom** (raw-flow)
+    displace; the residual only diverges from bloom once it accumulates over ≥ 2
+    P-frames or `gain ≠ 1`.
+  - `block_size ≤ 1` ⇒ `q = f` ⇒ `resid = 0` ⇒ accum stays zero ⇒ byte-identical
+    to bloom regardless of gain (the residual is a no-op without quantization).
+  - `--residual-decay` (default `0.9`) controls how long discarded motion lingers
+    (`0` = one-frame kick, `→1` = long-lived drift).
+- **Algorithm id:** `datamosh_algorithm(block_size, residual_gain)` resolves to
+  `flow_reuse_datamosh_block_residual_cpu_v1` **only when blocks ≥ 2px and
+  residual_gain > 0**, else the block / bloom id as before. A **separate** id (not
+  a descriptor dim on the block id), so adding it does **not** bump the block id.
+  Job fields are `#[serde(default)]` (gain/decay = `0` ≡ off) so legacy datamosh /
+  block jobs keep their meaning.
+
+### Acceptance criteria (residual)
+
+1. **Block-path continuity.** `--residual-gain 0` ⇒ output byte-identical to the
+   block path (same `block_size`).
+2. **Bloom continuity.** `block_size ≤ 1` (any gain) ⇒ byte-identical to bloom.
+3. **First-P-frame identity.** `--residual-gain 1` on the first P-frame ⇒
+   byte-identical to the raw-flow bloom displace.
+4. **Accumulation.** `accum` after a P-frame equals `prev_accum*decay + (f−q)`;
+   keyframe / frame-zero ⇒ `accum = 0`.
+5. **Determinism + Metal parity** inherited from the displace (per-frame gate);
+   no `unwrap()` in library code.
+
+### Verification (off-vs-on)
+
+Block path (`--residual-gain 0`) vs residual on (`--residual-gain 1 --block-size
+16` over high-motion A, full melt), Read frames from both, report
+`scripts/frame-delta.py`. Off ⇒ identical to the block tier; on ⇒ the coherent
+macroblock slide gains a divergent fine-motion haze that builds over frames.
+
+## Per-block keep/drop pseudo-keyframes tier — LANDED
+
+The patchy "some macroblocks refresh, some rot" half of the aesthetic — a keyframe
+decision *per block* rather than per whole frame. After the recursive advect, each
+macroblock whose **mean-motion magnitude** is below `--block-refresh-threshold`
+"keeps": it snaps back to the carrier `B[i]` (an intra/I-block refresh) while
+busier blocks are denied refresh and keep rotting under the reused flow.
+
+The trigger is **content-driven**, like a codec's intra-block map (intra blocks are
+inserted where inter-prediction fails ≈ high motion / new content), not injected
+noise — the faithful simulation of the macroblock-refresh mechanism. "Calm blocks
+refresh, busy blocks smear" yields the recognizable look where the trail behind a
+moving subject **self-erases** (calm regions snap back to clean `B`) while the
+subject's current position keeps smearing. Like the block / residual tiers it stays
+a per-block composite over the *output* of the parity-gated displace, so **Metal
+comes free again** (advect on the gated path, then a CPU composite identical across
+backends).
+
+Per P-frame (`q` = block mean = `quantize_flow_to_blocks`):
+
+```
+keeps(block) = |mean(q over block)| < refresh_threshold   # below ⇒ intra refresh
+out[p]   = keeps(block(p)) ? B[i][p] : advected[p]         # composite
+accum[p] = keeps(block(p)) ? 0       : accum[p]            # I-block clears residual
+```
+
+- **State (invariant):** the per-pixel residual accumulator (the residual tier's
+  second stateful channel) is **cleared in every refreshed block** — an intra-block
+  refresh discards that block's accumulated prediction state, matching the
+  whole-frame keyframe reset. Frame-zero / keyframe are unchanged (carrier verbatim,
+  accumulator zeroed); refresh only acts on a P-frame.
+- **Continuity knobs:**
+  - `--block-refresh-threshold 0` ⇒ **byte-identical to the block/residual path**
+    (no block refreshes).
+  - a threshold above the largest block motion ⇒ **every block refreshes** ⇒ the
+    carrier verbatim with a cleared accumulator (byte-identical to a whole-frame
+    keyframe).
+  - `block_size ≤ 1` ⇒ the bloom path (refresh is a no-op without macroblocks, like
+    residual).
+- **Algorithm id:** `datamosh_algorithm(block_size, residual_gain, refresh_threshold)`
+  resolves to `flow_reuse_datamosh_block_refresh_cpu_v1` **when blocks ≥ 2px and
+  refresh_threshold > 0** (precedence refresh > residual > block > bloom — it names
+  the most-specific active policy; the `residual_gain`/`residual_decay`/
+  `block_refresh_threshold` knobs are recorded separately and carry the rest). A
+  **separate** id, so it does not bump the block / residual ids. The job field is
+  `#[serde(default)]` (= `0` ≡ off) so legacy datamosh / block / residual jobs keep
+  their meaning.
+
+### Acceptance criteria (refresh)
+
+1. **Block/residual continuity.** `--block-refresh-threshold 0` ⇒ output
+   byte-identical to the residual frame (same block_size/gain/decay).
+2. **Keyframe continuity.** a threshold above every block's motion ⇒ the carrier
+   verbatim with a cleared accumulator (≡ a whole-frame keyframe).
+3. **Keep/rot.** calm blocks (mean motion below threshold) take the carrier; busy
+   blocks take the advected content; refreshed blocks clear their accumulator.
+4. **Bloom continuity.** `block_size ≤ 1` ⇒ the bloom path regardless of threshold.
+5. **Determinism + Metal parity** inherited from the displace (per-frame gate); no
+   `unwrap()` in library code.
+
+### Verification (off-vs-on)
+
+Block path (`--block-refresh-threshold 0`) vs refresh on (`--block-refresh-threshold
+1.0 --block-size 16` over the bouncing-square A, full melt), Read frames from both,
+report `scripts/dm-cross-delta.py`. Off ⇒ a cumulative smear everywhere the square
+has been; on ⇒ the trail self-erases (calm blocks refresh to clean `B`) leaving the
+smear only at the square's current position. Cross-delta grows **0 → 31.6/255** over
+30 frames (frame 0 identical, both `B[0]`); the Metal refresh path renders (gate
+passes ⇒ Metal free).
+
+## Real bitstream mosh — P-frame "bloom" — LANDED (experimental, non-deterministic)
+
+The authentic codec-artifact tier, shipped as a **standalone experimental CLI**
+(`datamosh-bitstream`) inside an explicit invariant carve-out. Unlike the simulated
+tiers (which fake the look on decoded float frames), this mangles the *compressed
+stream* so the decoder itself produces the artifacts.
+
+**Pipeline.** ffmpeg encodes the input to a **P-frame-only AVI/MPEG-4** (one leading
+I-frame, no B-frames, no audio — `-c:v mpeg4 -bf 0 -g 999999 -sc_threshold 0 -an`,
+using ffmpeg's built-in **LGPL** mpeg4 encoder, *not* libxvid, so no GPL dependency);
+pure-Rust RIFF surgery (`crates/morphogen-media/src/avi.rs::duplicate_p_frame`)
+duplicates a chosen P-frame's compressed chunk `--duplicate-count` times so its
+motion vectors re-apply on every redecode; ffmpeg decodes the mangled AVI to a PNG
+sequence. The surgery rebuilds the `movi` list + `idx1` index (preserving the
+encoder's offset convention via the first entry) and patches `avih.dwTotalFrames` /
+`strh.dwLength`.
+
+**The carve-out (3 invariants, explicit):**
+- **Determinism** — output depends on the external ffmpeg codec (version/build), so
+  it is **not bit-reproducible**. It lives OUTSIDE the deterministic render graph:
+  no `RenderJobTask`, no queue, no SwiftUI; a `datamosh_bitstream.json` sidecar
+  records params + ffmpeg version + `deterministic: false` for traceability.
+- **CPU-ground-truth / Metal parity** — n/a; there is no render kernel, no GPU path,
+  no parity gate.
+- **FFmpeg external+optional / no GPL-only dep** — **honoured**: only the already-
+  sanctioned external ffmpeg, the LGPL mpeg4 encoder, and our own Rust surgery. No
+  FFglitch, no vendored codec.
+
+**Determinism that *does* hold:** the AVI surgery is pure and unit-tested on
+synthetic byte buffers (no ffmpeg needed) — `--duplicate-count 0` is the exact
+identity (off case); duplication grows the chunk count by N, rebuilds the index, and
+updates the frame-count headers. Algorithm id
+`datamosh_bitstream_pframe_dup_experimental_v1`.
+
+**Verification (off-vs-on, look check not a determinism proof).** A 2s `testsrc2`
+clip, `--p-frame-index 5`, off (`--duplicate-count 0`, a plain transcode = 48 frames)
+vs on (`--duplicate-count 30` = 78 frames). Read frames: off is clean testsrc2; the
+30 duplicated frames **bloom/melt** — the rainbow diagonal dissolves, the clock
+digits smear into macroblock glitches, blocky codec decay scatters across the frame
+(the real quantized-macroblock look the simulation only approximated). Mean
+frame-to-frame delta **5.982 → 4.081 /255** (repeated identical-motion frames change
+less per step than normal motion).
 
 ## Deferred (not this slice)
 
-- **Real bitstream mosh** (tier 3, FFglitch) — the only route to authentic
-  artifacts; breaks determinism + CPU-parity + no-new-required-tool invariants.
-  Needs an explicit invariant carve-out (see `/memory/datamosh-real-vs-simulated.md`).
+- **Real bitstream mosh — further ops**: I-frame removal (transition/void mosh) and
+  motion-transfer (swap A's vectors into B — likely FFglitch). Same carve-out; the
+  P-frame bloom above is the first op landed. The richer FFglitch vocabulary
+  (sort/shuffle/fluid) stays deferred (see `/memory/datamosh-real-vs-simulated.md`).
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.
 - **Disk checkpoint / resume** — the RGBA32F state serializers exist

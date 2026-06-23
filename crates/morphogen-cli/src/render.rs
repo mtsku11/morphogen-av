@@ -15,7 +15,8 @@ use morphogen_render::{
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     is_datamosh_keyframe, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
-    quantize_flow_to_blocks,
+    datamosh_block_refresh_composite, datamosh_residual_flow, quantize_flow_to_blocks,
+    reset_residual_in_refreshed_blocks, zero_flow,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
@@ -412,6 +413,9 @@ pub(crate) struct DatamoshSequenceRequest<'a> {
     pub(crate) keyframe_interval: u32,
     pub(crate) amount: f32,
     pub(crate) block_size: u32,
+    pub(crate) residual_gain: f32,
+    pub(crate) residual_decay: f32,
+    pub(crate) refresh_threshold: f32,
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
 }
@@ -427,6 +431,21 @@ pub(crate) fn render_datamosh_sequence(
     if !request.amount.is_finite() || request.amount < 0.0 {
         return Err(CliError::Message(
             "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.residual_gain.is_finite() || request.residual_gain < 0.0 {
+        return Err(CliError::Message(
+            "residual-gain must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.residual_decay.is_finite() || request.residual_decay < 0.0 {
+        return Err(CliError::Message(
+            "residual-decay must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.refresh_threshold.is_finite() || request.refresh_threshold < 0.0 {
+        return Err(CliError::Message(
+            "block-refresh-threshold must be finite and non-negative".to_string(),
         ));
     }
     if matches!(request.max_frames, Some(0)) {
@@ -451,8 +470,19 @@ pub(crate) fn render_datamosh_sequence(
 
     fs::create_dir_all(request.output_dir)?;
 
+    // Residual accumulation is active only with a positive gain over coarse
+    // blocks; otherwise the loop uses the plain block-quantize path (gain 0 ⇒
+    // byte-identical block tier, by construction).
+    let residual_active = request.residual_gain > 0.0 && request.block_size >= 2;
+    // Per-block keep/drop refresh is active only with a positive threshold over
+    // coarse blocks (threshold 0 ⇒ byte-identical to the block/residual path).
+    let refresh_active = request.refresh_threshold > 0.0 && request.block_size >= 2;
+
     let mut previous_output: Option<ImageBufferF32> = None;
     let mut previous_modulator: Option<ImageBufferF32> = None;
+    // Per-pixel residual accumulator (the second stateful channel). Reset to zero
+    // at frame zero and every keyframe (an I-frame clears accumulated residual).
+    let mut accumulated_residual: Option<FlowField> = None;
     for index in 0..frame_count {
         let carrier = load_image_f32(&carrier_frames[index])?;
         let modulator = load_image_f32(&modulator_frames[index])?;
@@ -478,13 +508,64 @@ pub(crate) fn render_datamosh_sequence(
                 .flow;
                 // Codec-simulated mosh: quantize A's flow to a coarse block grid
                 // (CPU flow transform) so whole macroblocks slide; block_size <= 1
-                // returns the flow unchanged (the smooth bloom path). The displace
-                // that follows is the existing parity-gated kernel.
-                let flow = quantize_flow_to_blocks(&flow, request.block_size)?;
-                render_datamosh_advect_frame(previous, &flow, request.amount, request.backend)?
+                // returns the flow unchanged (the smooth bloom path). With residual
+                // active, the discarded intra-block motion is accumulated and
+                // re-injected (also a pure CPU flow transform). The displace that
+                // follows is the existing parity-gated kernel on either backend, so
+                // Metal stays free.
+                let effective = if residual_active {
+                    let accum = accumulated_residual
+                        .take()
+                        .unwrap_or(zero_flow(carrier.width, carrier.height)?);
+                    let (effective, new_accum) = datamosh_residual_flow(
+                        &flow,
+                        &accum,
+                        request.block_size,
+                        request.residual_gain,
+                        request.residual_decay,
+                    )?;
+                    accumulated_residual = Some(new_accum);
+                    effective
+                } else {
+                    quantize_flow_to_blocks(&flow, request.block_size)?
+                };
+                let advected = render_datamosh_advect_frame(
+                    previous,
+                    &effective,
+                    request.amount,
+                    request.backend,
+                )?;
+                // Per-block keep/drop: macroblocks whose mean motion is below the
+                // threshold snap back to the carrier B[i] (intra-block refresh)
+                // while busier blocks keep rotting. A pure CPU composite over the
+                // gated displace output, so Metal stays free; refreshed blocks also
+                // clear their residual accumulator (matching the keyframe reset).
+                if refresh_active {
+                    let block_means = quantize_flow_to_blocks(&flow, request.block_size)?;
+                    let composed = datamosh_block_refresh_composite(
+                        &advected,
+                        &carrier,
+                        &block_means,
+                        request.refresh_threshold,
+                    )?;
+                    if let Some(accum) = accumulated_residual.take() {
+                        accumulated_residual = Some(reset_residual_in_refreshed_blocks(
+                            &accum,
+                            &block_means,
+                            request.refresh_threshold,
+                        )?);
+                    }
+                    composed
+                } else {
+                    advected
+                }
             }
-            // Frame zero or keyframe refresh: the carrier is the output verbatim.
-            _ => carrier.clone(),
+            // Frame zero or keyframe refresh: the carrier is the output verbatim,
+            // and the residual accumulator is cleared (I-frame refresh).
+            _ => {
+                accumulated_residual = None;
+                carrier.clone()
+            }
         };
 
         save_png(
@@ -496,11 +577,14 @@ pub(crate) fn render_datamosh_sequence(
     }
 
     println!(
-        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, {:?}) from {} moshing {} to {}",
+        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, {:?}) from {} moshing {} to {}",
         frame_count,
         request.keyframe_interval,
         request.amount,
         request.block_size,
+        request.residual_gain,
+        request.residual_decay,
+        request.refresh_threshold,
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),
@@ -555,6 +639,85 @@ pub(crate) fn render_datamosh_advect_frame_metal(
     Err(CliError::Message(
         "the Metal backend is only available on macOS; use --backend cpu".to_string(),
     ))
+}
+
+pub(crate) struct DatamoshBitstreamRequest<'a> {
+    pub(crate) input: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) fps: f64,
+    pub(crate) p_frame_index: u32,
+    pub(crate) duplicate_count: u32,
+}
+
+const DATAMOSH_BITSTREAM_ALGORITHM: &str = "datamosh_bitstream_pframe_dup_experimental_v1";
+
+#[derive(Serialize)]
+struct DatamoshBitstreamSidecar {
+    algorithm: String,
+    /// Always false: ffmpeg's MPEG-4 codec makes this output non-reproducible.
+    deterministic: bool,
+    input: String,
+    fps: f64,
+    codec: String,
+    p_frame_index: u32,
+    duplicate_count: u32,
+    p_frames_available: u32,
+    ffmpeg_version: String,
+    note: String,
+}
+
+/// EXPERIMENTAL, NON-DETERMINISTIC real bitstream datamosh. Encodes `input` to a
+/// P-frame-only AVI/MPEG-4 via external ffmpeg, duplicates a chosen P-frame's
+/// compressed chunk (`morphogen_media::duplicate_p_frame`) so its motion vectors
+/// re-bloom on redecode, then decodes the mangled stream to a PNG sequence. This
+/// path lives OUTSIDE the deterministic render graph by design — there is no parity
+/// gate and the output is not bit-reproducible (it depends on ffmpeg's codec).
+pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Result<(), CliError> {
+    fs::create_dir_all(request.output_dir)?;
+    let encoded = request.output_dir.join("encoded.avi");
+    let moshed = request.output_dir.join("moshed.avi");
+
+    morphogen_media::encode_datamosh_avi(request.input, &encoded, request.fps)?;
+    let encoded_bytes = fs::read(&encoded)?;
+    let p_frames_available = morphogen_media::count_p_frames(&encoded_bytes)?;
+    let moshed_bytes = morphogen_media::duplicate_p_frame(
+        &encoded_bytes,
+        request.p_frame_index,
+        request.duplicate_count,
+    )?;
+    fs::write(&moshed, &moshed_bytes)?;
+    morphogen_media::decode_avi_frames(&moshed, request.output_dir)?;
+
+    let sidecar = DatamoshBitstreamSidecar {
+        algorithm: DATAMOSH_BITSTREAM_ALGORITHM.to_string(),
+        deterministic: false,
+        input: request.input.to_string_lossy().to_string(),
+        fps: request.fps,
+        codec: "mpeg4".to_string(),
+        p_frame_index: request.p_frame_index,
+        duplicate_count: request.duplicate_count,
+        p_frames_available,
+        ffmpeg_version: morphogen_media::ffmpeg_version().unwrap_or_default(),
+        note: "Experimental real bitstream datamosh: output is NOT bit-reproducible \
+               (depends on the external ffmpeg MPEG-4 codec) and lives outside the \
+               deterministic render graph."
+            .to_string(),
+    };
+    let sidecar_path = request.output_dir.join("datamosh_bitstream.json");
+    fs::write(&sidecar_path, serde_json::to_vec_pretty(&sidecar)?)?;
+
+    // The encoded source AVI is a disposable intermediate; the moshed AVI is itself
+    // a playable deliverable, so it is kept alongside the decoded frames.
+    let _ = fs::remove_file(&encoded);
+
+    println!(
+        "datamosh-bitstream (EXPERIMENTAL, non-deterministic): bloomed P-frame {} x{} of {} P-frames -> {}",
+        request.p_frame_index,
+        request.duplicate_count,
+        p_frames_available,
+        request.output_dir.display()
+    );
+    Ok(())
 }
 
 pub(crate) struct ConvolutionalBlendSequenceRequest<'a> {

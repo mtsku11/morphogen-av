@@ -102,6 +102,65 @@ pub fn extract_audio_wav_command_with_max_duration(
     CommandSpec::new("ffmpeg", args)
 }
 
+/// Encode `input` to an AVI/MPEG-4 stream shaped for bitstream datamosh: a single
+/// leading I-frame followed by P-frames only (no B-frames, no audio), so a chosen
+/// P-frame chunk can be duplicated to bloom its motion. Uses ffmpeg's built-in
+/// `mpeg4` encoder (LGPL — not libxvid), keeping us free of GPL-only dependencies.
+pub fn encode_datamosh_avi_command(
+    input: impl AsRef<Path>,
+    output_avi: impl AsRef<Path>,
+    fps: f64,
+) -> CommandSpec {
+    CommandSpec::new(
+        "ffmpeg",
+        vec![
+            "-y".to_string(),
+            "-i".to_string(),
+            input.as_ref().to_string_lossy().to_string(),
+            "-an".to_string(),
+            "-vf".to_string(),
+            format!("fps={fps}"),
+            "-c:v".to_string(),
+            "mpeg4".to_string(),
+            "-q:v".to_string(),
+            "4".to_string(),
+            "-bf".to_string(),
+            "0".to_string(),
+            "-g".to_string(),
+            "999999".to_string(),
+            "-sc_threshold".to_string(),
+            "0".to_string(),
+            output_avi.as_ref().to_string_lossy().to_string(),
+        ],
+    )
+}
+
+/// Decode a (possibly mangled) AVI back into a `frame_%06d.png` sequence.
+pub fn decode_avi_frames_command(
+    input_avi: impl AsRef<Path>,
+    output_dir: impl AsRef<Path>,
+) -> CommandSpec {
+    let output_pattern = frame_pattern(output_dir.as_ref());
+    CommandSpec::new(
+        "ffmpeg",
+        vec![
+            "-y".to_string(),
+            "-i".to_string(),
+            input_avi.as_ref().to_string_lossy().to_string(),
+            output_pattern.to_string_lossy().to_string(),
+        ],
+    )
+}
+
+/// The first line of `ffmpeg -version` (e.g. "ffmpeg version 7.1 ..."), recorded in
+/// the bitstream-datamosh sidecar so a non-reproducible run is at least traceable.
+pub fn ffmpeg_version() -> Result<String, MediaError> {
+    let spec = CommandSpec::new("ffmpeg", vec!["-version".to_string()]);
+    let stdout = run_command_stdout(&spec)?;
+    let text = String::from_utf8_lossy(&stdout);
+    Ok(text.lines().next().unwrap_or("").trim().to_string())
+}
+
 pub(crate) fn run_command_stdout(spec: &CommandSpec) -> Result<Vec<u8>, MediaError> {
     let output = spec.to_command().output().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -177,6 +236,29 @@ mod tests {
 
         assert!(spec.args.contains(&"-t".to_string()));
         assert!(spec.args.contains(&"10.000000".to_string()));
+    }
+
+    #[test]
+    fn datamosh_encode_command_forces_pframe_only_mpeg4_avi() {
+        let spec = encode_datamosh_avi_command("in.mov", "out.avi", 24.0);
+
+        assert_eq!(spec.program, "ffmpeg");
+        assert!(spec.args.contains(&"mpeg4".to_string()));
+        assert!(spec.args.contains(&"-an".to_string()));
+        assert!(spec.args.contains(&"-bf".to_string()));
+        assert!(spec.args.contains(&"0".to_string()));
+        assert!(spec.args.contains(&"-sc_threshold".to_string()));
+        assert!(spec.args.contains(&"fps=24".to_string()));
+        assert!(spec.args.iter().any(|arg| arg.ends_with("out.avi")));
+    }
+
+    #[test]
+    fn datamosh_decode_command_targets_png_sequence() {
+        let spec = decode_avi_frames_command("mosh.avi", "frames");
+
+        assert_eq!(spec.program, "ffmpeg");
+        assert!(spec.args.contains(&"mosh.avi".to_string()));
+        assert!(spec.args.iter().any(|arg| arg.ends_with("frame_%06d.png")));
     }
 
     #[test]

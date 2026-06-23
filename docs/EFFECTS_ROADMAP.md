@@ -98,11 +98,33 @@
   + queue + SwiftUI) — `--block-size` quantizes A's flow to a coarse block grid
   (one mean vector per block) before the advect, so whole macroblocks slide
   coherently. `block_size ≤ 1` ≡ the smooth bloom path; id
-  `flow_reuse_datamosh_block_cpu_v1` for blocks ≥ 2px. Still deferred within this
-  tier: block-residual accumulation + per-block keep/drop pseudo-keyframes.
+  `flow_reuse_datamosh_block_cpu_v1` for blocks ≥ 2px.
+- Block-residual accumulation: **Landed** (CPU + CLI + free parity-gated Metal +
+  queue + SwiftUI) — `--residual-gain`/`--residual-decay` accumulate the
+  intra-block motion discarded by quantization in a per-pixel buffer and re-inject
+  it (a fine-motion haze atop the macroblock slide). `gain 0` ≡ block path; id
+  `flow_reuse_datamosh_block_residual_cpu_v1` (blocks ≥ 2px and gain > 0).
+- Per-block keep/drop pseudo-keyframes: **Landed** (CPU + CLI + free parity-gated
+  Metal + queue + SwiftUI) — `--block-refresh-threshold`: macroblocks whose mean
+  motion is below the threshold snap back to the carrier `B[i]` (intra-block
+  refresh, content-driven like a codec's intra map) while busier blocks rot, so the
+  smear trail self-erases behind a moving subject. `threshold 0` ≡ block/residual
+  path; threshold above max block motion ≡ a whole-frame keyframe; id
+  `flow_reuse_datamosh_block_refresh_cpu_v1` (blocks ≥ 2px and threshold > 0). This
+  completes the codec-simulated block tier.
+- Real bitstream mosh (P-frame "bloom"): **Landed as an experimental,
+  non-deterministic CLI** (`datamosh-bitstream`) — the authentic codec-artifact
+  tier, kept inside an explicit invariant carve-out. ffmpeg encodes the input to a
+  P-frame-only AVI/MPEG-4 (LGPL encoder, no GPL dep); pure-Rust RIFF surgery
+  (`morphogen-media/src/avi.rs`) duplicates a chosen P-frame's compressed chunk so
+  its motion vectors re-bloom on redecode; ffmpeg decodes to PNGs. Lives OUTSIDE the
+  deterministic render graph (no RenderJobTask/queue/SwiftUI, no parity gate); output
+  is not bit-reproducible by design (a sidecar records params + ffmpeg version).
+  Algorithm id `datamosh_bitstream_pframe_dup_experimental_v1`.
 - Future high-quality version: codec-aware motion-vector extraction and controlled
-  remapping. Remaining deferred tier: real bitstream mosh (FFglitch — needs an
-  explicit invariant carve-out).
+  remapping. Remaining deferred ops on the bitstream path: I-frame removal
+  (transition/void mosh) and motion-transfer (likely FFglitch). The richer FFglitch
+  vocabulary stays deferred behind the same carve-out.
 
 ## Convolutional Audio/Video Blending
 

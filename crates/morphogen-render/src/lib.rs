@@ -30,9 +30,12 @@ pub use cpu_reference::{
     FlowFeedbackSettings, StructureMode,
 };
 pub use datamosh::{
-    datamosh_algorithm, datamosh_block_frame_cpu, datamosh_bloom_frame_cpu,
-    is_datamosh_keyframe, quantize_flow_to_blocks, DATAMOSH_BLOCK_ALGORITHM,
-    DATAMOSH_BLOOM_ALGORITHM,
+    block_motion_refreshes, datamosh_algorithm, datamosh_block_frame_cpu,
+    datamosh_block_refresh_composite, datamosh_bloom_frame_cpu, datamosh_refresh_frame_cpu,
+    datamosh_residual_flow, datamosh_residual_frame_cpu, is_datamosh_keyframe,
+    quantize_flow_to_blocks, reset_residual_in_refreshed_blocks, zero_flow,
+    DATAMOSH_BLOCK_ALGORITHM, DATAMOSH_BLOCK_REFRESH_ALGORITHM,
+    DATAMOSH_BLOCK_RESIDUAL_ALGORITHM, DATAMOSH_BLOOM_ALGORITHM,
 };
 pub use error::RenderError;
 pub use feedback_state::{

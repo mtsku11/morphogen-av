@@ -8,13 +8,83 @@ _Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **258 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **279 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **45 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the datamosh codec-block-tier commits. Manual-testing
+- `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — REAL bitstream mosh, P-frame "bloom" (experimental,
+  non-deterministic CLI).** The authentic codec-artifact tier — mangles the
+  *compressed stream* (not decoded float frames) so the decoder itself produces the
+  glitch. New standalone `datamosh-bitstream` CLI subcommand: ffmpeg encodes the
+  input to a P-frame-only AVI/MPEG-4 (LGPL `mpeg4` encoder, **no GPL dep**), pure-Rust
+  RIFF surgery (`crates/morphogen-media/src/avi.rs`) duplicates a chosen P-frame's
+  compressed chunk `--duplicate-count` times so its motion vectors re-bloom on
+  redecode, ffmpeg decodes to PNGs. **Explicit invariant carve-out** (this tier was
+  always gated on one): lives OUTSIDE the deterministic render graph — **no
+  RenderJobTask / queue / SwiftUI, no parity gate**; output is **not bit-reproducible**
+  by design (a `datamosh_bitstream.json` sidecar records params + ffmpeg version +
+  `deterministic: false`). The AVI surgery itself *is* deterministic + unit-tested on
+  synthetic byte buffers (`--duplicate-count 0` = exact identity / off case). Id
+  `datamosh_bitstream_pframe_dup_experimental_v1`. **Off-vs-on (look check, not a
+  determinism proof):** 2s `testsrc2`, P-frame 5, count 0 (48 frames) vs 30 (78
+  frames) — the duplicated frames bloom/melt (rainbow diagonal dissolves, clock digits
+  smear into macroblock glitches, blocky codec decay); frame-to-frame delta 5.982 →
+  4.081 /255. Workspace 272 → 279. See [[datamosh-real-vs-simulated]],
+  [[datamosh-bitstream-pframe-bloom]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
+
+- **Controlled Datamosh — per-block keep/drop pseudo-keyframes (full vertical
+  slice).** The patchy "some macroblocks refresh, some rot" half of the aesthetic,
+  completing the codec-simulated block tier. After the recursive advect, each
+  macroblock whose **mean-motion magnitude** is below `--block-refresh-threshold`
+  "keeps" — it snaps back to the carrier `B[i]` (an intra/I-block refresh) — while
+  busier blocks are denied refresh and keep rotting. **Content-driven** like a
+  codec's intra-block map (not injected noise): calm blocks refresh, busy blocks
+  smear, so the trail behind a moving subject **self-erases** (calm regions snap
+  back to clean `B`) leaving the smear only at the subject's current position. A
+  per-block composite over the *output* of the parity-gated displace, so **Metal
+  came free again** (the Metal refresh path renders, per-frame gate passing); a
+  refreshed block also **clears its residual accumulator** (intra-block reset).
+  `--block-refresh-threshold` on `render-datamosh-sequence` + queue + a macOS Block
+  Refresh stepper. Continuity: `threshold 0` ≡ the block/residual path
+  (byte-identical); a threshold above the largest block motion ≡ a whole-frame
+  keyframe (carrier verbatim, accumulator cleared); `block_size ≤ 1` ≡ bloom. New id
+  `flow_reuse_datamosh_block_refresh_cpu_v1` via `datamosh_algorithm(block_size,
+  residual_gain, refresh_threshold)` — **only** for blocks ≥ 2px **and** threshold >
+  0 (a separate id, precedence refresh > residual > block > bloom, no id bump); job
+  field `serde(default)` (=0 ≡ off). **Off-vs-on readout** (bouncing-square A over a
+  static stripe+dot B, block 16, full melt): refresh off (`threshold 0`) vs on
+  (`threshold 1.0`) cross-sequence delta grows **0 → 31.6/255** (frame 0 identical =
+  both `B[0]`); frames Read — off = a cumulative smear everywhere the square has
+  been, on = the diagonal stripes stay clean (trail self-erases) with the smear only
+  at the square's current position. Workspace 265 → 272; Swift 46 → 47. See
+  [[datamosh-codec-block-tier]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
+
+- **Controlled Datamosh — block-residual accumulation tier (full vertical slice).**
+  The quantization-noise half of the macroblock aesthetic. Quantizing A's flow to a
+  block mean discards the intra-block detail (`residual = flow − block_mean`); this
+  tier accumulates it in a **per-pixel residual flow buffer** (`accum = accum·decay
+  + residual`) and re-injects it (`effective = block_mean + accum·gain`) into the
+  advecting flow, so macroblocks slide coherently **and** shed a trailing
+  fine-motion haze. Still a **pure flow→flow transform** (`datamosh_residual_flow`),
+  so the displace stays the existing parity-gated kernel and **Metal came free
+  again** (no new kernel — the Metal render ran the residual path, per-frame gate
+  passing). `--residual-gain` / `--residual-decay` on `render-datamosh-sequence` +
+  queue + two macOS steppers. Continuity: `gain 0` short-circuits to the block path
+  (byte-identical); `gain 1` first P-frame ≡ the smooth bloom (raw-flow) displace;
+  `block_size ≤ 1` ≡ bloom (residual is a no-op without quantization). New id
+  `flow_reuse_datamosh_block_residual_cpu_v1` via `datamosh_algorithm(block_size,
+  residual_gain)` — **only** for blocks ≥ 2px **and** gain > 0 (a separate id, no
+  block-id bump); job fields `serde(default)` (=0 ≡ off). **Off-vs-on readout**
+  (high-motion bouncing-square A over a static stripe+dot B, block 16, full melt):
+  residual off (`gain 0`) vs on (`gain 1, decay 0.9`) cross-sequence delta grows
+  **0 → 33.8/255** (frame 0 identical = both `B[0]`); frames Read — the coherent
+  macroblock slide gains a divergent streaky haze (stripes smear, the dot drags
+  into a comet). Workspace 258 → 265; Swift 45 → 46. See
+  [[datamosh-codec-block-tier]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
 
 - **Controlled Datamosh — codec-simulated ("block") tier (full vertical slice).**
   The first deferred datamosh tier: A's per-frame optical flow is **quantized to a
