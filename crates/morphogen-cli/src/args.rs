@@ -305,6 +305,13 @@ pub(crate) enum Commands {
         /// `N >= 2` quantizes A's flow to NxN blocks so whole macroblocks slide.
         #[arg(long, default_value_t = 1)]
         block_size: u32,
+        /// Block-residual gain: re-inject the intra-block motion discarded by
+        /// quantization (a fine-motion haze). `0` = block path; needs block-size >= 2.
+        #[arg(long, default_value_t = 0.0)]
+        residual_gain: f32,
+        /// Decay on the residual accumulator: `0` = one-frame kick, `->1` = drift.
+        #[arg(long, default_value_t = 0.9)]
+        residual_decay: f32,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -765,6 +772,13 @@ pub(crate) enum Commands {
         /// quantizes A's flow to NxN blocks so whole macroblocks slide.
         #[arg(long, default_value_t = 1)]
         block_size: u32,
+        /// Block-residual gain: re-inject the intra-block motion discarded by
+        /// quantization. `0` = block path; needs block-size >= 2.
+        #[arg(long, default_value_t = 0.0)]
+        residual_gain: f32,
+        /// Decay on the residual accumulator: `0` = one-frame kick, `->1` = drift.
+        #[arg(long, default_value_t = 0.9)]
+        residual_decay: f32,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]

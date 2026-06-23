@@ -15,7 +15,7 @@ use morphogen_render::{
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     is_datamosh_keyframe, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
-    quantize_flow_to_blocks,
+    datamosh_residual_flow, quantize_flow_to_blocks, zero_flow,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
@@ -412,6 +412,8 @@ pub(crate) struct DatamoshSequenceRequest<'a> {
     pub(crate) keyframe_interval: u32,
     pub(crate) amount: f32,
     pub(crate) block_size: u32,
+    pub(crate) residual_gain: f32,
+    pub(crate) residual_decay: f32,
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
 }
@@ -427,6 +429,16 @@ pub(crate) fn render_datamosh_sequence(
     if !request.amount.is_finite() || request.amount < 0.0 {
         return Err(CliError::Message(
             "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.residual_gain.is_finite() || request.residual_gain < 0.0 {
+        return Err(CliError::Message(
+            "residual-gain must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.residual_decay.is_finite() || request.residual_decay < 0.0 {
+        return Err(CliError::Message(
+            "residual-decay must be finite and non-negative".to_string(),
         ));
     }
     if matches!(request.max_frames, Some(0)) {
@@ -451,8 +463,16 @@ pub(crate) fn render_datamosh_sequence(
 
     fs::create_dir_all(request.output_dir)?;
 
+    // Residual accumulation is active only with a positive gain over coarse
+    // blocks; otherwise the loop uses the plain block-quantize path (gain 0 ⇒
+    // byte-identical block tier, by construction).
+    let residual_active = request.residual_gain > 0.0 && request.block_size >= 2;
+
     let mut previous_output: Option<ImageBufferF32> = None;
     let mut previous_modulator: Option<ImageBufferF32> = None;
+    // Per-pixel residual accumulator (the second stateful channel). Reset to zero
+    // at frame zero and every keyframe (an I-frame clears accumulated residual).
+    let mut accumulated_residual: Option<FlowField> = None;
     for index in 0..frame_count {
         let carrier = load_image_f32(&carrier_frames[index])?;
         let modulator = load_image_f32(&modulator_frames[index])?;
@@ -478,13 +498,35 @@ pub(crate) fn render_datamosh_sequence(
                 .flow;
                 // Codec-simulated mosh: quantize A's flow to a coarse block grid
                 // (CPU flow transform) so whole macroblocks slide; block_size <= 1
-                // returns the flow unchanged (the smooth bloom path). The displace
-                // that follows is the existing parity-gated kernel.
-                let flow = quantize_flow_to_blocks(&flow, request.block_size)?;
-                render_datamosh_advect_frame(previous, &flow, request.amount, request.backend)?
+                // returns the flow unchanged (the smooth bloom path). With residual
+                // active, the discarded intra-block motion is accumulated and
+                // re-injected (also a pure CPU flow transform). The displace that
+                // follows is the existing parity-gated kernel on either backend, so
+                // Metal stays free.
+                let effective = if residual_active {
+                    let accum = accumulated_residual
+                        .take()
+                        .unwrap_or(zero_flow(carrier.width, carrier.height)?);
+                    let (effective, new_accum) = datamosh_residual_flow(
+                        &flow,
+                        &accum,
+                        request.block_size,
+                        request.residual_gain,
+                        request.residual_decay,
+                    )?;
+                    accumulated_residual = Some(new_accum);
+                    effective
+                } else {
+                    quantize_flow_to_blocks(&flow, request.block_size)?
+                };
+                render_datamosh_advect_frame(previous, &effective, request.amount, request.backend)?
             }
-            // Frame zero or keyframe refresh: the carrier is the output verbatim.
-            _ => carrier.clone(),
+            // Frame zero or keyframe refresh: the carrier is the output verbatim,
+            // and the residual accumulator is cleared (I-frame refresh).
+            _ => {
+                accumulated_residual = None;
+                carrier.clone()
+            }
         };
 
         save_png(
@@ -496,11 +538,13 @@ pub(crate) fn render_datamosh_sequence(
     }
 
     println!(
-        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, {:?}) from {} moshing {} to {}",
+        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, {:?}) from {} moshing {} to {}",
         frame_count,
         request.keyframe_interval,
         request.amount,
         request.block_size,
+        request.residual_gain,
+        request.residual_decay,
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),
