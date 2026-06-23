@@ -219,6 +219,26 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    /// Controlled datamosh (flow-reuse "bloom/melt"): Source A's per-frame optical
+    /// flow repeatedly advects Source B's previous output; keyframes snap back to
+    /// the carrier. See `docs/DATAMOSH_MILESTONE.md`.
+    FrameSequenceDatamosh {
+        /// Source A video frames (PNG sequence); supplies the per-frame motion.
+        modulator_frame_directory: String,
+        /// Source B video frames (PNG sequence) to mosh.
+        carrier_frame_directory: String,
+        output_directory: String,
+        /// Keyframe ("keep") interval: `1` = passthrough (snap to B every frame),
+        /// `N` = snap every N frames, `0` = only frame 0 (full melt from B[0]).
+        keyframe_interval: u32,
+        /// Per-step scale on A's flow; `0` freezes the held frame.
+        amount: f32,
+        max_frames: Option<u32>,
+        /// Render backend; the displace Metal path is gated per-frame against the
+        /// CPU reference. Defaults to CPU so legacy jobs keep their meaning.
+        #[serde(default)]
+        backend: RenderBackend,
+    },
     /// Convolutional AV blending (image kernel): each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved with
     /// (parity-gated), blended by `amount`. See `docs/CONVOLUTIONAL_BLEND_MILESTONE.md`.

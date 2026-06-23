@@ -748,6 +748,25 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    QueueAddDatamoshSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        keyframe_interval: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueRunDatamoshSequence {
+        queue_path: PathBuf,
+    },
     QueueAddConvolutionalBlendSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,

@@ -16,7 +16,7 @@ use morphogen_core::{
 };
 use morphogen_render::{
     ConvolutionBlendSettings,
-    flow_displace_cpu, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode, RMS_DISPLACEMENT_ROUTE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    flow_displace_cpu, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode, DATAMOSH_BLOOM_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 
 use crate::args::*;
@@ -1527,6 +1527,218 @@ pub(crate) fn queue_run_audio_video_route_sequence(queue_path: &Path) -> Result<
     }
 }
 
+pub(crate) struct QueueAddDatamoshSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) modulator_dir: &'a Path,
+    pub(crate) carrier_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) keyframe_interval: u32,
+    pub(crate) amount: f32,
+    pub(crate) max_frames: Option<u32>,
+    pub(crate) project_path: Option<&'a Path>,
+    pub(crate) backend: RenderBackend,
+}
+
+pub(crate) fn queue_add_datamosh_sequence(
+    request: QueueAddDatamoshSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddDatamoshSequenceRequest {
+        queue_path,
+        modulator_dir,
+        carrier_dir,
+        output_root_dir,
+        keyframe_interval,
+        amount,
+        max_frames,
+        project_path,
+        backend,
+    } = request;
+    if !amount.is_finite() || amount < 0.0 {
+        return Err(CliError::Message(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-frames".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::FrameSequenceDatamosh {
+            modulator_frame_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: carrier_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            keyframe_interval,
+            amount,
+            max_frames,
+            backend,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!("queued datamosh render job {job_id} in {}", queue_path.display());
+    Ok(())
+}
+
+pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceDatamosh { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message("render queue has no queued or running datamosh jobs".to_string())
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::FrameSequenceDatamosh {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        keyframe_interval,
+        amount,
+        max_frames,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a datamosh render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_datamosh_sequence(DatamoshSequenceRequest {
+            modulator_dir: Path::new(&modulator_frame_directory),
+            carrier_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            keyframe_interval,
+            amount,
+            backend,
+            max_frames: max_frames.map(|value| value as usize),
+        })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let frame_rate = 30.0;
+        let timing = RenderTimingMetadata {
+            frame_rate,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "frame_sequence_datamosh",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "datamosh": {
+                "algorithm": DATAMOSH_BLOOM_ALGORITHM,
+                "keyframe_interval": keyframe_interval,
+                "amount": amount,
+                "backend": render_backend_label(backend)
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!("rendered queued datamosh job {} to {}", job_id, output_dir.display());
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("datamosh job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 pub(crate) struct QueueAddConvolutionalBlendSequenceRequest<'a> {
     pub(crate) queue_path: &'a Path,
     pub(crate) modulator_dir: &'a Path,
@@ -2237,6 +2449,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceAudioVideoRoute { .. } => {
                 "frame_sequence_audio_video_route"
             }
+            RenderJobTask::FrameSequenceDatamosh { .. } => "frame_sequence_datamosh",
             RenderJobTask::FrameSequenceConvolutionBlend { .. } => {
                 "frame_sequence_convolution_blend"
             }

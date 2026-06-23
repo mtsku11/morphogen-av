@@ -771,6 +771,30 @@ fn run() -> Result<(), CliError> {
             project_path: project_path.as_deref(),
             backend: backend.into(),
         }),
+        Commands::QueueAddDatamoshSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            keyframe_interval,
+            amount,
+            max_frames,
+            project_path,
+            backend,
+        } => queue_add_datamosh_sequence(QueueAddDatamoshSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            keyframe_interval,
+            amount,
+            max_frames,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
+        Commands::QueueRunDatamoshSequence { queue_path } => {
+            queue_run_datamosh_sequence(&queue_path)
+        }
         Commands::QueueAddConvolutionalBlendSequence {
             queue_path,
             modulator_dir,
