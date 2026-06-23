@@ -25,8 +25,8 @@ pub use render_job::{
     GrainSelectionMode, GranularAudioModulation, IrMode, KernelMode, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
-    RenderSettings, RenderTimingMetadata, VideoAudioRouteDescriptor, VideoAudioRouteMode,
-    VideoVocoderMode, video_audio_route_algorithm_id,
+    RenderSettings, RenderTimingMetadata, VideoAudioRouteDescriptor, VideoAudioRouteFilterType,
+    VideoAudioRouteMode, VideoVocoderMode, video_audio_route_algorithm_id,
 };
 pub use render_queue::RenderQueue;
 pub use timeline::{FrameSampleRange, TimeRange, Timeline};

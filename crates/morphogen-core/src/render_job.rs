@@ -312,9 +312,13 @@ pub enum RenderJobTask {
         /// optical-flow descriptors keep their mean-luma meaning.
         #[serde(default)]
         descriptor: VideoAudioRouteDescriptor,
-        /// `gain` or `pan`. Defaults to [`VideoAudioRouteMode::Gain`].
+        /// `gain`, `pan`, or `filter`. Defaults to [`VideoAudioRouteMode::Gain`].
         #[serde(default)]
         mode: VideoAudioRouteMode,
+        /// Filter response for `filter` mode (ignored otherwise). Defaults to
+        /// [`VideoAudioRouteFilterType::Lowpass`].
+        #[serde(default)]
+        filter_type: VideoAudioRouteFilterType,
         /// Blend from Source B passthrough (`0`) to full routing (`1`).
         amount: f32,
         /// Frame rate mapping A's frame index to time for the descriptor lookup.
@@ -387,6 +391,8 @@ pub enum VideoAudioRouteMode {
     Gain,
     /// A's per-frame descriptor drives an equal-power stereo pan of B.
     Pan,
+    /// A's per-frame descriptor sweeps a one-pole LP/HP filter cutoff on B.
+    Filter,
 }
 
 /// Which Source A visual descriptor drives Video-to-Audio routing. The serde
@@ -402,6 +408,16 @@ pub enum VideoAudioRouteDescriptor {
     Flow,
 }
 
+/// One-pole filter response for `filter`-mode Video-to-Audio routing. The serde
+/// default is [`VideoAudioRouteFilterType::Lowpass`].
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAudioRouteFilterType {
+    #[default]
+    Lowpass,
+    Highpass,
+}
+
 /// Composes the deterministic algorithm id for Video-to-Audio routing from the
 /// visual descriptor and the audio mapping, following the project's
 /// `{descriptor}_{mapping}_route_cpu_v1` convention. The audio routing math is
@@ -413,8 +429,10 @@ pub fn video_audio_route_algorithm_id(
     match (descriptor, mode) {
         (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Gain) => "luma_gain_route_cpu_v1",
         (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Pan) => "luma_pan_route_cpu_v1",
+        (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Filter) => "luma_filter_route_cpu_v1",
         (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Gain) => "flow_gain_route_cpu_v1",
         (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Pan) => "flow_pan_route_cpu_v1",
+        (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Filter) => "flow_filter_route_cpu_v1",
     }
 }
 
@@ -839,7 +857,8 @@ mod tests {
             carrier_wav: "/tmp/b.wav".to_string(),
             output_directory: "/tmp/out".to_string(),
             descriptor: VideoAudioRouteDescriptor::Flow,
-            mode: VideoAudioRouteMode::Pan,
+            mode: VideoAudioRouteMode::Filter,
+            filter_type: VideoAudioRouteFilterType::Highpass,
             amount: 0.5,
             fps: 30.0,
         };
@@ -863,11 +882,12 @@ mod tests {
         }"#;
 
         let task: RenderJobTask = serde_json::from_str(json).expect("deserialize video-audio route");
-        let RenderJobTask::VideoAudioRoute { descriptor, mode, .. } = task else {
+        let RenderJobTask::VideoAudioRoute { descriptor, mode, filter_type, .. } = task else {
             panic!("expected video-audio route task");
         };
         assert_eq!(descriptor, VideoAudioRouteDescriptor::Luma);
         assert_eq!(mode, VideoAudioRouteMode::Gain);
+        assert_eq!(filter_type, VideoAudioRouteFilterType::Lowpass);
     }
 
     #[test]
@@ -877,8 +897,10 @@ mod tests {
         // Luma ids are unchanged from the original slice (back-compatible).
         assert_eq!(video_audio_route_algorithm_id(Luma, Gain), "luma_gain_route_cpu_v1");
         assert_eq!(video_audio_route_algorithm_id(Luma, Pan), "luma_pan_route_cpu_v1");
+        assert_eq!(video_audio_route_algorithm_id(Luma, Filter), "luma_filter_route_cpu_v1");
         assert_eq!(video_audio_route_algorithm_id(Flow, Gain), "flow_gain_route_cpu_v1");
         assert_eq!(video_audio_route_algorithm_id(Flow, Pan), "flow_pan_route_cpu_v1");
+        assert_eq!(video_audio_route_algorithm_id(Flow, Filter), "flow_filter_route_cpu_v1");
     }
 
     #[test]

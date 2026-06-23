@@ -14,6 +14,7 @@
 //! CPU-only — audio is not a GPU target here, so there is no Metal path to
 //! parity-gate. See `docs/VIDEO_AUDIO_ROUTE_MILESTONE.md` for the contract.
 
+use crate::cross_synth::{one_pole_filter_sweep, FilterType};
 use crate::{AudioBufferF32, AudioError};
 
 fn validate_amount(amount: f32) -> Result<(), AudioError> {
@@ -146,6 +147,31 @@ pub fn descriptor_pan_route(
     AudioBufferF32::new(2, carrier.sample_rate, samples_out)
 }
 
+/// `filter` mode: A's peak-normalized per-frame descriptor sweeps a one-pole
+/// LP/HP filter cutoff on B (a strong descriptor opens the cutoff toward
+/// Nyquist, a weak one closes it). Output follows B's channels. `amount = 0`
+/// returns Source B unchanged (byte-identical).
+pub fn descriptor_filter_route(
+    carrier: &AudioBufferF32,
+    samples: &[(f64, f32)],
+    filter_type: FilterType,
+    amount: f32,
+) -> Result<AudioBufferF32, AudioError> {
+    validate_amount(amount)?;
+    if amount == 0.0 {
+        return Ok(carrier.clone());
+    }
+
+    let env = DescriptorEnvelope::from_samples(samples);
+    if env.is_empty() {
+        return Err(AudioError::InvalidSettings(
+            "modulator produced no descriptor frames".to_string(),
+        ));
+    }
+    let cutoff_norm: Vec<f64> = env.norm.iter().map(|&v| v as f64).collect();
+    one_pole_filter_sweep(carrier, &env.times, &cutoff_norm, filter_type, amount)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +295,42 @@ mod tests {
         let carrier = buf(1, 4, vec![0.5; 8]);
         assert!(descriptor_gain_route(&carrier, &[], 1.0).is_err());
         assert!(descriptor_pan_route(&carrier, &[], 1.0).is_err());
+        assert!(descriptor_filter_route(&carrier, &[], FilterType::Lowpass, 1.0).is_err());
+    }
+
+    #[test]
+    fn filter_amount_zero_is_byte_identical_passthrough() {
+        let carrier = buf(1, 8, vec![1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]);
+        let env = [(0.0, 0.0), (1.0, 1.0)];
+        let out = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, 0.0).expect("filter");
+        assert_eq!(out.samples, carrier.samples);
+        assert_eq!(out.channels, 1);
+    }
+
+    #[test]
+    fn filter_descriptor_opens_lowpass_cutoff() {
+        // A Nyquist-rate carrier (alternating ±1) through a lowpass: a weak (dark)
+        // descriptor closes the cutoff ⇒ heavy attenuation; a strong (bright) one
+        // opens it ⇒ the alternation survives. sr=8 ⇒ samples 0..7 weak (t<1),
+        // 8..15 strong (t>=1).
+        let carrier = buf(1, 8, (0..16).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect());
+        let env = [(0.0, 0.0), (1.0, 1.0)];
+        let out =
+            descriptor_filter_route(&carrier, &env, FilterType::Lowpass, 1.0).expect("filter");
+        let weak_energy: f32 = out.samples[0..8].iter().map(|s| s * s).sum();
+        let strong_energy: f32 = out.samples[8..16].iter().map(|s| s * s).sum();
+        assert!(
+            strong_energy > weak_energy * 4.0,
+            "strong descriptor must pass far more HF energy: weak {weak_energy}, strong {strong_energy}"
+        );
+    }
+
+    #[test]
+    fn filter_lowpass_and_highpass_differ() {
+        let carrier = buf(1, 8, (0..16).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect());
+        let env = [(0.0, 0.3), (10.0, 1.0)]; // mid cutoff over the whole carrier
+        let lp = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, 1.0).expect("lp");
+        let hp = descriptor_filter_route(&carrier, &env, FilterType::Highpass, 1.0).expect("hp");
+        assert_ne!(lp.samples, hp.samples, "lowpass and highpass must differ");
     }
 }

@@ -8,7 +8,7 @@ use morphogen_audio::{
 use morphogen_core::{
     ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
     GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteDescriptor,
-    VideoAudioRouteMode, VideoVocoderMode,
+    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoVocoderMode,
 };
 use morphogen_render::{
     StructureMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
@@ -134,6 +134,9 @@ pub(crate) enum Commands {
         descriptor: CliVideoAudioRouteDescriptor,
         #[arg(long, value_enum, default_value_t = CliVideoAudioRouteMode::Gain)]
         mode: CliVideoAudioRouteMode,
+        /// Filter response for `--mode filter` (ignored otherwise).
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
         /// Frame rate mapping A's frame index to time for the descriptor lookup.
@@ -682,6 +685,9 @@ pub(crate) enum Commands {
         descriptor: CliVideoAudioRouteDescriptor,
         #[arg(long, value_enum, default_value_t = CliVideoAudioRouteMode::Gain)]
         mode: CliVideoAudioRouteMode,
+        /// Filter response for `--mode filter` (ignored otherwise).
+        #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
+        filter_type: CliFilterType,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
         #[arg(long, default_value_t = 30.0)]
@@ -830,11 +836,13 @@ pub(crate) enum CliCrossSynthMode {
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub(crate) enum CliVideoAudioRouteMode {
-    /// A's per-frame luma envelope scales B's amplitude.
+    /// A's per-frame descriptor envelope scales B's amplitude.
     #[default]
     Gain,
-    /// A's per-frame luma drives an equal-power stereo pan of B.
+    /// A's per-frame descriptor drives an equal-power stereo pan of B.
     Pan,
+    /// A's per-frame descriptor sweeps a one-pole LP/HP filter cutoff on B.
+    Filter,
 }
 
 impl From<CliVideoAudioRouteMode> for VideoAudioRouteMode {
@@ -842,6 +850,7 @@ impl From<CliVideoAudioRouteMode> for VideoAudioRouteMode {
         match value {
             CliVideoAudioRouteMode::Gain => Self::Gain,
             CliVideoAudioRouteMode::Pan => Self::Pan,
+            CliVideoAudioRouteMode::Filter => Self::Filter,
         }
     }
 }
@@ -861,6 +870,22 @@ impl From<CliVideoAudioRouteDescriptor> for VideoAudioRouteDescriptor {
             CliVideoAudioRouteDescriptor::Luma => Self::Luma,
             CliVideoAudioRouteDescriptor::Flow => Self::Flow,
         }
+    }
+}
+
+impl From<CliFilterType> for VideoAudioRouteFilterType {
+    fn from(value: CliFilterType) -> Self {
+        match value {
+            CliFilterType::Lowpass => Self::Lowpass,
+            CliFilterType::Highpass => Self::Highpass,
+        }
+    }
+}
+
+pub(crate) fn video_audio_route_filter_type(value: VideoAudioRouteFilterType) -> FilterType {
+    match value {
+        VideoAudioRouteFilterType::Lowpass => FilterType::Lowpass,
+        VideoAudioRouteFilterType::Highpass => FilterType::Highpass,
     }
 }
 
