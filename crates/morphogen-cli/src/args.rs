@@ -301,6 +301,10 @@ pub(crate) enum Commands {
         /// Per-step scale on A's flow (motion intensity); 0 freezes the held frame.
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
+        /// Macroblock size for codec-simulated mosh: `1` = smooth per-pixel bloom,
+        /// `N >= 2` quantizes A's flow to NxN blocks so whole macroblocks slide.
+        #[arg(long, default_value_t = 1)]
+        block_size: u32,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -757,6 +761,10 @@ pub(crate) enum Commands {
         keyframe_interval: u32,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
+        /// Macroblock size for codec-simulated mosh: `1` = smooth bloom, `N >= 2`
+        /// quantizes A's flow to NxN blocks so whole macroblocks slide.
+        #[arg(long, default_value_t = 1)]
+        block_size: u32,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]

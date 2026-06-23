@@ -16,7 +16,7 @@ use morphogen_core::{
 };
 use morphogen_render::{
     ConvolutionBlendSettings,
-    flow_displace_cpu, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode, DATAMOSH_BLOOM_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    flow_displace_cpu, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode, datamosh_algorithm, RMS_DISPLACEMENT_ROUTE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 
 use crate::args::*;
@@ -1534,6 +1534,7 @@ pub(crate) struct QueueAddDatamoshSequenceRequest<'a> {
     pub(crate) output_root_dir: &'a Path,
     pub(crate) keyframe_interval: u32,
     pub(crate) amount: f32,
+    pub(crate) block_size: u32,
     pub(crate) max_frames: Option<u32>,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) backend: RenderBackend,
@@ -1549,6 +1550,7 @@ pub(crate) fn queue_add_datamosh_sequence(
         output_root_dir,
         keyframe_interval,
         amount,
+        block_size,
         max_frames,
         project_path,
         backend,
@@ -1609,6 +1611,7 @@ pub(crate) fn queue_add_datamosh_sequence(
             amount,
             max_frames,
             backend,
+            block_size,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -1647,6 +1650,7 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
         amount,
         max_frames,
         backend,
+        block_size,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1664,6 +1668,7 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             output_dir: &output_dir.join("frames"),
             keyframe_interval,
             amount,
+            block_size,
             backend,
             max_frames: max_frames.map(|value| value as usize),
         })?;
@@ -1697,9 +1702,10 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 "audio_sample_count": timing.audio_sample_count
             },
             "datamosh": {
-                "algorithm": DATAMOSH_BLOOM_ALGORITHM,
+                "algorithm": datamosh_algorithm(block_size),
                 "keyframe_interval": keyframe_interval,
                 "amount": amount,
+                "block_size": block_size,
                 "backend": render_backend_label(backend)
             },
             "provenance": queue.jobs[job_index].provenance,

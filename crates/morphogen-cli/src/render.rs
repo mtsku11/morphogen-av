@@ -15,6 +15,7 @@ use morphogen_render::{
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     is_datamosh_keyframe, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
+    quantize_flow_to_blocks,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
@@ -410,6 +411,7 @@ pub(crate) struct DatamoshSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) keyframe_interval: u32,
     pub(crate) amount: f32,
+    pub(crate) block_size: u32,
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
 }
@@ -474,6 +476,11 @@ pub(crate) fn render_datamosh_sequence(
                     LUCAS_KANADE_WINDOW_RADIUS,
                 )?
                 .flow;
+                // Codec-simulated mosh: quantize A's flow to a coarse block grid
+                // (CPU flow transform) so whole macroblocks slide; block_size <= 1
+                // returns the flow unchanged (the smooth bloom path). The displace
+                // that follows is the existing parity-gated kernel.
+                let flow = quantize_flow_to_blocks(&flow, request.block_size)?;
                 render_datamosh_advect_frame(previous, &flow, request.amount, request.backend)?
             }
             // Frame zero or keyframe refresh: the carrier is the output verbatim.
@@ -489,10 +496,11 @@ pub(crate) fn render_datamosh_sequence(
     }
 
     println!(
-        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, {:?}) from {} moshing {} to {}",
+        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, {:?}) from {} moshing {} to {}",
         frame_count,
         request.keyframe_interval,
         request.amount,
+        request.block_size,
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),

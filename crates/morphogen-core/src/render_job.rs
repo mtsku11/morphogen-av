@@ -238,6 +238,11 @@ pub enum RenderJobTask {
         /// CPU reference. Defaults to CPU so legacy jobs keep their meaning.
         #[serde(default)]
         backend: RenderBackend,
+        /// Macroblock size (codec-simulated mosh): `0`/`1` = smooth bloom, `N >= 2`
+        /// quantizes A's flow to NxN blocks before advection. Defaults to `0` so
+        /// legacy jobs (no field) keep the smooth bloom meaning.
+        #[serde(default)]
+        block_size: u32,
     },
     /// Convolutional AV blending (image kernel): each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved with

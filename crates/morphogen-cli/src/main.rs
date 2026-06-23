@@ -291,6 +291,7 @@ fn run() -> Result<(), CliError> {
             output_dir,
             keyframe_interval,
             amount,
+            block_size,
             backend,
             max_frames,
         } => render_datamosh_sequence(DatamoshSequenceRequest {
@@ -299,6 +300,7 @@ fn run() -> Result<(), CliError> {
             output_dir: &output_dir,
             keyframe_interval,
             amount,
+            block_size,
             backend: backend.into(),
             max_frames,
         })
@@ -778,6 +780,7 @@ fn run() -> Result<(), CliError> {
             output_root_dir,
             keyframe_interval,
             amount,
+            block_size,
             max_frames,
             project_path,
             backend,
@@ -788,6 +791,7 @@ fn run() -> Result<(), CliError> {
             output_root_dir: &output_root_dir,
             keyframe_interval,
             amount,
+            block_size,
             max_frames,
             project_path: project_path.as_deref(),
             backend: backend.into(),
