@@ -844,6 +844,11 @@ enum RustBridgePlaceholder {
         "amount must be finite and greater than or equal to zero"
       )
     }
+    guard request.blockSize >= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "macroblock size must be greater than or equal to one"
+      )
+    }
     if let maxFrames = request.maxFrames, maxFrames <= 0 {
       throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
     }
@@ -864,6 +869,8 @@ enum RustBridgePlaceholder {
       String(request.keyframeInterval),
       "--amount",
       cliNumber(request.amount),
+      "--block-size",
+      String(request.blockSize),
       "--backend",
       request.backend.cliValue
     ]
@@ -1665,6 +1672,7 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   let outputRootDirectoryURL: URL
   let keyframeInterval: Int
   let amount: Double
+  let blockSize: Int
   let maxFrames: Int?
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?

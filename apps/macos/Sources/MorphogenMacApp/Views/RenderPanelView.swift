@@ -741,6 +741,14 @@ struct RenderPanelView: View {
             .help("Per-step scale on A's flow; 0 freezes the held frame.")
           }
 
+          HStack(spacing: 16) {
+            Stepper(value: $state.datamoshBlockSize, in: 1...64, step: 1) {
+              Text("Macroblock Size \(state.datamoshBlockSize)")
+            }
+            .frame(width: 230, alignment: .leading)
+            .help("1 = smooth per-pixel bloom; N >= 2 quantizes A's flow to NxN blocks so whole macroblocks slide (the chunky codec-simulated look).")
+          }
+
           Picker("Backend", selection: $state.datamoshBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
               Text(backend.rawValue).tag(backend)

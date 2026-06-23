@@ -545,6 +545,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
       keyframeInterval: 4,
       amount: 0.75,
+      blockSize: 16,
       maxFrames: 48,
       backend: .metal,
       projectURL: nil
@@ -564,6 +565,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(arguments[9], "/tmp/source-b-frames")
     XCTAssertEqual(Self.value(after: "--keyframe-interval", in: arguments), "4")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
+    XCTAssertEqual(Self.value(after: "--block-size", in: arguments), "16")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
     XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
   }
@@ -576,6 +578,26 @@ final class RustBridgePlaceholderTests: XCTestCase {
       outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
       keyframeInterval: 0,
       amount: -1, // negative amount
+      blockSize: 1,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: base)
+    )
+  }
+
+  func testQueuedDatamoshArgumentsRejectInvalidBlockSize() {
+    let base = DatamoshSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/datamosh-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      keyframeInterval: 0,
+      amount: 1,
+      blockSize: 0, // sub-1 macroblock size
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil
