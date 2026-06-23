@@ -670,6 +670,20 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    QueueAddVideoAudioRoute {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_wav: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliVideoAudioRouteMode::Gain)]
+        mode: CliVideoAudioRouteMode,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, default_value_t = 30.0)]
+        fps: f64,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueAddAudioVideoRouteSequence {
         queue_path: PathBuf,
         modulator_wav: PathBuf,
@@ -741,6 +755,9 @@ pub(crate) enum Commands {
         queue_path: PathBuf,
     },
     QueueRunAudioImpulseConvolution {
+        queue_path: PathBuf,
+    },
+    QueueRunVideoAudioRoute {
         queue_path: PathBuf,
     },
     QueueRunAudioVideoRouteSequence {

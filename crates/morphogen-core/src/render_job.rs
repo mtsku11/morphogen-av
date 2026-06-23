@@ -801,6 +801,42 @@ mod tests {
     }
 
     #[test]
+    fn video_audio_route_task_round_trips() {
+        let task = RenderJobTask::VideoAudioRoute {
+            modulator_directory: "/tmp/a".to_string(),
+            carrier_wav: "/tmp/b.wav".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            mode: VideoAudioRouteMode::Pan,
+            amount: 0.5,
+            fps: 30.0,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize video-audio route task");
+        let decoded: RenderJobTask =
+            serde_json::from_str(&json).expect("deserialize video-audio route task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn video_audio_route_task_defaults_mode_gain() {
+        let json = r#"{
+            "type": "video_audio_route",
+            "modulator_directory": "/tmp/a",
+            "carrier_wav": "/tmp/b.wav",
+            "output_directory": "/tmp/out",
+            "amount": 1.0,
+            "fps": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize video-audio route");
+        let RenderJobTask::VideoAudioRoute { mode, .. } = task else {
+            panic!("expected video-audio route task");
+        };
+        assert_eq!(mode, VideoAudioRouteMode::Gain);
+    }
+
+    #[test]
     fn audio_impulse_convolution_task_round_trips() {
         let task = RenderJobTask::AudioImpulseConvolution {
             modulator_wav: "/tmp/ir.wav".to_string(),

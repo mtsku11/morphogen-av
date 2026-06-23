@@ -693,6 +693,25 @@ fn run() -> Result<(), CliError> {
             ir_mode: ir_mode.into(),
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddVideoAudioRoute {
+            queue_path,
+            modulator_dir,
+            carrier_wav,
+            output_root_dir,
+            mode,
+            amount,
+            fps,
+            project_path,
+        } => queue_add_video_audio_route(QueueAddVideoAudioRouteRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_wav: &carrier_wav,
+            output_root_dir: &output_root_dir,
+            mode: mode.into(),
+            amount,
+            fps,
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueAddAudioVideoRouteSequence {
             queue_path,
             modulator_wav,
@@ -773,6 +792,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunAudioImpulseConvolution { queue_path } => {
             queue_run_audio_impulse_convolution(&queue_path)
+        }
+        Commands::QueueRunVideoAudioRoute { queue_path } => {
+            queue_run_video_audio_route(&queue_path)
         }
         Commands::QueueRunAudioVideoRouteSequence { queue_path } => {
             queue_run_audio_video_route_sequence(&queue_path)

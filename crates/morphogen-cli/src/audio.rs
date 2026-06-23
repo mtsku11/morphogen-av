@@ -678,3 +678,221 @@ pub(crate) fn queue_run_audio_impulse_convolution(queue_path: &Path) -> Result<(
         }
     }
 }
+
+pub(crate) struct QueueAddVideoAudioRouteRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) modulator_dir: &'a Path,
+    pub(crate) carrier_wav: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) mode: VideoAudioRouteMode,
+    pub(crate) amount: f32,
+    pub(crate) fps: f64,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_video_audio_route(
+    request: QueueAddVideoAudioRouteRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddVideoAudioRouteRequest {
+        queue_path,
+        modulator_dir,
+        carrier_wav,
+        output_root_dir,
+        mode,
+        amount,
+        fps,
+        project_path,
+    } = request;
+    if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+        return Err(CliError::Message(
+            "amount must be finite and within [0, 1]".to_string(),
+        ));
+    }
+    if !fps.is_finite() || fps <= 0.0 {
+        return Err(CliError::Message(
+            "fps must be finite and greater than zero".to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+    let provenance = RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-video".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-audio".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_wav.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 0,
+            height: 0,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::Wav { bit_depth: 32 },
+            temporal_supersampling: 1,
+            deterministic: true,
+        },
+        task: RenderJobTask::VideoAudioRoute {
+            modulator_directory: modulator_dir.to_string_lossy().to_string(),
+            carrier_wav: carrier_wav.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            mode,
+            amount,
+            fps,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued video-to-audio route render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_video_audio_route(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::VideoAudioRoute { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running video-to-audio route jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::VideoAudioRoute {
+        modulator_directory,
+        carrier_wav,
+        output_directory,
+        mode,
+        amount,
+        fps,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a video-to-audio route render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let carrier = load_wav_f32(Path::new(&carrier_wav))?;
+        let luma_samples = build_luma_samples(Path::new(&modulator_directory), fps, None)?;
+        let (output, algorithm) =
+            apply_video_audio_route(&carrier, &luma_samples, mode, amount)?;
+
+        let stem_rel = "audio/video_audio_route.wav";
+        let stem_path = output_dir.join(stem_rel);
+        write_parent_dirs(&stem_path)?;
+        save_wav_f32(&stem_path, &output)?;
+
+        let sample_rate = output.sample_rate;
+        let audio_sample_count = output.frames as u64;
+        let duration_seconds = if sample_rate > 0 {
+            output.frames as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+        let timing = RenderTimingMetadata {
+            frame_rate: 0.0,
+            frame_count: 0,
+            start_seconds: 0.0,
+            duration_seconds,
+            sample_rate,
+            audio_sample_count,
+        };
+        let mode_label = match mode {
+            VideoAudioRouteMode::Gain => "gain",
+            VideoAudioRouteMode::Pan => "pan",
+        };
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "video_audio_route",
+            "frames": [],
+            "audio_stems": [stem_rel],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "video_audio_route": {
+                "algorithm": algorithm,
+                "mode": mode_label,
+                "amount": amount,
+                "fps": fps
+            },
+            "provenance": queue.jobs[job_index].provenance,
+            "deterministic": true
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths: Vec::new(),
+            audio_stem_paths: vec![stem_rel.to_string()],
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued video-to-audio route job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("video-to-audio route job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
