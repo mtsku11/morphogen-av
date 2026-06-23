@@ -21,8 +21,10 @@ pub use audio_route::{
     uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 pub use coagulate::{
-    coagulated_blend_frame_cpu, coagulation_field, CoagulationField, CoagulationSettings,
-    COAGULATED_BLEND_ALGORITHM,
+    advect_coagulation_field, average_cell_flows, coagulated_blend_frame_cpu,
+    coagulated_blend_temporal_frame_cpu, coagulation_field, composite_with_field,
+    downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
+    CoagulationFlowSource, CoagulationSettings, COAGULATED_BLEND_ALGORITHM,
 };
 pub use conv_blend::{
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu, convolution_blend_color_cpu,

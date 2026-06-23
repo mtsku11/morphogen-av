@@ -11,7 +11,9 @@ use morphogen_core::{
     RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    coagulated_blend_frame_cpu, CoagulationSettings,
+    coagulated_blend_frame_cpu, coagulated_blend_temporal_frame_cpu, average_cell_flows,
+    downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
+    CoagulationFlowSource, CoagulationSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -814,12 +816,19 @@ pub(crate) struct CoagulatedBlendSequenceRequest<'a> {
     pub(crate) source_b_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: CoagulationSettings,
+    pub(crate) flow_source: CoagulationFlowSource,
+    pub(crate) advect_amount: f32,
+    pub(crate) refresh: f32,
+    pub(crate) turbulence: f32,
     pub(crate) max_frames: Option<usize>,
 }
 
-/// Render the descriptor-coagulated flow blend over a paired PNG sequence (Slice 1:
-/// CPU-only, single-frame — no advection/feedback yet). Each output frame blends the
-/// paired A/B frame by an A/B ownership field grouped on per-cell descriptors.
+/// Render the descriptor-coagulated flow blend over a paired PNG sequence. Slice 1
+/// (stateless) when `advect_amount == 0` and `refresh == 1` — each frame is the
+/// per-cell descriptor blend in isolation. Otherwise Slice 2 (temporal/stateful):
+/// the A/B ownership field is carried frame-to-frame, advected by the chosen flow,
+/// and re-seeded from fresh descriptors by `refresh`, so coagulated patches drift,
+/// smear, and collide over time.
 pub(crate) fn render_coagulated_blend_sequence(
     request: CoagulatedBlendSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
@@ -845,14 +854,60 @@ pub(crate) fn render_coagulated_blend_sequence(
         .unwrap_or(paired_count);
     fs::create_dir_all(request.output_dir)?;
 
+    // Stateless when advection is off and the field re-seeds fully every frame; this
+    // keeps the Slice-1 path byte-identical to its dedicated frame function.
+    let temporal = request.advect_amount != 0.0 || request.refresh != 1.0;
+    let patch = request.settings.patch_size;
+
+    let mut previous_field: Option<CoagulationField> = None;
+    let mut previous_a: Option<ImageBufferF32> = None;
+    let mut previous_b: Option<ImageBufferF32> = None;
+
     for index in 0..frame_count {
         let source_a = load_image_f32(&source_a_frames[index])?;
         let source_b = load_image_f32(&source_b_frames[index])?;
-        let rendered = coagulated_blend_frame_cpu(&source_a, &source_b, request.settings)?;
+
+        let rendered = if !temporal {
+            coagulated_blend_frame_cpu(&source_a, &source_b, request.settings)?
+        } else {
+            let cols = source_a.width.div_ceil(patch);
+            let rows = source_a.height.div_ceil(patch);
+            let cell_flow = if index == 0 {
+                None
+            } else {
+                Some(coagulation_cell_flow(
+                    request.flow_source,
+                    previous_a.as_ref(),
+                    &source_a,
+                    previous_b.as_ref(),
+                    &source_b,
+                    patch,
+                    cols,
+                    rows,
+                    index as u32,
+                    request.turbulence,
+                    request.settings.seed,
+                )?)
+            };
+            let (frame, field) = coagulated_blend_temporal_frame_cpu(
+                &source_a,
+                &source_b,
+                cell_flow.as_ref(),
+                previous_field.as_ref(),
+                request.settings,
+                request.advect_amount,
+                request.refresh,
+            )?;
+            previous_field = Some(field);
+            frame
+        };
+
         save_png(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
         )?;
+        previous_a = Some(source_a);
+        previous_b = Some(source_b);
     }
 
     if source_a_frames.len() != source_b_frames.len() {
@@ -863,18 +918,74 @@ pub(crate) fn render_coagulated_blend_sequence(
         );
     }
     println!(
-        "rendered coagulated blend sequence with {} frame(s) (patch {}, strength {}, coherence {}x{}, edge {}) from {} blended with {} to {}",
+        "rendered coagulated blend sequence with {} frame(s) (patch {}, strength {}, coherence {}x{}, edge {}; {}) from {} blended with {} to {}",
         frame_count,
         request.settings.patch_size,
         request.settings.coagulation_strength,
         request.settings.coherence_passes,
         request.settings.coherence_strength,
         request.settings.edge_hardness,
+        if temporal {
+            format!(
+                "temporal: {:?} flow, advect {}, refresh {}",
+                request.flow_source, request.advect_amount, request.refresh
+            )
+        } else {
+            "stateless (Slice 1)".to_string()
+        },
         request.source_a_dir.display(),
         request.source_b_dir.display(),
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+/// Build the cell-resolution advection flow for one temporal frame from the chosen
+/// source. Optical-flow sources estimate Lucas-Kanade motion between consecutive
+/// source frames and downsample it to the cell grid; turbulence is synthesized.
+#[allow(clippy::too_many_arguments)]
+fn coagulation_cell_flow(
+    source: CoagulationFlowSource,
+    previous_a: Option<&ImageBufferF32>,
+    source_a: &ImageBufferF32,
+    previous_b: Option<&ImageBufferF32>,
+    source_b: &ImageBufferF32,
+    patch: u32,
+    cols: u32,
+    rows: u32,
+    frame_index: u32,
+    turbulence: f32,
+    seed: u64,
+) -> Result<FlowField, CliError> {
+    let cell_flow_between = |previous: Option<&ImageBufferF32>,
+                             current: &ImageBufferF32|
+     -> Result<FlowField, CliError> {
+        let previous = previous.ok_or_else(|| {
+            CliError::Message("internal error: missing previous frame for coagulation flow".to_string())
+        })?;
+        let flow = pyramidal_lucas_kanade_flow_cpu(
+            previous,
+            current,
+            current.width,
+            current.height,
+            LUCAS_KANADE_WINDOW_RADIUS,
+        )?
+        .flow;
+        Ok(downsample_flow_to_cells(&flow, patch)?)
+    };
+
+    Ok(match source {
+        CoagulationFlowSource::AFlow => cell_flow_between(previous_a, source_a)?,
+        CoagulationFlowSource::BFlow => cell_flow_between(previous_b, source_b)?,
+        CoagulationFlowSource::Mixed => {
+            let a = cell_flow_between(previous_a, source_a)?;
+            let b = cell_flow_between(previous_b, source_b)?;
+            average_cell_flows(&a, &b)?
+        }
+        CoagulationFlowSource::Turbulence => {
+            synthesize_turbulence_flow(cols, rows, frame_index, turbulence, seed)?
+        }
+    })
 }
 
 pub(crate) fn render_convolutional_blend_frame(

@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::granular_mosaic::{average_carrier_tile_color, luminance, tile_texture};
-use crate::{ImageBufferF32, RenderError};
+use crate::{flow_displace_cpu, FlowField, ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the Slice-1 CPU reference. Bump when the field
 /// formulation or feature set changes so stale caches/checkpoints invalidate.
@@ -199,6 +199,19 @@ pub fn coagulated_blend_frame_cpu(
     }
 
     let field = coagulation_field(source_a, source_b, settings)?;
+    composite_with_field(source_a, source_b, &field, settings)
+}
+
+/// Composite Source A over Source B by an ownership `field`, with the soft/hard
+/// dithered edge blend. Shared by the stateless [`coagulated_blend_frame_cpu`] and
+/// the temporal frame path so both produce identical pixels for the same field.
+pub fn composite_with_field(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    field: &CoagulationField,
+    settings: CoagulationSettings,
+) -> Result<ImageBufferF32, RenderError> {
+    require_matching_dims(source_a, source_b)?;
     let hardness = settings.edge_hardness.clamp(0.0, 1.0);
 
     ImageBufferF32::from_fn(source_a.width, source_a.height, |x, y| {
@@ -222,6 +235,186 @@ pub fn coagulated_blend_frame_cpu(
             b[3] + (a[3] - b[3]) * w_eff,
         ]
     })
+}
+
+/// Source of the vector field that advects the ownership field each frame (Slice 2).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CoagulationFlowSource {
+    /// Optical flow estimated between consecutive Source A frames.
+    AFlow,
+    /// Optical flow estimated between consecutive Source B frames.
+    BFlow,
+    /// Per-cell mean of the A and B flows.
+    Mixed,
+    /// Deterministic synthetic turbulence (needs no input frames).
+    Turbulence,
+}
+
+/// Downsample a pixel-resolution flow field to the ownership-field cell grid: the
+/// per-cell mean motion, converted from pixels to **cell units** (divided by
+/// `patch_size`) so it advects the field at the same spatial speed as the imagery.
+pub fn downsample_flow_to_cells(
+    flow: &FlowField,
+    patch_size: u32,
+) -> Result<FlowField, RenderError> {
+    if patch_size == 0 {
+        return Err(RenderError::InvalidCoagulationSettings(
+            "patch_size must be greater than zero".to_string(),
+        ));
+    }
+    let cols = flow.width.div_ceil(patch_size);
+    let rows = flow.height.div_ceil(patch_size);
+    let inv_patch = 1.0 / patch_size as f32;
+    FlowField::from_fn(cols, rows, |cx, cy| {
+        let x0 = cx * patch_size;
+        let y0 = cy * patch_size;
+        let x1 = (x0 + patch_size).min(flow.width);
+        let y1 = (y0 + patch_size).min(flow.height);
+        let mut sum = [0.0_f64, 0.0_f64];
+        let mut count = 0_u64;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let v = flow.vector(x, y).unwrap_or([0.0, 0.0]);
+                sum[0] += f64::from(v[0]);
+                sum[1] += f64::from(v[1]);
+                count += 1;
+            }
+        }
+        if count == 0 {
+            [0.0, 0.0]
+        } else {
+            let inv = 1.0 / count as f64;
+            [
+                (sum[0] * inv) as f32 * inv_patch,
+                (sum[1] * inv) as f32 * inv_patch,
+            ]
+        }
+    })
+}
+
+/// Per-cell mean of two cell-resolution flow fields (the `Mixed` source).
+pub fn average_cell_flows(a: &FlowField, b: &FlowField) -> Result<FlowField, RenderError> {
+    if a.width != b.width || a.height != b.height {
+        return Err(RenderError::IncompatibleInputs(format!(
+            "cell flows are {}x{} and {}x{}",
+            a.width, a.height, b.width, b.height
+        )));
+    }
+    FlowField::from_fn(a.width, a.height, |x, y| {
+        let va = a.vector(x, y).unwrap_or([0.0, 0.0]);
+        let vb = b.vector(x, y).unwrap_or([0.0, 0.0]);
+        [(va[0] + vb[0]) * 0.5, (va[1] + vb[1]) * 0.5]
+    })
+}
+
+/// Deterministic synthetic turbulence in cell units, evolving with `frame_index` so
+/// patches drift and swirl with no input frames. A small sum of rotated sinusoids
+/// (cheap, reproducible, divergence-ful — patches collide and pile rather than
+/// translating rigidly).
+pub fn synthesize_turbulence_flow(
+    cols: u32,
+    rows: u32,
+    frame_index: u32,
+    strength: f32,
+    seed: u64,
+) -> Result<FlowField, RenderError> {
+    let phase = (seed & 0xFFFF) as f32 * 0.001;
+    let t = frame_index as f32;
+    FlowField::from_fn(cols, rows, |x, y| {
+        let fx = x as f32;
+        let fy = y as f32;
+        let vx = (0.13 * fx + 0.21 * fy + 0.30 * t + phase).sin()
+            + 0.5 * (0.07 * fx - 0.11 * fy - 0.20 * t).sin();
+        let vy = (0.11 * fx - 0.17 * fy + 0.25 * t + phase).cos()
+            + 0.5 * (0.09 * fx + 0.05 * fy + 0.15 * t).cos();
+        [vx * strength, vy * strength]
+    })
+}
+
+/// Advect an ownership field by a cell-resolution flow, reusing the parity-gated
+/// `flow_displace` backward warp on the field packed into an image channel (the
+/// trick that makes field advection free). Borders clamp, so patches pile at edges.
+pub fn advect_coagulation_field(
+    field: &CoagulationField,
+    cell_flow: &FlowField,
+    amount: f32,
+) -> Result<CoagulationField, RenderError> {
+    if cell_flow.width != field.cols || cell_flow.height != field.rows {
+        return Err(RenderError::IncompatibleInputs(format!(
+            "ownership field is {}x{} cells, cell flow is {}x{}",
+            field.cols, field.rows, cell_flow.width, cell_flow.height
+        )));
+    }
+    let packed = ImageBufferF32::from_fn(field.cols, field.rows, |x, y| {
+        let w = field.weights[(y * field.cols + x) as usize];
+        [w, 0.0, 0.0, 1.0]
+    })?;
+    let advected = flow_displace_cpu(&packed, cell_flow, amount)?;
+    let weights = advected.pixels.iter().map(|pixel| pixel[0]).collect();
+    Ok(CoagulationField {
+        cols: field.cols,
+        rows: field.rows,
+        patch_size: field.patch_size,
+        weights,
+    })
+}
+
+/// Render one frame of the **temporal** descriptor-coagulated flow blend (Slice 2).
+///
+/// Frame-zero behaviour (`previous_field: None`): the ownership field is built from
+/// descriptors only (identical to the stateless Slice-1 field). On later frames the
+/// prior-frame field is advected by `cell_flow` (the exact prior state consumed,
+/// carried as an unquantized [`CoagulationField`], never a display PNG), then blended
+/// toward the fresh descriptor field by `refresh` (`1` = re-seed every frame ≡ the
+/// stateless path; `0` = the field only advects, ignoring new content). Returns the
+/// composited frame and the new field to carry forward as the checkpoint.
+///
+/// With `cell_flow = None` (or `advect_amount = 0`) **and** `refresh = 1`, the output
+/// is identical to [`coagulated_blend_frame_cpu`].
+pub fn coagulated_blend_temporal_frame_cpu(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    cell_flow: Option<&FlowField>,
+    previous_field: Option<&CoagulationField>,
+    settings: CoagulationSettings,
+    advect_amount: f32,
+    refresh: f32,
+) -> Result<(ImageBufferF32, CoagulationField), RenderError> {
+    settings.validate()?;
+    require_matching_dims(source_a, source_b)?;
+
+    let target = coagulation_field(source_a, source_b, settings)?;
+    let field = match previous_field {
+        None => target,
+        Some(previous) => {
+            if previous.cols != target.cols || previous.rows != target.rows {
+                return Err(RenderError::IncompatibleInputs(format!(
+                    "previous field is {}x{} cells, current is {}x{}",
+                    previous.cols, previous.rows, target.cols, target.rows
+                )));
+            }
+            let advected = match cell_flow {
+                Some(flow) => advect_coagulation_field(previous, flow, advect_amount)?,
+                None => previous.clone(),
+            };
+            let r = refresh.clamp(0.0, 1.0);
+            let weights = advected
+                .weights
+                .iter()
+                .zip(&target.weights)
+                .map(|(history, fresh)| history + (fresh - history) * r)
+                .collect();
+            CoagulationField {
+                cols: target.cols,
+                rows: target.rows,
+                patch_size: target.patch_size,
+                weights,
+            }
+        }
+    };
+
+    let image = composite_with_field(source_a, source_b, &field, settings)?;
+    Ok((image, field))
 }
 
 /// Salt mixed into the seed for the per-pixel edge dither so it decorrelates from
@@ -468,5 +661,112 @@ mod tests {
                 pixel[0]
             );
         }
+    }
+
+    fn intrusion_settings() -> CoagulationSettings {
+        CoagulationSettings {
+            patch_size: 4,
+            coagulation_strength: 1.2,
+            randomness: 0.3,
+            bias: 0.2,
+            coherence_passes: 2,
+            seed: 4,
+            ..CoagulationSettings::default()
+        }
+    }
+
+    #[test]
+    fn temporal_frame_zero_matches_the_stateless_frame() {
+        let a = solid(16, 16, [0.9, 0.8, 0.2]);
+        let b = solid(16, 16, [0.1, 0.2, 0.5]);
+        let settings = intrusion_settings();
+
+        let stateless = coagulated_blend_frame_cpu(&a, &b, settings).expect("stateless");
+        let (temporal, _field) =
+            coagulated_blend_temporal_frame_cpu(&a, &b, None, None, settings, 1.0, 1.0)
+                .expect("temporal frame zero");
+        assert_eq!(temporal, stateless);
+    }
+
+    #[test]
+    fn refresh_one_without_advection_reduces_to_the_stateless_path() {
+        let a = solid(16, 16, [0.9, 0.8, 0.2]);
+        let b = solid(16, 16, [0.1, 0.2, 0.5]);
+        let settings = intrusion_settings();
+
+        let previous = coagulation_field(&a, &b, settings).expect("previous field");
+        let stateless = coagulated_blend_frame_cpu(&a, &b, settings).expect("stateless");
+        let (temporal, _field) = coagulated_blend_temporal_frame_cpu(
+            &a,
+            &b,
+            None,
+            Some(&previous),
+            settings,
+            0.0,
+            1.0,
+        )
+        .expect("temporal");
+        assert_eq!(temporal, stateless);
+    }
+
+    #[test]
+    fn refresh_zero_without_flow_persists_history_and_ignores_new_content() {
+        let a1 = solid(16, 16, [0.9, 0.9, 0.9]);
+        let b1 = solid(16, 16, [0.1, 0.1, 0.1]);
+        let settings = intrusion_settings();
+        let previous = coagulation_field(&a1, &b1, settings).expect("previous field");
+
+        // Entirely different content this frame; with refresh 0 and no flow the field
+        // must stay exactly the carried-forward history.
+        let a2 = solid(16, 16, [0.2, 0.4, 0.1]);
+        let b2 = solid(16, 16, [0.8, 0.6, 0.9]);
+        let (_image, field) = coagulated_blend_temporal_frame_cpu(
+            &a2,
+            &b2,
+            None,
+            Some(&previous),
+            settings,
+            1.0,
+            0.0,
+        )
+        .expect("temporal");
+        assert_eq!(field.weights, previous.weights);
+    }
+
+    #[test]
+    fn advecting_the_field_shifts_ownership_along_the_flow() {
+        let field = CoagulationField {
+            cols: 4,
+            rows: 1,
+            patch_size: 4,
+            weights: vec![0.0, 0.0, 1.0, 0.0],
+        };
+        let flow = FlowField::new(4, 1, vec![[1.0, 0.0]; 4]).expect("uniform cell flow");
+
+        let advected = advect_coagulation_field(&field, &flow, 1.0).expect("advected");
+        // Backward warp with +x flow pulls each cell's value from its right neighbour,
+        // so the lit cell moves one step left; the border clamps.
+        assert_eq!(advected.weights, vec![0.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn turbulence_flow_is_deterministic_and_evolves_with_frame_index() {
+        let first = synthesize_turbulence_flow(8, 6, 3, 0.5, 1).expect("first");
+        let again = synthesize_turbulence_flow(8, 6, 3, 0.5, 1).expect("again");
+        assert_eq!(first.vectors, again.vectors);
+
+        let later = synthesize_turbulence_flow(8, 6, 9, 0.5, 1).expect("later");
+        assert_ne!(first.vectors, later.vectors);
+    }
+
+    #[test]
+    fn downsample_flow_to_cells_averages_and_rescales_to_cell_units() {
+        // A 4x4 pixel flow, patch 4 -> a single cell holding the mean motion divided
+        // by patch_size (8 px / 4 = 2 cell units).
+        let flow = FlowField::new(4, 4, vec![[8.0, 0.0]; 16]).expect("flow");
+        let cells = downsample_flow_to_cells(&flow, 4).expect("cells");
+        assert_eq!(cells.width, 1);
+        assert_eq!(cells.height, 1);
+        assert_eq!(cells.vector(0, 0), Some([2.0, 0.0]));
     }
 }

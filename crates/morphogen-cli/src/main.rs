@@ -361,6 +361,10 @@ fn run() -> Result<(), CliError> {
             edge_dither,
             bias,
             seed,
+            advect_source,
+            advect_amount,
+            refresh,
+            turbulence,
             max_frames,
         } => render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
             source_a_dir: &source_a_dir,
@@ -379,6 +383,10 @@ fn run() -> Result<(), CliError> {
                 bias,
                 seed,
             },
+            flow_source: advect_source.into(),
+            advect_amount,
+            refresh,
+            turbulence,
             max_frames,
         })
         .map(|_| ()),
