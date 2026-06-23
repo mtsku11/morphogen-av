@@ -21,7 +21,7 @@ pub use audio_route::{
     uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 pub use coagulate::{
-    advect_coagulation_field, average_cell_flows, coagulated_blend_frame_cpu,
+    advect_coagulation_field, apply_history_smear, average_cell_flows, coagulated_blend_frame_cpu,
     coagulated_blend_temporal_frame_cpu, coagulation_field, composite_with_field,
     downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
     CoagulationFlowSource, CoagulationSettings, COAGULATED_BLEND_ALGORITHM,

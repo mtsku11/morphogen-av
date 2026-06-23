@@ -405,6 +405,10 @@ pub(crate) enum Commands {
         /// Seeded per-pixel jitter on the hard-threshold boundary.
         #[arg(long, default_value_t = 0.0)]
         edge_dither: f32,
+        /// Per-cell coherent sub-block offset of the field lookup, in fractions of a
+        /// cell (ragged, datamosh-y edges). 0 = clean grid.
+        #[arg(long, default_value_t = 0.0)]
+        block_jitter: f32,
         /// Baseline A ownership added to every cell (0 keeps B dominant).
         #[arg(long, default_value_t = 0.0)]
         bias: f32,
@@ -426,6 +430,14 @@ pub(crate) enum Commands {
         /// Strength of synthetic turbulence (only `--advect-source turbulence`).
         #[arg(long, default_value_t = 1.0)]
         turbulence: f32,
+        /// Output feedback smear: fraction of the previous output frame held into
+        /// this one, leaving trails as patches move (0 = no smear). >0 forces the
+        /// stateful path.
+        #[arg(long, default_value_t = 0.0)]
+        smear: f32,
+        /// Per-frame decay of the held smear trail (1 = no fade, 0 = none kept).
+        #[arg(long, default_value_t = 0.9)]
+        smear_decay: f32,
         #[arg(long)]
         max_frames: Option<usize>,
     },
