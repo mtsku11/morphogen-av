@@ -87,7 +87,17 @@
 - Output: B frames warped by reused or remapped motion.
 - Cached analysis: future motion-vector data, optical flow fields.
 - First MVP version: flow-field reuse on decoded float frames.
-- Future high-quality version: codec-aware motion-vector extraction and controlled remapping.
+  **Landed** (CPU + CLI + parity-gated Metal + queue + SwiftUI) — see
+  `docs/DATAMOSH_MILESTONE.md`. Recursive flow-reuse "bloom/melt": Source A's
+  per-frame Lucas-Kanade flow repeatedly advects Source B's previous output;
+  `--keyframe-interval` snaps back to B (`1` = passthrough, `0` = full melt,
+  `N` = pulse), `--amount` scales the flow. A stateful temporal node carrying the
+  previous output as RGBA32F; the advect step reuses the parity-gated
+  `flow_displace`. Algorithm id `flow_reuse_datamosh_bloom_cpu_v1`.
+- Future high-quality version: codec-aware motion-vector extraction and controlled
+  remapping. Two deferred tiers: codec-*simulated* mosh (16×16 block grid +
+  residual accumulation, deterministic) and real bitstream mosh (FFglitch — needs
+  an explicit invariant carve-out).
 
 ## Convolutional Audio/Video Blending
 

@@ -8,13 +8,47 @@ _Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **243 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **250 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **42 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the video-to-audio HQ-tier commits. Manual-testing
+- `swift test`: **44 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the datamosh MVP commits. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh / Motion-Vector Reuse — full vertical slice (CPU + CLI +
+  Metal + queue + SwiftUI).** The roadmap's "flow-field reuse on decoded float
+  frames" MVP, A→B, the deterministic flow-reuse tier (real melt/bloom, *in the
+  datamosh family* but not the authentic macroblock/bitstream artifact — see
+  [[datamosh-real-vs-simulated]]). A **stateful temporal node**: Source A's
+  per-frame Lucas-Kanade optical flow (`A[i-1]→A[i]`, reusing
+  `pyramidal_lucas_kanade_flow_cpu`) repeatedly advects Source B's *previous
+  output* (the carrier is frozen from the last keyframe and smears under A's
+  motion). **Recursive accumulate + keyframe refresh** (the chosen model of three):
+  `out[0]=B[0]`; `is_datamosh_keyframe(i,K)` ⇒ snap back to `B[i]`, else
+  `flow_displace(out[i-1], flowA[i], amount)`. `--keyframe-interval` `1` = exact B
+  passthrough, `N` = pulse, `0` = full melt from B[0]; `--amount` scales the flow.
+  CPU core `datamosh.rs` (`datamosh_bloom_frame_cpu`, 6 tests, algorithm id
+  `flow_reuse_datamosh_bloom_cpu_v1`) delegates the advect branch to the
+  parity-gated `flow_displace_cpu`. The recursion carries the previous output as
+  **RGBA32F in memory** (unquantized internal state; disk checkpoint/resume
+  deferred — the `write_flow_feedback_state` serializers exist to reuse).
+  `render-datamosh-sequence` CLI + parity-gated `--backend metal` (reuses
+  `flow_displace_metal`, gated per-frame). Persisted `frame_sequence_datamosh`
+  queue job (backend serde-default CPU; queue-add/run, manifest carries
+  algorithm + keyframe_interval/amount/backend) + a macOS Render-panel section
+  (A/B/output pickers, keyframe-interval + amount steppers, CPU/Metal backend).
+  **Off-vs-on readout** (high-motion A square over a static stripe+dot B fixture,
+  `scripts/make-datamosh-fixture.py` + `scripts/dm-cross-delta.py`): interval 1 =
+  **0.000/255** passthrough vs B; interval 0 melts **0 → 17.06/255** as B[0]
+  accumulates A's rightward motion (frames Read — the dot stretches, stripes drag).
+  **Metal nuance:** per-frame parity gate passes, but the end-to-end Metal sequence
+  is **not** byte-identical to CPU (max drift **0.013/255**) because the recursion
+  compounds sub-epsilon float diffs across frames — same accepted pattern as the
+  recursive `flow_feedback` Metal path; Metal is byte-reproducible across runs
+  (determinism-first holds per-backend). Queue add→run byte-identical to direct
+  (smoke test pins it + the manifest knobs). Workspace 243 → 250; Swift 42 → 44.
+  MVP feature-complete. Contract: `docs/DATAMOSH_MILESTONE.md`.
 
 - **Video-to-Audio Descriptor Routing — HQ tier (3 vertical slices; CPU + CLI +
   queue + SwiftUI, CPU-only).** The three deferred axes of the MVP, built
@@ -428,8 +462,15 @@ time-resampled smooth descriptor curves (`--sampling smooth`) — each CPU + CLI
 queue + SwiftUI. Its only remaining deferred items are an edge-density descriptor
 (near-free), a pitch/playback-rate target (bit-repro risk), depth (no pipeline),
 and phase-vocoder spectral processing (gated on a complex-STFT + inverse, shared
-with the cross-synth HQ tier). The next unstarted roadmap effect is **Controlled
-Datamosh / Motion-Vector Reuse** (flow-field reuse on decoded float frames).
+with the cross-synth HQ tier). **Controlled Datamosh / Motion-Vector Reuse** is
+now a feature-complete MVP vertical slice too (CPU + CLI + parity-gated Metal +
+queue + SwiftUI) — recursive flow-reuse "bloom/melt" with a keyframe-interval
+knob. Its deferred items are the codec-*simulated* mosh tier (16×16 block grid,
+residual accumulation, pseudo-keyframes — visually closer, still deterministic),
+the real bitstream/FFglitch tier (needs an invariant carve-out — see
+[[datamosh-real-vs-simulated]]), a stateless motion-transfer mode, and disk
+checkpoint/resume. With this the EFFECTS_ROADMAP MVPs are all landed; the next
+work is HQ tiers / deferred follow-ons rather than a new unstarted effect.
 
 ## Candidate next steps
 
