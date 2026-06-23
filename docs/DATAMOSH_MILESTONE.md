@@ -110,6 +110,20 @@ displacement (the analogue of the audio-route fixture needing a loud modulator).
 A look without a number is unfalsifiable; a number without the pixels proves
 nothing.
 
+### Recursive-node Metal drift (known, accepted)
+
+Because this is a *recursive* node (Metal's output feeds its own next frame), the
+end-to-end Metal sequence is **not** byte-identical to CPU — the per-frame parity
+gate passes, but sub-epsilon float differences compound. A 240-frame
+sustained-motion check shows the CPU-vs-Metal mean RGB delta accumulating
+**linearly** at **~0.00067/255 per frame** (systematic, not a plateau): <1/255
+below ~1500 frames, ~6.7/255 at 10k frames. Metal is byte-reproducible run-to-run,
+so determinism holds **per-backend**. Same accepted behavior as the recursive
+`flow_feedback` Metal path. **Guidance:** for very long archival renders
+(multi-thousand frames) prefer `--backend cpu`; otherwise Metal is a faithful
+accelerated view. Not a correctness gap — byte-identity is the wrong goal for a
+recursive node.
+
 ## Deferred (not this slice)
 
 - **Codec-simulated mosh** (tier 2) — quantize motion to a 16×16 block grid,
