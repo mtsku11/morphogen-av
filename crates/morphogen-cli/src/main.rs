@@ -294,6 +294,7 @@ fn run() -> Result<(), CliError> {
             block_size,
             residual_gain,
             residual_decay,
+            block_refresh_threshold,
             backend,
             max_frames,
         } => render_datamosh_sequence(DatamoshSequenceRequest {
@@ -305,6 +306,7 @@ fn run() -> Result<(), CliError> {
             block_size,
             residual_gain,
             residual_decay,
+            refresh_threshold: block_refresh_threshold,
             backend: backend.into(),
             max_frames,
         })
@@ -787,6 +789,7 @@ fn run() -> Result<(), CliError> {
             block_size,
             residual_gain,
             residual_decay,
+            block_refresh_threshold,
             max_frames,
             project_path,
             backend,
@@ -800,6 +803,7 @@ fn run() -> Result<(), CliError> {
             block_size,
             residual_gain,
             residual_decay,
+            refresh_threshold: block_refresh_threshold,
             max_frames,
             project_path: project_path.as_deref(),
             backend: backend.into(),

@@ -312,6 +312,11 @@ pub(crate) enum Commands {
         /// Decay on the residual accumulator: `0` = one-frame kick, `->1` = drift.
         #[arg(long, default_value_t = 0.9)]
         residual_decay: f32,
+        /// Per-block keep/drop threshold: macroblocks whose mean motion magnitude is
+        /// below this snap back to the carrier (intra-block refresh) while busier
+        /// blocks rot. `0` = no per-block refresh; needs block-size >= 2.
+        #[arg(long, default_value_t = 0.0)]
+        block_refresh_threshold: f32,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -779,6 +784,11 @@ pub(crate) enum Commands {
         /// Decay on the residual accumulator: `0` = one-frame kick, `->1` = drift.
         #[arg(long, default_value_t = 0.9)]
         residual_decay: f32,
+        /// Per-block keep/drop threshold: macroblocks whose mean motion magnitude is
+        /// below this snap back to the carrier (intra-block refresh) while busier
+        /// blocks rot. `0` = no per-block refresh; needs block-size >= 2.
+        #[arg(long, default_value_t = 0.0)]
+        block_refresh_threshold: f32,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]

@@ -35,20 +35,39 @@ pub const DATAMOSH_BLOCK_ALGORITHM: &str = "flow_reuse_datamosh_block_cpu_v1";
 /// a descriptor dim on the block id), so it does not bump the block id.
 pub const DATAMOSH_BLOCK_RESIDUAL_ALGORITHM: &str = "flow_reuse_datamosh_block_residual_cpu_v1";
 
-/// The datamosh policy id for a given `block_size` + `residual_gain`:
-/// - blocks ≥ 2px **and** `residual_gain > 0` ⇒ the block-residual id;
-/// - blocks ≥ 2px and `residual_gain == 0` ⇒ the codec-simulated block id;
-/// - blocks ≤ 1 (each pixel its own block) ⇒ the smooth bloom id (residual is a
-///   no-op without quantization, so gain is irrelevant — recorded as bloom).
-pub fn datamosh_algorithm(block_size: u32, residual_gain: f32) -> &'static str {
-    if block_size >= 2 {
-        if residual_gain > 0.0 {
-            DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
-        } else {
-            DATAMOSH_BLOCK_ALGORITHM
-        }
-    } else {
+/// Per-block keep/drop ("pseudo-keyframe") datamosh policy id: the block recursion,
+/// but after the advect each macroblock whose **mean motion** falls below a
+/// threshold "keeps" — it snaps back to the carrier `B[i]` (an intra/I-block
+/// refresh) — while busier blocks are denied refresh and keep rotting. The patchy
+/// "some macroblocks refresh, some rot" half of the aesthetic, content-driven like
+/// a codec's intra-block map rather than injected noise. The refresh is a per-block
+/// pixel composite over the *output* of the parity-gated `flow_displace`, so Metal
+/// stays free. A separate id (not a descriptor dim on the block/residual id); it
+/// names the most-specific active policy and takes precedence over residual in the
+/// recorded label (the `residual_gain`/`residual_decay`/`block_refresh_threshold`
+/// knobs are recorded separately and carry the rest).
+pub const DATAMOSH_BLOCK_REFRESH_ALGORITHM: &str = "flow_reuse_datamosh_block_refresh_cpu_v1";
+
+/// The datamosh policy id for a given `block_size`, `residual_gain`, and
+/// `refresh_threshold`. Precedence (most-specific active policy wins):
+/// - blocks ≤ 1 (each pixel its own block) ⇒ the smooth bloom id (block quantize,
+///   residual, and refresh are all no-ops without macroblocks — recorded as bloom);
+/// - blocks ≥ 2px **and** `refresh_threshold > 0` ⇒ the per-block refresh id;
+/// - blocks ≥ 2px and `residual_gain > 0` ⇒ the block-residual id;
+/// - blocks ≥ 2px otherwise ⇒ the codec-simulated block id.
+pub fn datamosh_algorithm(
+    block_size: u32,
+    residual_gain: f32,
+    refresh_threshold: f32,
+) -> &'static str {
+    if block_size < 2 {
         DATAMOSH_BLOOM_ALGORITHM
+    } else if refresh_threshold > 0.0 {
+        DATAMOSH_BLOCK_REFRESH_ALGORITHM
+    } else if residual_gain > 0.0 {
+        DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
+    } else {
+        DATAMOSH_BLOCK_ALGORITHM
     }
 }
 
@@ -303,6 +322,129 @@ pub fn datamosh_residual_frame_cpu(
     }
 }
 
+/// Per-block keep/drop refresh decision: a macroblock "keeps" (snaps back to the
+/// carrier `B[i]`, an intra/I-block refresh) when its **mean motion magnitude** is
+/// *below* `refresh_threshold` — calm regions stay crisp while busy regions are
+/// denied refresh and keep rotting under the reused flow (the controlled analogue
+/// of a codec's intra-block map). `refresh_threshold <= 0` ⇒ no block ever
+/// refreshes (the plain block/residual path); a threshold above the largest block
+/// motion ⇒ every block refreshes (the carrier verbatim).
+pub fn block_motion_refreshes(block_mean: [f32; 2], refresh_threshold: f32) -> bool {
+    if refresh_threshold <= 0.0 {
+        return false;
+    }
+    let magnitude = (block_mean[0] * block_mean[0] + block_mean[1] * block_mean[1]).sqrt();
+    magnitude < refresh_threshold
+}
+
+/// Composite a per-block keep/drop refresh into an advected datamosh frame: pixels
+/// whose block "keeps" (`block_motion_refreshes`) take the carrier `B[i]`; the rest
+/// keep the advected (rotted) content. `block_means` is the quantized flow
+/// (`quantize_flow_to_blocks`), so every pixel reads its own block's mean motion.
+///
+/// A pure CPU post-step over the *output* of the parity-gated displace, so it is
+/// identical regardless of which backend produced `advected` — Metal stays free,
+/// exactly as the block / residual tiers.
+pub fn datamosh_block_refresh_composite(
+    advected: &ImageBufferF32,
+    carrier: &ImageBufferF32,
+    block_means: &FlowField,
+    refresh_threshold: f32,
+) -> Result<ImageBufferF32, RenderError> {
+    if advected.width != carrier.width || advected.height != carrier.height {
+        return Err(RenderError::IncompatibleInputs(format!(
+            "advected frame is {}x{}, carrier is {}x{}",
+            advected.width, advected.height, carrier.width, carrier.height
+        )));
+    }
+    ImageBufferF32::from_fn(advected.width, advected.height, |x, y| {
+        let mean = block_means.vector(x, y).unwrap_or([0.0, 0.0]);
+        let source = if block_motion_refreshes(mean, refresh_threshold) {
+            carrier
+        } else {
+            advected
+        };
+        source.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 0.0])
+    })
+}
+
+/// Clear the residual accumulator in every block that "keeps" (refreshes to the
+/// carrier): an intra-block refresh discards that block's accumulated prediction
+/// state, matching the whole-frame keyframe reset. Blocks that keep rotting retain
+/// their accumulator. Used only on the residual path; the pure block path has no
+/// accumulator to reset.
+pub fn reset_residual_in_refreshed_blocks(
+    accumulated_residual: &FlowField,
+    block_means: &FlowField,
+    refresh_threshold: f32,
+) -> Result<FlowField, RenderError> {
+    FlowField::from_fn(
+        accumulated_residual.width,
+        accumulated_residual.height,
+        |x, y| {
+            let mean = block_means.vector(x, y).unwrap_or([0.0, 0.0]);
+            if block_motion_refreshes(mean, refresh_threshold) {
+                [0.0, 0.0]
+            } else {
+                accumulated_residual.vector(x, y).unwrap_or([0.0, 0.0])
+            }
+        },
+    )
+}
+
+/// Render one frame of **per-block keep/drop** datamosh and return the updated
+/// residual accumulator. Extends [`datamosh_residual_frame_cpu`]: after the advect,
+/// each macroblock whose mean motion is below `refresh_threshold` snaps back to the
+/// carrier `B[i]` (an intra-block refresh) while busier blocks keep rotting;
+/// refreshed blocks also clear their residual accumulator.
+///
+/// Continuity:
+/// - `refresh_threshold <= 0` ⇒ byte-identical to [`datamosh_residual_frame_cpu`]
+///   (no block refreshes);
+/// - a threshold above the largest block motion ⇒ every block refreshes ⇒ the
+///   carrier verbatim with a cleared accumulator (byte-identical to a whole-frame
+///   keyframe);
+/// - `block_size <= 1` ⇒ the bloom path (refresh ignored, like residual).
+///
+/// Frame-zero / keyframe return the carrier verbatim with a zeroed accumulator,
+/// unchanged (refresh only acts on a P-frame).
+#[allow(clippy::too_many_arguments)]
+pub fn datamosh_refresh_frame_cpu(
+    carrier: &ImageBufferF32,
+    previous_output: Option<&ImageBufferF32>,
+    accumulated_residual: &FlowField,
+    flow: &FlowField,
+    is_keyframe: bool,
+    amount: f32,
+    block_size: u32,
+    residual_gain: f32,
+    residual_decay: f32,
+    refresh_threshold: f32,
+) -> Result<(ImageBufferF32, FlowField), RenderError> {
+    let (advected, new_accum) = datamosh_residual_frame_cpu(
+        carrier,
+        previous_output,
+        accumulated_residual,
+        flow,
+        is_keyframe,
+        amount,
+        block_size,
+        residual_gain,
+        residual_decay,
+    )?;
+    // Refresh only acts on a P-frame over coarse blocks; frame-zero / keyframe are
+    // already the carrier verbatim (every pixel "refreshed") with a zero accum.
+    let is_p_frame = previous_output.is_some() && !is_keyframe;
+    if !is_p_frame || refresh_threshold <= 0.0 || block_size < 2 {
+        return Ok((advected, new_accum));
+    }
+    let block_means = quantize_flow_to_blocks(flow, block_size)?;
+    let out = datamosh_block_refresh_composite(&advected, carrier, &block_means, refresh_threshold)?;
+    let reset_accum =
+        reset_residual_in_refreshed_blocks(&new_accum, &block_means, refresh_threshold)?;
+    Ok((out, reset_accum))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,25 +532,218 @@ mod tests {
     #[test]
     fn algorithm_id_selects_block_only_for_coarse_blocks() {
         // 0/1 ⇒ each pixel its own block ⇒ bloom path (no macroblocking).
-        assert_eq!(datamosh_algorithm(0, 0.0), DATAMOSH_BLOOM_ALGORITHM);
-        assert_eq!(datamosh_algorithm(1, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(datamosh_algorithm(0, 0.0, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(datamosh_algorithm(1, 0.0, 0.0), DATAMOSH_BLOOM_ALGORITHM);
         // ≥ 2 with no residual ⇒ the codec-simulated block id.
-        assert_eq!(datamosh_algorithm(2, 0.0), DATAMOSH_BLOCK_ALGORITHM);
-        assert_eq!(datamosh_algorithm(16, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(datamosh_algorithm(2, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(datamosh_algorithm(16, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
     }
 
     #[test]
     fn algorithm_id_selects_residual_only_when_active() {
         // Residual id requires BOTH coarse blocks and a positive gain.
         assert_eq!(
-            datamosh_algorithm(16, 0.5),
+            datamosh_algorithm(16, 0.5, 0.0),
             DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
         );
         // Gain 0 ⇒ block id even with coarse blocks.
-        assert_eq!(datamosh_algorithm(16, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(datamosh_algorithm(16, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
         // Residual is a no-op without quantization ⇒ bloom id regardless of gain.
-        assert_eq!(datamosh_algorithm(1, 0.5), DATAMOSH_BLOOM_ALGORITHM);
-        assert_eq!(datamosh_algorithm(0, 0.9), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(datamosh_algorithm(1, 0.5, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(datamosh_algorithm(0, 0.9, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+    }
+
+    #[test]
+    fn algorithm_id_selects_refresh_when_active() {
+        // Refresh id requires coarse blocks AND a positive threshold; it takes
+        // precedence over residual in the recorded label.
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.5),
+            DATAMOSH_BLOCK_REFRESH_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(16, 0.5, 0.5),
+            DATAMOSH_BLOCK_REFRESH_ALGORITHM
+        );
+        // Threshold 0 ⇒ falls back to residual / block as before.
+        assert_eq!(
+            datamosh_algorithm(16, 0.5, 0.0),
+            DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
+        );
+        assert_eq!(datamosh_algorithm(16, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        // Refresh is a no-op without quantization ⇒ bloom id regardless of threshold.
+        assert_eq!(datamosh_algorithm(1, 0.0, 0.5), DATAMOSH_BLOOM_ALGORITHM);
+    }
+
+    #[test]
+    fn refresh_threshold_zero_equals_residual_frame() {
+        let carrier = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [x as f32 / 3.0, 0.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let accum = zero_flow(4, 1).expect("accum");
+        // Threshold 0 ⇒ no block refreshes ⇒ byte-identical to the residual frame.
+        let (out, new_accum) = datamosh_refresh_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.5,
+            0.9,
+            0.0,
+        )
+        .expect("refresh");
+        let (residual_out, residual_accum) = datamosh_residual_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.5,
+            0.9,
+        )
+        .expect("residual");
+        assert_eq!(out, residual_out);
+        for x in 0..4 {
+            assert_eq!(new_accum.vector(x, 0), residual_accum.vector(x, 0));
+        }
+    }
+
+    #[test]
+    fn refresh_high_threshold_equals_carrier_keyframe() {
+        let carrier = solid(4, 1, [0.2, 0.4, 0.6, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [0.0, x as f32 / 3.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let accum = zero_flow(4, 1).expect("accum");
+        // A threshold above any block's motion ⇒ every block refreshes ⇒ the
+        // carrier verbatim with a fully-cleared accumulator (≡ a whole-frame
+        // keyframe), even with residual active.
+        let (out, new_accum) = datamosh_refresh_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.5,
+            0.9,
+            1000.0,
+        )
+        .expect("refresh");
+        assert_eq!(out, carrier);
+        for x in 0..4 {
+            assert_eq!(new_accum.vector(x, 0), Some([0.0, 0.0]));
+        }
+    }
+
+    #[test]
+    fn refresh_keeps_calm_blocks_and_rots_busy_blocks() {
+        let carrier = solid(4, 1, [1.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [0.0, x as f32 / 3.0, 0.0, 1.0])
+            .expect("previous");
+        // Block 0 (x=0,1): zero mean motion (calm). Block 1 (x=2,3): large motion (busy).
+        let flow = FlowField::from_fn(4, 1, |x, _| {
+            if x < 2 {
+                [0.0, 0.0]
+            } else {
+                [10.0, 0.0]
+            }
+        })
+        .expect("flow");
+        let accum = zero_flow(4, 1).expect("accum");
+        let (out, _) = datamosh_refresh_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.0,
+            0.9,
+            5.0,
+        )
+        .expect("refresh");
+        // Reference advect (no refresh) for the busy block.
+        let advected = datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0, 2)
+            .expect("advected");
+        // Calm block keeps ⇒ carrier.
+        assert_eq!(out.pixel(0, 0), carrier.pixel(0, 0));
+        assert_eq!(out.pixel(1, 0), carrier.pixel(1, 0));
+        // Busy block rots ⇒ advected; and is distinct from the carrier.
+        assert_eq!(out.pixel(2, 0), advected.pixel(2, 0));
+        assert_eq!(out.pixel(3, 0), advected.pixel(3, 0));
+        assert_ne!(out.pixel(2, 0), carrier.pixel(2, 0));
+    }
+
+    #[test]
+    fn refresh_block_size_one_ignored() {
+        let carrier = solid(4, 1, [1.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [0.0, x as f32 / 3.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |_, _| [0.0, 0.0]).expect("flow");
+        let accum = zero_flow(4, 1).expect("accum");
+        // block_size 1 ⇒ refresh is a no-op (the bloom path), even with a low
+        // threshold that would otherwise refresh the zero-motion field.
+        let (out, _) = datamosh_refresh_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            1,
+            0.0,
+            0.9,
+            5.0,
+        )
+        .expect("refresh");
+        let bloom =
+            datamosh_bloom_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0).expect("bloom");
+        assert_eq!(out, bloom);
+    }
+
+    #[test]
+    fn refresh_resets_accumulator_in_refreshed_blocks() {
+        let carrier = solid(4, 1, [1.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [0.0, x as f32 / 3.0, 0.0, 1.0])
+            .expect("previous");
+        // Block 0 mean [0,0] (calm, refreshes) but with non-zero intra-block detail
+        // (±3) so its residual would be non-zero; block 1 mean [10,0] (busy, rots).
+        let flow = FlowField::from_fn(4, 1, |x, _| match x {
+            0 => [-3.0, 0.0],
+            1 => [3.0, 0.0],
+            2 => [8.0, 0.0],
+            _ => [12.0, 0.0],
+        })
+        .expect("flow");
+        let accum = zero_flow(4, 1).expect("accum");
+        let (_out, new_accum) = datamosh_refresh_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.5,
+            0.9,
+            5.0,
+        )
+        .expect("refresh");
+        // Calm refreshed block ⇒ accumulator cleared despite non-zero residual.
+        assert_eq!(new_accum.vector(0, 0), Some([0.0, 0.0]));
+        assert_eq!(new_accum.vector(1, 0), Some([0.0, 0.0]));
+        // Busy rotting block ⇒ residual retained (= f − block_mean = ±2).
+        assert_eq!(new_accum.vector(2, 0), Some([-2.0, 0.0]));
+        assert_eq!(new_accum.vector(3, 0), Some([2.0, 0.0]));
     }
 
     #[test]

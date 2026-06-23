@@ -252,6 +252,12 @@ pub enum RenderJobTask {
         /// `->1` = long-lived drift. Irrelevant when `residual_gain == 0`.
         #[serde(default)]
         residual_decay: f32,
+        /// Per-block keep/drop threshold: macroblocks whose mean motion magnitude is
+        /// below this snap back to the carrier (intra-block refresh) while busier
+        /// blocks rot. `0` = no per-block refresh; needs `block_size >= 2`. Defaults
+        /// to `0` so legacy jobs keep their meaning.
+        #[serde(default)]
+        block_refresh_threshold: f32,
     },
     /// Convolutional AV blending (image kernel): each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved with

@@ -1537,6 +1537,7 @@ pub(crate) struct QueueAddDatamoshSequenceRequest<'a> {
     pub(crate) block_size: u32,
     pub(crate) residual_gain: f32,
     pub(crate) residual_decay: f32,
+    pub(crate) refresh_threshold: f32,
     pub(crate) max_frames: Option<u32>,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) backend: RenderBackend,
@@ -1555,6 +1556,7 @@ pub(crate) fn queue_add_datamosh_sequence(
         block_size,
         residual_gain,
         residual_decay,
+        refresh_threshold,
         max_frames,
         project_path,
         backend,
@@ -1572,6 +1574,11 @@ pub(crate) fn queue_add_datamosh_sequence(
     if !residual_decay.is_finite() || residual_decay < 0.0 {
         return Err(CliError::Message(
             "residual-decay must be finite and non-negative".to_string(),
+        ));
+    }
+    if !refresh_threshold.is_finite() || refresh_threshold < 0.0 {
+        return Err(CliError::Message(
+            "block-refresh-threshold must be finite and non-negative".to_string(),
         ));
     }
     if matches!(max_frames, Some(0)) {
@@ -1628,6 +1635,7 @@ pub(crate) fn queue_add_datamosh_sequence(
             block_size,
             residual_gain,
             residual_decay,
+            block_refresh_threshold: refresh_threshold,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -1669,6 +1677,7 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
         block_size,
         residual_gain,
         residual_decay,
+        block_refresh_threshold,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1689,6 +1698,7 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             block_size,
             residual_gain,
             residual_decay,
+            refresh_threshold: block_refresh_threshold,
             backend,
             max_frames: max_frames.map(|value| value as usize),
         })?;
@@ -1722,12 +1732,13 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 "audio_sample_count": timing.audio_sample_count
             },
             "datamosh": {
-                "algorithm": datamosh_algorithm(block_size, residual_gain),
+                "algorithm": datamosh_algorithm(block_size, residual_gain, block_refresh_threshold),
                 "keyframe_interval": keyframe_interval,
                 "amount": amount,
                 "block_size": block_size,
                 "residual_gain": residual_gain,
                 "residual_decay": residual_decay,
+                "block_refresh_threshold": block_refresh_threshold,
                 "backend": render_backend_label(backend)
             },
             "provenance": queue.jobs[job_index].provenance,

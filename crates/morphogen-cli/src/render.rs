@@ -15,7 +15,8 @@ use morphogen_render::{
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
     is_datamosh_keyframe, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
-    datamosh_residual_flow, quantize_flow_to_blocks, zero_flow,
+    datamosh_block_refresh_composite, datamosh_residual_flow, quantize_flow_to_blocks,
+    reset_residual_in_refreshed_blocks, zero_flow,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
@@ -414,6 +415,7 @@ pub(crate) struct DatamoshSequenceRequest<'a> {
     pub(crate) block_size: u32,
     pub(crate) residual_gain: f32,
     pub(crate) residual_decay: f32,
+    pub(crate) refresh_threshold: f32,
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
 }
@@ -439,6 +441,11 @@ pub(crate) fn render_datamosh_sequence(
     if !request.residual_decay.is_finite() || request.residual_decay < 0.0 {
         return Err(CliError::Message(
             "residual-decay must be finite and non-negative".to_string(),
+        ));
+    }
+    if !request.refresh_threshold.is_finite() || request.refresh_threshold < 0.0 {
+        return Err(CliError::Message(
+            "block-refresh-threshold must be finite and non-negative".to_string(),
         ));
     }
     if matches!(request.max_frames, Some(0)) {
@@ -467,6 +474,9 @@ pub(crate) fn render_datamosh_sequence(
     // blocks; otherwise the loop uses the plain block-quantize path (gain 0 ⇒
     // byte-identical block tier, by construction).
     let residual_active = request.residual_gain > 0.0 && request.block_size >= 2;
+    // Per-block keep/drop refresh is active only with a positive threshold over
+    // coarse blocks (threshold 0 ⇒ byte-identical to the block/residual path).
+    let refresh_active = request.refresh_threshold > 0.0 && request.block_size >= 2;
 
     let mut previous_output: Option<ImageBufferF32> = None;
     let mut previous_modulator: Option<ImageBufferF32> = None;
@@ -519,7 +529,36 @@ pub(crate) fn render_datamosh_sequence(
                 } else {
                     quantize_flow_to_blocks(&flow, request.block_size)?
                 };
-                render_datamosh_advect_frame(previous, &effective, request.amount, request.backend)?
+                let advected = render_datamosh_advect_frame(
+                    previous,
+                    &effective,
+                    request.amount,
+                    request.backend,
+                )?;
+                // Per-block keep/drop: macroblocks whose mean motion is below the
+                // threshold snap back to the carrier B[i] (intra-block refresh)
+                // while busier blocks keep rotting. A pure CPU composite over the
+                // gated displace output, so Metal stays free; refreshed blocks also
+                // clear their residual accumulator (matching the keyframe reset).
+                if refresh_active {
+                    let block_means = quantize_flow_to_blocks(&flow, request.block_size)?;
+                    let composed = datamosh_block_refresh_composite(
+                        &advected,
+                        &carrier,
+                        &block_means,
+                        request.refresh_threshold,
+                    )?;
+                    if let Some(accum) = accumulated_residual.take() {
+                        accumulated_residual = Some(reset_residual_in_refreshed_blocks(
+                            &accum,
+                            &block_means,
+                            request.refresh_threshold,
+                        )?);
+                    }
+                    composed
+                } else {
+                    advected
+                }
             }
             // Frame zero or keyframe refresh: the carrier is the output verbatim,
             // and the residual accumulator is cleared (I-frame refresh).
@@ -538,13 +577,14 @@ pub(crate) fn render_datamosh_sequence(
     }
 
     println!(
-        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, {:?}) from {} moshing {} to {}",
+        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, {:?}) from {} moshing {} to {}",
         frame_count,
         request.keyframe_interval,
         request.amount,
         request.block_size,
         request.residual_gain,
         request.residual_decay,
+        request.refresh_threshold,
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),
