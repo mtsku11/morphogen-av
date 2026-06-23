@@ -163,3 +163,55 @@
 - Cached analysis: luminance maps, depth maps, RMS envelopes.
 - First MVP version: luma-derived vertical displacement.
 - Future high-quality version: Metal mesh or compute-driven line rendering with temporal supersampling.
+
+## Descriptor-Coagulated Flow Blend (proposed — experimental, deterministic)
+
+The first **mutual** two-source effect: instead of A merely *modulating* B, pixels
+from **both** sources are mangled together. Cells of the screen group into irregular
+**coagulated patches** by descriptor similarity (colour, luma, texture, motion,
+optionally audio), and those patches **advect, smear, and collide** over time through
+a vector field. The target look is extreme experimental glitch — pixelated,
+datamosh-adjacent, fluid, unstable, patchy, temporally alive — explicitly *not* an
+even crossfade, checkerboard, or uniform mosaic.
+
+- Modulator input: Source A frames + descriptors (colour, luma, texture, optical-flow
+  magnitude, optionally audio RMS/centroid).
+- Carrier input: Source B frames + the same descriptor set, **plus** the previous
+  frame's ownership field (stateful temporal node).
+- Output: B and A interleaved as moving clumps of visual material, with hard/dirty
+  patch edges, block jitter, and history smear.
+- Cached analysis: per-cell colour/texture descriptors (reuses the granular-mosaic
+  descriptor set), Lucas-Kanade flow fields for A and/or B, and the advected
+  ownership/mixture field checkpoint (RGBA32F, like the flow-feedback state).
+
+**Model — a low-resolution ownership/mixture field.** At patch resolution (cells of
+`patch_size` px, the same grid shape as `quantize_flow_to_blocks`), each cell holds a
+mixture weight `w ∈ [0,1]` (`0` = all B, `1` = all A). Per frame:
+1. **Descriptors** — per-cell `mean_color [3]` + `texture [2]` (luma variance,
+   gradient magnitude) for A and B, reusing the granular-mosaic feature extraction;
+   motion/audio dims appended later.
+2. **Coagulate** — update `w` toward whichever source's descriptor is more similar to
+   a seeded per-cell target, then run spatial-coherence relaxation passes (a cell is
+   pulled toward its neighbourhood's ownership) so patches *clump* instead of forming a
+   checkerboard, with seeded randomness breaking uniformity. Deterministic PCG/splitmix
+   keyed by `(seed, frame, cell)` — no wall-clock.
+3. **Advect** — drift the ownership field through A-flow, B-flow, mixed flow, or
+   synthetic turbulence, reusing the parity-gated `flow_displace` backward warp on the
+   field stored in an `ImageBufferF32` channel, so patches smear and collide.
+4. **Composite** — per output pixel, sample the upsampled advected `w`, bilinearly
+   sample A and B, and blend; `edge_hardness` controls soft lerp vs a noise-dithered
+   hard threshold (dirty edges), `block_jitter` adds per-cell sub-pixel offset.
+5. **Smear (optional)** — feed the composite through the existing
+   `flow_feedback_frame_cpu` history/structure machinery for trails.
+
+- First MVP version (deterministic CPU, single frame, no advection/feedback):
+  per-cell A/B descriptors → seeded + coherence-relaxed ownership field → hard/soft
+  composite. Continuity identity: `coagulation_strength 0` ⇒ `w ≡ 0` ⇒ Source B
+  verbatim (the off case for the off-vs-on readout). Algorithm id
+  `descriptor_coagulated_flow_blend_cpu_v1`. Stateful advection (field carried as the
+  prior-frame checkpoint) and dirty-edge/jitter/smear land as later slices, before any
+  Metal port. The composite/field-update Metal kernel is parity-gated like every other
+  GPU path; advection already has its parity-gated `flow_displace` twin.
+- Future high-quality version: curl-noise turbulence advection, multi-class ownership
+  (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
+  Metal field-update kernel gated against the CPU reference.
