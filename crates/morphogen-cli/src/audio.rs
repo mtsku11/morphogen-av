@@ -12,7 +12,7 @@ use morphogen_core::{
     CrossSynthWindow, ExportFormat, IrMode, RenderJob, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VideoAudioRouteDescriptor,
-    VideoAudioRouteFilterType, VideoAudioRouteMode,
+    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling,
 };
 use morphogen_render::{lucas_kanade_flow_cpu, FlowField, ImageBufferF32, LUCAS_KANADE_WINDOW_RADIUS};
 use crate::args::*;
@@ -128,21 +128,25 @@ pub(crate) fn build_descriptor_samples(
 }
 
 /// Apply the selected video-to-audio route, returning `(output, algorithm_id)`.
+#[allow(clippy::too_many_arguments)]
 fn apply_video_audio_route(
     carrier: &morphogen_audio::AudioBufferF32,
     samples: &[(f64, f32)],
     descriptor: VideoAudioRouteDescriptor,
     mode: VideoAudioRouteMode,
     filter_type: VideoAudioRouteFilterType,
+    sampling: VideoAudioRouteSampling,
     amount: f32,
 ) -> Result<(morphogen_audio::AudioBufferF32, &'static str), CliError> {
+    let sampling = video_audio_route_sampling(sampling);
     let output = match mode {
-        VideoAudioRouteMode::Gain => descriptor_gain_route(carrier, samples, amount)?,
-        VideoAudioRouteMode::Pan => descriptor_pan_route(carrier, samples, amount)?,
+        VideoAudioRouteMode::Gain => descriptor_gain_route(carrier, samples, sampling, amount)?,
+        VideoAudioRouteMode::Pan => descriptor_pan_route(carrier, samples, sampling, amount)?,
         VideoAudioRouteMode::Filter => descriptor_filter_route(
             carrier,
             samples,
             video_audio_route_filter_type(filter_type),
+            sampling,
             amount,
         )?,
     };
@@ -157,6 +161,7 @@ pub(crate) fn render_video_audio_route(
     descriptor: CliVideoAudioRouteDescriptor,
     mode: CliVideoAudioRouteMode,
     filter_type: CliFilterType,
+    sampling: CliVideoAudioRouteSampling,
     amount: f32,
     fps: f64,
     max_frames: Option<usize>,
@@ -170,6 +175,7 @@ pub(crate) fn render_video_audio_route(
         descriptor,
         mode.into(),
         filter_type.into(),
+        sampling.into(),
         amount,
     )?;
 
@@ -771,6 +777,7 @@ pub(crate) struct QueueAddVideoAudioRouteRequest<'a> {
     pub(crate) descriptor: VideoAudioRouteDescriptor,
     pub(crate) mode: VideoAudioRouteMode,
     pub(crate) filter_type: VideoAudioRouteFilterType,
+    pub(crate) sampling: VideoAudioRouteSampling,
     pub(crate) amount: f32,
     pub(crate) fps: f64,
     pub(crate) project_path: Option<&'a Path>,
@@ -787,6 +794,7 @@ pub(crate) fn queue_add_video_audio_route(
         descriptor,
         mode,
         filter_type,
+        sampling,
         amount,
         fps,
         project_path,
@@ -843,6 +851,7 @@ pub(crate) fn queue_add_video_audio_route(
             descriptor,
             mode,
             filter_type,
+            sampling,
             amount,
             fps,
         },
@@ -887,6 +896,7 @@ pub(crate) fn queue_run_video_audio_route(queue_path: &Path) -> Result<(), CliEr
         descriptor,
         mode,
         filter_type,
+        sampling,
         amount,
         fps,
     } = queue.jobs[job_index].task.clone()
@@ -903,8 +913,9 @@ pub(crate) fn queue_run_video_audio_route(queue_path: &Path) -> Result<(), CliEr
         let carrier = load_wav_f32(Path::new(&carrier_wav))?;
         let samples =
             build_descriptor_samples(Path::new(&modulator_directory), descriptor, fps, None)?;
-        let (output, algorithm) =
-            apply_video_audio_route(&carrier, &samples, descriptor, mode, filter_type, amount)?;
+        let (output, algorithm) = apply_video_audio_route(
+            &carrier, &samples, descriptor, mode, filter_type, sampling, amount,
+        )?;
 
         let stem_rel = "audio/video_audio_route.wav";
         let stem_path = output_dir.join(stem_rel);
@@ -939,6 +950,10 @@ pub(crate) fn queue_run_video_audio_route(queue_path: &Path) -> Result<(), CliEr
             VideoAudioRouteFilterType::Lowpass => "lowpass",
             VideoAudioRouteFilterType::Highpass => "highpass",
         };
+        let sampling_label = match sampling {
+            VideoAudioRouteSampling::Hold => "hold",
+            VideoAudioRouteSampling::Smooth => "smooth",
+        };
         let manifest = serde_json::json!({
             "job_id": job_id,
             "status": "complete",
@@ -958,6 +973,7 @@ pub(crate) fn queue_run_video_audio_route(queue_path: &Path) -> Result<(), CliEr
                 "descriptor": descriptor_label,
                 "mode": mode_label,
                 "filter_type": filter_label,
+                "sampling": sampling_label,
                 "amount": amount,
                 "fps": fps
             },

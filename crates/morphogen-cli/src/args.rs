@@ -2,13 +2,14 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use morphogen_audio::{
-    ConvolutionMethod as AudioConvolutionMethod, FilterType, IrMode as AudioIrMode, WindowFunction,
-    IMPULSE_CONVOLUTION_BLEND_ALGORITHM, PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+    ConvolutionMethod as AudioConvolutionMethod, EnvelopeSampling, FilterType,
+    IrMode as AudioIrMode, WindowFunction, IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
+    PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
 };
 use morphogen_core::{
     ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
     GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteDescriptor,
-    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoVocoderMode,
+    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
     StructureMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
@@ -137,6 +138,9 @@ pub(crate) enum Commands {
         /// Filter response for `--mode filter` (ignored otherwise).
         #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
         filter_type: CliFilterType,
+        /// How the descriptor envelope is resampled onto B's audio grid.
+        #[arg(long, value_enum, default_value_t = CliVideoAudioRouteSampling::Hold)]
+        sampling: CliVideoAudioRouteSampling,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
         /// Frame rate mapping A's frame index to time for the descriptor lookup.
@@ -688,6 +692,9 @@ pub(crate) enum Commands {
         /// Filter response for `--mode filter` (ignored otherwise).
         #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
         filter_type: CliFilterType,
+        /// How the descriptor envelope is resampled onto B's audio grid.
+        #[arg(long, value_enum, default_value_t = CliVideoAudioRouteSampling::Hold)]
+        sampling: CliVideoAudioRouteSampling,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
         #[arg(long, default_value_t = 30.0)]
@@ -886,6 +893,31 @@ pub(crate) fn video_audio_route_filter_type(value: VideoAudioRouteFilterType) ->
     match value {
         VideoAudioRouteFilterType::Lowpass => FilterType::Lowpass,
         VideoAudioRouteFilterType::Highpass => FilterType::Highpass,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliVideoAudioRouteSampling {
+    /// Step: hold each frame's value until the next frame.
+    #[default]
+    Hold,
+    /// Linearly interpolate between frames (a smooth curve).
+    Smooth,
+}
+
+impl From<CliVideoAudioRouteSampling> for VideoAudioRouteSampling {
+    fn from(value: CliVideoAudioRouteSampling) -> Self {
+        match value {
+            CliVideoAudioRouteSampling::Hold => Self::Hold,
+            CliVideoAudioRouteSampling::Smooth => Self::Smooth,
+        }
+    }
+}
+
+pub(crate) fn video_audio_route_sampling(value: VideoAudioRouteSampling) -> EnvelopeSampling {
+    match value {
+        VideoAudioRouteSampling::Hold => EnvelopeSampling::Hold,
+        VideoAudioRouteSampling::Smooth => EnvelopeSampling::Smooth,
     }
 }
 

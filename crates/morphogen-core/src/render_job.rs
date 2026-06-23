@@ -319,6 +319,10 @@ pub enum RenderJobTask {
         /// [`VideoAudioRouteFilterType::Lowpass`].
         #[serde(default)]
         filter_type: VideoAudioRouteFilterType,
+        /// How the descriptor envelope is resampled onto B's audio grid.
+        /// Defaults to [`VideoAudioRouteSampling::Hold`].
+        #[serde(default)]
+        sampling: VideoAudioRouteSampling,
         /// Blend from Source B passthrough (`0`) to full routing (`1`).
         amount: f32,
         /// Frame rate mapping A's frame index to time for the descriptor lookup.
@@ -416,6 +420,19 @@ pub enum VideoAudioRouteFilterType {
     #[default]
     Lowpass,
     Highpass,
+}
+
+/// How the per-frame descriptor envelope is resampled onto B's audio grid. The
+/// serde default is [`VideoAudioRouteSampling::Hold`] (step) so jobs serialized
+/// before time-resampled curves keep their hold-last meaning.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoAudioRouteSampling {
+    /// Step: hold each frame's value until the next frame.
+    #[default]
+    Hold,
+    /// Linearly interpolate between frames (a smooth curve).
+    Smooth,
 }
 
 /// Composes the deterministic algorithm id for Video-to-Audio routing from the
@@ -859,6 +876,7 @@ mod tests {
             descriptor: VideoAudioRouteDescriptor::Flow,
             mode: VideoAudioRouteMode::Filter,
             filter_type: VideoAudioRouteFilterType::Highpass,
+            sampling: VideoAudioRouteSampling::Smooth,
             amount: 0.5,
             fps: 30.0,
         };
@@ -882,12 +900,14 @@ mod tests {
         }"#;
 
         let task: RenderJobTask = serde_json::from_str(json).expect("deserialize video-audio route");
-        let RenderJobTask::VideoAudioRoute { descriptor, mode, filter_type, .. } = task else {
+        let RenderJobTask::VideoAudioRoute { descriptor, mode, filter_type, sampling, .. } = task
+        else {
             panic!("expected video-audio route task");
         };
         assert_eq!(descriptor, VideoAudioRouteDescriptor::Luma);
         assert_eq!(mode, VideoAudioRouteMode::Gain);
         assert_eq!(filter_type, VideoAudioRouteFilterType::Lowpass);
+        assert_eq!(sampling, VideoAudioRouteSampling::Hold);
     }
 
     #[test]

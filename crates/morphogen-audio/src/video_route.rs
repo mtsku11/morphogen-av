@@ -17,6 +17,17 @@
 use crate::cross_synth::{one_pole_filter_sweep, FilterType};
 use crate::{AudioBufferF32, AudioError};
 
+/// How the sparse per-frame descriptor envelope is resampled onto B's
+/// per-output-sample grid (the roadmap's "time-resampled descriptor curves").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvelopeSampling {
+    /// Step: hold the latest frame's value until the next frame (default).
+    Hold,
+    /// Linearly interpolate between adjacent frames (a smooth curve, no zipper
+    /// stepping); holds the first/last frame outside the envelope's time span.
+    Smooth,
+}
+
 fn validate_amount(amount: f32) -> Result<(), AudioError> {
     if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
         return Err(AudioError::InvalidSettings(
@@ -52,15 +63,40 @@ impl DescriptorEnvelope {
         self.times.is_empty()
     }
 
-    /// Advance `cursor` to the latest frame whose time is `<= t` (times
-    /// ascending, queried in non-decreasing `t` order) and return its normalized
-    /// value. Holds the first frame for `t` before it. Caller must ensure the
-    /// envelope is non-empty.
-    fn value_at(&self, cursor: &mut usize, t: f64) -> f32 {
-        while *cursor + 1 < self.times.len() && self.times[*cursor + 1] <= t {
-            *cursor += 1;
+    /// Resample the sparse per-frame envelope onto a dense per-output-frame curve
+    /// (`frames` values at `i / sample_rate`). `Hold` steps (the latest frame at
+    /// or before each output time); `Smooth` linearly interpolates between the
+    /// bracketing frames, holding the first/last value outside the time span.
+    /// Caller must ensure the envelope is non-empty.
+    fn resample(&self, frames: usize, sample_rate: u32, sampling: EnvelopeSampling) -> Vec<f32> {
+        let sr = sample_rate as f64;
+        let mut out = Vec::with_capacity(frames);
+        let mut cursor = 0_usize;
+        for frame in 0..frames {
+            let t = frame as f64 / sr;
+            while cursor + 1 < self.times.len() && self.times[cursor + 1] <= t {
+                cursor += 1;
+            }
+            let value = match sampling {
+                EnvelopeSampling::Hold => self.norm[cursor],
+                EnvelopeSampling::Smooth => {
+                    if cursor + 1 < self.times.len() {
+                        let t0 = self.times[cursor];
+                        let t1 = self.times[cursor + 1];
+                        if t <= t0 || t1 <= t0 {
+                            self.norm[cursor]
+                        } else {
+                            let frac = ((t - t0) / (t1 - t0)).clamp(0.0, 1.0) as f32;
+                            self.norm[cursor] + (self.norm[cursor + 1] - self.norm[cursor]) * frac
+                        }
+                    } else {
+                        self.norm[cursor]
+                    }
+                }
+            };
+            out.push(value);
         }
-        self.norm[*cursor]
+        out
     }
 }
 
@@ -76,6 +112,7 @@ fn equal_power_gains(pan: f32) -> (f32, f32) {
 pub fn descriptor_gain_route(
     carrier: &AudioBufferF32,
     samples: &[(f64, f32)],
+    sampling: EnvelopeSampling,
     amount: f32,
 ) -> Result<AudioBufferF32, AudioError> {
     validate_amount(amount)?;
@@ -89,13 +126,11 @@ pub fn descriptor_gain_route(
             "modulator produced no descriptor frames".to_string(),
         ));
     }
+    let curve = env.resample(carrier.frames, carrier.sample_rate, sampling);
 
     let channels = carrier.channels;
     let mut samples_out = vec![0.0_f32; carrier.samples.len()];
-    let mut cursor = 0_usize;
-    for frame in 0..carrier.frames {
-        let t = frame as f64 / carrier.sample_rate as f64;
-        let value = env.value_at(&mut cursor, t);
+    for (frame, &value) in curve.iter().enumerate() {
         // out = B * lerp(1.0, value, amount): strong A keeps B, weak A silences it.
         let gain = 1.0 + (value - 1.0) * amount;
         for channel in 0..channels {
@@ -113,6 +148,7 @@ pub fn descriptor_gain_route(
 pub fn descriptor_pan_route(
     carrier: &AudioBufferF32,
     samples: &[(f64, f32)],
+    sampling: EnvelopeSampling,
     amount: f32,
 ) -> Result<AudioBufferF32, AudioError> {
     validate_amount(amount)?;
@@ -126,13 +162,11 @@ pub fn descriptor_pan_route(
             "modulator produced no descriptor frames".to_string(),
         ));
     }
+    let curve = env.resample(carrier.frames, carrier.sample_rate, sampling);
 
     let channels = carrier.channels;
     let mut samples_out = vec![0.0_f32; carrier.frames * 2];
-    let mut cursor = 0_usize;
-    for frame in 0..carrier.frames {
-        let t = frame as f64 / carrier.sample_rate as f64;
-        let value = env.value_at(&mut cursor, t);
+    for (frame, &value) in curve.iter().enumerate() {
         let pan = (2.0 * value - 1.0) * amount;
         let (left_gain, right_gain) = equal_power_gains(pan);
         let mut mono = 0.0_f32;
@@ -155,6 +189,7 @@ pub fn descriptor_filter_route(
     carrier: &AudioBufferF32,
     samples: &[(f64, f32)],
     filter_type: FilterType,
+    sampling: EnvelopeSampling,
     amount: f32,
 ) -> Result<AudioBufferF32, AudioError> {
     validate_amount(amount)?;
@@ -168,8 +203,17 @@ pub fn descriptor_filter_route(
             "modulator produced no descriptor frames".to_string(),
         ));
     }
-    let cutoff_norm: Vec<f64> = env.norm.iter().map(|&v| v as f64).collect();
-    one_pole_filter_sweep(carrier, &env.times, &cutoff_norm, filter_type, amount)
+    // Resample the descriptor to a dense per-output-sample cutoff curve, then
+    // sweep with a per-sample time grid so the one-pole filter reads it directly.
+    let cutoff: Vec<f64> = env
+        .resample(carrier.frames, carrier.sample_rate, sampling)
+        .iter()
+        .map(|&v| v as f64)
+        .collect();
+    let times: Vec<f64> = (0..carrier.frames)
+        .map(|i| i as f64 / carrier.sample_rate as f64)
+        .collect();
+    one_pole_filter_sweep(carrier, &times, &cutoff, filter_type, amount)
 }
 
 #[cfg(test)]
@@ -181,29 +225,38 @@ mod tests {
     }
 
     #[test]
-    fn envelope_peak_normalizes_and_holds_last() {
-        let env = DescriptorEnvelope::from_samples(&[(0.0, 0.25), (1.0, 0.5), (2.0, 0.0)]);
-        let mut cursor = 0;
-        assert_eq!(env.value_at(&mut cursor, -0.1), 0.5); // hold-first (0.25/0.5)
-        assert_eq!(env.value_at(&mut cursor, 0.0), 0.5);
-        assert_eq!(env.value_at(&mut cursor, 0.5), 0.5); // hold-last from t=0
-        assert_eq!(env.value_at(&mut cursor, 1.5), 1.0); // hold-last from the strong frame
-        assert_eq!(env.value_at(&mut cursor, 2.5), 0.0); // hold-last from the zero frame
+    fn envelope_hold_resample_peak_normalizes_and_steps() {
+        // Two frames at t=0 (0.5) and t=1 (1.0), peak-normalized to 0.5 / 1.0.
+        // sr=4 ⇒ frames 0..3 at t<1 hold 0.5, frame 4 at t=1 steps to 1.0.
+        let env = DescriptorEnvelope::from_samples(&[(0.0, 0.5), (1.0, 1.0)]);
+        let curve = env.resample(5, 4, EnvelopeSampling::Hold);
+        assert_eq!(curve, vec![0.5, 0.5, 0.5, 0.5, 1.0]);
     }
 
     #[test]
-    fn silent_envelope_is_all_zero() {
+    fn envelope_smooth_resample_interpolates_between_frames() {
+        // Same frames; Smooth linearly ramps 0.5→1.0 across t∈[0,1] (sr=4 ⇒
+        // 0.25/0.5/0.75 fractions), then holds 1.0 at/after the last frame.
+        let env = DescriptorEnvelope::from_samples(&[(0.0, 0.5), (1.0, 1.0)]);
+        let curve = env.resample(5, 4, EnvelopeSampling::Smooth);
+        let expected = [0.5, 0.625, 0.75, 0.875, 1.0];
+        for (got, want) in curve.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn silent_envelope_resamples_all_zero() {
         let env = DescriptorEnvelope::from_samples(&[(0.0, 0.0), (1.0, 0.0)]);
-        let mut cursor = 0;
-        assert_eq!(env.value_at(&mut cursor, 0.0), 0.0);
-        assert_eq!(env.value_at(&mut cursor, 0.9), 0.0);
+        assert_eq!(env.resample(4, 4, EnvelopeSampling::Hold), vec![0.0; 4]);
+        assert_eq!(env.resample(4, 4, EnvelopeSampling::Smooth), vec![0.0; 4]);
     }
 
     #[test]
     fn gain_amount_zero_is_byte_identical_passthrough() {
         let carrier = buf(1, 4, vec![0.5; 8]);
         let env = [(0.0, 0.0), (1.0, 1.0)];
-        let out = descriptor_gain_route(&carrier, &env, 0.0).expect("gain");
+        let out = descriptor_gain_route(&carrier, &env, EnvelopeSampling::Hold, 0.0).expect("gain");
         assert_eq!(out.samples, carrier.samples);
         assert_eq!(out.channels, 1);
     }
@@ -214,7 +267,7 @@ mod tests {
         // Frame time = sample/sr; sr=4 ⇒ samples 0..3 at t<1 (weak), 4..7 at t>=1.
         let carrier = buf(1, 4, vec![0.5; 8]);
         let env = [(0.0, 0.0), (1.0, 1.0)];
-        let out = descriptor_gain_route(&carrier, &env, 1.0).expect("gain");
+        let out = descriptor_gain_route(&carrier, &env, EnvelopeSampling::Hold, 1.0).expect("gain");
         for &s in &out.samples[0..4] {
             assert!(s.abs() < 1e-6, "expected silence where A is weak, got {s}");
         }
@@ -227,7 +280,7 @@ mod tests {
     fn pan_amount_zero_is_byte_identical_passthrough() {
         let carrier = buf(1, 4, vec![0.5; 8]);
         let env = [(0.0, 0.0), (1.0, 1.0)];
-        let out = descriptor_pan_route(&carrier, &env, 0.0).expect("pan");
+        let out = descriptor_pan_route(&carrier, &env, EnvelopeSampling::Hold, 0.0).expect("pan");
         assert_eq!(out.samples, carrier.samples);
         assert_eq!(out.channels, 1); // mono B stays mono when off
     }
@@ -237,7 +290,7 @@ mod tests {
         // sr=4: samples 0..3 weak (t<1), 4..7 strong (t>=1). Mono carrier 0.5.
         let carrier = buf(1, 4, vec![0.5; 8]);
         let env = [(0.0, 0.0), (1.0, 1.0)];
-        let out = descriptor_pan_route(&carrier, &env, 1.0).expect("pan");
+        let out = descriptor_pan_route(&carrier, &env, EnvelopeSampling::Hold, 1.0).expect("pan");
         assert_eq!(out.channels, 2);
         // Weak frames (pan -1): all energy left, right ~0.
         for frame in 0..4 {
@@ -260,7 +313,7 @@ mod tests {
         // whose normalized mid is 0.5: value 0.5 over peak 1.0.
         let carrier = buf(1, 4, vec![1.0; 4]);
         let env = [(0.0, 0.5), (10.0, 1.0)]; // t<10 ⇒ norm 0.5 ⇒ pan 0 ⇒ center
-        let out = descriptor_pan_route(&carrier, &env, 1.0).expect("pan");
+        let out = descriptor_pan_route(&carrier, &env, EnvelopeSampling::Hold, 1.0).expect("pan");
         let expected = std::f32::consts::FRAC_1_SQRT_2; // cos(pi/4)
         for frame in 0..4 {
             let l = out.samples[frame * 2];
@@ -274,7 +327,7 @@ mod tests {
         // Stereo B [L=1, R=0] ⇒ mono mix 0.5; strong A ⇒ hard right.
         let carrier = buf(2, 4, vec![1.0, 0.0, 1.0, 0.0]);
         let env = [(0.0, 1.0)];
-        let out = descriptor_pan_route(&carrier, &env, 1.0).expect("pan");
+        let out = descriptor_pan_route(&carrier, &env, EnvelopeSampling::Hold, 1.0).expect("pan");
         assert_eq!(out.channels, 2);
         assert_eq!(out.frames, 2);
         assert!(out.samples[0].abs() < 1e-6, "left should be ~0 (hard right)");
@@ -285,24 +338,24 @@ mod tests {
     fn rejects_out_of_range_amount() {
         let carrier = buf(1, 4, vec![0.5; 8]);
         let env = [(0.0, 1.0)];
-        assert!(descriptor_gain_route(&carrier, &env, 1.5).is_err());
-        assert!(descriptor_gain_route(&carrier, &env, f32::NAN).is_err());
-        assert!(descriptor_pan_route(&carrier, &env, -0.1).is_err());
+        assert!(descriptor_gain_route(&carrier, &env, EnvelopeSampling::Hold, 1.5).is_err());
+        assert!(descriptor_gain_route(&carrier, &env, EnvelopeSampling::Hold, f32::NAN).is_err());
+        assert!(descriptor_pan_route(&carrier, &env, EnvelopeSampling::Hold, -0.1).is_err());
     }
 
     #[test]
     fn empty_descriptor_is_error_when_on() {
         let carrier = buf(1, 4, vec![0.5; 8]);
-        assert!(descriptor_gain_route(&carrier, &[], 1.0).is_err());
-        assert!(descriptor_pan_route(&carrier, &[], 1.0).is_err());
-        assert!(descriptor_filter_route(&carrier, &[], FilterType::Lowpass, 1.0).is_err());
+        assert!(descriptor_gain_route(&carrier, &[], EnvelopeSampling::Hold, 1.0).is_err());
+        assert!(descriptor_pan_route(&carrier, &[], EnvelopeSampling::Hold, 1.0).is_err());
+        assert!(descriptor_filter_route(&carrier, &[], FilterType::Lowpass, EnvelopeSampling::Hold, 1.0).is_err());
     }
 
     #[test]
     fn filter_amount_zero_is_byte_identical_passthrough() {
         let carrier = buf(1, 8, vec![1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]);
         let env = [(0.0, 0.0), (1.0, 1.0)];
-        let out = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, 0.0).expect("filter");
+        let out = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, EnvelopeSampling::Hold, 0.0).expect("filter");
         assert_eq!(out.samples, carrier.samples);
         assert_eq!(out.channels, 1);
     }
@@ -316,7 +369,7 @@ mod tests {
         let carrier = buf(1, 8, (0..16).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect());
         let env = [(0.0, 0.0), (1.0, 1.0)];
         let out =
-            descriptor_filter_route(&carrier, &env, FilterType::Lowpass, 1.0).expect("filter");
+            descriptor_filter_route(&carrier, &env, FilterType::Lowpass, EnvelopeSampling::Hold, 1.0).expect("filter");
         let weak_energy: f32 = out.samples[0..8].iter().map(|s| s * s).sum();
         let strong_energy: f32 = out.samples[8..16].iter().map(|s| s * s).sum();
         assert!(
@@ -329,8 +382,8 @@ mod tests {
     fn filter_lowpass_and_highpass_differ() {
         let carrier = buf(1, 8, (0..16).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect());
         let env = [(0.0, 0.3), (10.0, 1.0)]; // mid cutoff over the whole carrier
-        let lp = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, 1.0).expect("lp");
-        let hp = descriptor_filter_route(&carrier, &env, FilterType::Highpass, 1.0).expect("hp");
+        let lp = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, EnvelopeSampling::Hold, 1.0).expect("lp");
+        let hp = descriptor_filter_route(&carrier, &env, FilterType::Highpass, EnvelopeSampling::Hold, 1.0).expect("hp");
         assert_ne!(lp.samples, hp.samples, "lowpass and highpass must differ");
     }
 }

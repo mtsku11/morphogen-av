@@ -2201,6 +2201,7 @@ fn queue_video_audio_route_matches_direct_and_records_knobs() {
     assert_eq!(knobs["algorithm"], "luma_pan_route_cpu_v1");
     assert_eq!(knobs["descriptor"], "luma");
     assert_eq!(knobs["mode"], "pan");
+    assert_eq!(knobs["sampling"], "hold");
     assert_eq!(knobs["amount"], 1.0);
     assert_eq!(knobs["fps"], 4.0);
 }
@@ -2233,6 +2234,8 @@ fn queue_video_audio_route_flow_descriptor_matches_direct_and_records_knobs() {
         "flow",
         "--mode",
         "gain",
+        "--sampling",
+        "smooth",
         "--amount",
         "1",
         "--fps",
@@ -2288,6 +2291,7 @@ fn queue_video_audio_route_flow_descriptor_matches_direct_and_records_knobs() {
     assert_eq!(knobs["algorithm"], "flow_gain_route_cpu_v1");
     assert_eq!(knobs["descriptor"], "flow");
     assert_eq!(knobs["mode"], "gain");
+    assert_eq!(knobs["sampling"], "smooth");
 }
 
 #[test]

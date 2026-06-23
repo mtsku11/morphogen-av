@@ -26,7 +26,7 @@ pub use render_job::{
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderSettings, RenderTimingMetadata, VideoAudioRouteDescriptor, VideoAudioRouteFilterType,
-    VideoAudioRouteMode, VideoVocoderMode, video_audio_route_algorithm_id,
+    VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode, video_audio_route_algorithm_id,
 };
 pub use render_queue::RenderQueue;
 pub use timeline::{FrameSampleRange, TimeRange, Timeline};
