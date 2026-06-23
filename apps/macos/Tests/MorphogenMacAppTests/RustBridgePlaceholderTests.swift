@@ -314,6 +314,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       descriptor: .flow,
       mode: .filter,
       filterType: .highpass,
+      sampling: .smooth,
       amount: 0.5,
       fps: 24.0,
       projectURL: nil
@@ -331,6 +332,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--descriptor", in: arguments), "flow")
     XCTAssertEqual(Self.value(after: "--mode", in: arguments), "filter")
     XCTAssertEqual(Self.value(after: "--filter-type", in: arguments), "highpass")
+    XCTAssertEqual(Self.value(after: "--sampling", in: arguments), "smooth")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.5")
     XCTAssertEqual(Self.value(after: "--fps", in: arguments), "24")
   }
@@ -344,6 +346,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       descriptor: .luma,
       mode: .gain,
       filterType: .lowpass,
+      sampling: .hold,
       amount: 1.5, // out of [0, 1]
       fps: 0.0, // not greater than zero
       projectURL: nil

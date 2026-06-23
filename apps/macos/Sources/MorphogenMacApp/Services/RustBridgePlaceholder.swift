@@ -592,6 +592,8 @@ enum RustBridgePlaceholder {
       request.mode.cliValue,
       "--filter-type",
       request.filterType.cliValue,
+      "--sampling",
+      request.sampling.cliValue,
       "--amount",
       cliNumber(request.amount),
       "--fps",
@@ -1516,6 +1518,7 @@ struct VideoAudioRouteRenderQueueCommandRequest {
   let descriptor: VideoAudioRouteDescriptorOption
   let mode: VideoAudioRouteModeOption
   let filterType: VideoAudioRouteFilterTypeOption
+  let sampling: VideoAudioRouteSamplingOption
   let amount: Double
   let fps: Double
   let projectURL: URL?

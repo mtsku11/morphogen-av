@@ -119,6 +119,7 @@ final class AppState: ObservableObject {
   @Published var videoAudioRouteDescriptor: VideoAudioRouteDescriptorOption = .luma
   @Published var videoAudioRouteMode: VideoAudioRouteModeOption = .gain
   @Published var videoAudioRouteFilterType: VideoAudioRouteFilterTypeOption = .lowpass
+  @Published var videoAudioRouteSampling: VideoAudioRouteSamplingOption = .hold
   @Published var videoAudioRouteAmount = 1.0
   @Published var videoAudioRouteFPS = 30.0
   @Published var videoAudioRouteSummary = "No video→audio route rendered"
@@ -1022,6 +1023,7 @@ final class AppState: ObservableObject {
       descriptor: videoAudioRouteDescriptor,
       mode: videoAudioRouteMode,
       filterType: videoAudioRouteFilterType,
+      sampling: videoAudioRouteSampling,
       amount: videoAudioRouteAmount,
       fps: videoAudioRouteFPS,
       projectURL: projectURL
@@ -1549,6 +1551,22 @@ enum VideoAudioRouteFilterTypeOption: String, CaseIterable, Identifiable {
       return "lowpass"
     case .highpass:
       return "highpass"
+    }
+  }
+}
+
+enum VideoAudioRouteSamplingOption: String, CaseIterable, Identifiable {
+  case hold = "Hold (stepped)"
+  case smooth = "Smooth (interpolated)"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .hold:
+      return "hold"
+    case .smooth:
+      return "smooth"
     }
   }
 }

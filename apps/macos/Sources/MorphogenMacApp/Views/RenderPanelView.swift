@@ -738,6 +738,15 @@ struct RenderPanelView: View {
             .help("Lowpass: a strong descriptor opens the cutoff toward Nyquist. Highpass: a strong descriptor lifts the high-pass corner.")
           }
 
+          Picker("Envelope", selection: $state.videoAudioRouteSampling) {
+            ForEach(VideoAudioRouteSamplingOption.allCases) { sampling in
+              Text(sampling.rawValue).tag(sampling)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Hold: the descriptor steps at each frame. Smooth: it linearly interpolates between frames (a continuous curve, no zipper stepping).")
+
           HStack(spacing: 16) {
             Button {
               state.chooseVideoAudioRouteModulatorDirectory()
