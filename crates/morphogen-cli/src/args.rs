@@ -322,6 +322,26 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
+    /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
+    /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, duplicates a
+    /// chosen P-frame's compressed chunk so its motion vectors re-bloom, then decodes
+    /// to a PNG sequence. Output is NOT bit-reproducible (depends on ffmpeg's codec);
+    /// this path lives outside the deterministic render graph by design.
+    DatamoshBitstream {
+        /// Input video (any ffmpeg-decodable container; provides the motion).
+        input: PathBuf,
+        /// Output directory for the decoded `frame_%06d.png` sequence.
+        output_dir: PathBuf,
+        /// Frame rate to encode/decode at.
+        #[arg(long, default_value_t = 24.0)]
+        fps: f64,
+        /// Which P-frame to bloom (0-based among P-frames; 0 = the first P-frame).
+        #[arg(long, default_value_t = 0)]
+        p_frame_index: u32,
+        /// Extra copies of that P-frame to insert; `0` = a plain transcode (off).
+        #[arg(long, default_value_t = 0)]
+        duplicate_count: u32,
+    },
     /// Render a convolutional AV blend sequence: each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved
     /// with (parity-gated). `--amount 0` is an exact Source B passthrough.

@@ -14,4 +14,8 @@ pub enum MediaError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("malformed AVI bitstream: {0}")]
+    MalformedAvi(String),
+    #[error("invalid datamosh request: {0}")]
+    InvalidRequest(String),
 }

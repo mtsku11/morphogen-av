@@ -641,6 +641,85 @@ pub(crate) fn render_datamosh_advect_frame_metal(
     ))
 }
 
+pub(crate) struct DatamoshBitstreamRequest<'a> {
+    pub(crate) input: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) fps: f64,
+    pub(crate) p_frame_index: u32,
+    pub(crate) duplicate_count: u32,
+}
+
+const DATAMOSH_BITSTREAM_ALGORITHM: &str = "datamosh_bitstream_pframe_dup_experimental_v1";
+
+#[derive(Serialize)]
+struct DatamoshBitstreamSidecar {
+    algorithm: String,
+    /// Always false: ffmpeg's MPEG-4 codec makes this output non-reproducible.
+    deterministic: bool,
+    input: String,
+    fps: f64,
+    codec: String,
+    p_frame_index: u32,
+    duplicate_count: u32,
+    p_frames_available: u32,
+    ffmpeg_version: String,
+    note: String,
+}
+
+/// EXPERIMENTAL, NON-DETERMINISTIC real bitstream datamosh. Encodes `input` to a
+/// P-frame-only AVI/MPEG-4 via external ffmpeg, duplicates a chosen P-frame's
+/// compressed chunk (`morphogen_media::duplicate_p_frame`) so its motion vectors
+/// re-bloom on redecode, then decodes the mangled stream to a PNG sequence. This
+/// path lives OUTSIDE the deterministic render graph by design — there is no parity
+/// gate and the output is not bit-reproducible (it depends on ffmpeg's codec).
+pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Result<(), CliError> {
+    fs::create_dir_all(request.output_dir)?;
+    let encoded = request.output_dir.join("encoded.avi");
+    let moshed = request.output_dir.join("moshed.avi");
+
+    morphogen_media::encode_datamosh_avi(request.input, &encoded, request.fps)?;
+    let encoded_bytes = fs::read(&encoded)?;
+    let p_frames_available = morphogen_media::count_p_frames(&encoded_bytes)?;
+    let moshed_bytes = morphogen_media::duplicate_p_frame(
+        &encoded_bytes,
+        request.p_frame_index,
+        request.duplicate_count,
+    )?;
+    fs::write(&moshed, &moshed_bytes)?;
+    morphogen_media::decode_avi_frames(&moshed, request.output_dir)?;
+
+    let sidecar = DatamoshBitstreamSidecar {
+        algorithm: DATAMOSH_BITSTREAM_ALGORITHM.to_string(),
+        deterministic: false,
+        input: request.input.to_string_lossy().to_string(),
+        fps: request.fps,
+        codec: "mpeg4".to_string(),
+        p_frame_index: request.p_frame_index,
+        duplicate_count: request.duplicate_count,
+        p_frames_available,
+        ffmpeg_version: morphogen_media::ffmpeg_version().unwrap_or_default(),
+        note: "Experimental real bitstream datamosh: output is NOT bit-reproducible \
+               (depends on the external ffmpeg MPEG-4 codec) and lives outside the \
+               deterministic render graph."
+            .to_string(),
+    };
+    let sidecar_path = request.output_dir.join("datamosh_bitstream.json");
+    fs::write(&sidecar_path, serde_json::to_vec_pretty(&sidecar)?)?;
+
+    // The encoded source AVI is a disposable intermediate; the moshed AVI is itself
+    // a playable deliverable, so it is kept alongside the decoded frames.
+    let _ = fs::remove_file(&encoded);
+
+    println!(
+        "datamosh-bitstream (EXPERIMENTAL, non-deterministic): bloomed P-frame {} x{} of {} P-frames -> {}",
+        request.p_frame_index,
+        request.duplicate_count,
+        p_frames_available,
+        request.output_dir.display()
+    );
+    Ok(())
+}
+
 pub(crate) struct ConvolutionalBlendSequenceRequest<'a> {
     pub(crate) modulator_dir: &'a Path,
     pub(crate) carrier_dir: &'a Path,

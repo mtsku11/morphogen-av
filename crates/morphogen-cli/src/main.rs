@@ -311,6 +311,19 @@ fn run() -> Result<(), CliError> {
             max_frames,
         })
         .map(|_| ()),
+        Commands::DatamoshBitstream {
+            input,
+            output_dir,
+            fps,
+            p_frame_index,
+            duplicate_count,
+        } => datamosh_bitstream(DatamoshBitstreamRequest {
+            input: &input,
+            output_dir: &output_dir,
+            fps,
+            p_frame_index,
+            duplicate_count,
+        }),
         Commands::RenderConvolutionalBlendSequence {
             modulator_dir,
             carrier_dir,
