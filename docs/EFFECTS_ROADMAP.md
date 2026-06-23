@@ -103,8 +103,15 @@
   queue + SwiftUI) — `--residual-gain`/`--residual-decay` accumulate the
   intra-block motion discarded by quantization in a per-pixel buffer and re-inject
   it (a fine-motion haze atop the macroblock slide). `gain 0` ≡ block path; id
-  `flow_reuse_datamosh_block_residual_cpu_v1` (blocks ≥ 2px and gain > 0). Still
-  deferred within this tier: per-block keep/drop pseudo-keyframes.
+  `flow_reuse_datamosh_block_residual_cpu_v1` (blocks ≥ 2px and gain > 0).
+- Per-block keep/drop pseudo-keyframes: **Landed** (CPU + CLI + free parity-gated
+  Metal + queue + SwiftUI) — `--block-refresh-threshold`: macroblocks whose mean
+  motion is below the threshold snap back to the carrier `B[i]` (intra-block
+  refresh, content-driven like a codec's intra map) while busier blocks rot, so the
+  smear trail self-erases behind a moving subject. `threshold 0` ≡ block/residual
+  path; threshold above max block motion ≡ a whole-frame keyframe; id
+  `flow_reuse_datamosh_block_refresh_cpu_v1` (blocks ≥ 2px and threshold > 0). This
+  completes the codec-simulated block tier.
 - Future high-quality version: codec-aware motion-vector extraction and controlled
   remapping. Remaining deferred tier: real bitstream mosh (FFglitch — needs an
   explicit invariant carve-out).

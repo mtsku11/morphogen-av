@@ -145,9 +145,8 @@ block ⇒ **byte-identical to the smooth bloom path** (the continuity property).
   smooth-vs-blocky delta grows **0 → 35.9/255** (frame 0 identical, both `B[0]`);
   frames Read — block 16 melts into large coherent wavy warps (16px regions slide
   together) where block 1 shatters into per-pixel speckle (noisy per-pixel LK).
-- **Still deferred within this tier:** per-block keep/drop pseudo-keyframes (the
-  patchy "some macroblocks refresh, some rot" decision). Block-residual
-  accumulation has since landed (next section).
+- **Whole tier now landed:** block-residual accumulation and per-block keep/drop
+  pseudo-keyframes have both since landed (next sections).
 
 ## Block-residual accumulation tier — LANDED
 
@@ -211,11 +210,75 @@ Block path (`--residual-gain 0`) vs residual on (`--residual-gain 1 --block-size
 `scripts/frame-delta.py`. Off ⇒ identical to the block tier; on ⇒ the coherent
 macroblock slide gains a divergent fine-motion haze that builds over frames.
 
-### Still deferred within this tier
+## Per-block keep/drop pseudo-keyframes tier — LANDED
 
-- **Per-block keep/drop pseudo-keyframes** — a keyframe decision *per block*
-  rather than per whole frame (some macroblocks snap back to `B` while others keep
-  rotting). The patchy refresh half of the aesthetic; additive on top of this.
+The patchy "some macroblocks refresh, some rot" half of the aesthetic — a keyframe
+decision *per block* rather than per whole frame. After the recursive advect, each
+macroblock whose **mean-motion magnitude** is below `--block-refresh-threshold`
+"keeps": it snaps back to the carrier `B[i]` (an intra/I-block refresh) while
+busier blocks are denied refresh and keep rotting under the reused flow.
+
+The trigger is **content-driven**, like a codec's intra-block map (intra blocks are
+inserted where inter-prediction fails ≈ high motion / new content), not injected
+noise — the faithful simulation of the macroblock-refresh mechanism. "Calm blocks
+refresh, busy blocks smear" yields the recognizable look where the trail behind a
+moving subject **self-erases** (calm regions snap back to clean `B`) while the
+subject's current position keeps smearing. Like the block / residual tiers it stays
+a per-block composite over the *output* of the parity-gated displace, so **Metal
+comes free again** (advect on the gated path, then a CPU composite identical across
+backends).
+
+Per P-frame (`q` = block mean = `quantize_flow_to_blocks`):
+
+```
+keeps(block) = |mean(q over block)| < refresh_threshold   # below ⇒ intra refresh
+out[p]   = keeps(block(p)) ? B[i][p] : advected[p]         # composite
+accum[p] = keeps(block(p)) ? 0       : accum[p]            # I-block clears residual
+```
+
+- **State (invariant):** the per-pixel residual accumulator (the residual tier's
+  second stateful channel) is **cleared in every refreshed block** — an intra-block
+  refresh discards that block's accumulated prediction state, matching the
+  whole-frame keyframe reset. Frame-zero / keyframe are unchanged (carrier verbatim,
+  accumulator zeroed); refresh only acts on a P-frame.
+- **Continuity knobs:**
+  - `--block-refresh-threshold 0` ⇒ **byte-identical to the block/residual path**
+    (no block refreshes).
+  - a threshold above the largest block motion ⇒ **every block refreshes** ⇒ the
+    carrier verbatim with a cleared accumulator (byte-identical to a whole-frame
+    keyframe).
+  - `block_size ≤ 1` ⇒ the bloom path (refresh is a no-op without macroblocks, like
+    residual).
+- **Algorithm id:** `datamosh_algorithm(block_size, residual_gain, refresh_threshold)`
+  resolves to `flow_reuse_datamosh_block_refresh_cpu_v1` **when blocks ≥ 2px and
+  refresh_threshold > 0** (precedence refresh > residual > block > bloom — it names
+  the most-specific active policy; the `residual_gain`/`residual_decay`/
+  `block_refresh_threshold` knobs are recorded separately and carry the rest). A
+  **separate** id, so it does not bump the block / residual ids. The job field is
+  `#[serde(default)]` (= `0` ≡ off) so legacy datamosh / block / residual jobs keep
+  their meaning.
+
+### Acceptance criteria (refresh)
+
+1. **Block/residual continuity.** `--block-refresh-threshold 0` ⇒ output
+   byte-identical to the residual frame (same block_size/gain/decay).
+2. **Keyframe continuity.** a threshold above every block's motion ⇒ the carrier
+   verbatim with a cleared accumulator (≡ a whole-frame keyframe).
+3. **Keep/rot.** calm blocks (mean motion below threshold) take the carrier; busy
+   blocks take the advected content; refreshed blocks clear their accumulator.
+4. **Bloom continuity.** `block_size ≤ 1` ⇒ the bloom path regardless of threshold.
+5. **Determinism + Metal parity** inherited from the displace (per-frame gate); no
+   `unwrap()` in library code.
+
+### Verification (off-vs-on)
+
+Block path (`--block-refresh-threshold 0`) vs refresh on (`--block-refresh-threshold
+1.0 --block-size 16` over the bouncing-square A, full melt), Read frames from both,
+report `scripts/dm-cross-delta.py`. Off ⇒ a cumulative smear everywhere the square
+has been; on ⇒ the trail self-erases (calm blocks refresh to clean `B`) leaving the
+smear only at the square's current position. Cross-delta grows **0 → 31.6/255** over
+30 frames (frame 0 identical, both `B[0]`); the Metal refresh path renders (gate
+passes ⇒ Metal free).
 
 ## Deferred (not this slice)
 

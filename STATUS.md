@@ -8,13 +8,40 @@ _Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **265 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **272 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **46 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the datamosh block-residual commits. Manual-testing
+- `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the datamosh per-block-refresh commits. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — per-block keep/drop pseudo-keyframes (full vertical
+  slice).** The patchy "some macroblocks refresh, some rot" half of the aesthetic,
+  completing the codec-simulated block tier. After the recursive advect, each
+  macroblock whose **mean-motion magnitude** is below `--block-refresh-threshold`
+  "keeps" — it snaps back to the carrier `B[i]` (an intra/I-block refresh) — while
+  busier blocks are denied refresh and keep rotting. **Content-driven** like a
+  codec's intra-block map (not injected noise): calm blocks refresh, busy blocks
+  smear, so the trail behind a moving subject **self-erases** (calm regions snap
+  back to clean `B`) leaving the smear only at the subject's current position. A
+  per-block composite over the *output* of the parity-gated displace, so **Metal
+  came free again** (the Metal refresh path renders, per-frame gate passing); a
+  refreshed block also **clears its residual accumulator** (intra-block reset).
+  `--block-refresh-threshold` on `render-datamosh-sequence` + queue + a macOS Block
+  Refresh stepper. Continuity: `threshold 0` ≡ the block/residual path
+  (byte-identical); a threshold above the largest block motion ≡ a whole-frame
+  keyframe (carrier verbatim, accumulator cleared); `block_size ≤ 1` ≡ bloom. New id
+  `flow_reuse_datamosh_block_refresh_cpu_v1` via `datamosh_algorithm(block_size,
+  residual_gain, refresh_threshold)` — **only** for blocks ≥ 2px **and** threshold >
+  0 (a separate id, precedence refresh > residual > block > bloom, no id bump); job
+  field `serde(default)` (=0 ≡ off). **Off-vs-on readout** (bouncing-square A over a
+  static stripe+dot B, block 16, full melt): refresh off (`threshold 0`) vs on
+  (`threshold 1.0`) cross-sequence delta grows **0 → 31.6/255** (frame 0 identical =
+  both `B[0]`); frames Read — off = a cumulative smear everywhere the square has
+  been, on = the diagonal stripes stay clean (trail self-erases) with the smear only
+  at the square's current position. Workspace 265 → 272; Swift 46 → 47. See
+  [[datamosh-codec-block-tier]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
 
 - **Controlled Datamosh — block-residual accumulation tier (full vertical slice).**
   The quantization-noise half of the macroblock aesthetic. Quantizing A's flow to a
