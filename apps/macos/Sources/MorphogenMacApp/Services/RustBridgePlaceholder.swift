@@ -859,6 +859,11 @@ enum RustBridgePlaceholder {
         "residual decay must be finite and greater than or equal to zero"
       )
     }
+    guard request.blockRefreshThreshold.isFinite && request.blockRefreshThreshold >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "block refresh threshold must be finite and greater than or equal to zero"
+      )
+    }
     if let maxFrames = request.maxFrames, maxFrames <= 0 {
       throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
     }
@@ -885,6 +890,8 @@ enum RustBridgePlaceholder {
       cliNumber(request.residualGain),
       "--residual-decay",
       cliNumber(request.residualDecay),
+      "--block-refresh-threshold",
+      cliNumber(request.blockRefreshThreshold),
       "--backend",
       request.backend.cliValue
     ]
@@ -1689,6 +1696,7 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   let blockSize: Int
   let residualGain: Double
   let residualDecay: Double
+  let blockRefreshThreshold: Double
   let maxFrames: Int?
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?

@@ -548,6 +548,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       blockSize: 16,
       residualGain: 0.5,
       residualDecay: 0.8,
+      blockRefreshThreshold: 1.5,
       maxFrames: 48,
       backend: .metal,
       projectURL: nil
@@ -570,6 +571,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--block-size", in: arguments), "16")
     XCTAssertEqual(Self.value(after: "--residual-gain", in: arguments), "0.5")
     XCTAssertEqual(Self.value(after: "--residual-decay", in: arguments), "0.8")
+    XCTAssertEqual(Self.value(after: "--block-refresh-threshold", in: arguments), "1.5")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
     XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
   }
@@ -585,6 +587,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       blockSize: 1,
       residualGain: 0,
       residualDecay: 0.9,
+      blockRefreshThreshold: 0,
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil
@@ -606,6 +609,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       blockSize: 0, // sub-1 macroblock size
       residualGain: 0,
       residualDecay: 0.9,
+      blockRefreshThreshold: 0,
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil
@@ -627,6 +631,29 @@ final class RustBridgePlaceholderTests: XCTestCase {
       blockSize: 16,
       residualGain: -0.5, // negative residual gain
       residualDecay: 0.9,
+      blockRefreshThreshold: 0,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: base)
+    )
+  }
+
+  func testQueuedDatamoshArgumentsRejectInvalidBlockRefreshThreshold() {
+    let base = DatamoshSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/datamosh-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      keyframeInterval: 0,
+      amount: 1,
+      blockSize: 16,
+      residualGain: 0,
+      residualDecay: 0.9,
+      blockRefreshThreshold: -0.5, // negative refresh threshold
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil
