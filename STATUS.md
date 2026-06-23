@@ -8,13 +8,33 @@ _Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **272 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **279 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the datamosh per-block-refresh commits. Manual-testing
+- Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — REAL bitstream mosh, P-frame "bloom" (experimental,
+  non-deterministic CLI).** The authentic codec-artifact tier — mangles the
+  *compressed stream* (not decoded float frames) so the decoder itself produces the
+  glitch. New standalone `datamosh-bitstream` CLI subcommand: ffmpeg encodes the
+  input to a P-frame-only AVI/MPEG-4 (LGPL `mpeg4` encoder, **no GPL dep**), pure-Rust
+  RIFF surgery (`crates/morphogen-media/src/avi.rs`) duplicates a chosen P-frame's
+  compressed chunk `--duplicate-count` times so its motion vectors re-bloom on
+  redecode, ffmpeg decodes to PNGs. **Explicit invariant carve-out** (this tier was
+  always gated on one): lives OUTSIDE the deterministic render graph — **no
+  RenderJobTask / queue / SwiftUI, no parity gate**; output is **not bit-reproducible**
+  by design (a `datamosh_bitstream.json` sidecar records params + ffmpeg version +
+  `deterministic: false`). The AVI surgery itself *is* deterministic + unit-tested on
+  synthetic byte buffers (`--duplicate-count 0` = exact identity / off case). Id
+  `datamosh_bitstream_pframe_dup_experimental_v1`. **Off-vs-on (look check, not a
+  determinism proof):** 2s `testsrc2`, P-frame 5, count 0 (48 frames) vs 30 (78
+  frames) — the duplicated frames bloom/melt (rainbow diagonal dissolves, clock digits
+  smear into macroblock glitches, blocky codec decay); frame-to-frame delta 5.982 →
+  4.081 /255. Workspace 272 → 279. See [[datamosh-real-vs-simulated]],
+  [[datamosh-bitstream-pframe-bloom]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
 
 - **Controlled Datamosh — per-block keep/drop pseudo-keyframes (full vertical
   slice).** The patchy "some macroblocks refresh, some rot" half of the aesthetic,

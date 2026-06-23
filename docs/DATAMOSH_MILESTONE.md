@@ -280,11 +280,55 @@ smear only at the square's current position. Cross-delta grows **0 → 31.6/255*
 30 frames (frame 0 identical, both `B[0]`); the Metal refresh path renders (gate
 passes ⇒ Metal free).
 
+## Real bitstream mosh — P-frame "bloom" — LANDED (experimental, non-deterministic)
+
+The authentic codec-artifact tier, shipped as a **standalone experimental CLI**
+(`datamosh-bitstream`) inside an explicit invariant carve-out. Unlike the simulated
+tiers (which fake the look on decoded float frames), this mangles the *compressed
+stream* so the decoder itself produces the artifacts.
+
+**Pipeline.** ffmpeg encodes the input to a **P-frame-only AVI/MPEG-4** (one leading
+I-frame, no B-frames, no audio — `-c:v mpeg4 -bf 0 -g 999999 -sc_threshold 0 -an`,
+using ffmpeg's built-in **LGPL** mpeg4 encoder, *not* libxvid, so no GPL dependency);
+pure-Rust RIFF surgery (`crates/morphogen-media/src/avi.rs::duplicate_p_frame`)
+duplicates a chosen P-frame's compressed chunk `--duplicate-count` times so its
+motion vectors re-apply on every redecode; ffmpeg decodes the mangled AVI to a PNG
+sequence. The surgery rebuilds the `movi` list + `idx1` index (preserving the
+encoder's offset convention via the first entry) and patches `avih.dwTotalFrames` /
+`strh.dwLength`.
+
+**The carve-out (3 invariants, explicit):**
+- **Determinism** — output depends on the external ffmpeg codec (version/build), so
+  it is **not bit-reproducible**. It lives OUTSIDE the deterministic render graph:
+  no `RenderJobTask`, no queue, no SwiftUI; a `datamosh_bitstream.json` sidecar
+  records params + ffmpeg version + `deterministic: false` for traceability.
+- **CPU-ground-truth / Metal parity** — n/a; there is no render kernel, no GPU path,
+  no parity gate.
+- **FFmpeg external+optional / no GPL-only dep** — **honoured**: only the already-
+  sanctioned external ffmpeg, the LGPL mpeg4 encoder, and our own Rust surgery. No
+  FFglitch, no vendored codec.
+
+**Determinism that *does* hold:** the AVI surgery is pure and unit-tested on
+synthetic byte buffers (no ffmpeg needed) — `--duplicate-count 0` is the exact
+identity (off case); duplication grows the chunk count by N, rebuilds the index, and
+updates the frame-count headers. Algorithm id
+`datamosh_bitstream_pframe_dup_experimental_v1`.
+
+**Verification (off-vs-on, look check not a determinism proof).** A 2s `testsrc2`
+clip, `--p-frame-index 5`, off (`--duplicate-count 0`, a plain transcode = 48 frames)
+vs on (`--duplicate-count 30` = 78 frames). Read frames: off is clean testsrc2; the
+30 duplicated frames **bloom/melt** — the rainbow diagonal dissolves, the clock
+digits smear into macroblock glitches, blocky codec decay scatters across the frame
+(the real quantized-macroblock look the simulation only approximated). Mean
+frame-to-frame delta **5.982 → 4.081 /255** (repeated identical-motion frames change
+less per step than normal motion).
+
 ## Deferred (not this slice)
 
-- **Real bitstream mosh** (tier 3, FFglitch) — the only route to authentic
-  artifacts; breaks determinism + CPU-parity + no-new-required-tool invariants.
-  Needs an explicit invariant carve-out (see `/memory/datamosh-real-vs-simulated.md`).
+- **Real bitstream mosh — further ops**: I-frame removal (transition/void mosh) and
+  motion-transfer (swap A's vectors into B — likely FFglitch). Same carve-out; the
+  P-frame bloom above is the first op landed. The richer FFglitch vocabulary
+  (sort/shuffle/fluid) stays deferred (see `/memory/datamosh-real-vs-simulated.md`).
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.
 - **Disk checkpoint / resume** — the RGBA32F state serializers exist

@@ -112,9 +112,19 @@
   path; threshold above max block motion ≡ a whole-frame keyframe; id
   `flow_reuse_datamosh_block_refresh_cpu_v1` (blocks ≥ 2px and threshold > 0). This
   completes the codec-simulated block tier.
+- Real bitstream mosh (P-frame "bloom"): **Landed as an experimental,
+  non-deterministic CLI** (`datamosh-bitstream`) — the authentic codec-artifact
+  tier, kept inside an explicit invariant carve-out. ffmpeg encodes the input to a
+  P-frame-only AVI/MPEG-4 (LGPL encoder, no GPL dep); pure-Rust RIFF surgery
+  (`morphogen-media/src/avi.rs`) duplicates a chosen P-frame's compressed chunk so
+  its motion vectors re-bloom on redecode; ffmpeg decodes to PNGs. Lives OUTSIDE the
+  deterministic render graph (no RenderJobTask/queue/SwiftUI, no parity gate); output
+  is not bit-reproducible by design (a sidecar records params + ffmpeg version).
+  Algorithm id `datamosh_bitstream_pframe_dup_experimental_v1`.
 - Future high-quality version: codec-aware motion-vector extraction and controlled
-  remapping. Remaining deferred tier: real bitstream mosh (FFglitch — needs an
-  explicit invariant carve-out).
+  remapping. Remaining deferred ops on the bitstream path: I-frame removal
+  (transition/void mosh) and motion-transfer (likely FFglitch). The richer FFglitch
+  vocabulary stays deferred behind the same carve-out.
 
 ## Convolutional Audio/Video Blending
 
