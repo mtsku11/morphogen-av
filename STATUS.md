@@ -8,13 +8,40 @@ _Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **236 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **243 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **42 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the colour-kernel / per-channel-IR commits. Manual-testing
+- Tree clean as of the video-to-audio HQ-tier commits. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Video-to-Audio Descriptor Routing — HQ tier (3 vertical slices; CPU + CLI +
+  queue + SwiftUI, CPU-only).** The three deferred axes of the MVP, built
+  incrementally. **(1) Optical-flow descriptor** (`--descriptor flow`): per-frame
+  mean Lucas-Kanade flow magnitude (motion) instead of mean luma, reusing the
+  parity-gated `lucas_kanade_flow_cpu`; frame 0 = 0 (no prior frame). The gain/pan
+  routes were made descriptor-neutral (`descriptor_gain_route`/`_pan_route` take
+  arbitrary `(time,value)` samples); the algorithm id is composed in core
+  (`video_audio_route_algorithm_id`) as `{descriptor}_{mapping}_route_cpu_v1` —
+  **luma ids byte-unchanged**, flow added `flow_gain/flow_pan/flow_filter`.
+  **(2) Filter target** (`--mode filter --filter-type lowpass|highpass`): the
+  descriptor sweeps a one-pole cutoff on B, reusing a `one_pole_filter_sweep`
+  factored out of `centroid_filter_cross_synth` (cross-synth's f64 path
+  byte-unchanged). **(3) Time-resampled curves** (`--sampling hold|smooth`):
+  `hold` steps (default, byte-identical to the MVP), `smooth` linearly
+  interpolates between frames — centralized in `DescriptorEnvelope::resample`,
+  shared by gain/pan/filter. New core enums `VideoAudioRouteDescriptor` /
+  `VideoAudioRouteFilterType` / `VideoAudioRouteSampling` (all serde-defaulted to
+  the MVP meaning) + task fields; manifest records descriptor/filter_type/sampling;
+  Render-panel pickers (descriptor, filter-type shown in filter mode, envelope).
+  **Off-vs-on readouts:** flow→gain (moving-square fixture) OFF flat 0.5, ON tracks
+  motion 0.00→0.11→0.22→0.32→0.43→0.50; luma→lowpass (HF-content metric) OFF flat
+  0.9999, ON 0.00 (closed) →0.92 (open); hold-vs-smooth (coarse ramp) max
+  consecutive-sample jump 0.1255 (staircase) vs 0.000126 (~1000× smoother).
+  Queue add→run byte-identical to direct (3 smoke tests: luma-pan/flow-gain-smooth/
+  filter-highpass). Workspace 236 → 243; Swift unchanged at 42 (tests extended).
+  Contract: `docs/VIDEO_AUDIO_ROUTE_MILESTONE.md`.
 
 - **Video-to-Audio Descriptor Routing — full vertical slice (CPU + CLI + queue +
   SwiftUI; CPU-only).** The roadmap's "frame-luma controls gain or pan" MVP, the
@@ -394,12 +421,14 @@ color`, parity-gated Metal) and per-channel **true-stereo IRs** (`--ir-mode
 per-channel`, CPU-only), each CPU + CLI + queue + SwiftUI. The image Metal kernel
 already handles large K (no cap; proved by a K=11 parity test). Its only remaining
 deferred items are a *tiled* large-K Metal kernel (perf only, not correctness) and
-separable image kernels. **Video-to-Audio Descriptor Routing** (frame-luma →
-audio gain/pan) is now a feature-complete MVP vertical slice (CPU + CLI + queue +
-SwiftUI, gain + pan modes, CPU-only); its deferred items are other visual
-descriptors (edge density, optical-flow magnitude, depth), other audio targets
-(luma→filter/pitch, motion→onset), and time-resampled descriptor curves driving
-spectral processing (HQ tier). The next unstarted roadmap effect is **Controlled
+separable image kernels. **Video-to-Audio Descriptor Routing** is now feature-complete across the MVP
+(luma → gain/pan) **and its HQ tier**: an optical-flow magnitude descriptor
+(`--descriptor flow`), a filter audio target (`--mode filter`, LP/HP), and
+time-resampled smooth descriptor curves (`--sampling smooth`) — each CPU + CLI +
+queue + SwiftUI. Its only remaining deferred items are an edge-density descriptor
+(near-free), a pitch/playback-rate target (bit-repro risk), depth (no pipeline),
+and phase-vocoder spectral processing (gated on a complex-STFT + inverse, shared
+with the cross-synth HQ tier). The next unstarted roadmap effect is **Controlled
 Datamosh / Motion-Vector Reuse** (flow-field reuse on decoded float frames).
 
 ## Candidate next steps

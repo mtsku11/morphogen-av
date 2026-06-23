@@ -90,13 +90,36 @@ steady tone): `gain` ⇒ off RMS flat, on RMS rises with A's brightness; `pan` �
 off L≈R, on L-energy dominates on dark frames and R-energy on bright frames.
 Report the numbers. A look without a number is unfalsifiable.
 
-## Deferred (not this slice)
+## HQ Tier (landed — CPU + CLI + queue + SwiftUI)
 
-- **Other visual descriptors** — edge density, optical-flow magnitude, or depth
-  (the roadmap lists these); this MVP routes one descriptor (mean luma) to two
-  targets (gain, pan).
-- **Other audio targets** — luma→filter cutoff, luma→pitch/time, motion→onset
-  gating.
-- **Time-resampled visual descriptors driving spectral processing** (the roadmap
-  HQ tier): per-sample / smoothed / look-ahead descriptor curves vs the
-  per-frame hold-last here.
+Three deferred axes of the MVP, each a verified vertical slice. The routes are
+descriptor-neutral and the algorithm id is composed in `morphogen-core`
+(`video_audio_route_algorithm_id`) as `{descriptor}_{mapping}_route_cpu_v1` (the
+project convention, cf. `rms_gain_cross_synth`); the `filter_type` and `sampling`
+knobs are recorded parameters, not part of the id (like cross-synth's filter).
+
+1. **Optical-flow descriptor** (`--descriptor flow`): per-frame mean Lucas-Kanade
+   flow magnitude (motion) instead of mean luma, reusing the parity-gated
+   `lucas_kanade_flow_cpu` (`LUCAS_KANADE_WINDOW_RADIUS = 3`); frame zero has no
+   prior frame ⇒ `0`. Peak-normalized like luma (relative motion). New ids
+   `flow_gain/flow_pan/flow_filter_route_cpu_v1`; luma ids unchanged.
+2. **Filter audio target** (`--mode filter --filter-type lowpass|highpass`): the
+   descriptor sweeps a one-pole LP/HP cutoff on B (strong ⇒ open toward Nyquist),
+   reusing a shared `one_pole_filter_sweep` factored out of
+   `centroid_filter_cross_synth`. Ids `*_filter_route_cpu_v1`.
+3. **Time-resampled curves** (`--sampling hold|smooth`): `hold` steps the
+   envelope at frame boundaries (default, byte-identical to the MVP); `smooth`
+   linearly interpolates between frames (a continuous curve). Centralized in
+   `DescriptorEnvelope::resample`, shared by gain/pan/filter.
+
+## Still Deferred
+
+- **Edge-density descriptor** (per-frame Sobel mean) — a near-free third
+  descriptor; not yet wired.
+- **Pitch / playback-rate target** — needs deterministic resampling and changes
+  output length/timing (bit-repro risk); intentionally out of scope.
+- **Depth descriptor** — no depth pipeline exists; a monocular-depth estimator
+  would be a heavy non-deterministic dependency (dropped, not deferred).
+- **Phase-vocoder spectral processing** driven by the descriptor curves — the
+  deeper "drive spectral audio processing" reading of the roadmap HQ line; gated
+  on a complex-STFT + inverse path (shared with the cross-synth HQ tier).
