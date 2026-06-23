@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio_route;
+pub mod coagulate;
 pub mod conv_blend;
 pub mod cpu_reference;
 pub mod datamosh;
@@ -18,6 +19,10 @@ pub mod video_vocoder;
 
 pub use audio_route::{
     uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+};
+pub use coagulate::{
+    coagulated_blend_frame_cpu, coagulation_field, CoagulationField, CoagulationSettings,
+    COAGULATED_BLEND_ALGORITHM,
 };
 pub use conv_blend::{
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu, convolution_blend_color_cpu,
