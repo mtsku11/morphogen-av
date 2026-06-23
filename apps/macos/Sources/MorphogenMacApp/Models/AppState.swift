@@ -118,6 +118,7 @@ final class AppState: ObservableObject {
   @Published var videoAudioRouteOutputURL: URL?
   @Published var videoAudioRouteDescriptor: VideoAudioRouteDescriptorOption = .luma
   @Published var videoAudioRouteMode: VideoAudioRouteModeOption = .gain
+  @Published var videoAudioRouteFilterType: VideoAudioRouteFilterTypeOption = .lowpass
   @Published var videoAudioRouteAmount = 1.0
   @Published var videoAudioRouteFPS = 30.0
   @Published var videoAudioRouteSummary = "No video→audio route rendered"
@@ -1020,6 +1021,7 @@ final class AppState: ObservableObject {
       outputRootDirectoryURL: outputURL,
       descriptor: videoAudioRouteDescriptor,
       mode: videoAudioRouteMode,
+      filterType: videoAudioRouteFilterType,
       amount: videoAudioRouteAmount,
       fps: videoAudioRouteFPS,
       projectURL: projectURL
@@ -1503,6 +1505,7 @@ enum CrossSynthModeOption: String, CaseIterable, Identifiable {
 enum VideoAudioRouteModeOption: String, CaseIterable, Identifiable {
   case gain = "Gain (descriptor → amplitude)"
   case pan = "Pan (descriptor → stereo position)"
+  case filter = "Filter (descriptor → cutoff)"
 
   var id: String { rawValue }
 
@@ -1512,6 +1515,8 @@ enum VideoAudioRouteModeOption: String, CaseIterable, Identifiable {
       return "gain"
     case .pan:
       return "pan"
+    case .filter:
+      return "filter"
     }
   }
 }
@@ -1528,6 +1533,22 @@ enum VideoAudioRouteDescriptorOption: String, CaseIterable, Identifiable {
       return "luma"
     case .flow:
       return "flow"
+    }
+  }
+}
+
+enum VideoAudioRouteFilterTypeOption: String, CaseIterable, Identifiable {
+  case lowpass = "Lowpass"
+  case highpass = "Highpass"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .lowpass:
+      return "lowpass"
+    case .highpass:
+      return "highpass"
     }
   }
 }

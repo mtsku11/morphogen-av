@@ -725,7 +725,18 @@ struct RenderPanelView: View {
           }
           .pickerStyle(.segmented)
           .frame(width: 360)
-          .help("Gain: a strong descriptor keeps B, a weak one attenuates it. Pan: weak steers left, strong steers right.")
+          .help("Gain: a strong descriptor keeps B, a weak one attenuates it. Pan: weak steers left, strong steers right. Filter: the descriptor sweeps a one-pole cutoff.")
+
+          if state.videoAudioRouteMode == .filter {
+            Picker("Filter", selection: $state.videoAudioRouteFilterType) {
+              ForEach(VideoAudioRouteFilterTypeOption.allCases) { filter in
+                Text(filter.rawValue).tag(filter)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 240)
+            .help("Lowpass: a strong descriptor opens the cutoff toward Nyquist. Highpass: a strong descriptor lifts the high-pass corner.")
+          }
 
           HStack(spacing: 16) {
             Button {
