@@ -204,14 +204,26 @@ mixture weight `w ∈ [0,1]` (`0` = all B, `1` = all A). Per frame:
 5. **Smear (optional)** — feed the composite through the existing
    `flow_feedback_frame_cpu` history/structure machinery for trails.
 
-- First MVP version (deterministic CPU, single frame, no advection/feedback):
-  per-cell A/B descriptors → seeded + coherence-relaxed ownership field → hard/soft
-  composite. Continuity identity: `coagulation_strength 0` ⇒ `w ≡ 0` ⇒ Source B
-  verbatim (the off case for the off-vs-on readout). Algorithm id
-  `descriptor_coagulated_flow_blend_cpu_v1`. Stateful advection (field carried as the
-  prior-frame checkpoint) and dirty-edge/jitter/smear land as later slices, before any
-  Metal port. The composite/field-update Metal kernel is parity-gated like every other
-  GPU path; advection already has its parity-gated `flow_displace` twin.
+- First MVP version (Slice 1 — deterministic CPU, single frame, no advection):
+  **Landed** (CPU + CLI). Per-cell A/B descriptors → seeded + coherence-relaxed
+  ownership field → hard/soft composite. Continuity identity: `coagulation_strength 0`
+  (with `randomness 0`, `bias 0`) ⇒ `w ≡ 0` ⇒ Source B verbatim (the off case for the
+  off-vs-on readout). Algorithm id `descriptor_coagulated_flow_blend_cpu_v1`.
+- Temporal advection (Slice 2 — stateful): **Landed** (CPU + CLI). The ownership
+  field is carried frame-to-frame and advected each frame by a chosen flow —
+  `--advect-source {a-flow|b-flow|mixed|turbulence}` × `--advect-amount` — by packing
+  the field into an `ImageBufferF32` channel and reusing the parity-gated
+  `flow_displace` warp (advection comes free). `--refresh` blends the advected history
+  toward the fresh descriptor field (`1` = re-seed every frame ≡ Slice 1; `0` = the
+  field only advects). Frame-zero = descriptors only; the prior state is the
+  unquantized field carried in memory (never a display PNG). `advect_amount 0` +
+  `refresh 1` is byte-identical to Slice 1.
+- Slices remaining: dirty-edge block jitter + output feedback smear (Slice 3), then a
+  parity-gated Metal field-update/composite kernel (Slice 4 — advection already has its
+  `flow_displace` twin).
+- Future high-quality version: curl-noise turbulence advection, multi-class ownership
+  (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
+  Metal field-update kernel gated against the CPU reference.
 - Future high-quality version: curl-noise turbulence advection, multi-class ownership
   (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
   Metal field-update kernel gated against the CPU reference.

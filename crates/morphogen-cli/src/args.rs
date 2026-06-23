@@ -12,8 +12,8 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    StructureMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
-    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+    CoagulationFlowSource, StructureMode, CONVOLUTION_BLEND_ALGORITHM,
+    CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -410,6 +410,22 @@ pub(crate) enum Commands {
         bias: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Vector field that advects the ownership field across frames (Slice 2):
+        /// `a-flow`/`b-flow` (optical flow between consecutive source frames),
+        /// `mixed` (per-cell mean), or `turbulence` (synthetic, needs no motion).
+        #[arg(long, value_enum, default_value_t = CliCoagulationFlowSource::AFlow)]
+        advect_source: CliCoagulationFlowSource,
+        /// Flow scale for field advection. `0` (with `--refresh 1`) keeps the blend
+        /// stateless (Slice 1, byte-identical).
+        #[arg(long, default_value_t = 0.0)]
+        advect_amount: f32,
+        /// How much each frame re-seeds the field from fresh descriptors: `1` =
+        /// re-seed every frame (no memory ≡ Slice 1), `0` = the field only advects.
+        #[arg(long, default_value_t = 1.0)]
+        refresh: f32,
+        /// Strength of synthetic turbulence (only `--advect-source turbulence`).
+        #[arg(long, default_value_t = 1.0)]
+        turbulence: f32,
         #[arg(long)]
         max_frames: Option<usize>,
     },
@@ -1106,6 +1122,26 @@ pub(crate) fn convolution_method_label(method: ConvolutionMethod) -> &'static st
     match method {
         ConvolutionMethod::Direct => "direct",
         ConvolutionMethod::Fft => "fft",
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliCoagulationFlowSource {
+    #[default]
+    AFlow,
+    BFlow,
+    Mixed,
+    Turbulence,
+}
+
+impl From<CliCoagulationFlowSource> for CoagulationFlowSource {
+    fn from(value: CliCoagulationFlowSource) -> Self {
+        match value {
+            CliCoagulationFlowSource::AFlow => Self::AFlow,
+            CliCoagulationFlowSource::BFlow => Self::BFlow,
+            CliCoagulationFlowSource::Mixed => Self::Mixed,
+            CliCoagulationFlowSource::Turbulence => Self::Turbulence,
+        }
     }
 }
 
