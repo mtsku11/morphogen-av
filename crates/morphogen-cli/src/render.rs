@@ -11,8 +11,8 @@ use morphogen_core::{
     RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    coagulated_blend_frame_cpu, coagulated_blend_temporal_frame_cpu, apply_history_smear,
-    average_cell_flows, downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
+    advance_coagulation_field, apply_history_smear, average_cell_flows, coagulation_field,
+    composite_with_field, downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
     CoagulationFlowSource, CoagulationSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
@@ -822,6 +822,7 @@ pub(crate) struct CoagulatedBlendSequenceRequest<'a> {
     pub(crate) turbulence: f32,
     pub(crate) smear: f32,
     pub(crate) smear_decay: f32,
+    pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
 }
 
@@ -871,8 +872,10 @@ pub(crate) fn render_coagulated_blend_sequence(
         let source_a = load_image_f32(&source_a_frames[index])?;
         let source_b = load_image_f32(&source_b_frames[index])?;
 
-        let rendered = if !temporal {
-            coagulated_blend_frame_cpu(&source_a, &source_b, request.settings)?
+        // Build (or advance) the ownership field on the CPU, then composite it on
+        // the selected backend.
+        let field = if !temporal {
+            coagulation_field(&source_a, &source_b, request.settings)?
         } else {
             let cols = source_a.width.div_ceil(patch);
             let rows = source_a.height.div_ceil(patch);
@@ -894,7 +897,7 @@ pub(crate) fn render_coagulated_blend_sequence(
                     request.settings.seed,
                 )?)
             };
-            let (composite, field) = coagulated_blend_temporal_frame_cpu(
+            advance_coagulation_field(
                 &source_a,
                 &source_b,
                 cell_flow.as_ref(),
@@ -902,24 +905,34 @@ pub(crate) fn render_coagulated_blend_sequence(
                 request.settings,
                 request.advect_amount,
                 request.refresh,
-            )?;
-            previous_field = Some(field);
+            )?
+        };
 
-            // Output feedback smear: hold a decayed fraction of the previous output
-            // into this frame, leaving trails as patches move (RGB only; alpha stays
-            // from the composite). smear == 0 ⇒ the composite unchanged.
-            if request.smear != 0.0 {
-                let smeared = apply_history_smear(
-                    &composite,
-                    previous_output.as_ref(),
-                    request.smear,
-                    request.smear_decay,
-                )?;
-                previous_output = Some(smeared.clone());
-                smeared
-            } else {
-                composite
-            }
+        let composite = render_coagulated_composite_frame(
+            &source_a,
+            &source_b,
+            &field,
+            request.settings,
+            request.backend,
+        )?;
+        if temporal {
+            previous_field = Some(field);
+        }
+
+        // Output feedback smear: hold a decayed fraction of the previous output into
+        // this frame, leaving trails as patches move (RGB only; alpha stays from the
+        // composite). smear == 0 ⇒ the composite unchanged.
+        let rendered = if request.smear != 0.0 {
+            let smeared = apply_history_smear(
+                &composite,
+                previous_output.as_ref(),
+                request.smear,
+                request.smear_decay,
+            )?;
+            previous_output = Some(smeared.clone());
+            smeared
+        } else {
+            composite
         };
 
         save_png(
@@ -938,7 +951,7 @@ pub(crate) fn render_coagulated_blend_sequence(
         );
     }
     println!(
-        "rendered coagulated blend sequence with {} frame(s) (patch {}, strength {}, coherence {}x{}, edge {}; {}) from {} blended with {} to {}",
+        "rendered coagulated blend sequence with {} frame(s) (patch {}, strength {}, coherence {}x{}, edge {}; {}; {:?}) from {} blended with {} to {}",
         frame_count,
         request.settings.patch_size,
         request.settings.coagulation_strength,
@@ -953,6 +966,7 @@ pub(crate) fn render_coagulated_blend_sequence(
         } else {
             "stateless (Slice 1)".to_string()
         },
+        request.backend,
         request.source_a_dir.display(),
         request.source_b_dir.display(),
         request.output_dir.display()
@@ -1006,6 +1020,70 @@ fn coagulation_cell_flow(
             synthesize_turbulence_flow(cols, rows, frame_index, turbulence, seed)?
         }
     })
+}
+
+/// Composite one coagulated-blend frame from a prebuilt ownership field on the
+/// selected backend. The Metal path is gated against the CPU `composite_with_field`
+/// reference per frame.
+fn render_coagulated_composite_frame(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    field: &CoagulationField,
+    settings: CoagulationSettings,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(composite_with_field(source_a, source_b, field, settings)?),
+        RenderBackend::Metal => {
+            render_coagulated_composite_frame_metal(source_a, source_b, field, settings)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_coagulated_composite_frame_metal(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    field: &CoagulationField,
+    settings: CoagulationSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::coagulated_composite_metal(
+        source_a,
+        source_b,
+        &field.weights,
+        field.cols,
+        field.rows,
+        field.patch_size,
+        settings.edge_hardness,
+        settings.edge_dither,
+        settings.block_jitter,
+        settings.seed,
+    )?;
+    let cpu = composite_with_field(source_a, source_b, field, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU coagulated-composite outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal coagulated-composite render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_coagulated_composite_frame_metal(
+    _source_a: &ImageBufferF32,
+    _source_b: &ImageBufferF32,
+    _field: &CoagulationField,
+    _settings: CoagulationSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 pub(crate) fn render_convolutional_blend_frame(

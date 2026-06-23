@@ -224,11 +224,18 @@ mixture weight `w ∈ [0,1]` (`0` = all B, `1` = all A). Per frame:
   `--smear`/`--smear-decay` hold a decayed fraction of the previous output into each
   frame, leaving RGB trails as patches move (alpha stays from the composite so the
   blend stays opaque; `smear 0` = no trail). Both continuity-safe at `0`.
-- Slice remaining: a parity-gated Metal field-update/composite kernel (Slice 4 —
-  advection already has its `flow_displace` twin).
+- Metal composite (Slice 4): **Landed** (parity-gated). `--backend metal` runs the
+  per-pixel composite (block jitter + bilinear field sample + dithered hard/soft edge
+  blend + A/B lerp) as a `coagulated_composite` Metal kernel, gated against the CPU
+  `composite_with_field` per frame (tolerance `1/255`). Compiled with fast-math
+  disabled and the splitmix64 hash replicated in MSL so the hard-edge threshold
+  decision matches the CPU bit-for-bit. The ownership-field build/advance (cheap,
+  iterative, neighbour-coupled) stays CPU; advection already rode the parity-gated
+  `flow_displace`. This completes the effect's first full CPU→Metal vertical.
 - Future high-quality version: curl-noise turbulence advection, multi-class ownership
   (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
-  Metal field-update kernel gated against the CPU reference.
+  Metal field-build/advance kernel (the remaining CPU stage) gated against the CPU
+  reference.
 - Future high-quality version: curl-noise turbulence advection, multi-class ownership
   (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
   Metal field-update kernel gated against the CPU reference.

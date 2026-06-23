@@ -9,6 +9,7 @@ use morphogen_render::{
 
 use crate::{
     FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
+    COAGULATED_COMPOSITE_KERNEL_NAME, COAGULATED_COMPOSITE_SHADER_SOURCE,
     ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE,
     CONVOLUTION_BLEND_COLOR_KERNEL_NAME, CONVOLUTION_BLEND_COLOR_SHADER_SOURCE,
     CONVOLUTION_BLEND_KERNEL_NAME, CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME,
@@ -67,6 +68,20 @@ struct ConvolutionBlendParams {
     width: u32,
     height: u32,
     kernel_size: u32,
+}
+
+#[repr(C)]
+struct CoagulatedCompositeParams {
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    patch_size: u32,
+    seed_lo: u32,
+    seed_hi: u32,
+    edge_hardness: f32,
+    edge_dither: f32,
+    block_jitter: f32,
 }
 
 pub fn flow_displace_metal(
@@ -609,6 +624,142 @@ pub fn flow_feedback_metal(
     read_rgba_f32_texture(&output_texture, plan.width, plan.height)
 }
 
+/// Descriptor-coagulated flow blend — composite stage on the GPU. Given Source A,
+/// Source B, and the CPU-built `cols × rows` ownership field, evaluates the same
+/// per-pixel block-jitter + bilinear field sample + dithered hard/soft edge blend +
+/// A/B lerp as `morphogen_render::composite_with_field`. Compiled with fast-math
+/// disabled so the float math (and the hard-edge threshold) matches the CPU
+/// reference bit-for-bit; the CLI gates this output against it per frame.
+#[allow(clippy::too_many_arguments)]
+pub fn coagulated_composite_metal(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    field_weights: &[f32],
+    cols: u32,
+    rows: u32,
+    patch_size: u32,
+    edge_hardness: f32,
+    edge_dither: f32,
+    block_jitter: f32,
+    seed: u64,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if source_a.width != source_b.width || source_a.height != source_b.height {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "source A is {}x{}, source B is {}x{}",
+            source_a.width, source_a.height, source_b.width, source_b.height
+        )));
+    }
+    if patch_size == 0 {
+        return Err(MetalDispatchError::InvalidCoagulationSettings(
+            "patch_size must be greater than zero".to_string(),
+        ));
+    }
+    if field_weights.len() != (cols as usize) * (rows as usize) {
+        return Err(MetalDispatchError::InvalidCoagulationSettings(format!(
+            "field length {} does not match {}x{} cells",
+            field_weights.len(),
+            cols,
+            rows
+        )));
+    }
+
+    let plan = FlowDisplaceDispatchPlan::new(source_a.width, source_a.height, 0.0)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(COAGULATED_COMPOSITE_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(COAGULATED_COMPOSITE_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let source_a_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let source_b_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&source_a_texture, source_a)?;
+    upload_rgba_f32_texture(&source_b_texture, source_b)?;
+
+    let weights_byte_len = std::mem::size_of_val(field_weights);
+    let weights_buffer = device.new_buffer_with_data(
+        field_weights.as_ptr().cast(),
+        weights_byte_len as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&source_a_texture));
+    encoder.set_texture(1, Some(&source_b_texture));
+    encoder.set_texture(2, Some(&output_texture));
+    encoder.set_buffer(0, Some(&weights_buffer), 0);
+
+    let params = CoagulatedCompositeParams {
+        width: plan.width,
+        height: plan.height,
+        cols,
+        rows,
+        patch_size,
+        seed_lo: seed as u32,
+        seed_hi: (seed >> 32) as u32,
+        edge_hardness,
+        edge_dither,
+        block_jitter,
+    };
+    encoder.set_bytes(
+        1,
+        std::mem::size_of::<CoagulatedCompositeParams>() as u64,
+        (&params as *const CoagulatedCompositeParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
 pub fn granular_mosaic_metal(
     carrier: &ImageBufferF32,
     selection: &GrainSelection,
@@ -1095,14 +1246,87 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 mod tests {
     use morphogen_render::{
         analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
-        analyze_grain_pool_cpu, apply_tone_map_cpu, convolution_blend_color_cpu,
-        convolution_blend_cpu, flow_displace_cpu, flow_feedback_frame_cpu,
-        granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
-        luma_specification_tone_map, select_grains_from_pool_cpu, FlowFeedbackSettings, FlowField,
+        analyze_grain_pool_cpu, apply_tone_map_cpu, coagulation_field, composite_with_field,
+        convolution_blend_color_cpu, convolution_blend_cpu, flow_displace_cpu,
+        flow_feedback_frame_cpu, granular_mosaic_with_pool_selection_cpu,
+        granular_mosaic_with_selection_cpu, luma_specification_tone_map,
+        select_grains_from_pool_cpu, CoagulationSettings, FlowFeedbackSettings, FlowField,
         GrainSelection, GranularMosaicSettings, ImageBufferF32, StructureMode,
     };
 
     use super::*;
+
+    fn coagulation_fixture(seed: u64) -> (ImageBufferF32, ImageBufferF32, CoagulationSettings) {
+        // Structured, contrasting A/B so the ownership field has real spatial edges
+        // (a flat fixture cannot exercise the bilinear sample or the threshold).
+        let a = ImageBufferF32::from_fn(24, 18, |x, y| {
+            let v = ((x * 7 + y * 3) % 11) as f32 / 11.0;
+            [v, 1.0 - v, 0.5 * v, 1.0]
+        })
+        .expect("source a");
+        let b = ImageBufferF32::from_fn(24, 18, |x, y| {
+            let v = ((x * 2 + y * 5) % 13) as f32 / 13.0;
+            [0.2 * v, 0.4, 1.0 - v, 1.0]
+        })
+        .expect("source b");
+        let settings = CoagulationSettings {
+            patch_size: 5,
+            coagulation_strength: 1.4,
+            texture_weight: 0.6,
+            randomness: 0.5,
+            bias: 0.3,
+            coherence_passes: 2,
+            coherence_strength: 0.5,
+            edge_hardness: 0.85,
+            edge_dither: 0.4,
+            block_jitter: 0.6,
+            seed,
+            ..CoagulationSettings::default()
+        };
+        (a, b, settings)
+    }
+
+    #[test]
+    fn metal_coagulated_composite_matches_cpu_reference() {
+        // Exercises every composite lever (block jitter, dithered hard threshold,
+        // bilinear field sample). With fast-math disabled the GPU math — including
+        // the threshold decision — must match the CPU reference within tolerance.
+        let (a, b, settings) = coagulation_fixture(7);
+        let field = coagulation_field(&a, &b, settings).expect("field");
+        let cpu = composite_with_field(&a, &b, &field, settings).expect("cpu composite");
+        let gpu = match coagulated_composite_metal(
+            &a,
+            &b,
+            &field.weights,
+            field.cols,
+            field.rows,
+            field.patch_size,
+            settings.edge_hardness,
+            settings.edge_dither,
+            settings.block_jitter,
+            settings.seed,
+        ) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal coagulated-composite parity: no Metal device");
+                return;
+            }
+            Err(error) => panic!("metal render failed: {error}"),
+        };
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_coagulated_composite_rejects_mismatched_field_length() {
+        let a = ImageBufferF32::new(4, 4, vec![[0.5, 0.5, 0.5, 1.0]; 16]).expect("a");
+        let b = ImageBufferF32::new(4, 4, vec![[0.2, 0.2, 0.2, 1.0]; 16]).expect("b");
+        let error = coagulated_composite_metal(&a, &b, &[0.0; 3], 2, 2, 2, 0.0, 0.0, 0.0, 0)
+            .expect_err("wrong field length must be rejected");
+        assert!(
+            matches!(error, MetalDispatchError::InvalidCoagulationSettings(_)),
+            "expected InvalidCoagulationSettings, got {error:?}"
+        );
+    }
 
     #[test]
     fn metal_flow_displacement_matches_cpu_reference_on_tiny_fixture() {

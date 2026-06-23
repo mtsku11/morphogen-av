@@ -438,6 +438,9 @@ pub(crate) enum Commands {
         /// Per-frame decay of the held smear trail (1 = no fade, 0 = none kept).
         #[arg(long, default_value_t = 0.9)]
         smear_decay: f32,
+        /// Composite backend. `metal` is gated against the CPU reference per frame.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
     },

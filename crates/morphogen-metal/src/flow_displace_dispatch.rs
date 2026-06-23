@@ -17,6 +17,9 @@ pub const CONVOLUTION_BLEND_SHADER_SOURCE: &str =
 pub const CONVOLUTION_BLEND_COLOR_KERNEL_NAME: &str = "convolution_blend_color";
 pub const CONVOLUTION_BLEND_COLOR_SHADER_SOURCE: &str =
     include_str!("../shaders/convolution_blend_color.metal");
+pub const COAGULATED_COMPOSITE_KERNEL_NAME: &str = "coagulated_composite";
+pub const COAGULATED_COMPOSITE_SHADER_SOURCE: &str =
+    include_str!("../shaders/coagulated_composite.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -101,6 +104,12 @@ pub enum MetalDispatchError {
     MissingConvolutionBlendKernelEntryPoint,
     #[error("convolution_blend.metal does not contain the expected texture and buffer bindings")]
     MissingConvolutionBlendBindingLayout,
+    #[error("invalid coagulation settings: {0}")]
+    InvalidCoagulationSettings(String),
+    #[error("coagulated_composite.metal does not contain the expected kernel entry point")]
+    MissingCoagulatedCompositeKernelEntryPoint,
+    #[error("coagulated_composite.metal does not contain the expected texture and buffer bindings")]
+    MissingCoagulatedCompositeBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -300,6 +309,26 @@ pub fn validate_convolution_blend_shader_source() -> Result<(), MetalDispatchErr
     ] {
         if !CONVOLUTION_BLEND_SHADER_SOURCE.contains(expected) {
             return Err(MetalDispatchError::MissingConvolutionBlendBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_coagulated_composite_shader_source() -> Result<(), MetalDispatchError> {
+    if !COAGULATED_COMPOSITE_SHADER_SOURCE.contains("kernel void coagulated_composite") {
+        return Err(MetalDispatchError::MissingCoagulatedCompositeKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::read> source_a [[texture(0)]]",
+        "texture2d<float, access::read> source_b [[texture(1)]]",
+        "texture2d<float, access::write> output [[texture(2)]]",
+        "constant float *weights [[buffer(0)]]",
+        "constant CoagulatedCompositeParams &params [[buffer(1)]]",
+    ] {
+        if !COAGULATED_COMPOSITE_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingCoagulatedCompositeBindingLayout);
         }
     }
 

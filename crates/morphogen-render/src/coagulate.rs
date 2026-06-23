@@ -405,11 +405,37 @@ pub fn coagulated_blend_temporal_frame_cpu(
     advect_amount: f32,
     refresh: f32,
 ) -> Result<(ImageBufferF32, CoagulationField), RenderError> {
+    let field = advance_coagulation_field(
+        source_a,
+        source_b,
+        cell_flow,
+        previous_field,
+        settings,
+        advect_amount,
+        refresh,
+    )?;
+    let image = composite_with_field(source_a, source_b, &field, settings)?;
+    Ok((image, field))
+}
+
+/// Advance the ownership field one temporal step without compositing: build the
+/// fresh descriptor field, and (if a previous field is given) advect it by
+/// `cell_flow` and blend toward the fresh field by `refresh`. Split out so a render
+/// backend can build the field on the CPU and composite it on either CPU or GPU.
+pub fn advance_coagulation_field(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    cell_flow: Option<&FlowField>,
+    previous_field: Option<&CoagulationField>,
+    settings: CoagulationSettings,
+    advect_amount: f32,
+    refresh: f32,
+) -> Result<CoagulationField, RenderError> {
     settings.validate()?;
     require_matching_dims(source_a, source_b)?;
 
     let target = coagulation_field(source_a, source_b, settings)?;
-    let field = match previous_field {
+    Ok(match previous_field {
         None => target,
         Some(previous) => {
             if previous.cols != target.cols || previous.rows != target.rows {
@@ -436,10 +462,7 @@ pub fn coagulated_blend_temporal_frame_cpu(
                 weights,
             }
         }
-    };
-
-    let image = composite_with_field(source_a, source_b, &field, settings)?;
-    Ok((image, field))
+    })
 }
 
 /// Output feedback smear (Slice 3): hold a decayed fraction of the previous output
