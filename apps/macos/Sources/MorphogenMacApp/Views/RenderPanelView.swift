@@ -749,6 +749,19 @@ struct RenderPanelView: View {
             .help("1 = smooth per-pixel bloom; N >= 2 quantizes A's flow to NxN blocks so whole macroblocks slide (the chunky codec-simulated look).")
           }
 
+          HStack(spacing: 16) {
+            Stepper(value: $state.datamoshResidualGain, in: 0...4, step: 0.1) {
+              Text("Residual Gain \(state.datamoshResidualGain, specifier: "%.2f")")
+            }
+            .frame(width: 230, alignment: .leading)
+            .help("Re-inject the intra-block motion discarded by quantization (a fine-motion haze atop the macroblock slide). 0 = block path; needs Macroblock Size >= 2.")
+            Stepper(value: $state.datamoshResidualDecay, in: 0...1, step: 0.05) {
+              Text("Residual Decay \(state.datamoshResidualDecay, specifier: "%.2f")")
+            }
+            .frame(width: 230, alignment: .leading)
+            .help("How long discarded motion lingers in the accumulator: 0 = one-frame kick, ->1 = long-lived drift.")
+          }
+
           Picker("Backend", selection: $state.datamoshBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
               Text(backend.rawValue).tag(backend)

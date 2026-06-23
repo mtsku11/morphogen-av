@@ -119,6 +119,8 @@ final class AppState: ObservableObject {
   @Published var datamoshKeyframeInterval = 0
   @Published var datamoshAmount = 1.0
   @Published var datamoshBlockSize = 1
+  @Published var datamoshResidualGain = 0.0
+  @Published var datamoshResidualDecay = 0.9
   @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
   @Published var datamoshSummary = "No datamosh rendered"
   @Published var videoAudioRouteModulatorURL: URL?
@@ -1067,6 +1069,8 @@ final class AppState: ObservableObject {
       keyframeInterval: datamoshKeyframeInterval,
       amount: datamoshAmount,
       blockSize: datamoshBlockSize,
+      residualGain: datamoshResidualGain,
+      residualDecay: datamoshResidualDecay,
       maxFrames: nil,
       backend: datamoshBackend,
       projectURL: projectURL
