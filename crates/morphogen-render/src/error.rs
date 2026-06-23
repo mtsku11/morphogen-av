@@ -20,6 +20,8 @@ pub enum RenderError {
     InvalidVideoVocoderSettings(String),
     #[error("invalid convolution blend settings: {0}")]
     InvalidConvolutionSettings(String),
+    #[error("invalid coagulation settings: {0}")]
+    InvalidCoagulationSettings(String),
     #[error("render inputs are incompatible: {0}")]
     IncompatibleInputs(String),
     #[error("I/O error: {0}")]

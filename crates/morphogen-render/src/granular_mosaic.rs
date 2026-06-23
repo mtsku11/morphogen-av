@@ -834,7 +834,7 @@ fn average_modulator_tile_color(
     [total[0] * inverse, total[1] * inverse, total[2] * inverse]
 }
 
-fn average_carrier_tile_color(
+pub(crate) fn average_carrier_tile_color(
     carrier: &ImageBufferF32,
     start_x: u32,
     start_y: u32,
@@ -866,7 +866,7 @@ fn average_carrier_tile_color(
 /// right and bottom edges contribute a zero one-sided difference). Both grow with
 /// spatial busyness and are zero for a flat tile, so they discriminate grains of
 /// equal mean color by structure.
-fn tile_texture(
+pub(crate) fn tile_texture(
     image: &ImageBufferF32,
     start_x: u32,
     start_y: u32,
@@ -1270,7 +1270,7 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
 
-fn luminance(pixel: [f32; 4]) -> f32 {
+pub(crate) fn luminance(pixel: [f32; 4]) -> f32 {
     pixel[0] * 0.2126 + pixel[1] * 0.7152 + pixel[2] * 0.0722
 }
 

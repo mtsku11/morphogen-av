@@ -11,6 +11,7 @@ use morphogen_core::{
     RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
+    coagulated_blend_frame_cpu, CoagulationSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -803,6 +804,74 @@ pub(crate) fn render_convolutional_blend_sequence(
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct CoagulatedBlendSequenceRequest<'a> {
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: CoagulationSettings,
+    pub(crate) max_frames: Option<usize>,
+}
+
+/// Render the descriptor-coagulated flow blend over a paired PNG sequence (Slice 1:
+/// CPU-only, single-frame — no advection/feedback yet). Each output frame blends the
+/// paired A/B frame by an A/B ownership field grouped on per-cell descriptors.
+pub(crate) fn render_coagulated_blend_sequence(
+    request: CoagulatedBlendSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if matches!(request.max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_a_frames = collect_image_frames(request.source_a_dir)?;
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_a_frames.is_empty() || source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "coagulated blend requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    let paired_count = source_a_frames.len().min(source_b_frames.len());
+    let frame_count = request
+        .max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..frame_count {
+        let source_a = load_image_f32(&source_a_frames[index])?;
+        let source_b = load_image_f32(&source_b_frames[index])?;
+        let rendered = coagulated_blend_frame_cpu(&source_a, &source_b, request.settings)?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if source_a_frames.len() != source_b_frames.len() {
+        println!(
+            "source frame counts differ: {} A frame(s), {} B frame(s); rendered common prefix",
+            source_a_frames.len(),
+            source_b_frames.len()
+        );
+    }
+    println!(
+        "rendered coagulated blend sequence with {} frame(s) (patch {}, strength {}, coherence {}x{}, edge {}) from {} blended with {} to {}",
+        frame_count,
+        request.settings.patch_size,
+        request.settings.coagulation_strength,
+        request.settings.coherence_passes,
+        request.settings.coherence_strength,
+        request.settings.edge_hardness,
+        request.source_a_dir.display(),
+        request.source_b_dir.display(),
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })

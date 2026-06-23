@@ -366,6 +366,53 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
+    /// Render a descriptor-coagulated flow blend (experimental, deterministic;
+    /// Slice 1 — CPU-only, single-frame, no advection/feedback yet). Both sources
+    /// are mangled together: cells group into irregular coagulated patches by
+    /// per-cell descriptor (mean colour + texture), then a hard/dirty composite
+    /// interleaves A and B. `--coagulation-strength 0` (with `--randomness 0` and
+    /// `--bias 0`) is Source B verbatim.
+    RenderCoagulatedBlendSequence {
+        /// Source A video frames (PNG sequence) — the intruding material.
+        source_a_dir: PathBuf,
+        /// Source B video frames (PNG sequence) — the carrier baseline.
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Ownership-field cell edge length in pixels (>= 1).
+        #[arg(long, default_value_t = 16)]
+        patch_size: u32,
+        /// Weight on per-cell mean-colour luminance in the A-vs-B preference.
+        #[arg(long, default_value_t = 1.0)]
+        color_weight: f32,
+        /// Weight on per-cell texture energy (luma variance + gradient magnitude).
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
+        /// Spatial-coherence relaxation passes that clump patches (anti-checkerboard).
+        #[arg(long, default_value_t = 2)]
+        coherence_passes: u32,
+        /// Per-pass neighbour pull in [0, 1].
+        #[arg(long, default_value_t = 0.5)]
+        coherence_strength: f32,
+        /// Seeded per-cell scatter that breaks uniform crossfades.
+        #[arg(long, default_value_t = 0.0)]
+        randomness: f32,
+        /// Master coagulation amount; 0 (with randomness/bias 0) = B passthrough.
+        #[arg(long, default_value_t = 0.0)]
+        coagulation_strength: f32,
+        /// 0 = soft lerp; 1 = dithered hard threshold (dirty edges).
+        #[arg(long, default_value_t = 0.0)]
+        edge_hardness: f32,
+        /// Seeded per-pixel jitter on the hard-threshold boundary.
+        #[arg(long, default_value_t = 0.0)]
+        edge_dither: f32,
+        /// Baseline A ownership added to every cell (0 keeps B dominant).
+        #[arg(long, default_value_t = 0.0)]
+        bias: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
     /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
     /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's
     /// frame-time audio, making audio a real selection dimension.

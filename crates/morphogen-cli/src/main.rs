@@ -2,7 +2,7 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
+    CoagulationSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
 };
 
 mod args;
@@ -343,6 +343,42 @@ fn run() -> Result<(), CliError> {
             },
             kernel_mode: kernel_mode.into(),
             backend: backend.into(),
+            max_frames,
+        })
+        .map(|_| ()),
+        Commands::RenderCoagulatedBlendSequence {
+            source_a_dir,
+            source_b_dir,
+            output_dir,
+            patch_size,
+            color_weight,
+            texture_weight,
+            coherence_passes,
+            coherence_strength,
+            randomness,
+            coagulation_strength,
+            edge_hardness,
+            edge_dither,
+            bias,
+            seed,
+            max_frames,
+        } => render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: CoagulationSettings {
+                patch_size,
+                color_weight,
+                texture_weight,
+                coherence_passes,
+                coherence_strength,
+                randomness,
+                coagulation_strength,
+                edge_hardness,
+                edge_dither,
+                bias,
+                seed,
+            },
             max_frames,
         })
         .map(|_| ()),
