@@ -3,6 +3,7 @@
 pub mod audio_route;
 pub mod conv_blend;
 pub mod cpu_reference;
+pub mod datamosh;
 pub mod error;
 pub mod feedback_state;
 pub mod flow;
@@ -28,6 +29,7 @@ pub use cpu_reference::{
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     FlowFeedbackSettings, StructureMode,
 };
+pub use datamosh::{datamosh_bloom_frame_cpu, is_datamosh_keyframe, DATAMOSH_BLOOM_ALGORITHM};
 pub use error::RenderError;
 pub use feedback_state::{
     feedback_state_path, read_flow_feedback_state, write_flow_feedback_state,
