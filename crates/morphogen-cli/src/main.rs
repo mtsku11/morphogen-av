@@ -368,6 +368,7 @@ fn run() -> Result<(), CliError> {
             turbulence,
             smear,
             smear_decay,
+            backend,
             max_frames,
         } => render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
             source_a_dir: &source_a_dir,
@@ -393,6 +394,7 @@ fn run() -> Result<(), CliError> {
             turbulence,
             smear,
             smear_decay,
+            backend: backend.into(),
             max_frames,
         })
         .map(|_| ()),
