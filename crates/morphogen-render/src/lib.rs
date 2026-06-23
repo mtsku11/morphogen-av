@@ -31,8 +31,9 @@ pub use cpu_reference::{
 };
 pub use datamosh::{
     datamosh_algorithm, datamosh_block_frame_cpu, datamosh_bloom_frame_cpu,
-    is_datamosh_keyframe, quantize_flow_to_blocks, DATAMOSH_BLOCK_ALGORITHM,
-    DATAMOSH_BLOOM_ALGORITHM,
+    datamosh_residual_flow, datamosh_residual_frame_cpu, is_datamosh_keyframe,
+    quantize_flow_to_blocks, zero_flow, DATAMOSH_BLOCK_ALGORITHM,
+    DATAMOSH_BLOCK_RESIDUAL_ALGORITHM, DATAMOSH_BLOOM_ALGORITHM,
 };
 pub use error::RenderError;
 pub use feedback_state::{

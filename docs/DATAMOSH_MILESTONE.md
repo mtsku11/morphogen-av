@@ -145,10 +145,77 @@ block ⇒ **byte-identical to the smooth bloom path** (the continuity property).
   smooth-vs-blocky delta grows **0 → 35.9/255** (frame 0 identical, both `B[0]`);
   frames Read — block 16 melts into large coherent wavy warps (16px regions slide
   together) where block 1 shatters into per-pixel speckle (noisy per-pixel LK).
-- **Still deferred within this tier:** block-residual accumulation and per-block
-  keep/drop pseudo-keyframes (the residual/quantization-noise half of the
-  macroblock aesthetic) — block-quantized motion is the visual core; residuals are
-  an additive refinement if a use case shows it mattering.
+- **Still deferred within this tier:** per-block keep/drop pseudo-keyframes (the
+  patchy "some macroblocks refresh, some rot" decision). Block-residual
+  accumulation has since landed (next section).
+
+## Block-residual accumulation tier — LANDED
+
+The quantization-noise half of the macroblock aesthetic. Quantizing A's flow to a
+block mean (above) **throws away** the intra-block detail `residual = flow −
+block_mean`. This tier stops discarding it: a **per-pixel residual flow buffer**
+accumulates the discarded sub-block motion across frames and re-injects it
+(lagged) into the advecting flow, so macroblocks slide coherently *and* shed a
+trailing haze of the fine motion the coarse grid couldn't represent. Like the
+block tier it stays a **pure flow→flow transform**, so the advecting displace is
+still the existing parity-gated kernel and **Metal comes free again** (quantize +
+accumulate on CPU, displace on the gated GPU path).
+
+Per-pixel, per P-frame (`q` = block mean, `f` = A's raw flow, `accum` = the new
+state buffer):
+
+```
+resid[p]  = f[p] - q[p]                      # discarded intra-block detail
+accum[p]  = accum[p]*residual_decay + resid[p]   # NEW per-pixel state (2ch)
+flow[p]   = q[p] + accum[p]*residual_gain    # feed the parity-gated displace
+```
+
+- **State (invariant):** the per-pixel residual buffer is a second stateful
+  channel alongside `previous_output`, carried as an unquantized 2-channel
+  `FlowField` in memory. **Frame-zero and every keyframe reset it to zero** (an
+  I-frame refresh clears accumulated residual, matching the snap-back to `B`).
+- **Continuity knobs:**
+  - `--residual-gain 0` ⇒ **byte-identical to the block path** (no residual
+    re-injected; the function short-circuits to `datamosh_block_frame_cpu`).
+  - `--residual-gain 1` on the first P-frame ⇒ `accum = resid`, so `flow = q +
+    (f−q) = f` ⇒ that frame is byte-identical to the **smooth bloom** (raw-flow)
+    displace; the residual only diverges from bloom once it accumulates over ≥ 2
+    P-frames or `gain ≠ 1`.
+  - `block_size ≤ 1` ⇒ `q = f` ⇒ `resid = 0` ⇒ accum stays zero ⇒ byte-identical
+    to bloom regardless of gain (the residual is a no-op without quantization).
+  - `--residual-decay` (default `0.9`) controls how long discarded motion lingers
+    (`0` = one-frame kick, `→1` = long-lived drift).
+- **Algorithm id:** `datamosh_algorithm(block_size, residual_gain)` resolves to
+  `flow_reuse_datamosh_block_residual_cpu_v1` **only when blocks ≥ 2px and
+  residual_gain > 0**, else the block / bloom id as before. A **separate** id (not
+  a descriptor dim on the block id), so adding it does **not** bump the block id.
+  Job fields are `#[serde(default)]` (gain/decay = `0` ≡ off) so legacy datamosh /
+  block jobs keep their meaning.
+
+### Acceptance criteria (residual)
+
+1. **Block-path continuity.** `--residual-gain 0` ⇒ output byte-identical to the
+   block path (same `block_size`).
+2. **Bloom continuity.** `block_size ≤ 1` (any gain) ⇒ byte-identical to bloom.
+3. **First-P-frame identity.** `--residual-gain 1` on the first P-frame ⇒
+   byte-identical to the raw-flow bloom displace.
+4. **Accumulation.** `accum` after a P-frame equals `prev_accum*decay + (f−q)`;
+   keyframe / frame-zero ⇒ `accum = 0`.
+5. **Determinism + Metal parity** inherited from the displace (per-frame gate);
+   no `unwrap()` in library code.
+
+### Verification (off-vs-on)
+
+Block path (`--residual-gain 0`) vs residual on (`--residual-gain 1 --block-size
+16` over high-motion A, full melt), Read frames from both, report
+`scripts/frame-delta.py`. Off ⇒ identical to the block tier; on ⇒ the coherent
+macroblock slide gains a divergent fine-motion haze that builds over frames.
+
+### Still deferred within this tier
+
+- **Per-block keep/drop pseudo-keyframes** — a keyframe decision *per block*
+  rather than per whole frame (some macroblocks snap back to `B` while others keep
+  rotting). The patchy refresh half of the aesthetic; additive on top of this.
 
 ## Deferred (not this slice)
 

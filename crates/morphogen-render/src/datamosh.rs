@@ -26,13 +26,27 @@ pub const DATAMOSH_BLOOM_ALGORITHM: &str = "flow_reuse_datamosh_bloom_cpu_v1";
 /// the only new logic is `quantize_flow_to_blocks`.
 pub const DATAMOSH_BLOCK_ALGORITHM: &str = "flow_reuse_datamosh_block_cpu_v1";
 
-/// The datamosh policy id for a given `block_size`: the codec-simulated block id
-/// when blocks are ≥ 2px, otherwise the smooth bloom id. A `block_size` of `0` or
-/// `1` makes every pixel its own block ⇒ identical output to the bloom path, so it
-/// is recorded under the bloom id (the natural "no macroblocking" continuity).
-pub fn datamosh_algorithm(block_size: u32) -> &'static str {
+/// Block-residual datamosh policy id: the block recursion, but the intra-block
+/// motion discarded by `quantize_flow_to_blocks` is **accumulated** in a per-pixel
+/// residual buffer and re-injected (lagged) into the advecting flow — macroblocks
+/// slide coherently *and* shed a trailing haze of the fine motion the coarse grid
+/// couldn't represent. Still a pure flow→flow transform feeding the parity-gated
+/// `flow_displace`; the new logic is the residual accumulation. A separate id (not
+/// a descriptor dim on the block id), so it does not bump the block id.
+pub const DATAMOSH_BLOCK_RESIDUAL_ALGORITHM: &str = "flow_reuse_datamosh_block_residual_cpu_v1";
+
+/// The datamosh policy id for a given `block_size` + `residual_gain`:
+/// - blocks ≥ 2px **and** `residual_gain > 0` ⇒ the block-residual id;
+/// - blocks ≥ 2px and `residual_gain == 0` ⇒ the codec-simulated block id;
+/// - blocks ≤ 1 (each pixel its own block) ⇒ the smooth bloom id (residual is a
+///   no-op without quantization, so gain is irrelevant — recorded as bloom).
+pub fn datamosh_algorithm(block_size: u32, residual_gain: f32) -> &'static str {
     if block_size >= 2 {
-        DATAMOSH_BLOCK_ALGORITHM
+        if residual_gain > 0.0 {
+            DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
+        } else {
+            DATAMOSH_BLOCK_ALGORITHM
+        }
     } else {
         DATAMOSH_BLOOM_ALGORITHM
     }
@@ -171,6 +185,124 @@ pub fn datamosh_block_frame_cpu(
     }
 }
 
+/// A zero-valued (no-motion) flow field — the reset state for the residual
+/// accumulator at frame zero and every keyframe.
+pub fn zero_flow(width: u32, height: u32) -> Result<FlowField, RenderError> {
+    FlowField::from_fn(width, height, |_, _| [0.0, 0.0])
+}
+
+/// The block-residual **flow transform** for one P-frame: quantize `flow` to a
+/// block grid, accumulate the discarded intra-block residual (`flow − block_mean`)
+/// into the per-pixel state buffer with `residual_decay`, and return the
+/// `(effective_flow, new_accumulator)` where
+/// `effective = block_mean + accumulator·residual_gain`.
+///
+/// This is the *pure flow→flow* core — no advection — so the recursive render loop
+/// can feed `effective_flow` to the parity-gated displace on **either** backend
+/// (Metal stays free, exactly as the block tier). `block_size ≤ 1` ⇒ `block_mean =
+/// flow` ⇒ residual `0`; with a zero accumulator that yields `effective = flow`
+/// (the smooth bloom warp).
+pub fn datamosh_residual_flow(
+    flow: &FlowField,
+    accumulated_residual: &FlowField,
+    block_size: u32,
+    residual_gain: f32,
+    residual_decay: f32,
+) -> Result<(FlowField, FlowField), RenderError> {
+    let quantized = quantize_flow_to_blocks(flow, block_size)?;
+    // accum[p] = accum[p]·decay + (flow[p] − block_mean[p])
+    let new_accum = FlowField::from_fn(flow.width, flow.height, |x, y| {
+        let f = flow.vector(x, y).unwrap_or([0.0, 0.0]);
+        let q = quantized.vector(x, y).unwrap_or([0.0, 0.0]);
+        let a = accumulated_residual.vector(x, y).unwrap_or([0.0, 0.0]);
+        [
+            a[0] * residual_decay + (f[0] - q[0]),
+            a[1] * residual_decay + (f[1] - q[1]),
+        ]
+    })?;
+    // effective[p] = block_mean[p] + accum[p]·gain
+    let effective = FlowField::from_fn(flow.width, flow.height, |x, y| {
+        let q = quantized.vector(x, y).unwrap_or([0.0, 0.0]);
+        let a = new_accum.vector(x, y).unwrap_or([0.0, 0.0]);
+        [q[0] + a[0] * residual_gain, q[1] + a[1] * residual_gain]
+    })?;
+    Ok((effective, new_accum))
+}
+
+/// Render one frame of **block-residual** datamosh and return the updated residual
+/// accumulator alongside the output frame.
+///
+/// Extends [`datamosh_block_frame_cpu`]: the intra-block motion discarded by
+/// `quantize_flow_to_blocks` (`resid = flow − block_mean`) is accumulated in a
+/// per-pixel residual flow buffer and re-injected (lagged) into the advecting flow
+/// (`effective = block_mean + accum·residual_gain`). The advecting pixel op is
+/// still the parity-gated `flow_displace`.
+///
+/// State (second stateful channel alongside `previous_output`):
+/// - `accumulated_residual` — the prior-frame residual buffer (2-channel
+///   `FlowField`, carrier dims). Returned updated as the second tuple element.
+/// - **Frame-zero (`previous_output: None`) and every keyframe reset it to zero**
+///   (an I-frame refresh clears accumulated residual), returning the carrier
+///   verbatim plus a zeroed accumulator.
+///
+/// Continuity: `residual_gain == 0` short-circuits to the block path
+/// (byte-identical, zeroed accumulator returned). `block_size ≤ 1` ⇒ `resid = 0`
+/// ⇒ the accumulator stays zero ⇒ byte-identical to the bloom path.
+#[allow(clippy::too_many_arguments)]
+pub fn datamosh_residual_frame_cpu(
+    carrier: &ImageBufferF32,
+    previous_output: Option<&ImageBufferF32>,
+    accumulated_residual: &FlowField,
+    flow: &FlowField,
+    is_keyframe: bool,
+    amount: f32,
+    block_size: u32,
+    residual_gain: f32,
+    residual_decay: f32,
+) -> Result<(ImageBufferF32, FlowField), RenderError> {
+    // Gain 0 ⇒ no residual is ever re-injected ⇒ exactly the block path. Short-
+    // circuit so the byte-identity continuity is guaranteed, not float-incidental.
+    if residual_gain == 0.0 {
+        let out = datamosh_block_frame_cpu(
+            carrier,
+            previous_output,
+            flow,
+            is_keyframe,
+            amount,
+            block_size,
+        )?;
+        return Ok((out, zero_flow(carrier.width, carrier.height)?));
+    }
+
+    match previous_output {
+        // Frame zero or a keyframe refresh: carrier verbatim, accumulator cleared.
+        None => Ok((carrier.clone(), zero_flow(carrier.width, carrier.height)?)),
+        Some(_) if is_keyframe => {
+            Ok((carrier.clone(), zero_flow(carrier.width, carrier.height)?))
+        }
+        Some(previous_output) => {
+            if previous_output.width != carrier.width || previous_output.height != carrier.height {
+                return Err(RenderError::IncompatibleInputs(format!(
+                    "previous output is {}x{}, carrier is {}x{}",
+                    previous_output.width,
+                    previous_output.height,
+                    carrier.width,
+                    carrier.height
+                )));
+            }
+            let (effective, new_accum) = datamosh_residual_flow(
+                flow,
+                accumulated_residual,
+                block_size,
+                residual_gain,
+                residual_decay,
+            )?;
+            let out = flow_displace_cpu(previous_output, &effective, amount)?;
+            Ok((out, new_accum))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,11 +390,202 @@ mod tests {
     #[test]
     fn algorithm_id_selects_block_only_for_coarse_blocks() {
         // 0/1 ⇒ each pixel its own block ⇒ bloom path (no macroblocking).
-        assert_eq!(datamosh_algorithm(0), DATAMOSH_BLOOM_ALGORITHM);
-        assert_eq!(datamosh_algorithm(1), DATAMOSH_BLOOM_ALGORITHM);
-        // ≥ 2 ⇒ the codec-simulated block id.
-        assert_eq!(datamosh_algorithm(2), DATAMOSH_BLOCK_ALGORITHM);
-        assert_eq!(datamosh_algorithm(16), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(datamosh_algorithm(0, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(datamosh_algorithm(1, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+        // ≥ 2 with no residual ⇒ the codec-simulated block id.
+        assert_eq!(datamosh_algorithm(2, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(datamosh_algorithm(16, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+    }
+
+    #[test]
+    fn algorithm_id_selects_residual_only_when_active() {
+        // Residual id requires BOTH coarse blocks and a positive gain.
+        assert_eq!(
+            datamosh_algorithm(16, 0.5),
+            DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
+        );
+        // Gain 0 ⇒ block id even with coarse blocks.
+        assert_eq!(datamosh_algorithm(16, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        // Residual is a no-op without quantization ⇒ bloom id regardless of gain.
+        assert_eq!(datamosh_algorithm(1, 0.5), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(datamosh_algorithm(0, 0.9), DATAMOSH_BLOOM_ALGORITHM);
+    }
+
+    #[test]
+    fn residual_gain_zero_equals_block_frame() {
+        let carrier = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [x as f32 / 3.0, 0.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        // A deliberately non-zero prior accumulator must NOT leak into the output
+        // when gain is 0 (the short-circuit ignores it).
+        let accum = FlowField::from_fn(4, 1, |_, _| [5.0, -5.0]).expect("accum");
+        let (out, new_accum) = datamosh_residual_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.0,
+            0.9,
+        )
+        .expect("residual");
+        let block = datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0, 2)
+            .expect("block");
+        assert_eq!(out, block);
+        // The returned accumulator is zeroed at gain 0.
+        for x in 0..4 {
+            assert_eq!(new_accum.vector(x, 0), Some([0.0, 0.0]));
+        }
+    }
+
+    #[test]
+    fn residual_block_size_one_equals_bloom() {
+        let carrier = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [x as f32 / 3.0, 0.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let accum = zero_flow(4, 1).expect("accum");
+        // block_size 1 ⇒ resid = 0 ⇒ accum stays zero ⇒ exactly the bloom warp,
+        // regardless of a positive gain.
+        let (out, new_accum) = datamosh_residual_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            1,
+            0.75,
+            0.9,
+        )
+        .expect("residual");
+        let bloom =
+            datamosh_bloom_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0).expect("bloom");
+        assert_eq!(out, bloom);
+        for x in 0..4 {
+            assert_eq!(new_accum.vector(x, 0), Some([0.0, 0.0]));
+        }
+    }
+
+    #[test]
+    fn residual_gain_one_first_p_frame_equals_raw_flow_displace() {
+        let carrier = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [x as f32 / 3.0, 0.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let accum = zero_flow(4, 1).expect("accum");
+        // gain 1, first P-frame (accum zero): effective = q + (f − q) = f exactly,
+        // so the output equals displacing by A's RAW flow (the smooth bloom warp).
+        let (out, new_accum) = datamosh_residual_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum,
+            &flow,
+            false,
+            1.0,
+            2,
+            1.0,
+            0.9,
+        )
+        .expect("residual");
+        let raw = flow_displace_cpu(&previous, &flow, 1.0).expect("raw");
+        assert_eq!(out, raw);
+        // And the accumulator now holds exactly the discarded residual f − q.
+        let quantized = quantize_flow_to_blocks(&flow, 2).expect("quantized");
+        for x in 0..4 {
+            let f = flow.vector(x, 0).unwrap();
+            let q = quantized.vector(x, 0).unwrap();
+            assert_eq!(new_accum.vector(x, 0), Some([f[0] - q[0], f[1] - q[1]]));
+        }
+    }
+
+    #[test]
+    fn residual_accumulates_with_decay_across_p_frames() {
+        let carrier = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [x as f32 / 3.0, 0.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let quantized = quantize_flow_to_blocks(&flow, 2).expect("quantized");
+        let decay = 0.5f32;
+
+        // Frame 1: accum starts zero ⇒ accum1 = f − q.
+        let accum0 = zero_flow(4, 1).expect("accum0");
+        let (_out1, accum1) = datamosh_residual_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum0,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.5,
+            decay,
+        )
+        .expect("frame1");
+        // Frame 2: same flow ⇒ accum2 = accum1·decay + (f − q).
+        let (_out2, accum2) = datamosh_residual_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &accum1,
+            &flow,
+            false,
+            1.0,
+            2,
+            0.5,
+            decay,
+        )
+        .expect("frame2");
+        for x in 0..4 {
+            let f = flow.vector(x, 0).unwrap();
+            let q = quantized.vector(x, 0).unwrap();
+            let r0 = f[0] - q[0];
+            let r1 = f[1] - q[1];
+            let expected = [r0 * decay + r0, r1 * decay + r1];
+            assert_eq!(accum2.vector(x, 0), Some(expected));
+        }
+    }
+
+    #[test]
+    fn residual_keyframe_and_frame_zero_reset_accumulator() {
+        let carrier = solid(2, 2, [0.25, 0.5, 0.75, 1.0]);
+        let previous = solid(2, 2, [0.9, 0.8, 0.7, 1.0]);
+        let flow = FlowField::from_fn(2, 2, |_, _| [3.0, -2.0]).expect("flow");
+        let dirty = FlowField::from_fn(2, 2, |_, _| [9.0, 9.0]).expect("dirty");
+
+        // Frame zero (no previous output): carrier verbatim, accumulator cleared.
+        let (zero_out, zero_accum) = datamosh_residual_frame_cpu(
+            &carrier, None, &dirty, &flow, true, 1.0, 16, 0.5, 0.9,
+        )
+        .expect("zero");
+        assert_eq!(zero_out, carrier);
+        for y in 0..2 {
+            for x in 0..2 {
+                assert_eq!(zero_accum.vector(x, y), Some([0.0, 0.0]));
+            }
+        }
+
+        // Keyframe refresh ignores held state + flow and clears the accumulator.
+        let (key_out, key_accum) = datamosh_residual_frame_cpu(
+            &carrier,
+            Some(&previous),
+            &dirty,
+            &flow,
+            true,
+            1.0,
+            16,
+            0.5,
+            0.9,
+        )
+        .expect("keyframe");
+        assert_eq!(key_out, carrier);
+        for y in 0..2 {
+            for x in 0..2 {
+                assert_eq!(key_accum.vector(x, y), Some([0.0, 0.0]));
+            }
+        }
     }
 
     #[test]
