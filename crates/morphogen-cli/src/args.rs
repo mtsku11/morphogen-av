@@ -284,6 +284,28 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
+    /// Render a controlled-datamosh sequence (flow-reuse "bloom/melt"): Source A's
+    /// per-frame optical flow repeatedly advects Source B's previous output, so a
+    /// held carrier frame smears under A's motion. `--keyframe-interval 1` snaps
+    /// to Source B every frame (byte-identical passthrough); `0` melts from B[0].
+    RenderDatamoshSequence {
+        /// Source A video frames (PNG sequence); supplies the per-frame motion.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence) to mosh.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Keyframe ("keep") interval: 1 = passthrough (snap to B every frame),
+        /// N = snap every N frames (pulse), 0 = only frame 0 (full melt from B[0]).
+        #[arg(long, default_value_t = 0)]
+        keyframe_interval: u32,
+        /// Per-step scale on A's flow (motion intensity); 0 freezes the held frame.
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
     /// Render a convolutional AV blend sequence: each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved
     /// with (parity-gated). `--amount 0` is an exact Source B passthrough.

@@ -14,7 +14,7 @@ use morphogen_render::{
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
-    flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
+    is_datamosh_keyframe, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
     read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
@@ -397,6 +397,151 @@ pub(crate) fn render_audio_video_route_frame_metal(
 pub(crate) fn render_audio_video_route_frame_metal(
     _carrier: &ImageBufferF32,
     _field: &FlowField,
+    _amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+pub(crate) struct DatamoshSequenceRequest<'a> {
+    pub(crate) modulator_dir: &'a Path,
+    pub(crate) carrier_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) keyframe_interval: u32,
+    pub(crate) amount: f32,
+    pub(crate) backend: RenderBackend,
+    pub(crate) max_frames: Option<usize>,
+}
+
+/// Render a controlled-datamosh ("bloom/melt") sequence. Source A's per-frame
+/// optical flow (Lucas-Kanade between consecutive A frames) advects Source B's
+/// *previous output*; keyframes (`is_datamosh_keyframe`) snap back to the carrier.
+/// The recursion carries the previous output as RGBA32F in memory (the
+/// unquantized internal state), never re-reading a display PNG.
+pub(crate) fn render_datamosh_sequence(
+    request: DatamoshSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    if !request.amount.is_finite() || request.amount < 0.0 {
+        return Err(CliError::Message(
+            "amount must be finite and non-negative".to_string(),
+        ));
+    }
+    if matches!(request.max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let modulator_frames = collect_image_frames(request.modulator_dir)?;
+    let carrier_frames = collect_image_frames(request.carrier_dir)?;
+    if modulator_frames.is_empty() || carrier_frames.is_empty() {
+        return Err(CliError::Message(
+            "datamosh requires at least one PNG frame in both the modulator and carrier directories"
+                .to_string(),
+        ));
+    }
+    let available = modulator_frames.len().min(carrier_frames.len());
+    let frame_count = request
+        .max_frames
+        .map(|limit| limit.min(available))
+        .unwrap_or(available);
+
+    fs::create_dir_all(request.output_dir)?;
+
+    let mut previous_output: Option<ImageBufferF32> = None;
+    let mut previous_modulator: Option<ImageBufferF32> = None;
+    for index in 0..frame_count {
+        let carrier = load_image_f32(&carrier_frames[index])?;
+        let modulator = load_image_f32(&modulator_frames[index])?;
+        let is_keyframe = is_datamosh_keyframe(index, request.keyframe_interval);
+
+        let rendered = match previous_output.as_ref() {
+            // P-frame delta: advect the held previous output by A's flow. The
+            // carrier is frozen from the last keyframe and is not sampled here.
+            Some(previous) if !is_keyframe => {
+                let previous_modulator = previous_modulator.as_ref().ok_or_else(|| {
+                    CliError::Message(
+                        "internal error: missing previous modulator frame for datamosh flow"
+                            .to_string(),
+                    )
+                })?;
+                let flow = pyramidal_lucas_kanade_flow_cpu(
+                    previous_modulator,
+                    &modulator,
+                    carrier.width,
+                    carrier.height,
+                    LUCAS_KANADE_WINDOW_RADIUS,
+                )?
+                .flow;
+                render_datamosh_advect_frame(previous, &flow, request.amount, request.backend)?
+            }
+            // Frame zero or keyframe refresh: the carrier is the output verbatim.
+            _ => carrier.clone(),
+        };
+
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+        previous_output = Some(rendered);
+        previous_modulator = Some(modulator);
+    }
+
+    println!(
+        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, {:?}) from {} moshing {} to {}",
+        frame_count,
+        request.keyframe_interval,
+        request.amount,
+        request.backend,
+        request.modulator_dir.display(),
+        request.carrier_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+/// The advection ("P-frame") step of datamosh: displace `previous_output` by
+/// A's flow. Delegates to the parity-gated flow displace; this is the only
+/// pixel work in the non-keyframe branch.
+pub(crate) fn render_datamosh_advect_frame(
+    previous_output: &ImageBufferF32,
+    flow: &FlowField,
+    amount: f32,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(flow_displace_cpu(previous_output, flow, amount)?),
+        RenderBackend::Metal => render_datamosh_advect_frame_metal(previous_output, flow, amount),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_datamosh_advect_frame_metal(
+    previous_output: &ImageBufferF32,
+    flow: &FlowField,
+    amount: f32,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::flow_displace_metal(previous_output, flow, amount)?;
+    let cpu = flow_displace_cpu(previous_output, flow, amount)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU displace outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal datamosh render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_datamosh_advect_frame_metal(
+    _previous_output: &ImageBufferF32,
+    _flow: &FlowField,
     _amount: f32,
 ) -> Result<ImageBufferF32, CliError> {
     Err(CliError::Message(

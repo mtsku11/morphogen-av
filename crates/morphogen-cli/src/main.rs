@@ -285,6 +285,24 @@ fn run() -> Result<(), CliError> {
             max_frames,
         })
         .map(|_| ()),
+        Commands::RenderDatamoshSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            keyframe_interval,
+            amount,
+            backend,
+            max_frames,
+        } => render_datamosh_sequence(DatamoshSequenceRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            keyframe_interval,
+            amount,
+            backend: backend.into(),
+            max_frames,
+        })
+        .map(|_| ()),
         Commands::RenderConvolutionalBlendSequence {
             modulator_dir,
             carrier_dir,
