@@ -4,17 +4,87 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-22_
+_Last updated: 2026-06-23_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **223 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **243 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **40 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the colour-kernel / per-channel-IR commits. Manual-testing
+- `swift test`: **42 passing, 0 failing** (Swift shell + service tests).
+- Tree clean as of the video-to-audio HQ-tier commits. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Video-to-Audio Descriptor Routing — HQ tier (3 vertical slices; CPU + CLI +
+  queue + SwiftUI, CPU-only).** The three deferred axes of the MVP, built
+  incrementally. **(1) Optical-flow descriptor** (`--descriptor flow`): per-frame
+  mean Lucas-Kanade flow magnitude (motion) instead of mean luma, reusing the
+  parity-gated `lucas_kanade_flow_cpu`; frame 0 = 0 (no prior frame). The gain/pan
+  routes were made descriptor-neutral (`descriptor_gain_route`/`_pan_route` take
+  arbitrary `(time,value)` samples); the algorithm id is composed in core
+  (`video_audio_route_algorithm_id`) as `{descriptor}_{mapping}_route_cpu_v1` —
+  **luma ids byte-unchanged**, flow added `flow_gain/flow_pan/flow_filter`.
+  **(2) Filter target** (`--mode filter --filter-type lowpass|highpass`): the
+  descriptor sweeps a one-pole cutoff on B, reusing a `one_pole_filter_sweep`
+  factored out of `centroid_filter_cross_synth` (cross-synth's f64 path
+  byte-unchanged). **(3) Time-resampled curves** (`--sampling hold|smooth`):
+  `hold` steps (default, byte-identical to the MVP), `smooth` linearly
+  interpolates between frames — centralized in `DescriptorEnvelope::resample`,
+  shared by gain/pan/filter. New core enums `VideoAudioRouteDescriptor` /
+  `VideoAudioRouteFilterType` / `VideoAudioRouteSampling` (all serde-defaulted to
+  the MVP meaning) + task fields; manifest records descriptor/filter_type/sampling;
+  Render-panel pickers (descriptor, filter-type shown in filter mode, envelope).
+  **Off-vs-on readouts:** flow→gain (moving-square fixture) OFF flat 0.5, ON tracks
+  motion 0.00→0.11→0.22→0.32→0.43→0.50; luma→lowpass (HF-content metric) OFF flat
+  0.9999, ON 0.00 (closed) →0.92 (open); hold-vs-smooth (coarse ramp) max
+  consecutive-sample jump 0.1255 (staircase) vs 0.000126 (~1000× smoother).
+  Queue add→run byte-identical to direct (3 smoke tests: luma-pan/flow-gain-smooth/
+  filter-highpass). Workspace 236 → 243; Swift unchanged at 42 (tests extended).
+  Contract: `docs/VIDEO_AUDIO_ROUTE_MILESTONE.md`.
+
+- **Video-to-Audio Descriptor Routing — full vertical slice (CPU + CLI + queue +
+  SwiftUI; CPU-only).** The roadmap's "frame-luma controls gain or pan" MVP, the
+  cross-modal mirror of Audio-to-Video routing (there A's audio shaped B's video;
+  here A's *video* shapes B's *audio*). Source A's **peak-normalized per-frame
+  mean Rec.709 luma** envelope (hold-last by frame time at `--fps`) drives Source
+  B's WAV: **`gain`** = luma scales B's amplitude (`out = B·lerp(1,luma,amount)`,
+  the shape of `rms_gain_cross_synth`); **`pan`** = luma drives an equal-power
+  stereo pan of mono-mixed B (`pan=(2·luma−1)·amount`, dark→left, bright→right,
+  output 2-channel). CPU-only (audio has no Metal target). The luma is computed
+  by the CLI (which owns image decoding) and handed to `morphogen-audio` as raw
+  `(time,luma)` samples, keeping the audio crate image-decoupled (the symmetric
+  decoupling `audio_route.rs` keeps from audio). `video_route.rs` in
+  morphogen-audio (`luma_gain_route` / `luma_pan_route`, 10 tests) +
+  `render-video-audio-route` CLI + persisted `video_audio_route` queue job
+  (core `VideoAudioRouteMode` enum serde-default Gain;
+  `queue-add-/queue-run-video-audio-route` writing `audio/video_audio_route.wav`
+  + a manifest carrying algorithm/mode/amount/fps) + a macOS Render-panel section
+  (A frames / B WAV / output pickers, mode + amount + fps). Algorithm ids
+  `luma_gain_route_cpu_v1` / `luma_pan_route_cpu_v1`. `amount 0` = byte-identical
+  passthrough (mono B stays mono). **Off-vs-on readout** (8-frame dark→bright A,
+  steady tone B, fps 8): gain off flat 0.354 RMS, on dark **0.035** / bright
+  **0.330** (amplitude tracks A's luma ramp); pan off mono flat, on dark
+  **L 0.349 / R 0.055** (left), bright **L 0.055 / R 0.349** (right). Queue add→run
+  byte-identical to the direct render (smoke test pins it + the manifest knobs,
+  pan mode). Workspace 223 → 236; Swift 40 → 42. MVP feature-complete. Contract:
+  `docs/VIDEO_AUDIO_ROUTE_MILESTONE.md`.
+
+- **CLI module split (behavior-preserving refactor).** The monolithic
+  `crates/morphogen-cli/src/main.rs` (8127 lines) was decomposed into eight
+  modules with no logic change — the `run()` dispatch body is unchanged:
+  `error.rs` (CliError), `imaging.rs` (PNG/image/fingerprint leaf utils),
+  `args.rs` (Cli/Commands + all `Cli*` value-enums + From impls + mode/algorithm
+  helpers), `project.rs` (init/probe/extract/cache/inspect/proxy), `audio.rs`
+  (cross-synth + impulse-convolution render & queue), `render.rs` (all direct
+  `render_*` handlers + granular controls + provenance + feedback + shared render
+  consts), `queue.rs` (queue add/run + manifests + checkpoints + bundle writers;
+  depends one-directionally on render). `main.rs` is now **786 lines** (imports +
+  `main` + `run` dispatch). Cross-module request structs got `pub(crate)` fields.
+  Verified: cli tests 34/34, clippy clean, `cargo test --workspace` green
+  (baseline unchanged). A new effect now adds its command to `args.rs`, render
+  handler to `render.rs`, queue handler to `queue.rs` — bounded files, not a
+  monolith.
 
 - **Convolutional AV Blending (per-channel colour kernels + true-stereo IRs +
   large-K Metal verify) — three vertical slices.** The remaining deferred HQ
@@ -351,9 +421,15 @@ color`, parity-gated Metal) and per-channel **true-stereo IRs** (`--ir-mode
 per-channel`, CPU-only), each CPU + CLI + queue + SwiftUI. The image Metal kernel
 already handles large K (no cap; proved by a K=11 parity test). Its only remaining
 deferred items are a *tiled* large-K Metal kernel (perf only, not correctness) and
-separable image kernels. The next unstarted roadmap effect is **Video-to-Audio
-Descriptor Routing** (frame-luma → audio gain/pan) or **Controlled Datamosh /
-Motion-Vector Reuse** (flow-field reuse on decoded float frames).
+separable image kernels. **Video-to-Audio Descriptor Routing** is now feature-complete across the MVP
+(luma → gain/pan) **and its HQ tier**: an optical-flow magnitude descriptor
+(`--descriptor flow`), a filter audio target (`--mode filter`, LP/HP), and
+time-resampled smooth descriptor curves (`--sampling smooth`) — each CPU + CLI +
+queue + SwiftUI. Its only remaining deferred items are an edge-density descriptor
+(near-free), a pitch/playback-rate target (bit-repro risk), depth (no pipeline),
+and phase-vocoder spectral processing (gated on a complex-STFT + inverse, shared
+with the cross-synth HQ tier). The next unstarted roadmap effect is **Controlled
+Datamosh / Motion-Vector Reuse** (flow-field reuse on decoded float frames).
 
 ## Candidate next steps
 

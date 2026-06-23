@@ -66,8 +66,19 @@
 - Carrier input: Source B audio parameters.
 - Output: audio transformed by motion, brightness, edge density, or depth.
 - Cached analysis: luminance, edge maps, optical flow, depth maps.
-- First MVP version: frame-luma controls gain or pan.
-- Future high-quality version: time-resampled visual descriptors drive spectral audio processing.
+- First MVP version: frame-luma controls gain or pan. **Landed** (CPU + CLI +
+  queue + SwiftUI; CPU-only — audio is not a GPU target) — see
+  `docs/VIDEO_AUDIO_ROUTE_MILESTONE.md`. Source A's peak-normalized per-frame
+  mean luma drives B's amplitude (`gain`) or equal-power stereo pan (`pan`);
+  `amount 0` = byte-identical Source B passthrough.
+- High-quality version: **Landed** (CPU + CLI + queue + SwiftUI) — three axes:
+  an **optical-flow magnitude** descriptor (`--descriptor flow`, motion instead of
+  brightness, reusing the Lucas-Kanade estimator), a **filter** audio target
+  (`--mode filter`, the descriptor sweeps a one-pole LP/HP cutoff, sharing
+  cross-synth's filter core), and **time-resampled descriptor curves**
+  (`--sampling smooth`, linear interpolation vs the hold-last step). Still
+  deferred: edge-density descriptor, pitch/playback-rate target (bit-repro risk),
+  depth (no pipeline), and phase-vocoder spectral processing.
 
 ## Controlled Datamosh / Motion-Vector Reuse
 

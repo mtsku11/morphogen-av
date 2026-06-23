@@ -2123,6 +2123,261 @@ fn queue_spectral_cross_synth_matches_direct_and_records_knobs() {
 }
 
 #[test]
+fn queue_video_audio_route_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    write_test_wav(&carrier_wav, &[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+
+    // Two modulator frames (render-test writes a 256x256 gradient PNG; identical
+    // frames give a constant luma — enough to pin path-independence).
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let frame_arg = modulator_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_wav.to_string_lossy().to_string();
+    let direct_wav = temp_dir.path().join("direct.wav");
+    let direct_arg = direct_wav.to_string_lossy().to_string();
+    let common = ["--mode", "pan", "--amount", "1", "--fps", "4"];
+
+    // Direct render.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-video-audio-route",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+
+    // Queue add + run.
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-video-audio-route",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-video-audio-route", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render is byte-identical to the direct render (path-independent).
+    let queued_wav = output_root.join("job-0001/audio/video_audio_route.wav");
+    assert_eq!(
+        fs::read(&queued_wav).expect("read queued wav"),
+        fs::read(&direct_wav).expect("read direct wav"),
+        "queue render must be byte-identical to the direct render"
+    );
+
+    // Manifest records the algorithm + knobs.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "video_audio_route");
+    assert_eq!(manifest["audio_stems"][0], "audio/video_audio_route.wav");
+    let knobs = &manifest["video_audio_route"];
+    assert_eq!(knobs["algorithm"], "luma_pan_route_cpu_v1");
+    assert_eq!(knobs["descriptor"], "luma");
+    assert_eq!(knobs["mode"], "pan");
+    assert_eq!(knobs["sampling"], "hold");
+    assert_eq!(knobs["amount"], 1.0);
+    assert_eq!(knobs["fps"], 4.0);
+}
+
+#[test]
+fn queue_video_audio_route_flow_descriptor_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    write_test_wav(&carrier_wav, &[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+
+    // Two identical render-test frames ⇒ ~zero optical-flow magnitude. Enough to
+    // pin path-independence + the flow algorithm id (the effect's off-vs-on look
+    // is proven separately on a moving readout fixture).
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let frame_arg = modulator_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_wav.to_string_lossy().to_string();
+    let direct_wav = temp_dir.path().join("direct.wav");
+    let direct_arg = direct_wav.to_string_lossy().to_string();
+    let common = [
+        "--descriptor",
+        "flow",
+        "--mode",
+        "gain",
+        "--sampling",
+        "smooth",
+        "--amount",
+        "1",
+        "--fps",
+        "4",
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-video-audio-route",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-video-audio-route",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-video-audio-route", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let queued_wav = output_root.join("job-0001/audio/video_audio_route.wav");
+    assert_eq!(
+        fs::read(&queued_wav).expect("read queued wav"),
+        fs::read(&direct_wav).expect("read direct wav"),
+        "flow-descriptor queue render must be byte-identical to the direct render"
+    );
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["video_audio_route"];
+    assert_eq!(knobs["algorithm"], "flow_gain_route_cpu_v1");
+    assert_eq!(knobs["descriptor"], "flow");
+    assert_eq!(knobs["mode"], "gain");
+    assert_eq!(knobs["sampling"], "smooth");
+}
+
+#[test]
+fn queue_video_audio_route_filter_mode_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    // Alternating carrier so the one-pole filter has HF content to act on.
+    write_test_wav(&carrier_wav, &[1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]);
+
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let frame_arg = modulator_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_wav.to_string_lossy().to_string();
+    let direct_wav = temp_dir.path().join("direct.wav");
+    let direct_arg = direct_wav.to_string_lossy().to_string();
+    let common = [
+        "--mode",
+        "filter",
+        "--filter-type",
+        "highpass",
+        "--amount",
+        "1",
+        "--fps",
+        "4",
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-video-audio-route",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-video-audio-route",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-video-audio-route", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let queued_wav = output_root.join("job-0001/audio/video_audio_route.wav");
+    assert_eq!(
+        fs::read(&queued_wav).expect("read queued wav"),
+        fs::read(&direct_wav).expect("read direct wav"),
+        "filter-mode queue render must be byte-identical to the direct render"
+    );
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["video_audio_route"];
+    assert_eq!(knobs["algorithm"], "luma_filter_route_cpu_v1");
+    assert_eq!(knobs["mode"], "filter");
+    assert_eq!(knobs["filter_type"], "highpass");
+}
+
+#[test]
 fn queue_audio_impulse_convolution_matches_direct_and_records_knobs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_wav = temp_dir.path().join("ir.wav");

@@ -705,6 +705,94 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Video-to-Audio Descriptor Routing")
+            .font(.subheadline.weight(.semibold))
+            .help("A Source A visual descriptor (luma or motion) drives Source B's audio: gain (descriptor → amplitude) or pan (descriptor → equal-power stereo position).")
+
+          Picker("Descriptor", selection: $state.videoAudioRouteDescriptor) {
+            ForEach(VideoAudioRouteDescriptorOption.allCases) { descriptor in
+              Text(descriptor.rawValue).tag(descriptor)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Luma: per-frame mean brightness. Flow: per-frame mean optical-flow magnitude (motion).")
+
+          Picker("Mode", selection: $state.videoAudioRouteMode) {
+            ForEach(VideoAudioRouteModeOption.allCases) { mode in
+              Text(mode.rawValue).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Gain: a strong descriptor keeps B, a weak one attenuates it. Pan: weak steers left, strong steers right. Filter: the descriptor sweeps a one-pole cutoff.")
+
+          if state.videoAudioRouteMode == .filter {
+            Picker("Filter", selection: $state.videoAudioRouteFilterType) {
+              ForEach(VideoAudioRouteFilterTypeOption.allCases) { filter in
+                Text(filter.rawValue).tag(filter)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 240)
+            .help("Lowpass: a strong descriptor opens the cutoff toward Nyquist. Highpass: a strong descriptor lifts the high-pass corner.")
+          }
+
+          Picker("Envelope", selection: $state.videoAudioRouteSampling) {
+            ForEach(VideoAudioRouteSamplingOption.allCases) { sampling in
+              Text(sampling.rawValue).tag(sampling)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+          .help("Hold: the descriptor steps at each frame. Smooth: it linearly interpolates between frames (a continuous curve, no zipper stepping).")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseVideoAudioRouteModulatorDirectory()
+            } label: {
+              Label("Source A Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.chooseVideoAudioRouteCarrierWAV()
+            } label: {
+              Label("Source B WAV", systemImage: "waveform")
+            }
+            Button {
+              state.chooseVideoAudioRouteOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.videoAudioRouteAmount, in: 0...1, step: 0.05) {
+              Text("Amount \(state.videoAudioRouteAmount, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("0 = Source B passthrough; 1 = full routing.")
+
+            Stepper(value: $state.videoAudioRouteFPS, in: 1...120, step: 1) {
+              Text("FPS \(state.videoAudioRouteFPS, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Frame rate mapping A's frame index to time for the luma lookup.")
+          }
+
+          Text(state.videoAudioRouteSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runVideoAudioRouteRender()
+          } label: {
+            Label("Run Video→Audio Route", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Convolutional AV Blending")
             .font(.subheadline.weight(.semibold))
             .help("Each Source A frame supplies a normalized KxK luma kernel that Source B's frame is convolved with.")

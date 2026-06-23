@@ -86,6 +86,47 @@ pub fn rms_gain_cross_synth(
     AudioBufferF32::new(channels, carrier.sample_rate, samples)
 }
 
+/// Sweep a per-sample one-pole LP/HP filter on `carrier`, its cutoff driven by a
+/// normalized envelope (`cutoff_norm[i]` ∈ `[0,1]` of B's Nyquist) resolved by
+/// output time with a hold-last lookup over `times`. Output follows B (channels,
+/// length); `amount` blends dry→wet. Shared by spectral cross-synth (centroid
+/// envelope) and video-to-audio routing (a visual-descriptor envelope); callers
+/// short-circuit `amount = 0` to a passthrough before calling. `times` and
+/// `cutoff_norm` must be non-empty and equal length.
+pub(crate) fn one_pole_filter_sweep(
+    carrier: &AudioBufferF32,
+    times: &[f64],
+    cutoff_norm: &[f64],
+    filter_type: FilterType,
+    amount: f32,
+) -> Result<AudioBufferF32, AudioError> {
+    let channels = carrier.channels;
+    let sr_b = carrier.sample_rate as f64;
+    let nyquist_b = sr_b / 2.0;
+    let two_pi = std::f64::consts::TAU;
+    let mut samples = vec![0.0_f32; carrier.samples.len()];
+    let mut lp = vec![0.0_f64; channels];
+    let mut cursor = 0_usize;
+    for frame in 0..carrier.frames {
+        let t = frame as f64 / sr_b;
+        hold_last(times, &mut cursor, t);
+        let fc = cutoff_norm[cursor] * nyquist_b;
+        let alpha = (1.0 - (-two_pi * fc / sr_b).exp()).clamp(0.0, 1.0);
+        for (channel, lp_ch) in lp.iter_mut().enumerate() {
+            let idx = frame * channels + channel;
+            let x = carrier.samples[idx] as f64;
+            *lp_ch += alpha * (x - *lp_ch);
+            let filtered = match filter_type {
+                FilterType::Lowpass => *lp_ch,
+                FilterType::Highpass => x - *lp_ch,
+            };
+            samples[idx] = (x + (filtered - x) * amount as f64) as f32;
+        }
+    }
+
+    AudioBufferF32::new(channels, carrier.sample_rate, samples)
+}
+
 /// `filter` mode: A's spectral-centroid envelope sweeps a per-sample one-pole
 /// filter cutoff on B.
 pub fn centroid_filter_cross_synth(
@@ -116,31 +157,7 @@ pub fn centroid_filter_cross_synth(
         cnorm.push((centroid as f64 / nyquist_a).clamp(0.0, 1.0));
     }
 
-    let channels = carrier.channels;
-    let sr_b = carrier.sample_rate as f64;
-    let nyquist_b = sr_b / 2.0;
-    let two_pi = std::f64::consts::TAU;
-    let mut samples = vec![0.0_f32; carrier.samples.len()];
-    let mut lp = vec![0.0_f64; channels];
-    let mut cursor = 0_usize;
-    for frame in 0..carrier.frames {
-        let t = frame as f64 / sr_b;
-        hold_last(&times, &mut cursor, t);
-        let fc = cnorm[cursor] * nyquist_b;
-        let alpha = (1.0 - (-two_pi * fc / sr_b).exp()).clamp(0.0, 1.0);
-        for (channel, lp_ch) in lp.iter_mut().enumerate() {
-            let idx = frame * channels + channel;
-            let x = carrier.samples[idx] as f64;
-            *lp_ch += alpha * (x - *lp_ch);
-            let filtered = match filter_type {
-                FilterType::Lowpass => *lp_ch,
-                FilterType::Highpass => x - *lp_ch,
-            };
-            samples[idx] = (x + (filtered - x) * amount as f64) as f32;
-        }
-    }
-
-    AudioBufferF32::new(channels, carrier.sample_rate, samples)
+    one_pole_filter_sweep(carrier, &times, &cnorm, filter_type, amount)
 }
 
 #[cfg(test)]
