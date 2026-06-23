@@ -29,7 +29,11 @@ pub use cpu_reference::{
     flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
     FlowFeedbackSettings, StructureMode,
 };
-pub use datamosh::{datamosh_bloom_frame_cpu, is_datamosh_keyframe, DATAMOSH_BLOOM_ALGORITHM};
+pub use datamosh::{
+    datamosh_algorithm, datamosh_block_frame_cpu, datamosh_bloom_frame_cpu,
+    is_datamosh_keyframe, quantize_flow_to_blocks, DATAMOSH_BLOCK_ALGORITHM,
+    DATAMOSH_BLOOM_ALGORITHM,
+};
 pub use error::RenderError;
 pub use feedback_state::{
     feedback_state_path, read_flow_feedback_state, write_flow_feedback_state,

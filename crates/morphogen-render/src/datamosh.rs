@@ -19,6 +19,25 @@ use crate::RenderError;
 /// keyframe-refresh policy, distinct from every flow / granular / route id.
 pub const DATAMOSH_BLOOM_ALGORITHM: &str = "flow_reuse_datamosh_bloom_cpu_v1";
 
+/// Codec-simulated ("block") datamosh policy id: identical recursion, but A's flow
+/// is quantized to a coarse block grid before each advection so whole macroblocks
+/// slide coherently — the chunky "real datamosh" look rather than the smooth
+/// per-pixel bloom warp. The pixel op is still the parity-gated `flow_displace`;
+/// the only new logic is `quantize_flow_to_blocks`.
+pub const DATAMOSH_BLOCK_ALGORITHM: &str = "flow_reuse_datamosh_block_cpu_v1";
+
+/// The datamosh policy id for a given `block_size`: the codec-simulated block id
+/// when blocks are ≥ 2px, otherwise the smooth bloom id. A `block_size` of `0` or
+/// `1` makes every pixel its own block ⇒ identical output to the bloom path, so it
+/// is recorded under the bloom id (the natural "no macroblocking" continuity).
+pub fn datamosh_algorithm(block_size: u32) -> &'static str {
+    if block_size >= 2 {
+        DATAMOSH_BLOCK_ALGORITHM
+    } else {
+        DATAMOSH_BLOOM_ALGORITHM
+    }
+}
+
 /// Whether output frame `index` is a keyframe ("keep" / I-frame): it snaps back
 /// to the carrier `B[index]` instead of advecting the held previous output.
 ///
@@ -69,6 +88,85 @@ pub fn datamosh_bloom_frame_cpu(
                 )));
             }
             flow_displace_cpu(previous_output, flow, amount)
+        }
+    }
+}
+
+/// Quantize a flow field to a `block_size`×`block_size` grid: every pixel in a
+/// block is assigned that block's **mean** motion vector, so the subsequent
+/// advection slides whole macroblocks coherently. `block_size` ≤ 1 returns the
+/// flow unchanged (each pixel is its own block — the smooth bloom case). Edge
+/// blocks average only the pixels they actually cover. Deterministic: fixed
+/// iteration order, f64 accumulation, so identical input ⇒ identical output.
+pub fn quantize_flow_to_blocks(
+    flow: &FlowField,
+    block_size: u32,
+) -> Result<FlowField, RenderError> {
+    if block_size <= 1 {
+        return Ok(flow.clone());
+    }
+    let width = flow.width;
+    let height = flow.height;
+    let blocks_x = width.div_ceil(block_size);
+    let blocks_y = height.div_ceil(block_size);
+    let mut means = vec![[0.0f32, 0.0f32]; (blocks_x as usize) * (blocks_y as usize)];
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let x0 = bx * block_size;
+            let y0 = by * block_size;
+            let x1 = (x0 + block_size).min(width);
+            let y1 = (y0 + block_size).min(height);
+            let mut sum = [0.0f64, 0.0f64];
+            let mut count = 0u64;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let vector = flow.vector(x, y).unwrap_or([0.0, 0.0]);
+                    sum[0] += vector[0] as f64;
+                    sum[1] += vector[1] as f64;
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                let inverse = 1.0 / count as f64;
+                means[(by * blocks_x + bx) as usize] =
+                    [(sum[0] * inverse) as f32, (sum[1] * inverse) as f32];
+            }
+        }
+    }
+    FlowField::from_fn(width, height, |x, y| {
+        let bx = x / block_size;
+        let by = y / block_size;
+        means[(by * blocks_x + bx) as usize]
+    })
+}
+
+/// Render one frame of codec-simulated ("block") datamosh. Identical to
+/// [`datamosh_bloom_frame_cpu`] except the advecting flow is block-quantized first
+/// (`quantize_flow_to_blocks`). `block_size` ≤ 1 makes it byte-identical to the
+/// bloom frame. Frame-zero / keyframe behavior is unchanged (carrier verbatim).
+pub fn datamosh_block_frame_cpu(
+    carrier: &ImageBufferF32,
+    previous_output: Option<&ImageBufferF32>,
+    flow: &FlowField,
+    is_keyframe: bool,
+    amount: f32,
+    block_size: u32,
+) -> Result<ImageBufferF32, RenderError> {
+    match previous_output {
+        None => Ok(carrier.clone()),
+        Some(_) if is_keyframe => Ok(carrier.clone()),
+        Some(previous_output) => {
+            if previous_output.width != carrier.width || previous_output.height != carrier.height {
+                return Err(RenderError::IncompatibleInputs(format!(
+                    "previous output is {}x{}, carrier is {}x{}",
+                    previous_output.width,
+                    previous_output.height,
+                    carrier.width,
+                    carrier.height
+                )));
+            }
+            let quantized = quantize_flow_to_blocks(flow, block_size)?;
+            flow_displace_cpu(previous_output, &quantized, amount)
         }
     }
 }
@@ -155,5 +253,92 @@ mod tests {
         let flow = FlowField::from_fn(2, 2, |_, _| [0.0, 0.0]).expect("flow");
         let result = datamosh_bloom_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn algorithm_id_selects_block_only_for_coarse_blocks() {
+        // 0/1 ⇒ each pixel its own block ⇒ bloom path (no macroblocking).
+        assert_eq!(datamosh_algorithm(0), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(datamosh_algorithm(1), DATAMOSH_BLOOM_ALGORITHM);
+        // ≥ 2 ⇒ the codec-simulated block id.
+        assert_eq!(datamosh_algorithm(2), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(datamosh_algorithm(16), DATAMOSH_BLOCK_ALGORITHM);
+    }
+
+    #[test]
+    fn quantize_block_size_one_or_zero_is_identity() {
+        let flow = FlowField::from_fn(4, 3, |x, y| [x as f32, y as f32]).expect("flow");
+        assert_eq!(quantize_flow_to_blocks(&flow, 0).expect("q0"), flow);
+        assert_eq!(quantize_flow_to_blocks(&flow, 1).expect("q1"), flow);
+    }
+
+    #[test]
+    fn quantize_assigns_block_mean_to_every_pixel_in_the_block() {
+        // 2x2 image, one 2px block ⇒ every pixel gets the mean of all four vectors.
+        let flow = FlowField::from_fn(2, 2, |x, y| [x as f32, y as f32]).expect("flow");
+        // means: x in {0,1} ⇒ 0.5; y in {0,1} ⇒ 0.5.
+        let quantized = quantize_flow_to_blocks(&flow, 2).expect("quantized");
+        for y in 0..2 {
+            for x in 0..2 {
+                assert_eq!(quantized.vector(x, y), Some([0.5, 0.5]));
+            }
+        }
+    }
+
+    #[test]
+    fn quantize_edge_block_averages_only_covered_pixels() {
+        // 3px wide, block_size 2 ⇒ blocks cover columns {0,1} and {2}. The second
+        // block has a single column, so its mean is that column's value exactly.
+        let flow = FlowField::from_fn(3, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let quantized = quantize_flow_to_blocks(&flow, 2).expect("quantized");
+        // Block 0 (x=0,1) ⇒ mean 0.5; block 1 (x=2) ⇒ 2.0.
+        assert_eq!(quantized.vector(0, 0), Some([0.5, 0.0]));
+        assert_eq!(quantized.vector(1, 0), Some([0.5, 0.0]));
+        assert_eq!(quantized.vector(2, 0), Some([2.0, 0.0]));
+    }
+
+    #[test]
+    fn block_frame_size_one_equals_bloom_frame() {
+        let carrier = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [x as f32 / 3.0, 0.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |_, _| [1.0, 0.0]).expect("flow");
+        let bloom =
+            datamosh_bloom_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0).expect("bloom");
+        let block = datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0, 1)
+            .expect("block");
+        assert_eq!(block, bloom);
+    }
+
+    #[test]
+    fn block_frame_quantizes_flow_before_advecting() {
+        let carrier = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        let previous = ImageBufferF32::from_fn(4, 1, |x, _| [x as f32 / 3.0, 0.0, 0.0, 1.0])
+            .expect("previous");
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let block = datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, false, 1.0, 2)
+            .expect("block");
+        // Must equal displacing by the *quantized* flow, not the raw flow.
+        let quantized = quantize_flow_to_blocks(&flow, 2).expect("quantized");
+        let expected = flow_displace_cpu(&previous, &quantized, 1.0).expect("expected");
+        assert_eq!(block, expected);
+        let raw = flow_displace_cpu(&previous, &flow, 1.0).expect("raw");
+        assert_ne!(block, raw);
+    }
+
+    #[test]
+    fn block_frame_zero_and_keyframe_return_carrier() {
+        let carrier = solid(2, 2, [0.25, 0.5, 0.75, 1.0]);
+        let previous = solid(2, 2, [0.9, 0.8, 0.7, 1.0]);
+        let flow = FlowField::from_fn(2, 2, |_, _| [1.0, 0.0]).expect("flow");
+        // Frame zero (no previous output).
+        let zero =
+            datamosh_block_frame_cpu(&carrier, None, &flow, true, 1.0, 16).expect("zero");
+        assert_eq!(zero, carrier);
+        // Keyframe refresh ignores held state + flow.
+        let keyframe =
+            datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, true, 1.0, 16)
+                .expect("keyframe");
+        assert_eq!(keyframe, carrier);
     }
 }
