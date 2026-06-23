@@ -285,6 +285,26 @@ fn run() -> Result<(), CliError> {
             max_frames,
         })
         .map(|_| ()),
+        Commands::RenderDatamoshSequence {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            keyframe_interval,
+            amount,
+            block_size,
+            backend,
+            max_frames,
+        } => render_datamosh_sequence(DatamoshSequenceRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            keyframe_interval,
+            amount,
+            block_size,
+            backend: backend.into(),
+            max_frames,
+        })
+        .map(|_| ()),
         Commands::RenderConvolutionalBlendSequence {
             modulator_dir,
             carrier_dir,
@@ -753,6 +773,32 @@ fn run() -> Result<(), CliError> {
             project_path: project_path.as_deref(),
             backend: backend.into(),
         }),
+        Commands::QueueAddDatamoshSequence {
+            queue_path,
+            modulator_dir,
+            carrier_dir,
+            output_root_dir,
+            keyframe_interval,
+            amount,
+            block_size,
+            max_frames,
+            project_path,
+            backend,
+        } => queue_add_datamosh_sequence(QueueAddDatamoshSequenceRequest {
+            queue_path: &queue_path,
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_root_dir: &output_root_dir,
+            keyframe_interval,
+            amount,
+            block_size,
+            max_frames,
+            project_path: project_path.as_deref(),
+            backend: backend.into(),
+        }),
+        Commands::QueueRunDatamoshSequence { queue_path } => {
+            queue_run_datamosh_sequence(&queue_path)
+        }
         Commands::QueueAddConvolutionalBlendSequence {
             queue_path,
             modulator_dir,

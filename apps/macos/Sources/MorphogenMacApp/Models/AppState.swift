@@ -113,6 +113,14 @@ final class AppState: ObservableObject {
   @Published var audioRouteFrameRate = 30.0
   @Published var audioRouteBackend: FeedbackRenderBackendOption = .cpu
   @Published var audioRouteSummary = "No audio→video route rendered"
+  @Published var datamoshModulatorURL: URL?
+  @Published var datamoshCarrierURL: URL?
+  @Published var datamoshOutputURL: URL?
+  @Published var datamoshKeyframeInterval = 0
+  @Published var datamoshAmount = 1.0
+  @Published var datamoshBlockSize = 1
+  @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
+  @Published var datamoshSummary = "No datamosh rendered"
   @Published var videoAudioRouteModulatorURL: URL?
   @Published var videoAudioRouteCarrierURL: URL?
   @Published var videoAudioRouteOutputURL: URL?
@@ -468,6 +476,42 @@ final class AppState: ObservableObject {
 
     audioRouteOutputURL = url
     statusMessage = "Audio-route output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseDatamoshModulatorDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source A Frames",
+      message: "Select the modulator PNG frames whose motion drives the mosh."
+    ) else {
+      statusMessage = "Source A frame selection cancelled."
+      return
+    }
+
+    datamoshModulatorURL = url
+    statusMessage = "Datamosh Source A frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseDatamoshCarrierDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source B Frames",
+      message: "Select the carrier PNG frames to mosh."
+    ) else {
+      statusMessage = "Source B frame selection cancelled."
+      return
+    }
+
+    datamoshCarrierURL = url
+    statusMessage = "Datamosh Source B frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseDatamoshOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Datamosh output selection cancelled."
+      return
+    }
+
+    datamoshOutputURL = url
+    statusMessage = "Datamosh output selected: \(url.lastPathComponent)"
   }
 
   func chooseVideoAudioRouteModulatorDirectory() {
@@ -996,6 +1040,51 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
           self.audioRouteSummary = "Audio→video route render failed: \(error.localizedDescription)"
           self.statusMessage = "Audio→video route render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runDatamoshRender() {
+    guard let modulatorURL = datamoshModulatorURL else {
+      statusMessage = "Select a Source A frame directory before rendering the datamosh."
+      return
+    }
+    guard let carrierURL = datamoshCarrierURL else {
+      statusMessage = "Select a Source B frame directory before rendering the datamosh."
+      return
+    }
+    guard let outputURL = datamoshOutputURL else {
+      statusMessage = "Choose an output directory before rendering the datamosh."
+      return
+    }
+
+    let request = DatamoshSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultDatamoshSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      keyframeInterval: datamoshKeyframeInterval,
+      amount: datamoshAmount,
+      blockSize: datamoshBlockSize,
+      maxFrames: nil,
+      backend: datamoshBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing datamosh render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedDatamoshSequenceRender(request: request)
+        DispatchQueue.main.async {
+          self.datamoshSummary = "Datamosh bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Datamosh render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.datamoshSummary = "Datamosh render failed: \(error.localizedDescription)"
+          self.statusMessage = "Datamosh render failed: \(error.localizedDescription)"
         }
       }
     }

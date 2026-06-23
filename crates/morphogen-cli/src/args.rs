@@ -284,6 +284,32 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
+    /// Render a controlled-datamosh sequence (flow-reuse "bloom/melt"): Source A's
+    /// per-frame optical flow repeatedly advects Source B's previous output, so a
+    /// held carrier frame smears under A's motion. `--keyframe-interval 1` snaps
+    /// to Source B every frame (byte-identical passthrough); `0` melts from B[0].
+    RenderDatamoshSequence {
+        /// Source A video frames (PNG sequence); supplies the per-frame motion.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence) to mosh.
+        carrier_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Keyframe ("keep") interval: 1 = passthrough (snap to B every frame),
+        /// N = snap every N frames (pulse), 0 = only frame 0 (full melt from B[0]).
+        #[arg(long, default_value_t = 0)]
+        keyframe_interval: u32,
+        /// Per-step scale on A's flow (motion intensity); 0 freezes the held frame.
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Macroblock size for codec-simulated mosh: `1` = smooth per-pixel bloom,
+        /// `N >= 2` quantizes A's flow to NxN blocks so whole macroblocks slide.
+        #[arg(long, default_value_t = 1)]
+        block_size: u32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
     /// Render a convolutional AV blend sequence: each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved
     /// with (parity-gated). `--amount 0` is an exact Source B passthrough.
@@ -725,6 +751,29 @@ pub(crate) enum Commands {
         project_path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+    },
+    QueueAddDatamoshSequence {
+        queue_path: PathBuf,
+        modulator_dir: PathBuf,
+        carrier_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        keyframe_interval: u32,
+        #[arg(long, default_value_t = 1.0)]
+        amount: f32,
+        /// Macroblock size for codec-simulated mosh: `1` = smooth bloom, `N >= 2`
+        /// quantizes A's flow to NxN blocks so whole macroblocks slide.
+        #[arg(long, default_value_t = 1)]
+        block_size: u32,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    QueueRunDatamoshSequence {
+        queue_path: PathBuf,
     },
     QueueAddConvolutionalBlendSequence {
         queue_path: PathBuf,
