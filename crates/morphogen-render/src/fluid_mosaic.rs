@@ -47,6 +47,15 @@
 //! blob (stiff repulsion keeps the blob a disc rather than a point). It is the
 //! "gather each colour into one cluster" reading of self-sorting, opposite to the
 //! default's screen-filling decomposition.
+//!
+//! `dispersion_band` makes the *destabilizing* forces spatially local: a soft-edged
+//! vertical band (whose centre sweeps across the canvas over frames, a glitch-wipe)
+//! amplifies each in-band tile's jitter and fluid advection, so colour domains boil
+//! apart into scattered confetti where the band currently sits while the rest of the
+//! mosaic stays coherent — failure-mode #3 ("high fluid + jitter → boil to gas") turned
+//! into an opt-in, spatially-confined transition. It runs only at advance time (the
+//! warmup settle, which establishes the base grouping, is untouched), so behind the
+//! sweep cohesion re-gathers the scattered tiles (disperse-then-re-form). `0` = off.
 //! Metal is a later slice. Determinism: splitmix64 hashing, fixed-timestep
 //! integration, no wall clock.
 //!
@@ -62,7 +71,10 @@ use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the force model, tile
 /// formulation, or the content a tile paints changes so stale caches/checkpoints
-/// invalidate. `v6` adds the cluster-blob layout (`cluster_blob`: cohesion pulls each
+/// invalidate. `v7` adds the spatially-varying dispersion band (`dispersion_band`: a
+/// soft-edged vertical band that sweeps across the canvas and amplifies each in-band
+/// tile's jitter + fluid at advance time so colour domains shatter where the wipe sits);
+/// `v6` adds the cluster-blob layout (`cluster_blob`: cohesion pulls each
 /// tile toward its colour bin's *global* centroid so each colour gathers into one blob,
 /// vs the default local-mean phase separation); `v5` adds sim-driving live re-sort
 /// (`live_resort`: refreshed colour also re-bins each tile so cohesion follows the
@@ -70,7 +82,7 @@ use crate::{ImageBufferF32, RenderError};
 /// painted colour/patch from the current source frame); `v3` added variable-size tiles
 /// (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added texture
 /// patches (`carry_texture`); `v1` was flat uniform mean colour only.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v6";
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v7";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -158,6 +170,29 @@ pub struct FluidMosaicSettings {
     /// when each colour is spatially concentrated in the source.
     #[serde(default = "default_cluster_blob")]
     pub cluster_blob: bool,
+    /// Intensity of the spatially-varying **dispersion band**. When `> 0`, a soft-edged
+    /// vertical band (centred per [`band_start`]/[`band_speed`], width [`band_width`])
+    /// amplifies each in-band tile's jitter and fluid advection during the per-frame
+    /// advance — scaling the extra jitter (pixels) and the fluid gain by this value times
+    /// the tile's band weight — so colour domains boil apart into confetti where the band
+    /// currently sits, then re-gather behind the sweep. Advance-time only (the settle pass
+    /// is untouched). `0` (the default) is byte-identical to the band-free path.
+    #[serde(default = "default_dispersion_band")]
+    pub dispersion_band: f32,
+    /// Width of the dispersion band as a fraction of the canvas width, in `[0, 1]`. The
+    /// band's soft falloff spans this full width (weight `1` at the centre → `0` at the
+    /// edges). Only used when `dispersion_band > 0`.
+    #[serde(default = "default_band_width")]
+    pub band_width: f32,
+    /// Sweep speed of the dispersion band centre, in canvas-widths per frame (the wipe).
+    /// The centre is `(band_start + band_speed * frame)` wrapped into `[0, 1)`. `0` holds
+    /// the band static at `band_start`. Only used when `dispersion_band > 0`.
+    #[serde(default = "default_band_speed")]
+    pub band_speed: f32,
+    /// Dispersion band centre at frame zero, as a fraction of the canvas width in
+    /// `[0, 1)`. Only used when `dispersion_band > 0`.
+    #[serde(default = "default_band_start")]
+    pub band_start: f32,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
 }
@@ -190,6 +225,22 @@ fn default_cluster_blob() -> bool {
     false
 }
 
+fn default_dispersion_band() -> f32 {
+    0.0
+}
+
+fn default_band_width() -> f32 {
+    0.25
+}
+
+fn default_band_speed() -> f32 {
+    0.02
+}
+
+fn default_band_start() -> f32 {
+    0.0
+}
+
 impl Default for FluidMosaicSettings {
     fn default() -> Self {
         Self {
@@ -212,6 +263,10 @@ impl Default for FluidMosaicSettings {
             live_refresh: false,
             live_resort: false,
             cluster_blob: false,
+            dispersion_band: 0.0,
+            band_width: 0.25,
+            band_speed: 0.02,
+            band_start: 0.0,
             seed: 0,
         }
     }
@@ -250,6 +305,10 @@ impl FluidMosaicSettings {
             ("fluid_drift", self.fluid_drift),
             ("damping", self.damping),
             ("jitter", self.jitter),
+            ("dispersion_band", self.dispersion_band),
+            ("band_width", self.band_width),
+            ("band_speed", self.band_speed),
+            ("band_start", self.band_start),
         ] {
             if !value.is_finite() {
                 return Err(RenderError::InvalidCoagulationSettings(format!(
@@ -400,15 +459,21 @@ pub fn advance_fluid_mosaic(
         let mut ax = force[0];
         let mut ay = force[1];
 
+        // Spatially-varying dispersion band: where the sweeping band sits, amplify the
+        // destabilizing forces so this tile's domain shatters (0 ⇒ band-free identity).
+        let band = dispersion_band_weight(p[0], width, frame_index, settings);
+        let fluid_gain = 1.0 + settings.dispersion_band * band;
+        let jitter_amt = settings.jitter + settings.dispersion_band * band;
+
         // Fluid advection (divergence-free curl field) — the flowing/mixing current.
         let (fx, fy) = fluid_velocity(p[0], p[1], time, settings);
-        ax += fx * settings.fluid_strength;
-        ay += fy * settings.fluid_strength;
+        ax += fx * settings.fluid_strength * fluid_gain;
+        ay += fy * settings.fluid_strength * fluid_gain;
 
-        // Animated jitter keeps groups alive (no perfect collapse).
+        // Animated jitter keeps groups alive (no perfect collapse); boosted in the band.
         let angle = hash01(settings.seed ^ JITTER_SALT, i as u64, u64::from(frame_index)) * TAU;
-        ax += angle.cos() * settings.jitter;
-        ay += angle.sin() * settings.jitter;
+        ax += angle.cos() * jitter_amt;
+        ay += angle.sin() * jitter_amt;
 
         let nv = [(vel[0] + ax) * damping, (vel[1] + ay) * damping];
         *pos = [
@@ -873,6 +938,25 @@ fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> V
         *accel = [ax, ay];
     }
     accels
+}
+
+/// Band membership weight in `[0, 1]` for a tile at horizontal position `x` on a canvas
+/// `width` px wide, at `frame`. The band is a soft-edged vertical strip whose centre
+/// sweeps across the canvas (`band_start + band_speed * frame`, wrapped) — `1` at the
+/// centre falling smoothly to `0` at `band_width/2` away (toroidal distance, so the wipe
+/// loops). Returns `0` when the band is disabled. Pure ⇒ deterministic.
+fn dispersion_band_weight(x: f32, width: f32, frame: u32, settings: FluidMosaicSettings) -> f32 {
+    if settings.dispersion_band <= 0.0 {
+        return 0.0;
+    }
+    let w = width.max(1.0);
+    let half = (settings.band_width.max(0.0) * w * 0.5).max(1.0);
+    let center = ((settings.band_start + settings.band_speed * frame as f32) * w).rem_euclid(w);
+    let mut dx = (x - center).abs();
+    dx = dx.min(w - dx);
+    let t = (dx / half).clamp(0.0, 1.0);
+    // smoothstep falloff: 1 at the centre (t=0) → 0 at the edge (t=1).
+    1.0 - t * t * (3.0 - 2.0 * t)
 }
 
 /// A deterministic, divergence-free fluid velocity from a two-octave analytic
@@ -1379,5 +1463,103 @@ mod tests {
             },
         );
         assert_eq!(blob, again);
+    }
+
+    #[test]
+    fn dispersion_band_amplifies_only_in_band_tiles() {
+        // Two tiles: one at the band centre (x=100), one well outside it (x=180). Only
+        // jitter is active (fluid/cohesion/repulsion off) so the band's jitter boost is
+        // the sole difference. The in-band tile must move farther with the band on; the
+        // out-of-band tile must be byte-identical on vs off.
+        let grey = [0.5_f32, 0.5, 0.5];
+        let bin = color_bin(grey, 5);
+        let state = FluidMosaicState {
+            width: 200,
+            height: 200,
+            tile_size: 8,
+            color_bins: 5,
+            positions: vec![[100.0, 100.0], [180.0, 100.0]],
+            velocities: vec![[0.0, 0.0]; 2],
+            colors: vec![grey; 2],
+            patches: vec![
+                TilePatch {
+                    width: 0,
+                    height: 0,
+                    pixels: Vec::new(),
+                };
+                2
+            ],
+            bins: vec![bin; 2],
+            sizes: vec![8; 2],
+            origin: vec![
+                TileOrigin {
+                    source: 0,
+                    x0: 0,
+                    y0: 0,
+                    x1: 8,
+                    y1: 8,
+                };
+                2
+            ],
+        };
+        // Static band (speed 0) centred at x=100, width 0.2·200=40 ⇒ half-falloff 20px.
+        // Tile A (x=100) is dead centre (weight 1); tile B (x=180, 80px away) is outside.
+        let base = FluidMosaicSettings {
+            cohesion: 0.0,
+            repulsion: 0.0,
+            fluid_strength: 0.0,
+            jitter: 0.1,
+            band_width: 0.2,
+            band_start: 0.5,
+            band_speed: 0.0,
+            ..FluidMosaicSettings::default()
+        };
+        let off = FluidMosaicSettings {
+            dispersion_band: 0.0,
+            ..base
+        };
+        let on = FluidMosaicSettings {
+            dispersion_band: 5.0,
+            ..base
+        };
+
+        let off_state = advance_fluid_mosaic(&state, off, 1).expect("off");
+        let on_state = advance_fluid_mosaic(&state, on, 1).expect("on");
+
+        let disp = |before: &FluidMosaicState, after: &FluidMosaicState, i: usize| -> f32 {
+            let dx = after.positions[i][0] - before.positions[i][0];
+            let dy = after.positions[i][1] - before.positions[i][1];
+            (dx * dx + dy * dy).sqrt()
+        };
+
+        // In-band tile A moves farther with the band on.
+        assert!(
+            disp(&state, &on_state, 0) > disp(&state, &off_state, 0) * 1.5,
+            "band should amplify the in-band tile: off={}, on={}",
+            disp(&state, &off_state, 0),
+            disp(&state, &on_state, 0)
+        );
+        // Out-of-band tile B is unaffected (byte-identical on vs off).
+        assert_eq!(
+            on_state.positions[1], off_state.positions[1],
+            "out-of-band tile must be untouched by the band"
+        );
+
+        // Off path (dispersion_band 0) is byte-identical to a band-free settings struct.
+        let bandless = FluidMosaicSettings {
+            band_width: 0.25,
+            band_start: 0.0,
+            band_speed: 0.02,
+            ..off
+        };
+        let bandless_state = advance_fluid_mosaic(&state, bandless, 1).expect("bandless");
+        assert_eq!(
+            off_state.positions, bandless_state.positions,
+            "dispersion_band 0 must ignore the band geometry entirely"
+        );
+
+        // Determinism.
+        let again = advance_fluid_mosaic(&state, on, 1).expect("again");
+        assert_eq!(on_state.positions, again.positions);
     }
 }

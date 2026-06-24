@@ -8,13 +8,35 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **280 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **281 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Fluid Colour-Sort Mosaic — spatially-varying dispersion band (Slice 7, CPU + CLI).**
+  The destabilizing forces made spatially *local*: `--dispersion-band > 0` adds a
+  soft-edged vertical band whose centre sweeps across the canvas
+  (`--band-width`/`--band-speed`/`--band-start`) and amplifies each in-band tile's
+  jitter + fluid advection during the per-frame **advance** — so colour domains boil
+  apart into scattered confetti where the wipe sits while the rest stays coherent. This
+  is the effect's documented failure-mode #3 ("high fluid + jitter → boil to gas")
+  turned into a spatially-confined, opt-in glitch-wipe. `dispersion_band_weight` is a
+  pure smoothstep-falloff function of `(x, frame)` with a toroidal wrap so the sweep
+  loops; the modulation lives entirely in `advance_fluid_mosaic` (the warmup **settle is
+  untouched**, so behind the sweep cohesion re-gathers the scattered tiles —
+  disperse-then-re-form). Four serde-defaulted settings, algo id bumped `…_v6` → `…_v7`;
+  `dispersion_band 0` multiplies the fluid gain by exactly 1.0 and adds 0 jitter ⇒ the
+  off path is byte-identical. **Off-vs-on readout** (harp→cello, band 6, width 0.3,
+  sweep 0.02/frame): **frame 0 byte-identical** (band is advance-time only), cross-delta
+  growing monotonically from 0 (≈16/255 by frame 11, ≈50/255 by frame 47) as the wipe
+  scatters tiles; Read confirms shatter localized to the band + its trailing wake,
+  coherent domains ahead of it. Workspace 280 → 281. New unit test (2-tile state: the
+  in-band tile moves ≥1.5× farther with the band on, the out-of-band tile byte-identical,
+  off-path geometry-independent, deterministic). See [[fluid-colour-sort-mosaic]]. Metal
+  port deferred.
 
 - **Fluid Colour-Sort Mosaic — cluster-blob layout (Slice 6, CPU + CLI).** The
   deferred alternate layout. `--cluster-blob` swaps the cohesion *target*: each tile is
@@ -34,7 +56,7 @@ _Last updated: 2026-06-24_
   cluster force, so frame 0 diverges — unlike refresh/resort which are frame-0-identical)
   settling to **49.5/255**. Workspace 279 → 280. New unit test builds a 2-tile state
   directly: local force ~0 across the gap, cluster pulls both to the midpoint by exactly
-  dist·cohesion. See [[fluid-colour-sort-mosaic]]. Metal port + dispersion band deferred.
+  dist·cohesion. See [[fluid-colour-sort-mosaic]]. Metal port deferred.
 
 - **Controlled Datamosh — REAL bitstream mosh, P-frame "bloom" (experimental,
   non-deterministic CLI).** The authentic codec-artifact tier — mangles the

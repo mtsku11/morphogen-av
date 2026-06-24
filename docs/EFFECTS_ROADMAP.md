@@ -335,4 +335,16 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   into two discs + a blue disc): cluster-blob merges the two red discs into one blob at
   red's global centroid while local cohesion keeps them as two domains — cross-delta
   ≈57.8/255 at frame 0 (the settle pass already diverges) settling to ≈49.5/255.
-- Next: a spatially-varying dispersion/mix band and a parity-gated Metal port.
+- **Spatially-varying dispersion band: Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v7`). With `--dispersion-band > 0`, a soft-edged
+  vertical band whose centre sweeps across the canvas (`--band-width`, `--band-speed`,
+  `--band-start`) amplifies each in-band tile's jitter + fluid advection during the
+  per-frame advance, so colour domains boil apart into scattered confetti where the
+  wipe currently sits while the rest of the mosaic stays coherent — failure-mode #3
+  ("high fluid + jitter → boil to gas") turned into a spatially-confined, opt-in
+  glitch-wipe. Advance-time only (the warmup settle is untouched), so cohesion
+  re-gathers the scattered tiles behind the sweep (disperse-then-re-form). Off by
+  default (`--dispersion-band 0`); frame 0 is byte-identical (the band acts only on
+  advance) and the off-vs-on cross-delta grows from 0 as the wipe scatters tiles
+  (≈16/255 by frame 11, ≈50/255 by frame 47 on the harp/cello clip).
+- Next: a parity-gated Metal port for the fluid mosaic.
