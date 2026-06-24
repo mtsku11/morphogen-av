@@ -38,12 +38,12 @@ use morphogen_render::{
     ConvolutionKernel, DispersionField, DispersionSettings, FieldParticleSettings,
     FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor, GrainDescriptor,
-    GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, PoolSelectionWindow,
-    RmsDisplacementEnvelope, TemporalCoherence, VideoVocoderSettings, FLOW_VECTOR_CONVENTION,
-    GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
-    GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
-    GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
-    POOLED_GRAIN_ALGORITHM,
+    GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, ParticleField,
+    PoolSelectionWindow, RmsDisplacementEnvelope, TemporalCoherence, VideoVocoderSettings,
+    FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS,
+    MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1281,6 +1281,7 @@ pub(crate) struct FieldParticlesSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FieldParticleSettings,
     pub(crate) frames: usize,
+    pub(crate) backend: RenderBackend,
 }
 
 /// Render the discrete-carrier particle advection: a grid of coloured particles seeded from
@@ -1320,7 +1321,7 @@ pub(crate) fn render_field_particles_sequence(
             let current = load_image_f32(&source_frames[index % source_frames.len()])?;
             refresh_field_particle_colors(&mut field, &current);
         }
-        let rendered = render_field_particles(&field, request.settings)?;
+        let rendered = render_field_particles_frame(&field, request.settings, request.backend)?;
         save_png(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
@@ -1328,18 +1329,63 @@ pub(crate) fn render_field_particles_sequence(
     }
 
     println!(
-        "rendered field particles sequence with {} frame(s) ({} particles, spacing {}, size {}, advect {}) from {} to {}",
+        "rendered field particles sequence with {} frame(s) ({} particles, spacing {}, size {}, advect {}, {:?}) from {} to {}",
         request.frames,
         field.particle_count(),
         request.settings.spacing,
         request.settings.particle_size,
         request.settings.advect,
+        request.backend,
         request.source_dir.display(),
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult {
         frame_count: request.frames,
     })
+}
+
+/// Splat the particle carrier on the chosen backend. CPU runs the reference scatter; Metal runs
+/// the parity-gated gather kernel and is checked against the CPU per frame.
+pub(crate) fn render_field_particles_frame(
+    field: &ParticleField,
+    settings: FieldParticleSettings,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(render_field_particles(field, settings)?),
+        RenderBackend::Metal => render_field_particles_frame_metal(field, settings),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_field_particles_frame_metal(
+    field: &ParticleField,
+    settings: FieldParticleSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::field_particles_splat_metal(field, settings)?;
+    let cpu = render_field_particles(field, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU field particle outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal field particles render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_field_particles_frame_metal(
+    _field: &ParticleField,
+    _settings: FieldParticleSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 /// Advance the dye one frame on the chosen backend. Frame zero (`previous == None`) is the

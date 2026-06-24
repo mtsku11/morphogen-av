@@ -520,7 +520,7 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
-    /// Render the discrete-carrier particle advection (experimental, deterministic, CPU-only):
+    /// Render the discrete-carrier particle advection (experimental, deterministic):
     /// a grid of coloured particles seeded from the source rides the shared steady-vortex
     /// field. Frame zero is the initial grid (a posterised source); each later frame flows the
     /// particles along the field and splats them onto black. `--advect 0` holds the static grid
@@ -557,6 +557,10 @@ pub(crate) enum Commands {
         live_colour: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Render backend. `metal` is gated against the CPU reference per frame (a correctness-
+        /// first gather kernel; for a dense grid the CPU scatter is faster).
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour

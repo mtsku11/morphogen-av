@@ -3,8 +3,9 @@ use metal::{
     MTLSize, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
 };
 use morphogen_render::{
-    FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
-    GrainSelection, GranularMosaicSettings, ImageBufferF32, StructureMode,
+    FieldParticleSettings, FlowFeedbackSettings, FlowField, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, GrainPool, GrainSelection, GranularMosaicSettings,
+    ImageBufferF32, ParticleField, StructureMode,
 };
 
 use crate::{
@@ -12,7 +13,8 @@ use crate::{
     ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, COAGULATED_COMPOSITE_KERNEL_NAME,
     COAGULATED_COMPOSITE_SHADER_SOURCE, CONVOLUTION_BLEND_COLOR_KERNEL_NAME,
     CONVOLUTION_BLEND_COLOR_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
-    CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
+    CONVOLUTION_BLEND_SHADER_SOURCE, FIELD_PARTICLES_SPLAT_KERNEL_NAME,
+    FIELD_PARTICLES_SPLAT_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
     FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME,
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
@@ -89,6 +91,14 @@ struct FluidAdvectTwoSourceParams {
     reinject: f32,
     width: u32,
     height: u32,
+}
+
+#[repr(C)]
+struct FieldParticlesSplatParams {
+    width: u32,
+    height: u32,
+    particle_count: u32,
+    particle_size: u32,
 }
 
 #[repr(C)]
@@ -882,6 +892,98 @@ pub fn fluid_advect_two_source_metal(
     read_rgba_f32_texture(&output_texture, plan.width, plan.height)
 }
 
+/// Discrete-carrier particle splat on the GPU — the Metal port of
+/// `morphogen_render::render_field_particles`. The particle state is computed on the CPU; this
+/// rasterizes it. Each output pixel gathers the last (highest-index) particle whose
+/// `particle_size` square covers it (matching the CPU last-writer-wins scatter byte-for-byte,
+/// since positions are the CPU floats uploaded verbatim). O(width·height·particles) — a
+/// correctness-first kernel; a tiled scatter is the perf follow-up.
+pub fn field_particles_splat_metal(
+    field: &ParticleField,
+    settings: FieldParticleSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    settings
+        .validate()
+        .map_err(|error| MetalDispatchError::InvalidFieldParticlesSettings(error.to_string()))?;
+
+    let (width, height) = field.dimensions();
+    let particle_count = field.particle_count() as u32;
+    let splat = field.splat_buffer();
+
+    let plan = FlowDisplaceDispatchPlan::new(width, height, 0.0)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(FIELD_PARTICLES_SPLAT_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(FIELD_PARTICLES_SPLAT_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+
+    // A zero-length buffer is rejected by Metal; an empty field is just the black canvas, and a
+    // one-float stub keeps the binding valid while `particle_count == 0` skips the loop.
+    let buffer_data: &[f32] = if splat.is_empty() { &[0.0] } else { &splat };
+    let particle_buffer = device.new_buffer_with_data(
+        buffer_data.as_ptr().cast(),
+        std::mem::size_of_val(buffer_data) as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&output_texture));
+    encoder.set_buffer(0, Some(&particle_buffer), 0);
+    let params = FieldParticlesSplatParams {
+        width: plan.width,
+        height: plan.height,
+        particle_count,
+        particle_size: settings.particle_size,
+    };
+    encoder.set_bytes(
+        1,
+        std::mem::size_of::<FieldParticlesSplatParams>() as u64,
+        (&params as *const FieldParticlesSplatParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
 /// Descriptor-coagulated flow blend — composite stage on the GPU. Given Source A,
 /// Source B, and the CPU-built `cols × rows` ownership field, evaluates the same
 /// per-pixel block-jitter + bilinear field sample + dithered hard/soft edge blend +
@@ -1503,14 +1605,15 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
-        analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
-        analyze_grain_pool_cpu, apply_tone_map_cpu, coagulation_field, composite_with_field,
-        convolution_blend_color_cpu, convolution_blend_cpu, flow_displace_cpu,
-        flow_feedback_frame_cpu, fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu,
-        granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
-        luma_specification_tone_map, select_grains_from_pool_cpu, CoagulationSettings,
-        FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
-        StructureMode,
+        advance_field_particles, analyze_convolution_kernel_cpu,
+        analyze_convolution_kernels_color_cpu, analyze_grain_pool_cpu, apply_tone_map_cpu,
+        coagulation_field, composite_with_field, convolution_blend_color_cpu,
+        convolution_blend_cpu, flow_displace_cpu, flow_feedback_frame_cpu, fluid_advect_frame_cpu,
+        fluid_advect_two_source_frame_cpu, granular_mosaic_with_pool_selection_cpu,
+        granular_mosaic_with_selection_cpu, initialize_field_particles,
+        luma_specification_tone_map, render_field_particles, select_grains_from_pool_cpu,
+        CoagulationSettings, FieldParticleSettings, FlowFeedbackSettings, FlowField,
+        GrainSelection, GranularMosaicSettings, ImageBufferF32, StructureMode,
     };
 
     use super::*;
@@ -2159,6 +2262,45 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_field_particles_splat_matches_cpu_reference() {
+        // Build a particle field from a textured source and advance several frames so the
+        // particles sit at non-trivial, overlapping float positions, then compare the GPU
+        // gather splat with the CPU scatter. Positions are the CPU floats uploaded verbatim, so
+        // the rasterization is byte-identical (asserted at a tight bound).
+        let source = ImageBufferF32::from_fn(40, 32, |x, y| {
+            let u = x as f32 / 39.0;
+            let v = y as f32 / 31.0;
+            [u, v, 1.0 - u, 1.0]
+        })
+        .expect("source");
+        let settings = FieldParticleSettings {
+            spacing: 5,
+            particle_size: 5,
+            advect: 2.5,
+            turbulence_scale: 0.03,
+            ..FieldParticleSettings::default()
+        };
+        let mut field = initialize_field_particles(&source, settings).expect("init");
+        for index in 1..=5 {
+            advance_field_particles(&mut field, index, settings).expect("advance");
+        }
+
+        let cpu = render_field_particles(&field, settings).expect("cpu render");
+        let gpu = match field_particles_splat_metal(&field, settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal field particles splat parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal field particles splat render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 0.000_001);
     }
 
     fn assert_image_near(actual: &ImageBufferF32, expected: &ImageBufferF32, epsilon: f32) {

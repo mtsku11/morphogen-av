@@ -461,6 +461,7 @@ fn run() -> Result<(), CliError> {
             detail,
             live_colour,
             seed,
+            backend,
         } => render_field_particles_sequence(FieldParticlesSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -475,6 +476,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {

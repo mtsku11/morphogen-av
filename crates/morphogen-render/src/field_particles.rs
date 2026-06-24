@@ -142,6 +142,28 @@ impl ParticleField {
     pub fn particle_count(&self) -> usize {
         self.particles.len()
     }
+
+    /// Canvas dimensions `(width, height)`.
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The particle data packed for the GPU splat: `[x, y, r, g, b, a]` per particle, in render
+    /// (index) order so a last-writer-wins gather reproduces the CPU splat exactly.
+    pub fn splat_buffer(&self) -> Vec<f32> {
+        let mut buffer = Vec::with_capacity(self.particles.len() * 6);
+        for particle in &self.particles {
+            buffer.extend_from_slice(&[
+                particle.x,
+                particle.y,
+                particle.color[0],
+                particle.color[1],
+                particle.color[2],
+                particle.color[3],
+            ]);
+        }
+        buffer
+    }
 }
 
 /// Seed the particle grid from the source frame (frame zero). One particle per `spacing` cell,

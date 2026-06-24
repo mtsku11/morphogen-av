@@ -25,6 +25,9 @@ pub const FLUID_ADVECT_SHADER_SOURCE: &str = include_str!("../shaders/fluid_adve
 pub const FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME: &str = "fluid_advect_two_source";
 pub const FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE: &str =
     include_str!("../shaders/fluid_advect_two_source.metal");
+pub const FIELD_PARTICLES_SPLAT_KERNEL_NAME: &str = "field_particles_splat";
+pub const FIELD_PARTICLES_SPLAT_SHADER_SOURCE: &str =
+    include_str!("../shaders/field_particles_splat.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -131,6 +134,14 @@ pub enum MetalDispatchError {
         "fluid_advect_two_source.metal does not contain the expected texture and buffer bindings"
     )]
     MissingFluidAdvectTwoSourceBindingLayout,
+    #[error("invalid field particle settings: {0}")]
+    InvalidFieldParticlesSettings(String),
+    #[error("field_particles_splat.metal does not contain the expected kernel entry point")]
+    MissingFieldParticlesSplatKernelEntryPoint,
+    #[error(
+        "field_particles_splat.metal does not contain the expected texture and buffer bindings"
+    )]
+    MissingFieldParticlesSplatBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -416,6 +427,24 @@ pub fn validate_fluid_advect_two_source_shader_source() -> Result<(), MetalDispa
     Ok(())
 }
 
+pub fn validate_field_particles_splat_shader_source() -> Result<(), MetalDispatchError> {
+    if !FIELD_PARTICLES_SPLAT_SHADER_SOURCE.contains("kernel void field_particles_splat") {
+        return Err(MetalDispatchError::MissingFieldParticlesSplatKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::write> output [[texture(0)]]",
+        "device const float* particles [[buffer(0)]]",
+        "constant FieldParticlesSplatParams& params [[buffer(1)]]",
+    ] {
+        if !FIELD_PARTICLES_SPLAT_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingFieldParticlesSplatBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -519,5 +548,11 @@ mod tests {
     fn fluid_advect_two_source_shader_has_expected_bindings() {
         validate_fluid_advect_two_source_shader_source()
             .expect("fluid advect two-source shader preflight");
+    }
+
+    #[test]
+    fn field_particles_splat_shader_has_expected_bindings() {
+        validate_field_particles_splat_shader_source()
+            .expect("field particles splat shader preflight");
     }
 }
