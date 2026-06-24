@@ -1117,6 +1117,86 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
     Ok(FrameSequenceRenderResult { frame_count })
 }
 
+pub(crate) struct OpticalFlowAdvectSequenceRequest<'a> {
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: FluidAdvectTwoSourceSettings,
+    pub(crate) frames: usize,
+}
+
+/// Render the single-source optical-flow-driven advection: the video is advected by its own
+/// motion. The self-driven case of the two-source advection — the source is both the
+/// modulator (its Lucas-Kanade flow between consecutive frames) and the carrier (the dye and
+/// the reinjected frame) — so it reuses `fluid_advect_two_source_frame_cpu`. Frame zero is the
+/// source verbatim (no prior frame to derive motion from); thereafter the held dye (RGBA32F
+/// state) flows along the source's measured motion. Bounded by the available source frames.
+pub(crate) fn render_optical_flow_advect_sequence(
+    request: OpticalFlowAdvectSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_frames = collect_image_frames(request.source_dir)?;
+    if source_frames.is_empty() {
+        return Err(CliError::Message(
+            "optical-flow advect requires at least one PNG frame in the source directory"
+                .to_string(),
+        ));
+    }
+    let frame_count = request.frames.min(source_frames.len());
+
+    fs::create_dir_all(request.output_dir)?;
+
+    let mut previous_output: Option<ImageBufferF32> = None;
+    let mut previous_source: Option<ImageBufferF32> = None;
+    for (index, source_path) in source_frames.iter().enumerate().take(frame_count) {
+        let source = load_image_f32(source_path)?;
+
+        let rendered = match (previous_output.as_ref(), previous_source.as_ref()) {
+            (Some(previous), Some(previous_source)) => {
+                // The source's own per-frame motion drives the field that advects its dye.
+                let flow = pyramidal_lucas_kanade_flow_cpu(
+                    previous_source,
+                    &source,
+                    source.width,
+                    source.height,
+                    LUCAS_KANADE_WINDOW_RADIUS,
+                )?
+                .flow;
+                fluid_advect_two_source_frame_cpu(
+                    &source,
+                    Some(previous),
+                    &flow,
+                    request.settings,
+                )?
+            }
+            // Frame zero (or a missing prior frame): the source is the output verbatim.
+            _ => source.clone(),
+        };
+
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+        previous_output = Some(rendered);
+        previous_source = Some(source);
+    }
+
+    println!(
+        "rendered optical-flow advect sequence with {} frame(s) (advect {}, reinject {}) from {} to {}",
+        frame_count,
+        request.settings.advect,
+        request.settings.reinject,
+        request.source_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
 pub(crate) struct FieldParticlesSequenceRequest<'a> {
     pub(crate) source_dir: &'a Path,
     pub(crate) output_dir: &'a Path,

@@ -490,6 +490,29 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
     },
+    /// Render the single-source optical-flow-driven advection (experimental, deterministic,
+    /// CPU-only): the video is advected by its OWN motion. Each frame the source's Lucas-Kanade
+    /// flow (between consecutive frames) flows the held dye and `--reinject` of the current
+    /// frame is bled back in — so the picture liquefies along where it is actually moving
+    /// (vs the procedural vortices of render-fluid-advect-sequence). The self-driven case of
+    /// the two-source advection. `--reinject 1` = source verbatim (the off case). A static
+    /// clip has no motion ⇒ source verbatim.
+    RenderOpticalFlowAdvectSequence {
+        /// Source video frames (PNG sequence) — both the dye and the motion source.
+        source_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render (capped to the available source frames).
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        /// Strength applied to the source's own flow when advecting the dye (flow units; the
+        /// flow is in pixels/frame). 1.0 moves the dye with the measured motion; 0 holds.
+        #[arg(long, default_value_t = 1.0)]
+        advect: f32,
+        /// Source bled back into the dye each frame, in [0, 1] (the "frame refresh"). Lower =
+        /// the dye smears further along the motion; 0 = pure smear, 1 = source verbatim.
+        #[arg(long, default_value_t = 0.08)]
+        reinject: f32,
+    },
     /// Render the discrete-carrier particle advection (experimental, deterministic, CPU-only):
     /// a grid of coloured particles seeded from the source rides the shared steady-vortex
     /// field. Frame zero is the initial grid (a posterised source); each later frame flows the

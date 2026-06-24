@@ -433,6 +433,19 @@ fn run() -> Result<(), CliError> {
             frames,
         })
         .map(|_| ()),
+        Commands::RenderOpticalFlowAdvectSequence {
+            source_dir,
+            output_dir,
+            frames,
+            advect,
+            reinject,
+        } => render_optical_flow_advect_sequence(OpticalFlowAdvectSequenceRequest {
+            source_dir: &source_dir,
+            output_dir: &output_dir,
+            settings: FluidAdvectTwoSourceSettings { advect, reinject },
+            frames,
+        })
+        .map(|_| ()),
         Commands::RenderFieldParticlesSequence {
             source_dir,
             output_dir,
