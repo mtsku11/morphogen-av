@@ -399,6 +399,7 @@ fn run() -> Result<(), CliError> {
             advect,
             turbulence_scale,
             turbulence_speed,
+            detail,
             reinject,
             seed,
         } => render_fluid_advect_sequence(FluidAdvectSequenceRequest {
@@ -408,6 +409,7 @@ fn run() -> Result<(), CliError> {
                 advect,
                 turbulence_scale,
                 turbulence_speed,
+                detail,
                 reinject,
                 seed,
             },
