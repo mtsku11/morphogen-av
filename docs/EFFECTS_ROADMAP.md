@@ -261,3 +261,33 @@ their groups (perpetual churn).
   shatter along a transition curve, like a glitch wipe), selectable/synthetic flow
   fields (turbulence, radial, custom vector fields), transition and disperse-then-
   re-form arcs, coarse/mixed tile scales, and a parity-gated Metal composite.
+
+## Fluid Colour-Sort Mosaic
+
+The **relocation** effect, where coagulation and dispersion keep each tile roughly
+where it started. Tiles of *both* sources become crisp **particles** that are sorted
+by colour into screen-filling domains, then advected by a fluid current so the colour
+groups flow, fold, and intermix — the source footage is unrecognisable throughout
+(target reference: the marcscully.com fluid background). User-locked forks: emergent
+self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
+
+- Modulator/Carrier: Source A + Source B frames (matched dims); the simulation is
+  seeded from the first frame of each and runs self-contained.
+- Output: a particle set rendered as crisp colour tiles (painter order A-then-B,
+  uncovered = black).
+- Cached/stateful: per-tile positions + velocities carried frame-to-frame; fixed
+  per-tile mean colour + colour bin.
+- Forces (the whole look is their balance): **local same-colour cohesion** (pull to
+  the local mean of nearby same-colour tiles → phase separation into domains) +
+  **stiff colour-blind repulsion** (incompressible pressure that keeps the sheet
+  space-filling so domains can't contract into voids) + a deterministic
+  divergence-free **fluid curl field** (gentle, so domains marble rather than boil to
+  gas) + tiny jitter. A warmup *settle* runs cohesion+repulsion before frame zero so
+  the first frame is already colour-grouped.
+- First MVP version: **Landed** (CPU + CLI `render-fluid-mosaic-sequence`). Algorithm
+  id `fluid_mosaic_colour_sort_cpu_v1`; off case (`--cohesion 0 --repulsion 0
+  --fluid-strength 0 --jitter 0 --settle-iterations 0`) = source grids overlaid.
+- Future high-quality version: tiles carrying **texture patches** (not just mean
+  colour), **varying tile sizes** (quadtree by detail / mixed scales), **live
+  per-frame colour refresh** from the moving sources, a **cluster-blob** layout
+  option, a spatially-varying dispersion/mix band, and a parity-gated Metal port.
