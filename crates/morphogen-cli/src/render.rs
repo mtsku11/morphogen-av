@@ -15,6 +15,7 @@ use morphogen_render::{
     coagulation_field, composite_with_field, disperse_composite_cpu, downsample_flow_to_cells,
     synthesize_turbulence_flow, CoagulationField, CoagulationFlowSource, CoagulationSettings,
     DispersionField, DispersionSettings,
+    advance_fluid_mosaic, initialize_fluid_mosaic, render_fluid_mosaic, FluidMosaicSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -959,6 +960,70 @@ pub(crate) fn render_dispersion_blend_sequence(
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct FluidMosaicSequenceRequest<'a> {
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: FluidMosaicSettings,
+    pub(crate) frames: usize,
+}
+
+/// Render the fluid colour-sort mosaic. Tiles of both sources are seeded from each
+/// source's first frame, settled into colour groups, then advected by a fluid field
+/// frame-to-frame so the grouped colours flow and intermix. Self-contained particle
+/// simulation (later video frames and live colour refresh are deferred).
+pub(crate) fn render_fluid_mosaic_sequence(
+    request: FluidMosaicSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_a_frames = collect_image_frames(request.source_a_dir)?;
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_a_frames.is_empty() || source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "fluid mosaic requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    let source_a = load_image_f32(&source_a_frames[0])?;
+    let source_b = load_image_f32(&source_b_frames[0])?;
+    fs::create_dir_all(request.output_dir)?;
+
+    let mut state = initialize_fluid_mosaic(&source_a, &source_b, request.settings)?;
+    for index in 0..request.frames {
+        if index > 0 {
+            state = advance_fluid_mosaic(&state, request.settings, index as u32)?;
+        }
+        let frame = render_fluid_mosaic(&state, request.settings)?;
+        save_png(
+            &frame,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    println!(
+        "rendered fluid mosaic sequence with {} frame(s) (tile {}, bins {}, cohesion {}, repulsion {}, fluid {}, settle {}) seeded from {} + {} to {}",
+        request.frames,
+        request.settings.tile_size,
+        request.settings.color_bins,
+        request.settings.cohesion,
+        request.settings.repulsion,
+        request.settings.fluid_strength,
+        request.settings.settle_iterations,
+        request.source_a_dir.display(),
+        request.source_b_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult {
+        frame_count: request.frames,
+    })
 }
 
 pub(crate) struct CoagulatedBlendSequenceRequest<'a> {

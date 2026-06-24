@@ -2,7 +2,7 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CoagulationSettings, DispersionSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
+    CoagulationSettings, DispersionSettings, FluidMosaicSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
 };
 
 mod args;
@@ -390,6 +390,46 @@ fn run() -> Result<(), CliError> {
             smear,
             smear_decay,
             max_frames,
+        })
+        .map(|_| ()),
+        Commands::RenderFluidMosaicSequence {
+            source_a_dir,
+            source_b_dir,
+            output_dir,
+            frames,
+            tile_size,
+            color_bins,
+            cohesion,
+            cohesion_radius,
+            repulsion,
+            repulsion_radius,
+            fluid_strength,
+            fluid_scale,
+            fluid_drift,
+            damping,
+            settle_iterations,
+            jitter,
+            seed,
+        } => render_fluid_mosaic_sequence(FluidMosaicSequenceRequest {
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: FluidMosaicSettings {
+                tile_size,
+                color_bins,
+                cohesion,
+                cohesion_radius,
+                repulsion,
+                repulsion_radius,
+                fluid_strength,
+                fluid_scale,
+                fluid_drift,
+                damping,
+                settle_iterations,
+                jitter,
+                seed,
+            },
+            frames,
         })
         .map(|_| ()),
         Commands::RenderCoagulatedBlendSequence {
