@@ -467,6 +467,29 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Render the mutual two-source faux-fluid advection (experimental, deterministic,
+    /// CPU-only): Source A's optical-flow motion advects Source B's colour as a continuous
+    /// dye. Frame zero is B verbatim; thereafter A's Lucas-Kanade flow between consecutive A
+    /// frames flows B's dye and `--reinject` of the current B frame is bled back in. This is
+    /// the cross-synth model (A reshapes B). `--reinject 1` = B verbatim (the off case).
+    RenderFluidAdvectTwoSourceSequence {
+        /// Source A video frames (PNG sequence) — the modulator whose motion drives the flow.
+        source_a_dir: PathBuf,
+        /// Source B video frames (PNG sequence) — the carrier dye that is advected.
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render (capped to the shorter of the two clips).
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        /// Strength applied to A's flow when advecting B's dye (flow units; A's flow is in
+        /// pixels/frame). 1.0 moves the dye exactly with A's motion; higher amplifies; 0 holds.
+        #[arg(long, default_value_t = 1.0)]
+        advect: f32,
+        /// Source B bled back into the dye each frame, in [0, 1] (the "frame refresh"). Lower =
+        /// B smears further along A's motion; 0 = pure smear, 1 = B verbatim. ~0.08 marbles.
+        #[arg(long, default_value_t = 0.08)]
+        reinject: f32,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains

@@ -58,7 +58,10 @@ pub use feedback_state::{
     feedback_state_path, read_flow_feedback_state, write_flow_feedback_state,
     FlowFeedbackStateDescriptor, FLOW_FEEDBACK_STATE_VERSION,
 };
-pub use fluid_advect::{fluid_advect_frame_cpu, FluidAdvectSettings, FLUID_ADVECT_ALGORITHM};
+pub use fluid_advect::{
+    fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
+};
 pub use fluid_mosaic::{
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
     resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings, FluidMosaicState,

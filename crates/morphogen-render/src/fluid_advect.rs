@@ -35,9 +35,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::cpu_reference::flow_displace_cpu;
 use crate::sampler::sample_bilinear_clamped;
 use crate::vortex_field::steady_vortex_velocity;
-use crate::{ImageBufferF32, RenderError};
+use crate::{FlowField, ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the velocity model, advection
 /// scheme, or reinjection changes so stale caches/checkpoints invalidate.
@@ -164,6 +165,104 @@ pub fn fluid_advect_frame_cpu(
     })
 }
 
+/// Algorithm identifier for the two-source CPU reference. Bump when the advection scheme
+/// or the reinjection changes so stale caches/checkpoints invalidate.
+pub const FLUID_ADVECT_TWO_SOURCE_ALGORITHM: &str = "fluid_advect_two_source_cpu_v1";
+
+/// Settings for [`fluid_advect_two_source_frame_cpu`] — the mutual two-source variant where
+/// Source A's optical-flow motion drives the field that advects Source B's colour.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FluidAdvectTwoSourceSettings {
+    /// Strength applied to Source A's per-pixel flow when advecting the dye, in flow units
+    /// (A's flow is already expressed in output pixels per frame). `1.0` moves the dye
+    /// exactly with A's measured motion; higher amplifies it; `0` holds the dye in place.
+    pub advect: f32,
+    /// Fraction of the current Source B frame bled back into the dye each frame, in
+    /// `[0, 1]` — the "frame refresh". `0` lets B smear freely along A's motion with no
+    /// fresh content; `1` shows B verbatim (no fluid). Small values (~0.05–0.15) keep B
+    /// present while A's motion reshapes it.
+    pub reinject: f32,
+}
+
+impl Default for FluidAdvectTwoSourceSettings {
+    fn default() -> Self {
+        Self {
+            advect: 1.0,
+            reinject: 0.08,
+        }
+    }
+}
+
+impl FluidAdvectTwoSourceSettings {
+    pub fn validate(&self) -> Result<(), RenderError> {
+        if !self.advect.is_finite() {
+            return Err(RenderError::InvalidCoagulationSettings(
+                "advect must be finite".to_string(),
+            ));
+        }
+        if !self.reinject.is_finite() || !(0.0..=1.0).contains(&self.reinject) {
+            return Err(RenderError::InvalidCoagulationSettings(
+                "reinject must be in [0, 1]".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Advance the two-source dye one frame. Source B (`carrier_b`) is the material whose colour
+/// flows; `flow_a` is Source A's optical flow (the modulator's motion), already sized to B's
+/// dimensions and in B's pixel units. `previous` is the dye buffer carried from the prior
+/// frame; `None` (frame zero) returns B verbatim (there is no prior A frame to derive motion
+/// from). The dye is advected along A's flow via the parity-gated [`flow_displace_cpu`], then
+/// a fraction of the current B frame is bled back in (the "frame refresh").
+///
+/// Continuity identities (the off cases for an off-vs-on readout):
+/// - `reinject == 1.0` ⇒ output is B verbatim every frame (no fluid at all).
+/// - `advect == 0.0` with `reinject == 0.0` ⇒ output is the previous dye unchanged (A's
+///   motion never displaces anything) — a pure hold of frame zero.
+pub fn fluid_advect_two_source_frame_cpu(
+    carrier_b: &ImageBufferF32,
+    previous: Option<&ImageBufferF32>,
+    flow_a: &FlowField,
+    settings: FluidAdvectTwoSourceSettings,
+) -> Result<ImageBufferF32, RenderError> {
+    settings.validate()?;
+
+    let Some(previous) = previous else {
+        // Frame zero: the dye is seeded from Source B verbatim.
+        return Ok(carrier_b.clone());
+    };
+
+    if previous.width != carrier_b.width || previous.height != carrier_b.height {
+        return Err(RenderError::IncompatibleInputs(format!(
+            "previous dye is {}x{}, carrier B is {}x{}",
+            previous.width, previous.height, carrier_b.width, carrier_b.height
+        )));
+    }
+    if flow_a.width != carrier_b.width || flow_a.height != carrier_b.height {
+        return Err(RenderError::IncompatibleInputs(format!(
+            "Source A flow is {}x{}, carrier B is {}x{}",
+            flow_a.width, flow_a.height, carrier_b.width, carrier_b.height
+        )));
+    }
+
+    // Advect the dye along Source A's motion (the same parity-gated displace the rest of the
+    // graph uses; a future Metal port is flow_displace_metal + the reinject composite).
+    let advected = flow_displace_cpu(previous, flow_a, settings.advect)?;
+
+    let r = settings.reinject;
+    ImageBufferF32::from_fn(carrier_b.width, carrier_b.height, |x, y| {
+        let a = advected.pixel(x, y).unwrap_or([0.0; 4]);
+        let b = carrier_b.pixel(x, y).unwrap_or([0.0; 4]);
+        [
+            a[0] + (b[0] - a[0]) * r,
+            a[1] + (b[1] - a[1]) * r,
+            a[2] + (b[2] - a[2]) * r,
+            a[3] + (b[3] - a[3]) * r,
+        ]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +335,89 @@ mod tests {
         let a = fluid_advect_frame_cpu(&src, Some(&prev), 7, settings).expect("a");
         let b = fluid_advect_frame_cpu(&src, Some(&prev), 7, settings).expect("b");
         assert_eq!(a.pixels, b.pixels);
+    }
+
+    fn zero_flow(width: u32, height: u32) -> FlowField {
+        FlowField::new(width, height, vec![[0.0, 0.0]; (width * height) as usize]).expect("flow")
+    }
+
+    fn uniform_flow(width: u32, height: u32, vector: [f32; 2]) -> FlowField {
+        FlowField::new(width, height, vec![vector; (width * height) as usize]).expect("flow")
+    }
+
+    #[test]
+    fn two_source_frame_zero_is_carrier_b() {
+        let b = ramp(16, 16);
+        let flow = zero_flow(16, 16);
+        let out = fluid_advect_two_source_frame_cpu(
+            &b,
+            None,
+            &flow,
+            FluidAdvectTwoSourceSettings::default(),
+        )
+        .expect("f0");
+        assert_eq!(out.pixels, b.pixels);
+    }
+
+    #[test]
+    fn two_source_full_reinject_returns_carrier_b() {
+        // reinject 1 ⇒ output is the current B verbatim, no fluid.
+        let b = ramp(16, 16);
+        let prev = ImageBufferF32::from_fn(16, 16, |_, _| [0.0, 0.0, 0.0, 1.0]).expect("prev");
+        let flow = uniform_flow(16, 16, [3.0, -2.0]);
+        let settings = FluidAdvectTwoSourceSettings {
+            reinject: 1.0,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        let out =
+            fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("on");
+        assert_eq!(out.pixels, b.pixels);
+    }
+
+    #[test]
+    fn two_source_zero_advect_zero_reinject_holds_previous() {
+        // No displacement and no fresh content ⇒ the dye is held unchanged, even if A moved.
+        let b = ramp(16, 16);
+        let prev = ImageBufferF32::from_fn(16, 16, |x, y| {
+            [(x as f32 * 0.05).fract(), (y as f32 * 0.03).fract(), 0.25, 1.0]
+        })
+        .expect("prev");
+        let flow = uniform_flow(16, 16, [4.0, 4.0]);
+        let settings = FluidAdvectTwoSourceSettings {
+            advect: 0.0,
+            reinject: 0.0,
+        };
+        let out =
+            fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("hold");
+        assert_eq!(out.pixels, prev.pixels);
+    }
+
+    #[test]
+    fn two_source_flow_advects_the_dye() {
+        // With A's flow non-zero and advection on, the dye must move off the held image.
+        let b = ramp(64, 64);
+        let prev = ramp(64, 64);
+        let flow = uniform_flow(64, 64, [5.0, 0.0]);
+        let settings = FluidAdvectTwoSourceSettings {
+            advect: 1.0,
+            reinject: 0.0,
+        };
+        let out =
+            fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("flow");
+        assert_ne!(out.pixels, prev.pixels, "A's motion should relocate B's dye");
+    }
+
+    #[test]
+    fn two_source_dimension_mismatch_errors() {
+        let b = ramp(16, 16);
+        let prev = ramp(16, 16);
+        let flow = zero_flow(8, 8);
+        let result = fluid_advect_two_source_frame_cpu(
+            &b,
+            Some(&prev),
+            &flow,
+            FluidAdvectTwoSourceSettings::default(),
+        );
+        assert!(result.is_err(), "mismatched flow dimensions should error");
     }
 }

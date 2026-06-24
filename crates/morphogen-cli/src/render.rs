@@ -17,7 +17,8 @@ use morphogen_render::{
     DispersionField, DispersionSettings,
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
     resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings,
-    fluid_advect_frame_cpu, FluidAdvectSettings,
+    fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -1027,6 +1028,91 @@ pub(crate) fn render_fluid_advect_sequence(
     Ok(FrameSequenceRenderResult {
         frame_count: request.frames,
     })
+}
+
+pub(crate) struct FluidAdvectTwoSourceSequenceRequest<'a> {
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: FluidAdvectTwoSourceSettings,
+    pub(crate) frames: usize,
+}
+
+/// Render the mutual two-source faux-fluid advection: Source A (modulator) supplies the
+/// optical-flow motion that advects Source B (carrier) as a continuous dye. Frame zero is B
+/// verbatim (no prior A frame to derive motion from); thereafter A's Lucas-Kanade flow between
+/// consecutive A frames advects the held dye (RGBA32F state — never a re-read PNG) and a little
+/// of the current B frame is bled back in. Bounded by the shorter of the two clips (no cyclic
+/// wrap, so the flow never jumps across a clip boundary).
+pub(crate) fn render_fluid_advect_two_source_sequence(
+    request: FluidAdvectTwoSourceSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let a_frames = collect_image_frames(request.source_a_dir)?;
+    let b_frames = collect_image_frames(request.source_b_dir)?;
+    if a_frames.is_empty() || b_frames.is_empty() {
+        return Err(CliError::Message(
+            "two-source fluid advect requires at least one PNG frame in both the A and B directories"
+                .to_string(),
+        ));
+    }
+    let available = a_frames.len().min(b_frames.len());
+    let frame_count = request.frames.min(available);
+
+    fs::create_dir_all(request.output_dir)?;
+
+    let mut previous_output: Option<ImageBufferF32> = None;
+    let mut previous_a: Option<ImageBufferF32> = None;
+    for index in 0..frame_count {
+        let carrier_b = load_image_f32(&b_frames[index])?;
+        let modulator_a = load_image_f32(&a_frames[index])?;
+
+        let rendered = match (previous_output.as_ref(), previous_a.as_ref()) {
+            (Some(previous), Some(previous_a)) => {
+                // A's per-frame motion, sized to B's dimensions and in B's pixel units.
+                let flow = pyramidal_lucas_kanade_flow_cpu(
+                    previous_a,
+                    &modulator_a,
+                    carrier_b.width,
+                    carrier_b.height,
+                    LUCAS_KANADE_WINDOW_RADIUS,
+                )?
+                .flow;
+                fluid_advect_two_source_frame_cpu(
+                    &carrier_b,
+                    Some(previous),
+                    &flow,
+                    request.settings,
+                )?
+            }
+            // Frame zero (or a missing prior A frame): B is the output verbatim.
+            _ => carrier_b.clone(),
+        };
+
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+        previous_output = Some(rendered);
+        previous_a = Some(modulator_a);
+    }
+
+    println!(
+        "rendered two-source fluid advect sequence with {} frame(s) (advect {}, reinject {}) from A {} advecting B {} to {}",
+        frame_count,
+        request.settings.advect,
+        request.settings.reinject,
+        request.source_a_dir.display(),
+        request.source_b_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
 }
 
 /// Advance the dye one frame on the chosen backend. Frame zero (`previous == None`) is the

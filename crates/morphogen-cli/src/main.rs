@@ -2,7 +2,7 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CoagulationSettings, DispersionSettings, FluidAdvectSettings, FluidMosaicSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
+    CoagulationSettings, DispersionSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
 };
 
 mod args;
@@ -416,6 +416,21 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+        })
+        .map(|_| ()),
+        Commands::RenderFluidAdvectTwoSourceSequence {
+            source_a_dir,
+            source_b_dir,
+            output_dir,
+            frames,
+            advect,
+            reinject,
+        } => render_fluid_advect_two_source_sequence(FluidAdvectTwoSourceSequenceRequest {
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: FluidAdvectTwoSourceSettings { advect, reinject },
+            frames,
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {
