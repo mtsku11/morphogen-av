@@ -32,8 +32,14 @@
 //! colour and patch from the current source frame** — a render-only *live colour
 //! refresh* that lets the two videos play through the flowing mosaic. The simulation
 //! (positions, the frozen frame-zero colour bins that drive sorting) is untouched, so
-//! the force balance is unchanged and refresh alters only the painted pixels. Without a
-//! refresh call the path stays self-contained (seeded from each source's first frame).
+//! the force balance is unchanged and refresh alters only the painted pixels.
+//! [`resort_fluid_mosaic_colors`] goes one step further — a *sim-driving live re-sort*:
+//! it re-samples the colour/patch **and re-bins each tile** from the current frame, so
+//! the cohesion force (which keys on the bin) makes colour domains **migrate to follow
+//! the video** rather than staying frozen in their frame-zero grouping. Positions and
+//! velocities still carry forward; only the colour bin (and painted pixels) updates.
+//! Without a refresh/resort call the path stays self-contained (seeded from each
+//! source's first frame).
 //! Metal is a later slice. Determinism: splitmix64 hashing, fixed-timestep
 //! integration, no wall clock.
 //!
@@ -49,11 +55,13 @@ use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the force model, tile
 /// formulation, or the content a tile paints changes so stale caches/checkpoints
-/// invalidate. `v4` adds render-only live colour refresh (each tile can re-sample its
-/// painted colour/patch from the current source frame); `v3` added variable-size tiles
-/// (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added texture
-/// patches (`carry_texture`); `v1` was flat uniform mean colour only.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v4";
+/// invalidate. `v5` adds sim-driving live re-sort (`live_resort`: refreshed colour also
+/// re-bins each tile so cohesion follows the video); `v4` added render-only live colour
+/// refresh (each tile can re-sample its painted colour/patch from the current source
+/// frame); `v3` added variable-size tiles (`adaptive_tiles`: quadtree subdivision +
+/// size-aware repulsion); `v2` added texture patches (`carry_texture`); `v1` was flat
+/// uniform mean colour only.
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v5";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -121,6 +129,14 @@ pub struct FluidMosaicSettings {
     /// seeded from each source's first frame and runs self-contained (the `v3` look).
     #[serde(default = "default_live_refresh")]
     pub live_refresh: bool,
+    /// When `true`, the caller re-samples each tile's colour/patch from the current
+    /// source frame **and re-bins it** every frame (via [`resort_fluid_mosaic_colors`]),
+    /// so the cohesion force follows the live colour and domains migrate to track the
+    /// video — a sim-driving live re-sort. Implies the live colour refresh (the painted
+    /// pixels also update). When `false`, the colour bins stay frozen at their
+    /// frame-zero values (the `v4` render-only refresh, or a self-contained sim).
+    #[serde(default = "default_live_resort")]
+    pub live_resort: bool,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
 }
@@ -145,6 +161,10 @@ fn default_live_refresh() -> bool {
     false
 }
 
+fn default_live_resort() -> bool {
+    false
+}
+
 impl Default for FluidMosaicSettings {
     fn default() -> Self {
         Self {
@@ -165,6 +185,7 @@ impl Default for FluidMosaicSettings {
             min_tile_size: 4,
             subdivide_threshold: 0.004,
             live_refresh: false,
+            live_resort: false,
             seed: 0,
         }
     }
@@ -528,6 +549,32 @@ pub fn refresh_fluid_mosaic_colors(
     source_a: &ImageBufferF32,
     source_b: &ImageBufferF32,
 ) -> Result<(), RenderError> {
+    resample_tiles(state, source_a, source_b, false)
+}
+
+/// Re-sample every tile's colour and patch from the **current** frame of its source
+/// **and re-bin it** — a sim-driving live re-sort. Because the cohesion force keys on
+/// the colour bin, re-binning makes colour domains migrate to follow the video: a tile
+/// whose source cell changes hue joins the new colour's group and is pulled toward it.
+/// Positions and velocities carry forward (the motion is continuous); only the bin and
+/// painted pixels update. The frames must match the state's dimensions.
+pub fn resort_fluid_mosaic_colors(
+    state: &mut FluidMosaicState,
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+) -> Result<(), RenderError> {
+    resample_tiles(state, source_a, source_b, true)
+}
+
+/// Shared body of the live colour refresh / re-sort. Re-samples each tile's colour and
+/// patch from its origin cell in the current source frame; when `resort`, also recomputes
+/// the colour bin so cohesion follows the live colour (otherwise the bin stays frozen).
+fn resample_tiles(
+    state: &mut FluidMosaicState,
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    resort: bool,
+) -> Result<(), RenderError> {
     for source in [source_a, source_b] {
         if source.width != state.width || source.height != state.height {
             return Err(RenderError::IncompatibleInputs(format!(
@@ -536,12 +583,16 @@ pub fn refresh_fluid_mosaic_colors(
             )));
         }
     }
+    let color_bins = state.color_bins;
     for i in 0..state.origin.len() {
         let origin = state.origin[i];
         let source = if origin.source == 0 { source_a } else { source_b };
         let (mean, patch) = sample_cell(source, origin.x0, origin.y0, origin.x1, origin.y1);
         state.colors[i] = mean;
         state.patches[i] = patch;
+        if resort {
+            state.bins[i] = color_bin(mean, color_bins);
+        }
     }
     Ok(())
 }
@@ -1127,5 +1178,54 @@ mod tests {
         // A mismatched frame size is rejected.
         let wrong = solid(8, 8, [0.0, 0.0, 0.0]);
         assert!(refresh_fluid_mosaic_colors(&mut state, &wrong, &b0).is_err());
+    }
+
+    #[test]
+    fn resort_rebins_so_cohesion_follows_the_live_colour() {
+        // Seed grey A + grey B, advance a frame so the sim is non-trivial.
+        let a0 = solid(16, 16, [0.2, 0.2, 0.2]);
+        let b0 = solid(16, 16, [0.2, 0.2, 0.2]);
+        let s = FluidMosaicSettings {
+            tile_size: 8,
+            settle_iterations: 4,
+            ..FluidMosaicSettings::default()
+        };
+        let mut state = initialize_fluid_mosaic(&a0, &b0, s).expect("seed");
+        state = advance_fluid_mosaic(&state, s, 1).expect("advance");
+        let before = state.clone();
+
+        // Re-sort from a red A frame + blue B frame: colours AND bins must update (so
+        // the next advance sorts on the new colours), while positions / velocities carry
+        // forward unchanged.
+        let a1 = solid(16, 16, [0.8, 0.1, 0.1]);
+        let b1 = solid(16, 16, [0.1, 0.1, 0.8]);
+        resort_fluid_mosaic_colors(&mut state, &a1, &b1).expect("resort");
+        assert_ne!(state.colors, before.colors, "resort should repaint colours");
+        assert_ne!(state.bins, before.bins, "resort should re-bin tiles");
+        assert_eq!(state.positions, before.positions, "sim positions carry forward");
+        assert_eq!(state.velocities, before.velocities, "sim velocities carry forward");
+        // The new bins match the new colours (red A tiles vs blue B tiles diverge).
+        assert_eq!(state.bins[0], color_bin([0.8, 0.1, 0.1], s.color_bins));
+        assert_eq!(state.bins[4], color_bin([0.1, 0.1, 0.8], s.color_bins));
+        assert_ne!(state.bins[0], state.bins[4], "A and B now sort into different groups");
+
+        // Determinism: re-sorting the same `before` state with the same frames reproduces
+        // byte-identical bins and colours.
+        let mut again = before.clone();
+        resort_fluid_mosaic_colors(&mut again, &a1, &b1).expect("resort again");
+        assert_eq!(again.bins, state.bins);
+        assert_eq!(again.colors, state.colors);
+
+        // Re-sort diverges from the render-only refresh: refresh freezes the bins, so a
+        // subsequent advance follows a different trajectory than the re-sorted one.
+        let mut refreshed = before.clone();
+        refresh_fluid_mosaic_colors(&mut refreshed, &a1, &b1).expect("refresh");
+        assert_eq!(refreshed.bins, before.bins, "refresh keeps bins frozen");
+        let resort_next = advance_fluid_mosaic(&state, s, 2).expect("resort advance");
+        let refresh_next = advance_fluid_mosaic(&refreshed, s, 2).expect("refresh advance");
+        assert_ne!(
+            resort_next.positions, refresh_next.positions,
+            "re-sorted bins must steer cohesion differently than frozen bins"
+        );
     }
 }

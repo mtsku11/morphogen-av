@@ -16,7 +16,7 @@ use morphogen_render::{
     synthesize_turbulence_flow, CoagulationField, CoagulationFlowSource, CoagulationSettings,
     DispersionField, DispersionSettings,
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
-    render_fluid_mosaic, FluidMosaicSettings,
+    resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -1007,10 +1007,17 @@ pub(crate) fn render_fluid_mosaic_sequence(
         // Live colour refresh: re-sample each tile's painted colour/patch from the
         // current source frame so the videos play through the mosaic. Frame 0 already
         // carries the seed colours; later frames cycle if the render outlasts a clip.
-        if request.settings.live_refresh && index > 0 {
+        // With --live-resort the re-sample also re-bins each tile, so the cohesion force
+        // follows the live colour and domains migrate to track the video (sim-driving);
+        // plain --live-refresh leaves the bins frozen (render-only).
+        if (request.settings.live_refresh || request.settings.live_resort) && index > 0 {
             let frame_a = load_image_f32(&source_a_frames[index % source_a_frames.len()])?;
             let frame_b = load_image_f32(&source_b_frames[index % source_b_frames.len()])?;
-            refresh_fluid_mosaic_colors(&mut state, &frame_a, &frame_b)?;
+            if request.settings.live_resort {
+                resort_fluid_mosaic_colors(&mut state, &frame_a, &frame_b)?;
+            } else {
+                refresh_fluid_mosaic_colors(&mut state, &frame_a, &frame_b)?;
+            }
         }
         let frame = render_fluid_mosaic(&state, request.settings)?;
         save_png(

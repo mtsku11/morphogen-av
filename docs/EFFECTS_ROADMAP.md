@@ -311,6 +311,16 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   isolates exactly the live content. Off by default; omitting `--live-refresh` is the
   off case (frame 0 byte-identical; off-vs-on cross-delta grows as the clips play,
   ≈9.7/255 by frame 59). Sources cycle if the render outlasts a clip.
-- Next: **sim-driving live re-sort** (refreshed colour also feeds cohesion so domains
-  migrate to follow the video — re-tunes the force balance), a **cluster-blob** layout
-  option, a spatially-varying dispersion/mix band, and a parity-gated Metal port.
+- **Sim-driving live re-sort: Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v5`). With `--live-resort`, the per-frame re-sample also
+  **re-bins** each tile from the current source frame, so the cohesion force (which keys
+  on the bin) follows the live colour and colour domains **migrate to track the video**
+  rather than staying frozen in their frame-zero grouping. Positions/velocities carry
+  forward; the force balance still holds (coverage stays space-filling — no boil to
+  confetti, no black voids — confirmed by Reading frame 59). Off by default; the off case
+  is render-only `--live-refresh` (bins frozen). Frame 0/1 byte-identical, off-vs-on
+  cross-delta grows as the re-binned cohesion steers domains apart (≈22/255 by frame 30,
+  ≈28/255 by frame 59 — ~3× the render-only refresh because positions, not just painted
+  pixels, diverge).
+- Next: a **cluster-blob** layout option, a spatially-varying dispersion/mix band, and a
+  parity-gated Metal port.
