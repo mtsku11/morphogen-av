@@ -17,6 +17,7 @@ use morphogen_render::{
     DispersionField, DispersionSettings,
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
     resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings,
+    fluid_advect_frame_cpu, FluidAdvectSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -961,6 +962,68 @@ pub(crate) fn render_dispersion_blend_sequence(
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct FluidAdvectSequenceRequest<'a> {
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: FluidAdvectSettings,
+    pub(crate) frames: usize,
+}
+
+/// Render the faux-fluid dye advection. The source is treated as a continuous dye:
+/// frame zero is the source verbatim, then each frame the held dye (RGBA32F in memory —
+/// the stateful internal buffer, never a re-read PNG) is advected along a procedural
+/// turbulence field and the current source frame is bled back in. Source frames cycle
+/// if the render outlasts the clip.
+pub(crate) fn render_fluid_advect_sequence(
+    request: FluidAdvectSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_frames = collect_image_frames(request.source_dir)?;
+    if source_frames.is_empty() {
+        return Err(CliError::Message(
+            "fluid advect requires at least one PNG frame in the source directory".to_string(),
+        ));
+    }
+
+    fs::create_dir_all(request.output_dir)?;
+
+    let mut previous_output: Option<ImageBufferF32> = None;
+    for index in 0..request.frames {
+        let source = load_image_f32(&source_frames[index % source_frames.len()])?;
+        let rendered = fluid_advect_frame_cpu(
+            &source,
+            previous_output.as_ref(),
+            index as u32,
+            request.settings,
+        )?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+        previous_output = Some(rendered);
+    }
+
+    println!(
+        "rendered fluid advect sequence with {} frame(s) (advect {}, turbulence-scale {}, turbulence-speed {}, reinject {}) from {} to {}",
+        request.frames,
+        request.settings.advect,
+        request.settings.turbulence_scale,
+        request.settings.turbulence_speed,
+        request.settings.reinject,
+        request.source_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult {
+        frame_count: request.frames,
+    })
 }
 
 pub(crate) struct FluidMosaicSequenceRequest<'a> {

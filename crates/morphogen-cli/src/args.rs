@@ -428,6 +428,35 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
+    /// Render a faux-fluid dye advection (experimental, deterministic; CPU-only).
+    /// A single source video is treated as a continuous "dye": each frame every pixel
+    /// is pushed along a procedural divergence-free turbulence field (semi-Lagrangian
+    /// advection) and a little of the current source frame is bled back in. The picture
+    /// becomes liquid and marbles — no tiles or particles. `--reinject 1` shows the
+    /// source verbatim (no fluid); `--advect 0 --reinject 0` holds frame zero.
+    RenderFluidAdvectSequence {
+        /// Source video frames (PNG sequence) — the dye that flows and is refreshed.
+        source_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        /// Advection distance per frame (pixels) — how far the dye is pushed each step.
+        #[arg(long, default_value_t = 6.0)]
+        advect: f32,
+        /// Turbulence spatial frequency (lattice cells per pixel). Smaller = broader currents.
+        #[arg(long, default_value_t = 0.02)]
+        turbulence_scale: f32,
+        /// Turbulence temporal evolution rate per frame (how fast the currents churn).
+        #[arg(long, default_value_t = 0.3)]
+        turbulence_speed: f32,
+        /// Source bled back into the dye each frame, in [0, 1] (the "frame refresh").
+        /// 0 = pure smear, 1 = source verbatim; ~0.05-0.15 keeps the video marbling.
+        #[arg(long, default_value_t = 0.08)]
+        reinject: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains

@@ -361,4 +361,15 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   overdriving (≈6) reproduces the boil-to-confetti failure mode *globally* (what the
   dispersion band does locally). Frame 0 byte-identical; off-vs-on cross-delta ≈23/255 by
   frame 5, ≈41/255 by frame 59 on harp/cello at `--turbulence 0.6`.
+- **Faux-fluid dye advection (NEW separate effect): Landed** (`fluid_advect.rs`, id
+  `fluid_advect_curl_noise_cpu_v1`, CLI `render-fluid-advect-sequence`). The mosaic's
+  turbulence perturbs *tiles*, so it can't produce the smooth flowing **pixel** behaviour
+  of the Faux Fluid Sim; this spin-off does. A single source video is treated as a
+  continuous dye: each frame the held dye (RGBA32F state) is advected semi-Lagrangian-style
+  along the same divergence-free curl-of-value-noise field, and `--reinject` of the current
+  source frame is bled back in (the "frame refresh"). The picture becomes liquid and
+  marbles — no tiles/particles. Stateful (frame 0 = source verbatim, prior state = dye
+  buffer). Levers: `--advect` (flow), `--reinject` 0→1 (pure smear → source verbatim,
+  ~0.08 marble). Off cases unit-tested. Deferred variants: optical-flow-driven, two-source
+  A→B, a discrete carrier (tiles/particles on this field), and Metal.
 - Next: a parity-gated Metal port for the fluid mosaic.

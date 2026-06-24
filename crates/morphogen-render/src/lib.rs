@@ -8,6 +8,7 @@ pub mod disperse;
 pub mod datamosh;
 pub mod error;
 pub mod feedback_state;
+pub mod fluid_advect;
 pub mod fluid_mosaic;
 pub mod flow;
 pub mod flow_cache;
@@ -56,6 +57,7 @@ pub use feedback_state::{
     feedback_state_path, read_flow_feedback_state, write_flow_feedback_state,
     FlowFeedbackStateDescriptor, FLOW_FEEDBACK_STATE_VERSION,
 };
+pub use fluid_advect::{fluid_advect_frame_cpu, FluidAdvectSettings, FLUID_ADVECT_ALGORITHM};
 pub use fluid_mosaic::{
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
     resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings, FluidMosaicState,
