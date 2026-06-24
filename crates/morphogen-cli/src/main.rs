@@ -409,6 +409,7 @@ fn run() -> Result<(), CliError> {
             damping,
             settle_iterations,
             jitter,
+            flat_tiles,
             seed,
         } => render_fluid_mosaic_sequence(FluidMosaicSequenceRequest {
             source_a_dir: &source_a_dir,
@@ -427,6 +428,7 @@ fn run() -> Result<(), CliError> {
                 damping,
                 settle_iterations,
                 jitter,
+                carry_texture: !flat_tiles,
                 seed,
             },
             frames,
