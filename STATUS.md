@@ -8,13 +8,31 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **325 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **330 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Discrete-carrier particle advection — NEW single-source effect (`field_particles.rs`,
+  CPU + CLI).** The third "what rides the field?" option (after the continuous dye and the
+  force-driven tile mosaic): a grid of coloured particles seeded from the source rides the
+  shared steady-vortex field — **no cohesion/repulsion, just flow**. Each frame the particle
+  positions integrate the field (forward Euler, clamped to canvas) and splat as
+  `particle_size` squares onto black, in fixed index order (last writer wins = deterministic).
+  New `initialize_field_particles`/`advance_field_particles`/`render_field_particles` +
+  `ParticleField` state, id `field_particles_vortex_cpu_v1`, CLI
+  `render-field-particles-sequence` (CPU). Stateful: frame 0 = initial grid (the checkpoint);
+  colours fixed at seed time (live-refresh deferred). **Continuity identities** (unit-tested):
+  `advect 0` holds the grid byte-identical; frame 0 is independent of advect; deterministic.
+  **Off-vs-on** (testsrc2): frame 0 ON==OFF 0.000, OFF temporal delta 0.000 (static grid), ON
+  temporal 20.5/255, ON-vs-OFF grows 77 → 98/255. **Tuning:** vortex scale must match canvas
+  size — scale 0.008 (~125px vortices) is for real footage; a 128px fixture needs ~0.03 so
+  several vortices fit and particles swirl rather than sweep to the edges (the steady-field
+  void trap). Read-confirmed the swirl look at scale 0.03. Workspace 325 → 330 (+5). Metal
+  deferred (a scatter splat — less natural than the gather kernels). See [[faux-fluid-advect]].
 
 - **Two-source A→B faux-fluid advection — NEW mutual effect (CPU + CLI).** The cross-synth
   model (A reshapes B): Source A's optical-flow motion advects Source B's colour as a

@@ -386,7 +386,7 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   `--turbulence-scale` (vortex size), `--turbulence-speed` (detail drift), `--detail`
   (0 = pure big vortices), `--reinject` (lower = more spiralling, 0→1 smear→verbatim).
   Off cases unit-tested. Deferred variants:
-  optical-flow-driven (single source), a discrete carrier (tiles/particles on this field).
+  optical-flow-driven (single source).
 - **Two-source A→B advection (mutual cross-synth): Landed** (`fluid_advect_two_source_frame_cpu`,
   id `fluid_advect_two_source_cpu_v1`, CLI `render-fluid-advect-two-source-sequence`, CPU).
   Source A's optical-flow motion (Lucas-Kanade between consecutive A frames, sized to B)
@@ -398,6 +398,18 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   0 = hold). Off-vs-on (testsrc2 A / mandelbrot B): OFF (reinject 1) == B verbatim, ON-vs-OFF
   grows 0 → ~18/255 by f11 as A's motion accumulates into B's dye (the fractal smears into
   directional streaks). Metal deferred.
+- **Discrete-carrier particle advection (the third "what rides the field?"): Landed**
+  (`field_particles.rs`: `initialize`/`advance`/`render_field_particles` + `ParticleField`
+  state, id `field_particles_vortex_cpu_v1`, CLI `render-field-particles-sequence`, CPU). A
+  grid of coloured particles seeded from the source rides the shared steady-vortex field — no
+  cohesion/repulsion, just flow (vs the continuous dye and the force-driven tile mosaic).
+  Positions integrate the field (forward Euler, clamped); each is splatted as a `particle_size`
+  square onto black in fixed index order (last writer wins = deterministic). Stateful (frame 0
+  = grid). Off cases unit-tested (advect 0 holds the grid byte-identical; frame 0 independent
+  of advect). Off-vs-on (testsrc2): OFF (advect 0) temporal delta 0.000, ON temporal 20.5/255,
+  ON-vs-OFF grows 77 → 98/255. Tuning: vortex scale must match canvas size (0.008 ~125px is for
+  real footage; a 128px fixture needs ~0.03 so particles swirl rather than sweep to the void
+  edges). Live colour re-sampling and Metal (a scatter splat) deferred.
 - **Parity-gated Metal port: Landed** (`fluid_advect.metal`, CLI `--backend metal`). A
   `fluid_advect` compute kernel reproduces the steady curl-noise vortex field in MSL —
   splitmix64 `ulong` hashing + 3D gradient (Perlin) noise on the proven
