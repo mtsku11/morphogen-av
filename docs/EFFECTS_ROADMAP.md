@@ -361,6 +361,15 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   overdriving (≈6) reproduces the boil-to-confetti failure mode *globally* (what the
   dispersion band does locally). Frame 0 byte-identical; off-vs-on cross-delta ≈23/255 by
   frame 5, ≈41/255 by frame 59 on harp/cello at `--turbulence 0.6`.
+- **Steady-vortex flow mode: Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v9`). The perfected faux-fluid vortex field (shared via
+  `vortex_field.rs`) now drives the mosaic *tiles* as a third, separately-knobbed flow:
+  `--vortex-flow > 0` adds the steady curl-of-gradient-noise velocity to each tile so
+  colour domains flow and swirl along persistent vortices (`--vortex-scale`/`-detail`/
+  `-speed`). Off by default (byte-identical to v8). Tuning: a steady coherent field
+  advects all tiles the same way, so past ~0.4 it sweeps them out of their domains faster
+  than cohesion refills (black voids); sweet spot ≈0.2–0.3. The mosaic is discrete tiles,
+  so it swirls gracefully but can't be pushed as hard as the continuous dye advection.
 - **Faux-fluid dye advection (NEW separate effect): Landed** (`fluid_advect.rs`, id
   `fluid_advect_curl_noise_cpu_v1`, CLI `render-fluid-advect-sequence`). The mosaic's
   turbulence perturbs *tiles*, so it can't produce the smooth flowing **pixel** behaviour

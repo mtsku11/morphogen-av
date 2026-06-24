@@ -8,13 +8,28 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **287 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **288 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Fluid Colour-Sort Mosaic — steady-vortex flow mode (Slice 9, CPU + CLI).** The
+  perfected faux-fluid vortex field, now driving the mosaic *tiles* as a new opt-in flow
+  (the user asked to "add as a new mode" — analytic fluid + value-noise turbulence stay).
+  Extracted the steady-vortex field into a shared `vortex_field.rs`
+  (`steady_vortex_velocity`); `fluid_advect` refactored to call it (verified
+  byte-identical). `--vortex-flow > 0` adds that velocity to each tile so colour domains
+  flow and swirl along persistent vortices; four serde-defaulted knobs; algo id v8 → v9;
+  `vortex_flow 0` skips the call ⇒ byte-identical to v8. **Tuning:** a *steady, coherent*
+  field advects all tiles the same way, so past ~0.4 it sweeps tiles out of their domains
+  faster than cohesion refills → black voids; sweet spot ≈0.2–0.3 (domains swirl while
+  staying space-filling). The mosaic is discrete tiles held by cohesion, so it can't be
+  pushed as hard as the continuous dye. **Off-vs-on** (harp/cello, vortex 0.25 scale
+  0.006): frame 0 byte-identical, cross-delta ≈42/255 f30 → ≈46/255 f59. New unit test.
+  See [[fluid-colour-sort-mosaic]].
 
 - **Faux-fluid dye advection — NEW effect (`fluid_advect.rs`, CPU + CLI).** A separate,
   single-source effect that ports the *Faux Fluid Sim* shadertoy **pixel** behaviour —

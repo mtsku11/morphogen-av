@@ -580,6 +580,19 @@ pub(crate) enum Commands {
         /// Turbulence temporal evolution rate per frame (how fast the currents churn).
         #[arg(long, default_value_t = 0.3)]
         turbulence_speed: f32,
+        /// Steady-vortex flow amplitude (pixels/step) — the shared faux-fluid vortex field
+        /// added to each tile so colour domains swirl along persistent vortices. 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        vortex_flow: f32,
+        /// Vortex scale (lattice cells per pixel) for the vortex flow. Smaller = larger vortices.
+        #[arg(long, default_value_t = 0.008)]
+        vortex_scale: f32,
+        /// Fine-detail octave weight for the vortex flow (big vortices stay steady).
+        #[arg(long, default_value_t = 0.1)]
+        vortex_detail: f32,
+        /// Drift rate per frame of the vortex flow's fine detail.
+        #[arg(long, default_value_t = 0.06)]
+        vortex_speed: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
