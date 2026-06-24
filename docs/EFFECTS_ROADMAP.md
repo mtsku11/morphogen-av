@@ -236,6 +236,28 @@ mixture weight `w ∈ [0,1]` (`0` = all B, `1` = all A). Per frame:
   (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
   Metal field-build/advance kernel (the remaining CPU stage) gated against the CPU
   reference.
-- Future high-quality version: curl-noise turbulence advection, multi-class ownership
-  (more than two sources / hybrid phases), motion- and audio-driven coagulation, and a
-  Metal field-update kernel gated against the CPU reference.
+
+## Colour-Group Dispersion Blend
+
+The **content-advecting** sibling of the coagulation blend. Coagulation composites A
+and B *in place* behind a moving ownership mask (a moving-edge dissolve); this path
+advects the image **content itself**, per block, so colour-grouped tiles physically
+flow, shatter, and intermix. The target look: crisp glitch tiles of both sources that
+first flow together along a directional current, then break apart and disperse from
+their groups (perpetual churn).
+
+- Modulator/Carrier: Source A + Source B frames (matched dims); A's optical flow is
+  the directional current.
+- Output: both sources sampled at a per-block displaced coordinate and blended by the
+  (also displaced) colour-group ownership field, so A-tiles and B-tiles interleave.
+- Cached/stateful: the colour-group ownership field (reused from the coagulation
+  effect) and a per-block content-offset field, both carried frame-to-frame.
+- First MVP version: **Landed** (CPU + CLI `render-dispersion-blend-sequence`). A
+  stateful per-block offset accumulates `coherent·current + dispersion·scatter`
+  (damped/bounded); `dispersion` ramps `0→1` then churns. Block size = fine tiles;
+  frame-zero starts in place. Algorithm id `colour_group_dispersion_blend_cpu_v1`.
+  Locked v1 forks: directional-current-then-scatter, perpetual churn, fine tiles.
+- Future high-quality version: a spatially-varying **dispersion band** (concentrate the
+  shatter along a transition curve, like a glitch wipe), selectable/synthetic flow
+  fields (turbulence, radial, custom vector fields), transition and disperse-then-
+  re-form arcs, coarse/mixed tile scales, and a parity-gated Metal composite.
