@@ -40,6 +40,13 @@
 //! velocities still carry forward; only the colour bin (and painted pixels) updates.
 //! Without a refresh/resort call the path stays self-contained (seeded from each
 //! source's first frame).
+//!
+//! `cluster_blob` swaps the cohesion *target*: instead of the local same-colour mean
+//! (which phase-separates colours into domains in place), every tile is pulled toward
+//! its colour bin's **global** centroid, so each colour collapses into a single compact
+//! blob (stiff repulsion keeps the blob a disc rather than a point). It is the
+//! "gather each colour into one cluster" reading of self-sorting, opposite to the
+//! default's screen-filling decomposition.
 //! Metal is a later slice. Determinism: splitmix64 hashing, fixed-timestep
 //! integration, no wall clock.
 //!
@@ -55,13 +62,15 @@ use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the force model, tile
 /// formulation, or the content a tile paints changes so stale caches/checkpoints
-/// invalidate. `v5` adds sim-driving live re-sort (`live_resort`: refreshed colour also
-/// re-bins each tile so cohesion follows the video); `v4` added render-only live colour
-/// refresh (each tile can re-sample its painted colour/patch from the current source
-/// frame); `v3` added variable-size tiles (`adaptive_tiles`: quadtree subdivision +
-/// size-aware repulsion); `v2` added texture patches (`carry_texture`); `v1` was flat
-/// uniform mean colour only.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v5";
+/// invalidate. `v6` adds the cluster-blob layout (`cluster_blob`: cohesion pulls each
+/// tile toward its colour bin's *global* centroid so each colour gathers into one blob,
+/// vs the default local-mean phase separation); `v5` adds sim-driving live re-sort
+/// (`live_resort`: refreshed colour also re-bins each tile so cohesion follows the
+/// video); `v4` added render-only live colour refresh (each tile can re-sample its
+/// painted colour/patch from the current source frame); `v3` added variable-size tiles
+/// (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added texture
+/// patches (`carry_texture`); `v1` was flat uniform mean colour only.
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v6";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -137,6 +146,18 @@ pub struct FluidMosaicSettings {
     /// frame-zero values (the `v4` render-only refresh, or a self-contained sim).
     #[serde(default = "default_live_resort")]
     pub live_resort: bool,
+    /// When `true`, cohesion pulls each tile toward its colour bin's **global**
+    /// centroid (the mean position of *all* same-colour tiles on the canvas) instead
+    /// of the local neighbourhood mean — so each colour gathers into a single compact
+    /// **blob** rather than phase-separating into many in-place domains. Stiff
+    /// repulsion still keeps a blob from collapsing to a point (it rests as a disc
+    /// sized by its tile count). `cohesion_radius` is ignored for the cohesion pull in
+    /// this mode (the reach is global). When `false`, cohesion is local (the default
+    /// screen-filling self-sorting look). Caveat: colours that start spatially uniform
+    /// share a near-identical centroid (the canvas centre), so the blobs separate only
+    /// when each colour is spatially concentrated in the source.
+    #[serde(default = "default_cluster_blob")]
+    pub cluster_blob: bool,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
 }
@@ -165,6 +186,10 @@ fn default_live_resort() -> bool {
     false
 }
 
+fn default_cluster_blob() -> bool {
+    false
+}
+
 impl Default for FluidMosaicSettings {
     fn default() -> Self {
         Self {
@@ -186,6 +211,7 @@ impl Default for FluidMosaicSettings {
             subdivide_threshold: 0.004,
             live_refresh: false,
             live_resort: false,
+            cluster_blob: false,
             seed: 0,
         }
     }
@@ -690,12 +716,42 @@ fn color_bin(color: [f32; 3], color_bins: u32) -> u32 {
     (q(color[0]) * levels + q(color[1])) * levels + q(color[2])
 }
 
-/// Per-tile neighbour force = local same-colour **cohesion** (pull toward the mean
-/// position of nearby same-bin tiles) plus colour-blind short-range **repulsion**.
-/// A uniform spatial-hash grid (cell = `cohesion_radius`, the larger radius) keeps
-/// this O(N · local density) rather than O(N²): each tile only tests neighbours in
-/// its own and the eight adjacent cells. Exactly-coincident tiles (common at frame
-/// zero, where A's and B's grids overlap) are separated along a deterministic
+/// Global centroid (mean position) of every colour bin, indexed by bin in
+/// `0..color_bins^3`. `None` for an unoccupied bin. The cluster-blob cohesion target:
+/// pulling each tile toward its bin's entry gathers a colour into one blob.
+fn global_bin_centroids(state: &FluidMosaicState) -> Vec<Option<[f32; 2]>> {
+    let levels = state.color_bins.max(2) as usize;
+    let nbins = levels * levels * levels;
+    let mut sum = vec![[0.0_f32, 0.0]; nbins];
+    let mut count = vec![0.0_f32; nbins];
+    for (i, p) in state.positions.iter().enumerate() {
+        let b = state.bins[i] as usize;
+        if b < nbins {
+            sum[b][0] += p[0];
+            sum[b][1] += p[1];
+            count[b] += 1.0;
+        }
+    }
+    sum.iter()
+        .zip(&count)
+        .map(|(s, &c)| {
+            if c > 0.0 {
+                Some([s[0] / c, s[1] / c])
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Per-tile neighbour force = same-colour **cohesion** plus colour-blind short-range
+/// **repulsion**. Cohesion pulls each tile toward the mean position of nearby same-bin
+/// tiles (the local, phase-separating default) or — when `cluster_blob` — toward its
+/// bin's *global* centroid (gathering each colour into one blob). Repulsion always uses
+/// a uniform spatial-hash grid (cell = `cohesion_radius`, the larger radius) so the
+/// near-field stays O(N · local density) rather than O(N²): each tile only tests
+/// neighbours in its own and the eight adjacent cells. Exactly-coincident tiles (common
+/// at frame zero, where A's and B's grids overlap) are separated along a deterministic
 /// per-tile hashed direction.
 fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> Vec<[f32; 2]> {
     let n = state.positions.len();
@@ -704,6 +760,15 @@ fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> V
     if !cohesion_on && !repulsion_on {
         return vec![[0.0, 0.0]; n];
     }
+
+    // Cluster-blob cohesion targets each colour bin's global centroid (precomputed once)
+    // instead of the local same-colour mean gathered per tile in the grid loop below.
+    let cluster = cohesion_on && settings.cluster_blob;
+    let centroids = if cluster {
+        Some(global_bin_centroids(state))
+    } else {
+        None
+    };
 
     // The repulsion reach is a fixed radius for uniform tiles, but with adaptive sizes
     // a pair's target spacing is (size_i + size_j)/2 ≤ max tile size, so the grid cell
@@ -783,7 +848,7 @@ fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> V
                         }
                     }
 
-                    if cohesion_on && state.bins[j] == bin && d2 < coh_r2 {
+                    if cohesion_on && !cluster && state.bins[j] == bin && d2 < coh_r2 {
                         coh_sum[0] += q[0];
                         coh_sum[1] += q[1];
                         coh_count += 1.0;
@@ -794,7 +859,13 @@ fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> V
 
         let mut ax = rep[0];
         let mut ay = rep[1];
-        if coh_count > 0.0 {
+        if let Some(centroids) = &centroids {
+            // Cluster-blob: pull toward this colour bin's global centroid.
+            if let Some(Some(c)) = centroids.get(bin as usize) {
+                ax += (c[0] - p[0]) * settings.cohesion;
+                ay += (c[1] - p[1]) * settings.cohesion;
+            }
+        } else if coh_count > 0.0 {
             // Pull toward the local same-colour mean position.
             ax += (coh_sum[0] / coh_count - p[0]) * settings.cohesion;
             ay += (coh_sum[1] / coh_count - p[1]) * settings.cohesion;
@@ -1227,5 +1298,86 @@ mod tests {
             resort_next.positions, refresh_next.positions,
             "re-sorted bins must steer cohesion differently than frozen bins"
         );
+    }
+
+    #[test]
+    fn cluster_blob_pulls_same_colour_to_global_centroid() {
+        // Two same-colour tiles placed far apart (beyond cohesion_radius) with no other
+        // tiles and repulsion off. Local cohesion can't see across the gap → ~zero
+        // force; cluster-blob pulls each toward their shared global centroid (the
+        // midpoint), so the colour gathers into one blob regardless of separation.
+        let red = [0.9_f32, 0.1, 0.1];
+        let bin = color_bin(red, 5);
+        let state = FluidMosaicState {
+            width: 200,
+            height: 200,
+            tile_size: 8,
+            color_bins: 5,
+            positions: vec![[20.0, 100.0], [180.0, 100.0]],
+            velocities: vec![[0.0, 0.0]; 2],
+            colors: vec![red; 2],
+            patches: vec![
+                TilePatch {
+                    width: 0,
+                    height: 0,
+                    pixels: Vec::new(),
+                };
+                2
+            ],
+            bins: vec![bin; 2],
+            sizes: vec![8; 2],
+            origin: vec![
+                TileOrigin {
+                    source: 0,
+                    x0: 0,
+                    y0: 0,
+                    x1: 8,
+                    y1: 8,
+                };
+                2
+            ],
+        };
+        let base = FluidMosaicSettings {
+            cohesion: 0.05,
+            cohesion_radius: 24.0,
+            repulsion: 0.0,
+            ..FluidMosaicSettings::default()
+        };
+
+        // Local cohesion: 160px apart ≫ radius 24 ⇒ neither tile sees the other ⇒ no pull.
+        let local = neighbor_forces(
+            &state,
+            FluidMosaicSettings {
+                cluster_blob: false,
+                ..base
+            },
+        );
+        assert!(
+            local[0][0].abs() < 1e-6 && local[1][0].abs() < 1e-6,
+            "local cohesion must not reach across the gap: {local:?}"
+        );
+
+        // Cluster-blob: centroid x = 100, so the left tile (x=20) pulls +x and the right
+        // (x=180) pulls −x, by 80·0.05 = 4.0 each (no y component — both at y=100).
+        let blob = neighbor_forces(
+            &state,
+            FluidMosaicSettings {
+                cluster_blob: true,
+                ..base
+            },
+        );
+        assert!((blob[0][0] - 4.0).abs() < 1e-4, "left tile pulled to centre: {blob:?}");
+        assert!((blob[1][0] + 4.0).abs() < 1e-4, "right tile pulled to centre: {blob:?}");
+        assert!(blob[0][1].abs() < 1e-6 && blob[1][1].abs() < 1e-6, "no y pull: {blob:?}");
+
+        // Determinism.
+        let again = neighbor_forces(
+            &state,
+            FluidMosaicSettings {
+                cluster_blob: true,
+                ..base
+            },
+        );
+        assert_eq!(blob, again);
     }
 }

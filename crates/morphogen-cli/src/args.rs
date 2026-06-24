@@ -514,6 +514,11 @@ pub(crate) enum Commands {
         /// live colour refresh. Off by default; render-only --live-refresh is the off case.
         #[arg(long)]
         live_resort: bool,
+        /// Cluster-blob layout: cohesion pulls each tile toward its colour bin's global
+        /// centroid so each colour gathers into one compact blob, instead of the default
+        /// local phase-separation into screen-filling domains. Off by default.
+        #[arg(long)]
+        cluster_blob: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },

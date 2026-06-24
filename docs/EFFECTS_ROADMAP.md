@@ -322,5 +322,17 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   cross-delta grows as the re-binned cohesion steers domains apart (≈22/255 by frame 30,
   ≈28/255 by frame 59 — ~3× the render-only refresh because positions, not just painted
   pixels, diverge).
-- Next: a **cluster-blob** layout option, a spatially-varying dispersion/mix band, and a
-  parity-gated Metal port.
+- **Cluster-blob layout: Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v6`). With `--cluster-blob`, cohesion pulls each tile
+  toward its colour bin's **global** centroid (the mean position of *all* same-colour
+  tiles) instead of the local same-colour mean, so each colour gathers into a single
+  compact **blob** rather than phase-separating into screen-filling domains in place;
+  stiff repulsion still keeps a blob a disc, not a point. `cohesion_radius` is ignored
+  for the cohesion pull in this mode (the reach is global). Off by default (local
+  cohesion is the off case). Caveat: spatially-uniform colours share a near-identical
+  centroid (the canvas centre), so the blobs separate only when each colour is
+  spatially concentrated in the source. Off-vs-on readout (a fixture with red split
+  into two discs + a blue disc): cluster-blob merges the two red discs into one blob at
+  red's global centroid while local cohesion keeps them as two domains — cross-delta
+  ≈57.8/255 at frame 0 (the settle pass already diverges) settling to ≈49.5/255.
+- Next: a spatially-varying dispersion/mix band and a parity-gated Metal port.
