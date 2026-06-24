@@ -508,6 +508,12 @@ pub(crate) enum Commands {
         /// render outlasts the clip. Off by default; omitting it is the off case.
         #[arg(long)]
         live_refresh: bool,
+        /// Sim-driving live re-sort: like --live-refresh, but also re-bins each tile from
+        /// the current source frame so the cohesion force follows the live colour and
+        /// domains migrate to track the video (not just the painted pixels). Implies the
+        /// live colour refresh. Off by default; render-only --live-refresh is the off case.
+        #[arg(long)]
+        live_resort: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },

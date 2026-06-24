@@ -414,6 +414,7 @@ fn run() -> Result<(), CliError> {
             min_tile_size,
             subdivide_threshold,
             live_refresh,
+            live_resort,
             seed,
         } => render_fluid_mosaic_sequence(FluidMosaicSequenceRequest {
             source_a_dir: &source_a_dir,
@@ -437,6 +438,7 @@ fn run() -> Result<(), CliError> {
                 min_tile_size,
                 subdivide_threshold,
                 live_refresh,
+                live_resort,
                 seed,
             },
             frames,
