@@ -39,6 +39,8 @@ Flow feedback is now a CPU/Metal temporal render path with one shared contract:
 
 `advect_feedback.metal` samples the current carrier with `carrier_amount`, samples the previous output with `feedback_amount`, applies `decay`, then blends the two with `feedback_mix`. Frame zero reuses the existing Metal flow-displacement kernel, because there is no history texture. The runtime compiles with fast math disabled and compares every Metal frame to the CPU reference before writing its export image. The MVP validates `iterations == 1`; future multi-iteration behavior must add explicit ping-pong texture semantics before it is enabled. Realtime preview may reduce resolution, but it must not change state-update ordering.
 
+`fluid_advect_two_source.metal` is the equivalent one-pass A-to-B path: Source A's RG32F optical flow backward-samples the previous Source B dye with manual bilinear and border clamping, then blends in the current B frame by `reinject`. Frame zero remains B verbatim because no prior A frame exists. Both the two-source and self-driven optical-flow CLI commands run the kernel only after it has been compared against `fluid_advect_two_source_frame_cpu` for that exact frame.
+
 ## Granular Mosaic
 
 `granular_mosaic.metal` receives the float Source B carrier texture and the CPU-generated row-major grain-selection index map. It maps every output pixel to its selected carrier tile, blends original and selected coordinates by `rearrangement`, then uses the same linear, clamp-to-edge sampling convention as the CPU renderer. Descriptor analysis and Source A luma matching remain on the CPU in this milestone, preserving the validated cache contract.

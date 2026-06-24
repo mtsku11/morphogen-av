@@ -387,16 +387,18 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   (0 = pure big vortices), `--reinject` (lower = more spiralling, 0→1 smear→verbatim).
   Off cases unit-tested.
 - **Two-source A→B advection (mutual cross-synth): Landed** (`fluid_advect_two_source_frame_cpu`,
-  id `fluid_advect_two_source_cpu_v1`, CLI `render-fluid-advect-two-source-sequence`, CPU).
+  id `fluid_advect_two_source_cpu_v1`, CLI `render-fluid-advect-two-source-sequence`, CPU +
+  parity-gated Metal).
   Source A's optical-flow motion (Lucas-Kanade between consecutive A frames, sized to B)
   advects Source B's colour as a continuous dye — A reshapes B, the app's core model. The
-  advect step reuses the parity-gated `flow_displace_cpu` (so a future Metal port is
-  `flow_displace_metal` + the reinject composite, the datamosh pattern); a fraction of the
-  current B frame is reinjected each frame. Bounded by the shorter clip (no cyclic wrap).
+  advection step reuses the parity-gated displacement convention; `fluid_advect_two_source.metal`
+  performs the manual-bilinear displacement and B reinjection in one pass, then the CLI compares
+  each GPU frame with the CPU reference. A fraction of the current B frame is reinjected each
+  frame. Bounded by the shorter clip (no cyclic wrap).
   Off cases unit-tested (frame 0 = B verbatim; reinject 1 = B verbatim; advect 0 + reinject
   0 = hold). Off-vs-on (testsrc2 A / mandelbrot B): OFF (reinject 1) == B verbatim, ON-vs-OFF
   grows 0 → ~18/255 by f11 as A's motion accumulates into B's dye (the fractal smears into
-  directional streaks). Metal deferred.
+  directional streaks).
 - **Discrete-carrier particle advection (the third "what rides the field?"): Landed**
   (`field_particles.rs`: `initialize`/`advance`/`render_field_particles` + `ParticleField`
   state, id `field_particles_vortex_cpu_v1`, CLI `render-field-particles-sequence`, CPU). A
@@ -414,14 +416,14 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   static source ON==OFF byte-identical (no-op), moving source ON-vs-OFF tracks the playing
   video. Metal (a scatter splat) deferred.
 - **Single-source optical-flow-driven advection: Landed** (CLI
-  `render-optical-flow-advect-sequence`, CPU). The video advected by its own motion — the
+  `render-optical-flow-advect-sequence`, CPU + parity-gated Metal). The video advected by its own motion — the
   self-driven case of the two-source advection (source = both modulator and carrier), so it
   reuses `fluid_advect_two_source_frame_cpu` with the flow taken from the source's consecutive
   frames. Distinct from the procedural-vortex `render-fluid-advect-sequence`: the field is the
   source's *real* motion. Off-vs-on (moving testsrc2): OFF (reinject 1) == source verbatim,
   ON-vs-OFF tracks the source's actual motion (non-monotonic — ebbs with the real motion,
-  unlike the procedural field's steady accumulation). Metal deferred (reuses
-  `flow_displace_metal` + reinject, like two-source).
+  unlike the procedural field's steady accumulation). Its Metal path shares the two-source
+  kernel and per-frame CPU parity gate.
 - **Parity-gated Metal port: Landed** (`fluid_advect.metal`, CLI `--backend metal`). A
   `fluid_advect` compute kernel reproduces the steady curl-noise vortex field in MSL —
   splitmix64 `ulong` hashing + 3D gradient (Perlin) noise on the proven

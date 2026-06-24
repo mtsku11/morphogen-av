@@ -10,7 +10,7 @@ The long-term goal is an audiovisual modular synthesizer where compatible analys
 
 ## Current Status
 
-This repository is an initial production-quality scaffold with deterministic vertical slices. The Rust CLI can create and inspect project JSON, probe and extract proxy media through optional FFmpeg tools, render synthetic and real A-modulates-B displacement and temporal-feedback sequences, produce reusable analysis sidecars, and persist resumable offline render queues with timing and source/cache provenance. The Metal crate compiles and submits flow displacement plus the one-pass feedback/advection kernel on macOS, gated against the CPU reference. The SwiftUI app shell can select movie sources, extract them to PNG/WAV proxies, submit the proxy frames as a persisted queue job, inspect decoded source previews, and export completed queue bundles to ProRes `.mov`.
+This repository is an initial production-quality scaffold with deterministic vertical slices. The Rust CLI can create and inspect project JSON, probe and extract proxy media through optional FFmpeg tools, render synthetic and real A-modulates-B displacement, temporal feedback, and fluid-advection sequences, produce reusable analysis sidecars, and persist resumable offline render queues with timing and source/cache provenance. The Metal crate compiles and submits flow displacement, feedback, and one-/two-source advection kernels on macOS, gated against the CPU reference. The SwiftUI app shell can select movie sources, extract them to PNG/WAV proxies, submit the proxy frames as a persisted queue job, inspect decoded source previews, and export completed queue bundles to ProRes `.mov`.
 
 ## What Works Now
 

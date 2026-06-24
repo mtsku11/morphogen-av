@@ -8,13 +8,25 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **332 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **334 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Flow-driven advect — parity-gated Metal port (two-source + single-source).** A
+  `fluid_advect_two_source` Metal kernel does the parity-gated displace (reading A's flow from
+  an RG32F texture) + the reinject composite in one pass, matching
+  `fluid_advect_two_source_frame_cpu`. Exposed via `--backend metal` on both
+  `render-fluid-advect-two-source-sequence` and `render-optical-flow-advect-sequence` (the
+  single-source case reuses the same per-frame core). The CLI runs kernel + CPU per frame and
+  errors past `METAL_CPU_PARITY_EPSILON`. Parity test holds at 1/255 on device; end-to-end on
+  testsrc2/mandelbrot, both effects render with Metal-vs-CPU output **0.000/255** (byte-
+  identical after PNG quantization). Workspace 332 → 334 (+2). **Remaining fluid-advect-family
+  deferral: just the particle scatter-splat Metal** (needs ordered/atomic resolution for
+  last-writer parity). See [[faux-fluid-advect]].
 
 - **Field particles — opt-in live colour (`--live-colour`).** Particle colours were frozen at
   seed time, so video didn't play through. Now each particle can re-sample its **origin cell**
