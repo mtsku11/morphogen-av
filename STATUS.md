@@ -8,12 +8,24 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **334 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **336 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Field-particles splat — parity-gated Metal port.** A `field_particles_splat` kernel
+  rasterizes the CPU-computed particle carrier: each output pixel **gathers** the last
+  (highest-index) particle whose `particle_size` square covers it, matching the CPU
+  last-writer-wins **scatter** byte-for-byte (positions are the CPU floats uploaded verbatim,
+  so `round()` lands on the same cells). `ParticleField` gained `dimensions()`/`splat_buffer()`
+  accessors. Exposed via `--backend metal` on `render-field-particles-sequence` with a per-frame
+  CPU parity gate. Parity test at **1e-6** on device (byte-identical); end-to-end Metal-vs-CPU
+  **0.000/255**. **Caveat:** the gather is O(w·h·particles) — for a dense grid that's *more* work
+  than the CPU scatter, so it's correctness-first; a tiled/binned scatter is the perf follow-up
+  (like the large-K convolution kernel). Workspace 334 → 336 (+2). **This completes all
+  fluid-advect-family Metal ports — nothing deferred remains.** See [[faux-fluid-advect]].
 
 - **Flow-driven advect — parity-gated Metal port (two-source + single-source).** A
   `fluid_advect_two_source` Metal kernel does the parity-gated displace (reading A's flow from
@@ -23,9 +35,7 @@ _Last updated: 2026-06-24_
   single-source case reuses the same per-frame core). The CLI runs kernel + CPU per frame and
   errors past `METAL_CPU_PARITY_EPSILON`. Parity test holds at 1/255 on device; end-to-end on
   testsrc2/mandelbrot, both effects render with Metal-vs-CPU output **0.000/255** (byte-
-  identical after PNG quantization). Workspace 332 → 334 (+2). **Remaining fluid-advect-family
-  deferral: just the particle scatter-splat Metal** (needs ordered/atomic resolution for
-  last-writer parity). See [[faux-fluid-advect]].
+  identical after PNG quantization). Workspace 332 → 334 (+2). See [[faux-fluid-advect]].
 
 - **Field particles — opt-in live colour (`--live-colour`).** Particle colours were frozen at
   seed time, so video didn't play through. Now each particle can re-sample its **origin cell**

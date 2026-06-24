@@ -414,7 +414,11 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   re-samples its origin cell from the current source frame so the video plays through the flow
   (positions untouched, colours updated; the `fluid_mosaic` live-refresh semantics). Off-vs-on:
   static source ON==OFF byte-identical (no-op), moving source ON-vs-OFF tracks the playing
-  video. Metal (a scatter splat) deferred.
+  video. **Metal splat: Landed** (`field_particles_splat.metal`) — the CPU-computed carrier is
+  rasterized by a per-pixel last-writer-wins gather (byte-identical to the CPU scatter; positions
+  uploaded verbatim), `--backend metal` with a per-frame parity gate. Caveat: O(w·h·particles),
+  more work than the CPU scatter for a dense grid — correctness-first, a tiled scatter is the
+  perf follow-up.
 - **Single-source optical-flow-driven advection: Landed** (CLI
   `render-optical-flow-advect-sequence`, CPU + parity-gated Metal). The video advected by its own motion — the
   self-driven case of the two-source advection (source = both modulator and carrier), so it
