@@ -4,6 +4,7 @@ pub mod audio_route;
 pub mod coagulate;
 pub mod conv_blend;
 pub mod cpu_reference;
+pub mod disperse;
 pub mod datamosh;
 pub mod error;
 pub mod feedback_state;
@@ -26,6 +27,10 @@ pub use coagulate::{
     coagulated_blend_temporal_frame_cpu, coagulation_field, composite_with_field,
     downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
     CoagulationFlowSource, CoagulationSettings, COAGULATED_BLEND_ALGORITHM,
+};
+pub use disperse::{
+    advance_dispersion_field, disperse_composite_cpu, DispersionField, DispersionSettings,
+    DISPERSION_BLEND_ALGORITHM,
 };
 pub use conv_blend::{
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu, convolution_blend_color_cpu,

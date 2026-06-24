@@ -366,6 +366,68 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
+    /// Render a colour-group dispersion blend (experimental, deterministic). Unlike
+    /// the coagulated blend (which composites in place behind a moving mask), this
+    /// advects the image *content* per block: colour-grouped tiles first flow along a
+    /// directional current, then a growing random walk shatters and intermixes them
+    /// (perpetual churn). CPU-only for now.
+    RenderDispersionBlendSequence {
+        /// Source A video frames (PNG sequence).
+        source_a_dir: PathBuf,
+        /// Source B video frames (PNG sequence).
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Tile edge length in pixels (fine ⇒ a dense glitch spray).
+        #[arg(long, default_value_t = 8)]
+        block_size: u32,
+        /// Weight on per-tile mean-colour luminance in the A/B ownership preference.
+        #[arg(long, default_value_t = 1.0)]
+        color_weight: f32,
+        /// Weight on per-tile texture energy in the ownership preference.
+        #[arg(long, default_value_t = 0.4)]
+        texture_weight: f32,
+        /// Master ownership coagulation amount.
+        #[arg(long, default_value_t = 1.6)]
+        coagulation_strength: f32,
+        /// Seeded per-tile scatter on the ownership preference.
+        #[arg(long, default_value_t = 0.5)]
+        randomness: f32,
+        /// Spatial-coherence relaxation passes for the ownership field.
+        #[arg(long, default_value_t = 2)]
+        coherence_passes: u32,
+        /// Per-pass neighbour pull for the ownership field, in [0, 1].
+        #[arg(long, default_value_t = 0.5)]
+        coherence_strength: f32,
+        /// Baseline A ownership added to every tile.
+        #[arg(long, default_value_t = 0.4)]
+        bias: f32,
+        /// How much each frame re-seeds the ownership field from fresh descriptors.
+        #[arg(long, default_value_t = 0.4)]
+        ownership_refresh: f32,
+        /// Scales the coherent current (block-mean optical flow) per block.
+        #[arg(long, default_value_t = 1.0)]
+        coherent_amount: f32,
+        /// Max per-frame random scatter step (pixels) at full dispersion.
+        #[arg(long, default_value_t = 3.0)]
+        scatter_amount: f32,
+        /// Per-frame damping of accumulated offset in [0, 1) (keeps churn bounded).
+        #[arg(long, default_value_t = 0.9)]
+        damping: f32,
+        /// Frames over which dispersion ramps from 0 to full (0 = full immediately).
+        #[arg(long, default_value_t = 24)]
+        dispersion_ramp: u32,
+        /// Output feedback smear: fraction of the previous frame held into this one,
+        /// leaving directional streaks as tiles flow (0 = none).
+        #[arg(long, default_value_t = 0.0)]
+        smear: f32,
+        /// Per-frame decay of the held smear trail (1 = no fade).
+        #[arg(long, default_value_t = 0.85)]
+        smear_decay: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
     /// Render a descriptor-coagulated flow blend (experimental, deterministic;
     /// Slice 1 — CPU-only, single-frame, no advection/feedback yet). Both sources
     /// are mangled together: cells group into irregular coagulated patches by

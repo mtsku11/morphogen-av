@@ -2,7 +2,7 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CoagulationSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
+    CoagulationSettings, DispersionSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
 };
 
 mod args;
@@ -343,6 +343,52 @@ fn run() -> Result<(), CliError> {
             },
             kernel_mode: kernel_mode.into(),
             backend: backend.into(),
+            max_frames,
+        })
+        .map(|_| ()),
+        Commands::RenderDispersionBlendSequence {
+            source_a_dir,
+            source_b_dir,
+            output_dir,
+            block_size,
+            color_weight,
+            texture_weight,
+            coagulation_strength,
+            randomness,
+            coherence_passes,
+            coherence_strength,
+            bias,
+            ownership_refresh,
+            coherent_amount,
+            scatter_amount,
+            damping,
+            dispersion_ramp,
+            smear,
+            smear_decay,
+            seed,
+            max_frames,
+        } => render_dispersion_blend_sequence(DispersionBlendSequenceRequest {
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: DispersionSettings {
+                block_size,
+                color_weight,
+                texture_weight,
+                coagulation_strength,
+                randomness,
+                coherence_passes,
+                coherence_strength,
+                bias,
+                coherent_amount,
+                scatter_amount,
+                damping,
+                seed,
+            },
+            ownership_refresh,
+            dispersion_ramp,
+            smear,
+            smear_decay,
             max_frames,
         })
         .map(|_| ()),
