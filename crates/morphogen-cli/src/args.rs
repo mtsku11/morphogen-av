@@ -534,6 +534,16 @@ pub(crate) enum Commands {
         /// Dispersion-band centre at frame zero, as a fraction of the canvas width (0..1).
         #[arg(long, default_value_t = 0.0)]
         band_start: f32,
+        /// Faux-fluid turbulence amplitude (pixels/step) — a curl-of-value-noise field
+        /// added to the analytic fluid for organic, evolving currents. 0 (default) = off.
+        #[arg(long, default_value_t = 0.0)]
+        turbulence: f32,
+        /// Turbulence spatial frequency (lattice cells per pixel). Smaller = broader currents.
+        #[arg(long, default_value_t = 0.02)]
+        turbulence_scale: f32,
+        /// Turbulence temporal evolution rate per frame (how fast the currents churn).
+        #[arg(long, default_value_t = 0.3)]
+        turbulence_speed: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },

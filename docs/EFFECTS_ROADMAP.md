@@ -347,4 +347,18 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   default (`--dispersion-band 0`); frame 0 is byte-identical (the band acts only on
   advance) and the off-vs-on cross-delta grows from 0 as the wipe scatters tiles
   (≈16/255 by frame 11, ≈50/255 by frame 47 on the harp/cello clip).
+- **Faux-fluid turbulence: Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v8`). Ported the *faux-fluid* shadertoy look: the
+  analytic fluid is a regular swirl lattice, so `--turbulence > 0` adds an **organic**
+  streamfunction — two octaves of value noise (built on the same splitmix hash, GPU-safe,
+  not trig-hashing) whose lattices drift in different directions so the field *evolves*
+  rather than rigidly translating. Its analytic curl is divergence-free by construction
+  (the property the base field relies on to marble without collapsing), so the tuned
+  forces are preserved; `--turbulence-scale`/`--turbulence-speed` set frequency/churn, and
+  the turbulence shares the dispersion band's gain. Off by default (`--turbulence 0`,
+  byte-identical to v7's analytic-only field). **Tuning:** amplitude reads in pixels like
+  `fluid_strength` — the sweet spot is ≈0.6 (coherent domains, organic currents);
+  overdriving (≈6) reproduces the boil-to-confetti failure mode *globally* (what the
+  dispersion band does locally). Frame 0 byte-identical; off-vs-on cross-delta ≈23/255 by
+  frame 5, ≈41/255 by frame 59 on harp/cello at `--turbulence 0.6`.
 - Next: a parity-gated Metal port for the fluid mosaic.
