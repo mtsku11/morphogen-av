@@ -969,6 +969,7 @@ pub(crate) struct FluidAdvectSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FluidAdvectSettings,
     pub(crate) frames: usize,
+    pub(crate) backend: RenderBackend,
 }
 
 /// Render the faux-fluid dye advection. The source is treated as a continuous dye:
@@ -998,11 +999,12 @@ pub(crate) fn render_fluid_advect_sequence(
     let mut previous_output: Option<ImageBufferF32> = None;
     for index in 0..request.frames {
         let source = load_image_f32(&source_frames[index % source_frames.len()])?;
-        let rendered = fluid_advect_frame_cpu(
+        let rendered = render_fluid_advect_frame(
             &source,
             previous_output.as_ref(),
             index as u32,
             request.settings,
+            request.backend,
         )?;
         save_png(
             &rendered,
@@ -1012,18 +1014,74 @@ pub(crate) fn render_fluid_advect_sequence(
     }
 
     println!(
-        "rendered fluid advect sequence with {} frame(s) (advect {}, turbulence-scale {}, turbulence-speed {}, reinject {}) from {} to {}",
+        "rendered fluid advect sequence with {} frame(s) (advect {}, turbulence-scale {}, turbulence-speed {}, reinject {}, {:?}) from {} to {}",
         request.frames,
         request.settings.advect,
         request.settings.turbulence_scale,
         request.settings.turbulence_speed,
         request.settings.reinject,
+        request.backend,
         request.source_dir.display(),
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult {
         frame_count: request.frames,
     })
+}
+
+/// Advance the dye one frame on the chosen backend. Frame zero (`previous == None`) is the
+/// source verbatim on either backend; otherwise CPU runs the reference and Metal runs the
+/// parity-gated kernel.
+pub(crate) fn render_fluid_advect_frame(
+    source: &ImageBufferF32,
+    previous: Option<&ImageBufferF32>,
+    frame_index: u32,
+    settings: FluidAdvectSettings,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => {
+            Ok(fluid_advect_frame_cpu(source, previous, frame_index, settings)?)
+        }
+        RenderBackend::Metal => {
+            render_fluid_advect_frame_metal(source, previous, frame_index, settings)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_fluid_advect_frame_metal(
+    source: &ImageBufferF32,
+    previous: Option<&ImageBufferF32>,
+    frame_index: u32,
+    settings: FluidAdvectSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::fluid_advect_metal(source, previous, frame_index, settings)?;
+    let cpu = fluid_advect_frame_cpu(source, previous, frame_index, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU fluid advect outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal fluid advect render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_fluid_advect_frame_metal(
+    _source: &ImageBufferF32,
+    _previous: Option<&ImageBufferF32>,
+    _frame_index: u32,
+    _settings: FluidAdvectSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 pub(crate) struct FluidMosaicSequenceRequest<'a> {

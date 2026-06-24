@@ -402,6 +402,7 @@ fn run() -> Result<(), CliError> {
             detail,
             reinject,
             seed,
+            backend,
         } => render_fluid_advect_sequence(FluidAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -414,6 +415,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {

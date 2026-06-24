@@ -463,6 +463,9 @@ pub(crate) enum Commands {
         reinject: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Render backend. `metal` is gated against the CPU reference per frame.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
