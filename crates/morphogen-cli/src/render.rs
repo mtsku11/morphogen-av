@@ -15,7 +15,8 @@ use morphogen_render::{
     coagulation_field, composite_with_field, disperse_composite_cpu, downsample_flow_to_cells,
     synthesize_turbulence_flow, CoagulationField, CoagulationFlowSource, CoagulationSettings,
     DispersionField, DispersionSettings,
-    advance_fluid_mosaic, initialize_fluid_mosaic, render_fluid_mosaic, FluidMosaicSettings,
+    advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
+    render_fluid_mosaic, FluidMosaicSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -972,8 +973,10 @@ pub(crate) struct FluidMosaicSequenceRequest<'a> {
 
 /// Render the fluid colour-sort mosaic. Tiles of both sources are seeded from each
 /// source's first frame, settled into colour groups, then advected by a fluid field
-/// frame-to-frame so the grouped colours flow and intermix. Self-contained particle
-/// simulation (later video frames and live colour refresh are deferred).
+/// frame-to-frame so the grouped colours flow and intermix. With `--live-refresh` each
+/// tile re-samples its painted colour/patch from the current source frame so the videos
+/// play through the mosaic (render-only); otherwise it is a self-contained particle
+/// simulation seeded from each source's first frame.
 pub(crate) fn render_fluid_mosaic_sequence(
     request: FluidMosaicSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
@@ -1000,6 +1003,14 @@ pub(crate) fn render_fluid_mosaic_sequence(
     for index in 0..request.frames {
         if index > 0 {
             state = advance_fluid_mosaic(&state, request.settings, index as u32)?;
+        }
+        // Live colour refresh: re-sample each tile's painted colour/patch from the
+        // current source frame so the videos play through the mosaic. Frame 0 already
+        // carries the seed colours; later frames cycle if the render outlasts a clip.
+        if request.settings.live_refresh && index > 0 {
+            let frame_a = load_image_f32(&source_a_frames[index % source_a_frames.len()])?;
+            let frame_b = load_image_f32(&source_b_frames[index % source_b_frames.len()])?;
+            refresh_fluid_mosaic_colors(&mut state, &frame_a, &frame_b)?;
         }
         let frame = render_fluid_mosaic(&state, request.settings)?;
         save_png(

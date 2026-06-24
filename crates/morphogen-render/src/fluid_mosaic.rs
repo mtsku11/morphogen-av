@@ -27,8 +27,13 @@
 //! variance is high — flat regions stay large, detailed regions become fine — and the
 //! repulsion target scales with the two tiles' sizes so the sheet stays space-filling.
 //! Off (the default), every tile is `tile_size` and the path is byte-identical to the
-//! uniform `v2` formulation. (Live per-frame colour refresh is still deferred; the
-//! simulation is seeded from the first frame of each source and runs self-contained.)
+//! uniform `v2` formulation. Each tile also remembers its source-**origin cell**, so a
+//! caller can call [`refresh_fluid_mosaic_colors`] each frame to **re-sample its painted
+//! colour and patch from the current source frame** — a render-only *live colour
+//! refresh* that lets the two videos play through the flowing mosaic. The simulation
+//! (positions, the frozen frame-zero colour bins that drive sorting) is untouched, so
+//! the force balance is unchanged and refresh alters only the painted pixels. Without a
+//! refresh call the path stays self-contained (seeded from each source's first frame).
 //! Metal is a later slice. Determinism: splitmix64 hashing, fixed-timestep
 //! integration, no wall clock.
 //!
@@ -42,11 +47,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ImageBufferF32, RenderError};
 
-/// Algorithm identifier for the CPU reference. Bump when the force model or tile
-/// formulation changes so stale caches/checkpoints invalidate. `v3` adds variable-size
-/// tiles (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added
-/// texture patches (`carry_texture`); `v1` was flat uniform mean colour only.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v3";
+/// Algorithm identifier for the CPU reference. Bump when the force model, tile
+/// formulation, or the content a tile paints changes so stale caches/checkpoints
+/// invalidate. `v4` adds render-only live colour refresh (each tile can re-sample its
+/// painted colour/patch from the current source frame); `v3` added variable-size tiles
+/// (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added texture
+/// patches (`carry_texture`); `v1` was flat uniform mean colour only.
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v4";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -106,6 +113,14 @@ pub struct FluidMosaicSettings {
     /// `adaptive_tiles` is on). Lower ⇒ more aggressive subdivision (finer tiles).
     #[serde(default = "default_subdivide_threshold")]
     pub subdivide_threshold: f32,
+    /// When `true`, the caller re-samples each tile's painted colour and patch from the
+    /// **current** source frame every frame (via [`refresh_fluid_mosaic_colors`]) so the
+    /// two videos play through the flowing mosaic. Render-only: the simulation (positions
+    /// and the frozen frame-zero bins that drive sorting) is unaffected, so this isolates
+    /// exactly the live content in an off-vs-on comparison. When `false`, the mosaic is
+    /// seeded from each source's first frame and runs self-contained (the `v3` look).
+    #[serde(default = "default_live_refresh")]
+    pub live_refresh: bool,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
 }
@@ -124,6 +139,10 @@ fn default_min_tile_size() -> u32 {
 
 fn default_subdivide_threshold() -> f32 {
     0.004
+}
+
+fn default_live_refresh() -> bool {
+    false
 }
 
 impl Default for FluidMosaicSettings {
@@ -145,6 +164,7 @@ impl Default for FluidMosaicSettings {
             adaptive_tiles: false,
             min_tile_size: 4,
             subdivide_threshold: 0.004,
+            live_refresh: false,
             seed: 0,
         }
     }
@@ -204,6 +224,18 @@ pub struct TilePatch {
     pub pixels: Vec<[f32; 3]>,
 }
 
+/// Where a tile was born — its source (`0` = A, `1` = B) and the source-pixel cell
+/// rectangle `[x0,x1)×[y0,y1)` it averaged. Fixed for the tile's life; lets
+/// [`refresh_fluid_mosaic_colors`] re-sample the same cell from a later source frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileOrigin {
+    pub source: u8,
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
 /// The stateful particle set. All `Vec`s are parallel and index-aligned; tile order
 /// is fixed (Source A tiles first, then Source B), which fixes the painter order in
 /// [`render_fluid_mosaic`] and keeps the render deterministic.
@@ -226,6 +258,8 @@ pub struct FluidMosaicState {
     /// Fixed per-tile edge length in pixels (the painted square's size and the
     /// size-aware repulsion target). All equal `tile_size` unless `adaptive_tiles`.
     pub sizes: Vec<u32>,
+    /// Fixed per-tile source-origin cell (for the live colour refresh). Index-aligned.
+    pub origin: Vec<TileOrigin>,
 }
 
 /// Phase salt so a different seed gives a different fluid field.
@@ -252,8 +286,8 @@ pub fn initialize_fluid_mosaic(
     let tile = settings.tile_size;
 
     let mut acc = TileAccumulator::default();
-    for source in [source_a, source_b] {
-        append_source_tiles(source, settings, &mut acc);
+    for (source_index, source) in [source_a, source_b].into_iter().enumerate() {
+        append_source_tiles(source, source_index as u8, settings, &mut acc);
     }
     let velocities = vec![[0.0_f32, 0.0]; acc.positions.len()];
 
@@ -268,6 +302,7 @@ pub fn initialize_fluid_mosaic(
         patches: acc.patches,
         bins: acc.bins,
         sizes: acc.sizes,
+        origin: acc.origin,
     };
 
     // Warmup: local same-colour cohesion + colour-blind repulsion (no fluid, no
@@ -343,6 +378,7 @@ pub fn advance_fluid_mosaic(
         patches: state.patches.clone(),
         bins: state.bins.clone(),
         sizes: state.sizes.clone(),
+        origin: state.origin.clone(),
         ..*state
     })
 }
@@ -413,16 +449,19 @@ struct TileAccumulator {
     patches: Vec<TilePatch>,
     bins: Vec<u32>,
     sizes: Vec<u32>,
+    origin: Vec<TileOrigin>,
 }
 
 impl TileAccumulator {
-    /// Emit one tile for the in-bounds cell `[x0,x1)×[y0,y1)` whose painted square edge
-    /// is `nominal_size` (>= the clamped extent at edges). Pushes mean colour, the
-    /// original pixel patch, the colour bin, the centre position, and the size.
+    /// Emit one tile for the in-bounds cell `[x0,x1)×[y0,y1)` of `source` (index
+    /// `source_index`) whose painted square edge is `nominal_size` (>= the clamped
+    /// extent at edges). Pushes mean colour, the original pixel patch, the colour bin,
+    /// the centre position, the size, and the origin cell (for live refresh).
     #[allow(clippy::too_many_arguments)]
     fn push_cell(
         &mut self,
         source: &ImageBufferF32,
+        source_index: u8,
         x0: u32,
         y0: u32,
         x1: u32,
@@ -430,41 +469,88 @@ impl TileAccumulator {
         nominal_size: u32,
         color_bins: u32,
     ) {
-        let mut sum = [0.0_f32; 3];
-        let mut count = 0.0_f32;
-        let mut patch_pixels = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let px = source.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 1.0]);
-                sum[0] += px[0];
-                sum[1] += px[1];
-                sum[2] += px[2];
-                count += 1.0;
-                patch_pixels.push([px[0], px[1], px[2]]);
-            }
-        }
-        let mean = if count > 0.0 {
-            [sum[0] / count, sum[1] / count, sum[2] / count]
-        } else {
-            [0.0, 0.0, 0.0]
-        };
+        let (mean, patch) = sample_cell(source, x0, y0, x1, y1);
         self.positions
             .push([(x0 + x1) as f32 * 0.5, (y0 + y1) as f32 * 0.5]);
         self.colors.push(mean);
-        self.patches.push(TilePatch {
+        self.patches.push(patch);
+        self.bins.push(color_bin(mean, color_bins));
+        self.sizes.push(nominal_size);
+        self.origin.push(TileOrigin {
+            source: source_index,
+            x0,
+            y0,
+            x1,
+            y1,
+        });
+    }
+}
+
+/// Mean colour + original pixel patch of the in-bounds cell `[x0,x1)×[y0,y1)`. Shared
+/// by the initial seed and the live refresh so a refreshed tile matches a freshly seeded
+/// one byte-for-byte when the source frame is identical.
+fn sample_cell(source: &ImageBufferF32, x0: u32, y0: u32, x1: u32, y1: u32) -> ([f32; 3], TilePatch) {
+    let mut sum = [0.0_f32; 3];
+    let mut count = 0.0_f32;
+    let mut patch_pixels = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let px = source.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            sum[0] += px[0];
+            sum[1] += px[1];
+            sum[2] += px[2];
+            count += 1.0;
+            patch_pixels.push([px[0], px[1], px[2]]);
+        }
+    }
+    let mean = if count > 0.0 {
+        [sum[0] / count, sum[1] / count, sum[2] / count]
+    } else {
+        [0.0, 0.0, 0.0]
+    };
+    (
+        mean,
+        TilePatch {
             width: x1 - x0,
             height: y1 - y0,
             pixels: patch_pixels,
-        });
-        self.bins.push(color_bin(mean, color_bins));
-        self.sizes.push(nominal_size);
+        },
+    )
+}
+
+/// Re-sample every tile's painted colour and patch from the **current** frame of its
+/// source, leaving the simulation (positions, velocities, bins, sizes, origin)
+/// untouched — a render-only live colour refresh so the two videos play through the
+/// flowing mosaic. Sorting stays keyed on the frozen frame-zero bins, so the force
+/// balance is unchanged. The frames must match the state's dimensions.
+pub fn refresh_fluid_mosaic_colors(
+    state: &mut FluidMosaicState,
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+) -> Result<(), RenderError> {
+    for source in [source_a, source_b] {
+        if source.width != state.width || source.height != state.height {
+            return Err(RenderError::IncompatibleInputs(format!(
+                "refresh frame is {}x{}, state is {}x{}",
+                source.width, source.height, state.width, state.height
+            )));
+        }
     }
+    for i in 0..state.origin.len() {
+        let origin = state.origin[i];
+        let source = if origin.source == 0 { source_a } else { source_b };
+        let (mean, patch) = sample_cell(source, origin.x0, origin.y0, origin.x1, origin.y1);
+        state.colors[i] = mean;
+        state.patches[i] = patch;
+    }
+    Ok(())
 }
 
 /// Append one source's tiles to the accumulator. Uniform `tile_size` cells unless
 /// `adaptive_tiles`, in which case each top-level cell is recursively quadtree-split.
 fn append_source_tiles(
     source: &ImageBufferF32,
+    source_index: u8,
     settings: FluidMosaicSettings,
     acc: &mut TileAccumulator,
 ) {
@@ -476,11 +562,11 @@ fn append_source_tiles(
             let x0 = cx * tile;
             let y0 = cy * tile;
             if settings.adaptive_tiles {
-                subdivide_cell(source, x0, y0, tile, settings, acc);
+                subdivide_cell(source, source_index, x0, y0, tile, settings, acc);
             } else {
                 let x1 = (x0 + tile).min(source.width);
                 let y1 = (y0 + tile).min(source.height);
-                acc.push_cell(source, x0, y0, x1, y1, tile, settings.color_bins);
+                acc.push_cell(source, source_index, x0, y0, x1, y1, tile, settings.color_bins);
             }
         }
     }
@@ -492,6 +578,7 @@ fn append_source_tiles(
 /// skipped; edge cells are clamped (their patch is smaller than `size`).
 fn subdivide_cell(
     source: &ImageBufferF32,
+    source_index: u8,
     x0: u32,
     y0: u32,
     size: u32,
@@ -506,12 +593,12 @@ fn subdivide_cell(
     let half = size / 2;
     let can_split = size > settings.min_tile_size && half >= 1;
     if can_split && cell_variance(source, x0, y0, x1, y1) > settings.subdivide_threshold {
-        subdivide_cell(source, x0, y0, half, settings, acc);
-        subdivide_cell(source, x0 + half, y0, half, settings, acc);
-        subdivide_cell(source, x0, y0 + half, half, settings, acc);
-        subdivide_cell(source, x0 + half, y0 + half, half, settings, acc);
+        subdivide_cell(source, source_index, x0, y0, half, settings, acc);
+        subdivide_cell(source, source_index, x0 + half, y0, half, settings, acc);
+        subdivide_cell(source, source_index, x0, y0 + half, half, settings, acc);
+        subdivide_cell(source, source_index, x0 + half, y0 + half, half, settings, acc);
     } else {
-        acc.push_cell(source, x0, y0, x1, y1, size, settings.color_bins);
+        acc.push_cell(source, source_index, x0, y0, x1, y1, size, settings.color_bins);
     }
 }
 
@@ -1000,5 +1087,45 @@ mod tests {
         let off_state = initialize_fluid_mosaic(&busy, &busy, off).expect("off");
         assert!(off_state.sizes.iter().all(|&s| s == 16));
         assert_eq!(off_state.sizes.len(), 8);
+    }
+
+    #[test]
+    fn live_refresh_repaints_without_disturbing_sim() {
+        // Seed grey A + grey B, advance a few frames so positions/velocities are
+        // non-trivial, then refresh from differently-coloured frames.
+        let a0 = solid(16, 16, [0.2, 0.2, 0.2]);
+        let b0 = solid(16, 16, [0.2, 0.2, 0.2]);
+        let s = FluidMosaicSettings {
+            tile_size: 8,
+            settle_iterations: 4,
+            ..FluidMosaicSettings::default()
+        };
+        let mut state = initialize_fluid_mosaic(&a0, &b0, s).expect("seed");
+        state = advance_fluid_mosaic(&state, s, 1).expect("advance");
+        let before = state.clone();
+
+        // Refresh from a red A frame + blue B frame: painted colours must update, but
+        // positions / bins (sorting) / sizes / origin (the simulation) must not.
+        let a1 = solid(16, 16, [0.8, 0.1, 0.1]);
+        let b1 = solid(16, 16, [0.1, 0.1, 0.8]);
+        refresh_fluid_mosaic_colors(&mut state, &a1, &b1).expect("refresh");
+        assert_ne!(state.colors, before.colors, "refresh should repaint colours");
+        assert_eq!(state.positions, before.positions, "sim positions unchanged");
+        assert_eq!(state.velocities, before.velocities, "sim velocities unchanged");
+        assert_eq!(state.bins, before.bins, "sorting bins frozen");
+        assert_eq!(state.sizes, before.sizes, "sizes unchanged");
+        assert_eq!(state.origin, before.origin, "origin cells unchanged");
+        // A tiles (first 4 for a 16px/8 grid) take A's colour, B tiles take B's.
+        assert!((state.colors[0][0] - 0.8).abs() < 1e-6 && state.colors[0][2] < 0.2);
+        assert!(state.colors[4][2] > 0.7 && state.colors[4][0] < 0.2);
+
+        // Refreshing back to the seed frames restores byte-identical colours + patches.
+        refresh_fluid_mosaic_colors(&mut state, &a0, &b0).expect("refresh back");
+        assert_eq!(state.colors, before.colors);
+        assert_eq!(state.patches, before.patches);
+
+        // A mismatched frame size is rejected.
+        let wrong = solid(8, 8, [0.0, 0.0, 0.0]);
+        assert!(refresh_fluid_mosaic_colors(&mut state, &wrong, &b0).is_err());
     }
 }

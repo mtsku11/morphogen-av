@@ -302,6 +302,15 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   so small tiles can't over-pack and collapse into voids), and the render paints
   largest-tiles-first (stable, so uniform output is unchanged). Off by default;
   omitting `--adaptive-tiles` is the off case (off-vs-on cross-delta ≈46/255).
-- Future high-quality version: **live per-frame colour refresh** from the moving
-  sources, a **cluster-blob** layout option, a spatially-varying dispersion/mix band,
-  and a parity-gated Metal port.
+- **Live per-frame colour refresh (render-only): Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v4`). With `--live-refresh`, each tile remembers its
+  source-origin cell and re-samples its painted colour/patch from the **current**
+  source frame every frame, so the two videos play through the flowing mosaic. The
+  simulation (positions and the frozen frame-zero colour bins that drive sorting) is
+  untouched — render-only — so the force balance is unchanged and toggling refresh
+  isolates exactly the live content. Off by default; omitting `--live-refresh` is the
+  off case (frame 0 byte-identical; off-vs-on cross-delta grows as the clips play,
+  ≈9.7/255 by frame 59). Sources cycle if the render outlasts a clip.
+- Next: **sim-driving live re-sort** (refreshed colour also feeds cohesion so domains
+  migrate to follow the video — re-tunes the force balance), a **cluster-blob** layout
+  option, a spatially-varying dispersion/mix band, and a parity-gated Metal port.
