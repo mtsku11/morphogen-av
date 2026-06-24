@@ -68,6 +68,15 @@
 //! dispersion band's `fluid_gain` (the band amplifies it in-band). `turbulence == 0`
 //! (the default) early-returns a zero contribution, so the path is byte-identical to the
 //! analytic-only `v7` field.
+//!
+//! `vortex_flow` adds a third, separately-knobbed flow: the **shared steady-vortex field**
+//! ([`crate::vortex_field`]) — the same curl-of-gradient-noise velocity perfected for the
+//! faux-fluid dye advection ([`crate::fluid_advect`]). Unlike the value-noise `turbulence`
+//! above, its large vortices are held **steady**, so tiles flow *along* persistent vortex
+//! streamlines and whole colour domains swirl coherently (rather than wobbling); only a
+//! small `vortex_detail` octave drifts. It is added to the tile velocity and shares the
+//! dispersion band's `fluid_gain`. `vortex_flow == 0` (the default) skips it entirely, so
+//! the path is byte-identical to the vortex-free field.
 //! Metal is a later slice. Determinism: splitmix64 hashing, fixed-timestep
 //! integration, no wall clock.
 //!
@@ -79,11 +88,15 @@ use std::f32::consts::TAU;
 
 use serde::{Deserialize, Serialize};
 
+use crate::vortex_field::steady_vortex_velocity;
 use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the force model, tile
 /// formulation, or the content a tile paints changes so stale caches/checkpoints
-/// invalidate. `v8` adds the faux-fluid **turbulence** field (`turbulence`: a
+/// invalidate. `v9` adds the **steady-vortex flow** mode (`vortex_flow`: the shared
+/// faux-fluid vortex field — a steady curl-of-gradient-noise velocity — added to each
+/// tile so colour domains flow along persistent vortex streamlines; `0` = off);
+/// `v8` adds the faux-fluid **turbulence** field (`turbulence`: a
 /// curl-of-value-noise streamfunction added to the analytic fluid velocity so the
 /// flow marbles with organic, multi-octave, evolving currents instead of a regular
 /// swirl lattice — divergence-free, deterministic, `0` = off);
@@ -98,7 +111,7 @@ use crate::{ImageBufferF32, RenderError};
 /// painted colour/patch from the current source frame); `v3` added variable-size tiles
 /// (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added texture
 /// patches (`carry_texture`); `v1` was flat uniform mean colour only.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v8";
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v9";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -224,6 +237,27 @@ pub struct FluidMosaicSettings {
     /// currents churn). Only used when `turbulence > 0`.
     #[serde(default = "default_turbulence_speed")]
     pub turbulence_speed: f32,
+    /// Amplitude (pixels/step) of the **steady-vortex flow** added to each tile — the same
+    /// curl-of-gradient-noise field as the faux-fluid dye advection ([`crate::fluid_advect`]),
+    /// shared via [`crate::vortex_field`]. Unlike the value-noise `turbulence` above, the
+    /// big vortices are held *steady*, so tiles flow along persistent vortex streamlines
+    /// (colour domains swirl coherently) rather than wobbling. Reads in the same pixel units
+    /// as `fluid_strength`. `0` (the default) skips it entirely, byte-identical to the
+    /// vortex-free path.
+    #[serde(default = "default_vortex_flow")]
+    pub vortex_flow: f32,
+    /// Vortex scale (lattice cells per pixel) for `vortex_flow`. Smaller ⇒ larger vortices.
+    /// Only used when `vortex_flow > 0`.
+    #[serde(default = "default_vortex_scale")]
+    pub vortex_scale: f32,
+    /// Fine-detail octave weight for the vortex flow (the big vortices stay steady; this
+    /// stirs only the fine texture). Only used when `vortex_flow > 0`.
+    #[serde(default = "default_vortex_detail")]
+    pub vortex_detail: f32,
+    /// Drift rate per frame of the vortex flow's fine detail. Only used when
+    /// `vortex_flow > 0`.
+    #[serde(default = "default_vortex_speed")]
+    pub vortex_speed: f32,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
 }
@@ -284,6 +318,22 @@ fn default_turbulence_speed() -> f32 {
     0.3
 }
 
+fn default_vortex_flow() -> f32 {
+    0.0
+}
+
+fn default_vortex_scale() -> f32 {
+    0.008
+}
+
+fn default_vortex_detail() -> f32 {
+    0.1
+}
+
+fn default_vortex_speed() -> f32 {
+    0.06
+}
+
 impl Default for FluidMosaicSettings {
     fn default() -> Self {
         Self {
@@ -313,6 +363,10 @@ impl Default for FluidMosaicSettings {
             turbulence: 0.0,
             turbulence_scale: 0.02,
             turbulence_speed: 0.3,
+            vortex_flow: 0.0,
+            vortex_scale: 0.008,
+            vortex_detail: 0.1,
+            vortex_speed: 0.06,
             seed: 0,
         }
     }
@@ -358,6 +412,10 @@ impl FluidMosaicSettings {
             ("turbulence", self.turbulence),
             ("turbulence_scale", self.turbulence_scale),
             ("turbulence_speed", self.turbulence_speed),
+            ("vortex_flow", self.vortex_flow),
+            ("vortex_scale", self.vortex_scale),
+            ("vortex_detail", self.vortex_detail),
+            ("vortex_speed", self.vortex_speed),
         ] {
             if !value.is_finite() {
                 return Err(RenderError::InvalidCoagulationSettings(format!(
@@ -491,6 +549,7 @@ pub fn advance_fluid_mosaic(
     let damping = settings.damping.clamp(0.0, 1.0);
     let time = frame_index as f32 * settings.fluid_drift;
     let turb_time = frame_index as f32 * settings.turbulence_speed;
+    let vortex_time = frame_index as f32 * settings.vortex_speed;
     let width = state.width as f32;
     let height = state.height as f32;
 
@@ -527,6 +586,22 @@ pub fn advance_fluid_mosaic(
         let (tx, ty) = turbulence_velocity(p[0], p[1], turb_time, settings);
         ax += tx * settings.turbulence * fluid_gain;
         ay += ty * settings.turbulence * fluid_gain;
+
+        // Steady-vortex flow — the shared faux-fluid vortex field; tiles flow along
+        // persistent vortex streamlines so colour domains swirl coherently. Opt-in;
+        // `0` skips it entirely (vortex-free identity). Shares the band gain (it is fluid).
+        if settings.vortex_flow != 0.0 {
+            let (vx, vy) = steady_vortex_velocity(
+                settings.seed,
+                p[0],
+                p[1],
+                vortex_time,
+                settings.vortex_scale,
+                settings.vortex_detail,
+            );
+            ax += vx * settings.vortex_flow * fluid_gain;
+            ay += vy * settings.vortex_flow * fluid_gain;
+        }
 
         // Animated jitter keeps groups alive (no perfect collapse); boosted in the band.
         let angle = hash01(settings.seed ^ JITTER_SALT, i as u64, u64::from(frame_index)) * TAU;
@@ -1755,6 +1830,90 @@ mod tests {
         assert_eq!(
             off_state.positions, off_other_state.positions,
             "turbulence 0 must ignore turbulence_scale/speed entirely"
+        );
+
+        // Determinism.
+        let again = advance_fluid_mosaic(&state, on, 3).expect("again");
+        assert_eq!(on_state.positions, again.positions);
+    }
+
+    #[test]
+    fn vortex_flow_perturbs_tiles_and_off_is_byte_identical() {
+        // Two tiles; the steady-vortex flow adds a velocity on top. Off (vortex_flow 0)
+        // must be byte-identical regardless of vortex geometry; on must move the tiles.
+        let grey = [0.5_f32, 0.5, 0.5];
+        let bin = color_bin(grey, 5);
+        let state = FluidMosaicState {
+            width: 200,
+            height: 200,
+            tile_size: 8,
+            color_bins: 5,
+            positions: vec![[60.0, 90.0], [140.0, 110.0]],
+            velocities: vec![[0.0, 0.0]; 2],
+            colors: vec![grey; 2],
+            patches: vec![
+                TilePatch {
+                    width: 0,
+                    height: 0,
+                    pixels: Vec::new(),
+                };
+                2
+            ],
+            bins: vec![bin; 2],
+            sizes: vec![8; 2],
+            origin: vec![
+                TileOrigin {
+                    source: 0,
+                    x0: 0,
+                    y0: 0,
+                    x1: 8,
+                    y1: 8,
+                };
+                2
+            ],
+        };
+        // Cohesion/repulsion/jitter/fluid/turbulence off so the vortex flow is the sole mover.
+        let base = FluidMosaicSettings {
+            cohesion: 0.0,
+            repulsion: 0.0,
+            jitter: 0.0,
+            fluid_strength: 0.0,
+            turbulence: 0.0,
+            vortex_scale: 0.01,
+            vortex_detail: 0.1,
+            vortex_speed: 0.06,
+            ..FluidMosaicSettings::default()
+        };
+        let off = FluidMosaicSettings {
+            vortex_flow: 0.0,
+            ..base
+        };
+        let on = FluidMosaicSettings {
+            vortex_flow: 4.0,
+            ..base
+        };
+
+        let off_state = advance_fluid_mosaic(&state, off, 3).expect("off");
+        let on_state = advance_fluid_mosaic(&state, on, 3).expect("on");
+
+        for i in 0..2 {
+            assert_ne!(
+                on_state.positions[i], off_state.positions[i],
+                "vortex flow should perturb tile {i}"
+            );
+        }
+
+        // Off path (vortex_flow 0) ignores the vortex geometry entirely.
+        let off_other_geom = FluidMosaicSettings {
+            vortex_scale: 0.05,
+            vortex_detail: 0.5,
+            vortex_speed: 1.0,
+            ..off
+        };
+        let off_other_state = advance_fluid_mosaic(&state, off_other_geom, 3).expect("off geom");
+        assert_eq!(
+            off_state.positions, off_other_state.positions,
+            "vortex_flow 0 must ignore vortex_scale/detail/speed entirely"
         );
 
         // Determinism.

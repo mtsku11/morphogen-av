@@ -19,6 +19,7 @@ pub mod luminance_flow;
 pub mod optical_flow;
 pub mod sampler;
 pub mod video_vocoder;
+pub mod vortex_field;
 
 pub use audio_route::{
     uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
@@ -95,6 +96,7 @@ pub use optical_flow::{
     PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
 };
 pub use sampler::sample_bilinear_clamped;
+pub use vortex_field::steady_vortex_velocity;
 pub use video_vocoder::{
     analyze_luma_band_envelope_cpu, apply_tone_map_cpu, histogram_specification_cpu,
     luma_specification_tone_map, video_vocoder_cpu, video_vocoder_from_modulator_cpu,
