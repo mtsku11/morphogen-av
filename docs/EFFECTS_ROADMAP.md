@@ -386,7 +386,18 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   `--turbulence-scale` (vortex size), `--turbulence-speed` (detail drift), `--detail`
   (0 = pure big vortices), `--reinject` (lower = more spiralling, 0→1 smear→verbatim).
   Off cases unit-tested. Deferred variants:
-  optical-flow-driven, two-source A→B, a discrete carrier (tiles/particles on this field).
+  optical-flow-driven (single source), a discrete carrier (tiles/particles on this field).
+- **Two-source A→B advection (mutual cross-synth): Landed** (`fluid_advect_two_source_frame_cpu`,
+  id `fluid_advect_two_source_cpu_v1`, CLI `render-fluid-advect-two-source-sequence`, CPU).
+  Source A's optical-flow motion (Lucas-Kanade between consecutive A frames, sized to B)
+  advects Source B's colour as a continuous dye — A reshapes B, the app's core model. The
+  advect step reuses the parity-gated `flow_displace_cpu` (so a future Metal port is
+  `flow_displace_metal` + the reinject composite, the datamosh pattern); a fraction of the
+  current B frame is reinjected each frame. Bounded by the shorter clip (no cyclic wrap).
+  Off cases unit-tested (frame 0 = B verbatim; reinject 1 = B verbatim; advect 0 + reinject
+  0 = hold). Off-vs-on (testsrc2 A / mandelbrot B): OFF (reinject 1) == B verbatim, ON-vs-OFF
+  grows 0 → ~18/255 by f11 as A's motion accumulates into B's dye (the fractal smears into
+  directional streaks). Metal deferred.
 - **Parity-gated Metal port: Landed** (`fluid_advect.metal`, CLI `--backend metal`). A
   `fluid_advect` compute kernel reproduces the steady curl-noise vortex field in MSL —
   splitmix64 `ulong` hashing + 3D gradient (Perlin) noise on the proven

@@ -8,13 +8,30 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **320 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **325 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Two-source A→B faux-fluid advection — NEW mutual effect (CPU + CLI).** The cross-synth
+  model (A reshapes B): Source A's optical-flow motion advects Source B's colour as a
+  continuous dye. The first *mutual* two-source version of the fluid look. Each frame, A's
+  Lucas-Kanade flow (between consecutive A frames, sized to B) advects the held dye via the
+  already parity-gated `flow_displace_cpu`, then a fraction of the current B frame is
+  reinjected (the "frame refresh"). New `fluid_advect_two_source_frame_cpu` +
+  `FluidAdvectTwoSourceSettings { advect, reinject }`, id `fluid_advect_two_source_cpu_v1`,
+  CLI `render-fluid-advect-two-source-sequence` (CPU; bounded by the shorter clip — no
+  cyclic wrap, so the flow never jumps a clip boundary). **Continuity identities** (unit-
+  tested): frame 0 = B verbatim; reinject 1 = B verbatim; advect 0 + reinject 0 = hold
+  previous. **Off-vs-on** (testsrc2 A / mandelbrot B): OFF (reinject 1) == B verbatim
+  (0.000), frame 0 == 0.000, ON-vs-OFF grows 0 → 14.5/255 (f6) → 18.1/255 (f11) as A's
+  motion accumulates into B's dye; Read-confirmed the fractal smears into directional
+  streaks along A's motion. Workspace 320 → 325 (+5). **Metal deferred** (would reuse
+  `flow_displace_metal` + a CPU reinject composite, the datamosh pattern). See
+  [[faux-fluid-advect]].
 
 - **Faux-fluid dye advection — parity-gated Metal port (`fluid_advect.metal` + CLI
   `--backend metal`).** The first deferred Metal step. A new `fluid_advect` compute kernel
