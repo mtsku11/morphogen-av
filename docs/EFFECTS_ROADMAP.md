@@ -408,7 +408,11 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   of advect). Off-vs-on (testsrc2): OFF (advect 0) temporal delta 0.000, ON temporal 20.5/255,
   ON-vs-OFF grows 77 → 98/255. Tuning: vortex scale must match canvas size (0.008 ~125px is for
   real footage; a 128px fixture needs ~0.03 so particles swirl rather than sweep to the void
-  edges). Live colour re-sampling and Metal (a scatter splat) deferred.
+  edges). **Live colour (`--live-colour`): Landed** (algo id v1 → v2) — each particle
+  re-samples its origin cell from the current source frame so the video plays through the flow
+  (positions untouched, colours updated; the `fluid_mosaic` live-refresh semantics). Off-vs-on:
+  static source ON==OFF byte-identical (no-op), moving source ON-vs-OFF tracks the playing
+  video. Metal (a scatter splat) deferred.
 - **Single-source optical-flow-driven advection: Landed** (CLI
   `render-optical-flow-advect-sequence`, CPU). The video advected by its own motion — the
   self-driven case of the two-source advection (source = both modulator and carrier), so it

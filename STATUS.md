@@ -8,13 +8,26 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **330 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **332 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Field particles — opt-in live colour (`--live-colour`).** Particle colours were frozen at
+  seed time, so video didn't play through. Now each particle can re-sample its **origin cell**
+  from the current source frame every frame (the `fluid_mosaic` live-refresh semantics): the
+  video's colour at the particle's birthpoint is carried to wherever it flowed — positions (the
+  flow) untouched, only the carried colour updates. New `refresh_field_particle_colors` +
+  `live_color` setting (serde-default false); each `Particle` now stores its home cell; algo id
+  v1 → v2 (byte-identical to v1 when colours aren't refreshed). **Continuity** (unit-tested):
+  refresh against the seed frame is a no-op; a changed frame updates the colour. **Off-vs-on:**
+  static source ON==OFF byte-identical (0.000 — the no-op identity), moving testsrc2 frame 0
+  ON==OFF 0.000, ON-vs-OFF grows 15 → 24.6 → 17/255 tracking the playing video; Read-confirmed
+  identical flow with the video's colours played through (positions unchanged, palette updated).
+  Workspace 330 → 332 (+2). See [[faux-fluid-advect]].
 
 - **Single-source optical-flow-driven advection — NEW effect (CLI).** The video advected by
   its OWN motion: each frame the source's Lucas-Kanade flow (between consecutive frames)
