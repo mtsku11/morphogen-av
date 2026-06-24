@@ -488,23 +488,26 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 5)]
         color_bins: u32,
         /// Per-step pull of each tile toward the local mean of nearby same-colour
-        /// tiles, in [0, 1] (local cohesion → emergent colour domains).
-        #[arg(long, default_value_t = 0.035)]
-        cohesion: f32,
+        /// tiles, in [0, 1] (local cohesion → emergent colour domains). [default: 0.035;
+        /// 0.015 when --vortex-flow > 0, so domains spread enough to flow without voids]
+        #[arg(long)]
+        cohesion: Option<f32>,
         /// Neighbourhood radius (pixels) over which same-colour cohesion is gathered.
         #[arg(long, default_value_t = 24.0)]
         cohesion_radius: f32,
         /// Colour-blind short-range repulsion (pixels/step) — the stiff incompressible
         /// pressure that keeps tiles spread so colour domains fill the frame instead
-        /// of contracting into voids.
-        #[arg(long, default_value_t = 1.4)]
-        repulsion: f32,
+        /// of contracting into voids. [default: 1.4; 3.0 when --vortex-flow > 0]
+        #[arg(long)]
+        repulsion: Option<f32>,
         /// Radius (pixels) within which tiles repel one another.
-        #[arg(long, default_value_t = 10.0)]
-        repulsion_radius: f32,
-        /// Amplitude of the fluid velocity field (pixels/step).
-        #[arg(long, default_value_t = 0.5)]
-        fluid_strength: f32,
+        /// [default: 10.0; 16.0 when --vortex-flow > 0]
+        #[arg(long)]
+        repulsion_radius: Option<f32>,
+        /// Amplitude of the analytic fluid velocity field (pixels/step).
+        /// [default: 0.5; 0.0 when --vortex-flow > 0, so the vortex flow is the sole current]
+        #[arg(long)]
+        fluid_strength: Option<f32>,
         /// Spatial frequency of the curl field (radians/pixel); smaller = broader currents.
         #[arg(long, default_value_t = 0.01)]
         fluid_scale: f32,
@@ -518,8 +521,9 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 60)]
         settle_iterations: u32,
         /// Per-step animated random nudge (pixels) keeping groups alive.
-        #[arg(long, default_value_t = 0.03)]
-        jitter: f32,
+        /// [default: 0.03; 0.0 when --vortex-flow > 0, so the vortex flow isn't masked by wobble]
+        #[arg(long)]
+        jitter: Option<f32>,
         /// Render flat mean-colour tiles instead of carrying each tile's original
         /// source pixel patch (the v1 look; this is the off case for the texture
         /// readout). Sorting/motion are identical either way.
