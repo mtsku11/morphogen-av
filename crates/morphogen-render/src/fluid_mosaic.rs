@@ -17,15 +17,20 @@
 //!    colours then flow and intermix like dye — the marcscully.com fluid look — while
 //!    the tiles keep their crisp edges (the hybrid "crisp tiles ride a fluid" model).
 //!
-//! Deterministic CPU reference. Tiles are uniform-size; each carries the original
-//! pixel **patch** of its source cell, so with `carry_texture` on the render paints
-//! that patch (footage texture survives, not just a flat colour) while the *sorting
-//! and motion stay keyed on the patch's mean colour* — turning texture off renders
-//! the flat mean square and is the only difference, so off-vs-on isolates exactly the
-//! texture. (Varying tile sizes and live per-frame colour refresh are still deferred;
-//! the simulation is seeded from the first frame of each source and runs
-//! self-contained.) Metal is a later slice. Determinism: splitmix64 hashing,
-//! fixed-timestep integration, no wall clock.
+//! Deterministic CPU reference. Each tile carries the original pixel **patch** of its
+//! source cell, so with `carry_texture` on the render paints that patch (footage
+//! texture survives, not just a flat colour) while the *sorting and motion stay keyed
+//! on the patch's mean colour* — turning texture off renders the flat mean square and
+//! is the only difference, so off-vs-on isolates exactly the texture. With
+//! `adaptive_tiles` on, tiles are **variable-size**: a quadtree subdivides each source
+//! from `tile_size` down to `min_tile_size`, splitting only where local colour
+//! variance is high — flat regions stay large, detailed regions become fine — and the
+//! repulsion target scales with the two tiles' sizes so the sheet stays space-filling.
+//! Off (the default), every tile is `tile_size` and the path is byte-identical to the
+//! uniform `v2` formulation. (Live per-frame colour refresh is still deferred; the
+//! simulation is seeded from the first frame of each source and runs self-contained.)
+//! Metal is a later slice. Determinism: splitmix64 hashing, fixed-timestep
+//! integration, no wall clock.
 //!
 //! Continuity identity (the off case for off-vs-on readout): with `cohesion`,
 //! `fluid_strength`, and `jitter` all `0` and `settle_iterations == 0`, every tile
@@ -38,9 +43,10 @@ use serde::{Deserialize, Serialize};
 use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the force model or tile
-/// formulation changes so stale caches/checkpoints invalidate. `v2` adds texture
-/// patches to the tile formulation (`carry_texture`); `v1` was flat mean colour only.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v2";
+/// formulation changes so stale caches/checkpoints invalidate. `v3` adds variable-size
+/// tiles (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added
+/// texture patches (`carry_texture`); `v1` was flat uniform mean colour only.
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v3";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -85,12 +91,39 @@ pub struct FluidMosaicSettings {
     /// so this flag isolates exactly the texture in an off-vs-on comparison.
     #[serde(default = "default_carry_texture")]
     pub carry_texture: bool,
+    /// When `true`, tiles are **variable-size**: a quadtree subdivides each `tile_size`
+    /// cell down toward `min_tile_size`, splitting only where local colour variance
+    /// exceeds `subdivide_threshold`, so flat regions stay coarse and detailed regions
+    /// become fine. Repulsion then targets the two tiles' average size so the sheet
+    /// stays space-filling. When `false`, every tile is `tile_size` (the `v2` look).
+    #[serde(default = "default_adaptive_tiles")]
+    pub adaptive_tiles: bool,
+    /// Smallest tile edge length the quadtree may subdivide to (>= 1, <= `tile_size`).
+    /// Only used when `adaptive_tiles` is on.
+    #[serde(default = "default_min_tile_size")]
+    pub min_tile_size: u32,
+    /// Sum-of-per-channel colour variance above which a cell subdivides (only when
+    /// `adaptive_tiles` is on). Lower ⇒ more aggressive subdivision (finer tiles).
+    #[serde(default = "default_subdivide_threshold")]
+    pub subdivide_threshold: f32,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
 }
 
 fn default_carry_texture() -> bool {
     true
+}
+
+fn default_adaptive_tiles() -> bool {
+    false
+}
+
+fn default_min_tile_size() -> u32 {
+    4
+}
+
+fn default_subdivide_threshold() -> f32 {
+    0.004
 }
 
 impl Default for FluidMosaicSettings {
@@ -109,6 +142,9 @@ impl Default for FluidMosaicSettings {
             settle_iterations: 60,
             jitter: 0.03,
             carry_texture: true,
+            adaptive_tiles: false,
+            min_tile_size: 4,
+            subdivide_threshold: 0.004,
             seed: 0,
         }
     }
@@ -124,6 +160,17 @@ impl FluidMosaicSettings {
         if self.color_bins < 2 {
             return Err(RenderError::InvalidCoagulationSettings(
                 "color_bins must be at least 2".to_string(),
+            ));
+        }
+        if self.adaptive_tiles && (self.min_tile_size == 0 || self.min_tile_size > self.tile_size) {
+            return Err(RenderError::InvalidCoagulationSettings(format!(
+                "min_tile_size ({}) must be in 1..=tile_size ({})",
+                self.min_tile_size, self.tile_size
+            )));
+        }
+        if self.adaptive_tiles && !(self.subdivide_threshold.is_finite() && self.subdivide_threshold >= 0.0) {
+            return Err(RenderError::InvalidCoagulationSettings(
+                "subdivide_threshold must be finite and non-negative".to_string(),
             ));
         }
         for (name, value) in [
@@ -176,6 +223,9 @@ pub struct FluidMosaicState {
     pub patches: Vec<TilePatch>,
     /// Fixed per-tile colour bin index in `0..color_bins^3`.
     pub bins: Vec<u32>,
+    /// Fixed per-tile edge length in pixels (the painted square's size and the
+    /// size-aware repulsion target). All equal `tile_size` unless `adaptive_tiles`.
+    pub sizes: Vec<u32>,
 }
 
 /// Phase salt so a different seed gives a different fluid field.
@@ -201,33 +251,23 @@ pub fn initialize_fluid_mosaic(
     let height = source_a.height;
     let tile = settings.tile_size;
 
-    let mut positions = Vec::new();
-    let mut colors = Vec::new();
-    let mut patches = Vec::new();
-    let mut bins = Vec::new();
+    let mut acc = TileAccumulator::default();
     for source in [source_a, source_b] {
-        append_source_tiles(
-            source,
-            tile,
-            settings.color_bins,
-            &mut positions,
-            &mut colors,
-            &mut patches,
-            &mut bins,
-        );
+        append_source_tiles(source, settings, &mut acc);
     }
-    let velocities = vec![[0.0_f32, 0.0]; positions.len()];
+    let velocities = vec![[0.0_f32, 0.0]; acc.positions.len()];
 
     let mut state = FluidMosaicState {
         width,
         height,
         tile_size: tile,
         color_bins: settings.color_bins,
-        positions,
+        positions: acc.positions,
         velocities,
-        colors,
-        patches,
-        bins,
+        colors: acc.colors,
+        patches: acc.patches,
+        bins: acc.bins,
+        sizes: acc.sizes,
     };
 
     // Warmup: local same-colour cohesion + colour-blind repulsion (no fluid, no
@@ -302,6 +342,7 @@ pub fn advance_fluid_mosaic(
         colors: state.colors.clone(),
         patches: state.patches.clone(),
         bins: state.bins.clone(),
+        sizes: state.sizes.clone(),
         ..*state
     })
 }
@@ -319,13 +360,20 @@ pub fn render_fluid_mosaic(
     settings.validate()?;
     let width = state.width;
     let height = state.height;
-    let tile = state.tile_size as i64;
-    let half = tile / 2;
     let mut pixels = vec![[0.0_f32, 0.0, 0.0, 1.0]; (width as usize) * (height as usize)];
 
-    for (i, pos) in state.positions.iter().enumerate() {
+    // Paint largest tiles first so fine detail tiles land on top of coarse flat ones.
+    // The sort is stable, so when sizes are uniform the order is the original index
+    // order (Source A then B) and the output matches the uniform formulation exactly.
+    let mut order: Vec<usize> = (0..state.positions.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(state.sizes[i]));
+
+    for &i in &order {
+        let pos = state.positions[i];
         let color = state.colors[i];
         let patch = &state.patches[i];
+        let tile = state.sizes[i] as i64;
+        let half = tile / 2;
         let cx = pos[0].round() as i64;
         let cy = pos[1].round() as i64;
         let left = cx - half;
@@ -357,58 +405,141 @@ pub fn render_fluid_mosaic(
     ImageBufferF32::new(width, height, pixels)
 }
 
-/// Append one source's tiles (mean colour per `tile`-sized cell, centre position,
-/// colour bin) to the parallel state vectors.
-#[allow(clippy::too_many_arguments)]
+/// Index-aligned parallel tile vectors, accumulated across both sources.
+#[derive(Default)]
+struct TileAccumulator {
+    positions: Vec<[f32; 2]>,
+    colors: Vec<[f32; 3]>,
+    patches: Vec<TilePatch>,
+    bins: Vec<u32>,
+    sizes: Vec<u32>,
+}
+
+impl TileAccumulator {
+    /// Emit one tile for the in-bounds cell `[x0,x1)×[y0,y1)` whose painted square edge
+    /// is `nominal_size` (>= the clamped extent at edges). Pushes mean colour, the
+    /// original pixel patch, the colour bin, the centre position, and the size.
+    #[allow(clippy::too_many_arguments)]
+    fn push_cell(
+        &mut self,
+        source: &ImageBufferF32,
+        x0: u32,
+        y0: u32,
+        x1: u32,
+        y1: u32,
+        nominal_size: u32,
+        color_bins: u32,
+    ) {
+        let mut sum = [0.0_f32; 3];
+        let mut count = 0.0_f32;
+        let mut patch_pixels = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let px = source.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                sum[0] += px[0];
+                sum[1] += px[1];
+                sum[2] += px[2];
+                count += 1.0;
+                patch_pixels.push([px[0], px[1], px[2]]);
+            }
+        }
+        let mean = if count > 0.0 {
+            [sum[0] / count, sum[1] / count, sum[2] / count]
+        } else {
+            [0.0, 0.0, 0.0]
+        };
+        self.positions
+            .push([(x0 + x1) as f32 * 0.5, (y0 + y1) as f32 * 0.5]);
+        self.colors.push(mean);
+        self.patches.push(TilePatch {
+            width: x1 - x0,
+            height: y1 - y0,
+            pixels: patch_pixels,
+        });
+        self.bins.push(color_bin(mean, color_bins));
+        self.sizes.push(nominal_size);
+    }
+}
+
+/// Append one source's tiles to the accumulator. Uniform `tile_size` cells unless
+/// `adaptive_tiles`, in which case each top-level cell is recursively quadtree-split.
 fn append_source_tiles(
     source: &ImageBufferF32,
-    tile: u32,
-    color_bins: u32,
-    positions: &mut Vec<[f32; 2]>,
-    colors: &mut Vec<[f32; 3]>,
-    patches: &mut Vec<TilePatch>,
-    bins: &mut Vec<u32>,
+    settings: FluidMosaicSettings,
+    acc: &mut TileAccumulator,
 ) {
+    let tile = settings.tile_size;
     let cols = source.width.div_ceil(tile);
     let rows = source.height.div_ceil(tile);
     for cy in 0..rows {
         for cx in 0..cols {
             let x0 = cx * tile;
             let y0 = cy * tile;
-            let x1 = (x0 + tile).min(source.width);
-            let y1 = (y0 + tile).min(source.height);
-            let mut sum = [0.0_f32; 3];
-            let mut count = 0.0_f32;
-            let mut patch_pixels =
-                Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let px = source.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 1.0]);
-                    sum[0] += px[0];
-                    sum[1] += px[1];
-                    sum[2] += px[2];
-                    count += 1.0;
-                    patch_pixels.push([px[0], px[1], px[2]]);
-                }
-            }
-            let mean = if count > 0.0 {
-                [sum[0] / count, sum[1] / count, sum[2] / count]
+            if settings.adaptive_tiles {
+                subdivide_cell(source, x0, y0, tile, settings, acc);
             } else {
-                [0.0, 0.0, 0.0]
-            };
-            positions.push([
-                (x0 + x1) as f32 * 0.5,
-                (y0 + y1) as f32 * 0.5,
-            ]);
-            colors.push(mean);
-            patches.push(TilePatch {
-                width: x1 - x0,
-                height: y1 - y0,
-                pixels: patch_pixels,
-            });
-            bins.push(color_bin(mean, color_bins));
+                let x1 = (x0 + tile).min(source.width);
+                let y1 = (y0 + tile).min(source.height);
+                acc.push_cell(source, x0, y0, x1, y1, tile, settings.color_bins);
+            }
         }
     }
+}
+
+/// Quadtree subdivision: split the `size`-edged cell at `(x0,y0)` into four while its
+/// in-bounds colour variance exceeds `subdivide_threshold` and `size` is still above
+/// `min_tile_size`; otherwise emit it as a single tile. Cells fully off the canvas are
+/// skipped; edge cells are clamped (their patch is smaller than `size`).
+fn subdivide_cell(
+    source: &ImageBufferF32,
+    x0: u32,
+    y0: u32,
+    size: u32,
+    settings: FluidMosaicSettings,
+    acc: &mut TileAccumulator,
+) {
+    if x0 >= source.width || y0 >= source.height {
+        return;
+    }
+    let x1 = (x0 + size).min(source.width);
+    let y1 = (y0 + size).min(source.height);
+    let half = size / 2;
+    let can_split = size > settings.min_tile_size && half >= 1;
+    if can_split && cell_variance(source, x0, y0, x1, y1) > settings.subdivide_threshold {
+        subdivide_cell(source, x0, y0, half, settings, acc);
+        subdivide_cell(source, x0 + half, y0, half, settings, acc);
+        subdivide_cell(source, x0, y0 + half, half, settings, acc);
+        subdivide_cell(source, x0 + half, y0 + half, half, settings, acc);
+    } else {
+        acc.push_cell(source, x0, y0, x1, y1, size, settings.color_bins);
+    }
+}
+
+/// Sum of the per-channel colour variance over the in-bounds cell — the detail metric
+/// that drives subdivision. `0` for a flat cell.
+fn cell_variance(source: &ImageBufferF32, x0: u32, y0: u32, x1: u32, y1: u32) -> f32 {
+    let mut sum = [0.0_f32; 3];
+    let mut sq = [0.0_f32; 3];
+    let mut n = 0.0_f32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let px = source.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            for c in 0..3 {
+                sum[c] += px[c];
+                sq[c] += px[c] * px[c];
+            }
+            n += 1.0;
+        }
+    }
+    if n <= 0.0 {
+        return 0.0;
+    }
+    let mut variance = 0.0;
+    for c in 0..3 {
+        let mean = sum[c] / n;
+        variance += (sq[c] / n - mean * mean).max(0.0);
+    }
+    variance
 }
 
 /// Quantize a colour into a `color_bins^3` bin index.
@@ -436,10 +567,16 @@ fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> V
         return vec![[0.0, 0.0]; n];
     }
 
-    let radius = settings
-        .cohesion_radius
-        .max(settings.repulsion_radius)
-        .max(1.0);
+    // The repulsion reach is a fixed radius for uniform tiles, but with adaptive sizes
+    // a pair's target spacing is (size_i + size_j)/2 ≤ max tile size, so the grid cell
+    // must be at least that large for the 3×3 neighbourhood to catch every interaction.
+    let rep_reach = if settings.adaptive_tiles {
+        let max_size = state.sizes.iter().copied().max().unwrap_or(state.tile_size) as f32;
+        max_size.max(settings.repulsion_radius)
+    } else {
+        settings.repulsion_radius
+    };
+    let radius = settings.cohesion_radius.max(rep_reach).max(1.0);
     let grid_cols = (state.width as f32 / radius).ceil().max(1.0) as i64;
     let grid_rows = (state.height as f32 / radius).ceil().max(1.0) as i64;
     let cell_of = |p: [f32; 2]| -> (i64, i64) {
@@ -481,7 +618,20 @@ fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> V
                     let dy = p[1] - q[1];
                     let d2 = dx * dx + dy * dy;
 
-                    if repulsion_on && d2 < rep_r2 {
+                    // Uniform tiles use the fixed repulsion_radius; adaptive tiles
+                    // target the pair's average size so big and small tiles each rest
+                    // at their own non-overlapping spacing (keeps coverage space-filling).
+                    let (target, target2) = if settings.adaptive_tiles {
+                        // Target the pair's average size, but never let a pair pack
+                        // tighter than the proven incompressible spacing — small tiles
+                        // with a tiny target otherwise over-pack and the cohesion
+                        // collapses them into clumps, opening black voids over time.
+                        let t = ((state.sizes[i] + state.sizes[j]) as f32 * 0.5).max(rep_r);
+                        (t, t * t)
+                    } else {
+                        (rep_r, rep_r2)
+                    };
+                    if repulsion_on && d2 < target2 {
                         if d2 <= 1e-12 {
                             // Coincident: push along a deterministic hashed direction.
                             let angle = hash01(settings.seed, i as u64, j as u64) * TAU;
@@ -489,7 +639,7 @@ fn neighbor_forces(state: &FluidMosaicState, settings: FluidMosaicSettings) -> V
                             rep[1] += angle.sin() * settings.repulsion;
                         } else {
                             let dist = d2.sqrt();
-                            let falloff = 1.0 - dist / rep_r;
+                            let falloff = 1.0 - dist / target;
                             rep[0] += (dx / dist) * settings.repulsion * falloff;
                             rep[1] += (dy / dist) * settings.repulsion * falloff;
                         }
@@ -800,5 +950,55 @@ mod tests {
         );
         // Sanity: the flat value is the ramp's mean (≈0.5), distinct from both edges.
         assert!((flat_left - 0.5).abs() < 0.1, "flat ≈ mean: {flat_left}");
+    }
+
+    /// A per-pixel black/white checkerboard — maximal within-cell colour variance, so
+    /// every cell above the minimum size subdivides fully.
+    fn fine_checker(size: u32) -> ImageBufferF32 {
+        ImageBufferF32::from_fn(size, size, |x, y| {
+            let v = if (x + y) % 2 == 0 { 1.0 } else { 0.0 };
+            [v, v, v, 1.0]
+        })
+        .expect("checker")
+    }
+
+    #[test]
+    fn adaptive_tiles_subdivide_only_detailed_regions() {
+        let flat = solid(32, 32, [0.3, 0.5, 0.7]);
+        let busy = fine_checker(32);
+        let base = FluidMosaicSettings {
+            adaptive_tiles: true,
+            tile_size: 16,
+            min_tile_size: 4,
+            settle_iterations: 0,
+            cohesion: 0.0,
+            repulsion: 0.0,
+            fluid_strength: 0.0,
+            jitter: 0.0,
+            ..FluidMosaicSettings::default()
+        };
+
+        // Flat sources: variance 0 everywhere ⇒ nothing subdivides, every tile is 16px.
+        let flat_state = initialize_fluid_mosaic(&flat, &flat, base).expect("flat");
+        assert!(flat_state.sizes.iter().all(|&s| s == 16));
+        // Adaptive remains deterministic.
+        let again = initialize_fluid_mosaic(&flat, &flat, base).expect("again");
+        assert_eq!(flat_state, again);
+
+        // Busy sources: every 16px cell is high-variance ⇒ fully subdivides to 4px.
+        // 32/16 = 2×2 = 4 top cells/source, each → (16/4)² = 16 leaves; ×2 sources = 128.
+        let busy_state = initialize_fluid_mosaic(&busy, &busy, base).expect("busy");
+        assert!(busy_state.sizes.iter().all(|&s| s == 4));
+        assert_eq!(busy_state.sizes.len(), 128);
+        assert!(busy_state.sizes.len() > flat_state.sizes.len());
+
+        // Off ⇒ uniform 16px tiles regardless of content (the v2 formulation).
+        let off = FluidMosaicSettings {
+            adaptive_tiles: false,
+            ..base
+        };
+        let off_state = initialize_fluid_mosaic(&busy, &busy, off).expect("off");
+        assert!(off_state.sizes.iter().all(|&s| s == 16));
+        assert_eq!(off_state.sizes.len(), 8);
     }
 }

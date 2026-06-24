@@ -294,7 +294,14 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   mean colour. Sorting/cohesion still key on the mean colour, so the temporal motion
   is byte-identical to flat — `--flat-tiles` is the off case (v1 look) and isolates
   exactly the texture (off-vs-on cross-delta ≈9.3/255).
-- Future high-quality version: **varying tile sizes** (quadtree by detail / mixed
-  scales), **live per-frame colour refresh** from the moving sources, a
-  **cluster-blob** layout option, a spatially-varying dispersion/mix band, and a
-  parity-gated Metal port.
+- **Adaptive (varying) tile sizes: Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v3`). With `--adaptive-tiles`, a quadtree subdivides
+  each `tile_size` cell down toward `--min-tile-size` wherever local colour variance
+  exceeds `--subdivide-threshold`, so flat regions stay coarse and detailed regions
+  go fine. Repulsion targets each pair's average size (**floored at `repulsion_radius`**
+  so small tiles can't over-pack and collapse into voids), and the render paints
+  largest-tiles-first (stable, so uniform output is unchanged). Off by default;
+  omitting `--adaptive-tiles` is the off case (off-vs-on cross-delta ≈46/255).
+- Future high-quality version: **live per-frame colour refresh** from the moving
+  sources, a **cluster-blob** layout option, a spatially-varying dispersion/mix band,
+  and a parity-gated Metal port.

@@ -489,6 +489,19 @@ pub(crate) enum Commands {
         /// readout). Sorting/motion are identical either way.
         #[arg(long)]
         flat_tiles: bool,
+        /// Variable-size tiles: quadtree-subdivide each `tile_size` cell down toward
+        /// `min_tile_size` where local colour variance is high (flat regions stay
+        /// coarse, detail gets fine). Off by default; omitting it is the off case for
+        /// the adaptive readout.
+        #[arg(long)]
+        adaptive_tiles: bool,
+        /// Smallest tile edge the quadtree may reach (only with --adaptive-tiles).
+        #[arg(long, default_value_t = 4)]
+        min_tile_size: u32,
+        /// Sum-of-per-channel variance above which a cell subdivides (only with
+        /// --adaptive-tiles). Lower ⇒ finer tiles.
+        #[arg(long, default_value_t = 0.004)]
+        subdivide_threshold: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
