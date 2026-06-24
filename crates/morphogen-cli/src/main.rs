@@ -452,23 +452,36 @@ fn run() -> Result<(), CliError> {
             vortex_detail,
             vortex_speed,
             seed,
-        } => render_fluid_mosaic_sequence(FluidMosaicSequenceRequest {
-            source_a_dir: &source_a_dir,
-            source_b_dir: &source_b_dir,
-            output_dir: &output_dir,
-            settings: FluidMosaicSettings {
-                tile_size,
-                color_bins,
-                cohesion,
-                cohesion_radius,
-                repulsion,
-                repulsion_radius,
-                fluid_strength,
-                fluid_scale,
-                fluid_drift,
-                damping,
-                settle_iterations,
-                jitter,
+        } => {
+            // When the steady-vortex flow is active it is meant to be the dominant
+            // current, so the analytic fluid + jitter (which otherwise read as a wobble
+            // that masks it) default to off and the force balance defaults to the
+            // coverage-preserving recipe (lower cohesion, stiffer/longer repulsion) so the
+            // flowing tiles stay space-filling. Any flag passed explicitly still wins.
+            let vortex_active = vortex_flow > 0.0;
+            let cohesion = cohesion.unwrap_or(if vortex_active { 0.015 } else { 0.035 });
+            let repulsion = repulsion.unwrap_or(if vortex_active { 3.0 } else { 1.4 });
+            let repulsion_radius =
+                repulsion_radius.unwrap_or(if vortex_active { 16.0 } else { 10.0 });
+            let fluid_strength = fluid_strength.unwrap_or(if vortex_active { 0.0 } else { 0.5 });
+            let jitter = jitter.unwrap_or(if vortex_active { 0.0 } else { 0.03 });
+            render_fluid_mosaic_sequence(FluidMosaicSequenceRequest {
+                source_a_dir: &source_a_dir,
+                source_b_dir: &source_b_dir,
+                output_dir: &output_dir,
+                settings: FluidMosaicSettings {
+                    tile_size,
+                    color_bins,
+                    cohesion,
+                    cohesion_radius,
+                    repulsion,
+                    repulsion_radius,
+                    fluid_strength,
+                    fluid_scale,
+                    fluid_drift,
+                    damping,
+                    settle_iterations,
+                    jitter,
                 carry_texture: !flat_tiles,
                 adaptive_tiles,
                 min_tile_size,
@@ -489,9 +502,10 @@ fn run() -> Result<(), CliError> {
                 vortex_speed,
                 seed,
             },
-            frames,
-        })
-        .map(|_| ()),
+                frames,
+            })
+            .map(|_| ())
+        }
         Commands::RenderCoagulatedBlendSequence {
             source_a_dir,
             source_b_dir,
