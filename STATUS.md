@@ -11,8 +11,7 @@ _Last updated: 2026-06-24_
 - `cargo test --workspace`: **334 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
-- Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
-  clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
+- Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
 
