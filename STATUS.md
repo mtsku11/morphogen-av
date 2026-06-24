@@ -26,12 +26,15 @@ _Last updated: 2026-06-24_
   frame is bled back in each frame (`--reinject` = the "frame refresh"). The video becomes
   liquid and marbles — no tiles, no particles (Read-confirmed on harp: the figure
   dissolves into swirling dye trails). **Velocity field reworked to match the shader
-  (id v1 → v2)** after feedback that v1 was "wobbly" vs the shader's large emergent
-  vortices: switched value noise → **3D gradient (Perlin) noise** (round vortices, not
-  grid wobble), a **dominant low-frequency octave** + a `--detail`-weighted (0.1, the
-  shader's weight) fine octave, with **time as the noise's 3rd axis** (smooth in-place
-  evolution) plus a coherent x-drift so big vortices emerge and translate. Stateful
-  temporal node: frame 0 = source verbatim,
+  (id v1 → v2)** after feedback that it was "wobbly" vs the shader's flowing swirls:
+  switched value noise → **3D gradient (Perlin) noise** (round vortices) and — the key
+  fix — made the big-vortex octave **steady** (a fixed noise z-slice) so the dye flows
+  along its streamlines and **spirals into the vortex centres** over frames (that
+  accumulation *is* the swirl; an evolving field only wobbles in place). Only a 0.1
+  `--detail` octave drifts. Defaults retuned so material wraps several times: advect 12,
+  reinject 0.05 (lower = dye persists/spirals more), turbulence-speed 0.06. Frame-delta
+  3.46 → 2.19 (calmer); Read-confirmed the same vortices persist across frames while dye
+  spirals through them. Stateful temporal node: frame 0 = source verbatim,
   prior state = RGBA32F dye buffer (the checkpoint). CLI `render-fluid-advect-sequence`
   (single source). **Levers:** `--advect` (flow strength), `--reinject` in [0,1] (0 = pure
   smear, 1 = source verbatim, ~0.08 marble). Continuity identities unit-tested (reinject 1
