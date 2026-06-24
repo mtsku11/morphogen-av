@@ -17,6 +17,8 @@ use morphogen_render::{
     DispersionField, DispersionSettings,
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
     resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings,
+    advance_field_particles, initialize_field_particles, render_field_particles,
+    FieldParticleSettings,
     fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
@@ -1113,6 +1115,66 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct FieldParticlesSequenceRequest<'a> {
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: FieldParticleSettings,
+    pub(crate) frames: usize,
+}
+
+/// Render the discrete-carrier particle advection: a grid of coloured particles seeded from
+/// the source's first frame rides the shared steady-vortex field. Frame zero is the initial
+/// grid (a posterised source); each later frame integrates the particle positions along the
+/// field and splats them onto a black canvas. The particle state (positions + colours) is the
+/// stateful carrier, carried in memory (never a re-read PNG). Colours are fixed at seed time,
+/// so only the first source frame is read.
+pub(crate) fn render_field_particles_sequence(
+    request: FieldParticlesSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_frames = collect_image_frames(request.source_dir)?;
+    if source_frames.is_empty() {
+        return Err(CliError::Message(
+            "field particles requires at least one PNG frame in the source directory".to_string(),
+        ));
+    }
+
+    let seed_frame = load_image_f32(&source_frames[0])?;
+    fs::create_dir_all(request.output_dir)?;
+
+    let mut field = initialize_field_particles(&seed_frame, request.settings)?;
+    for index in 0..request.frames {
+        if index > 0 {
+            advance_field_particles(&mut field, index as u32, request.settings)?;
+        }
+        let rendered = render_field_particles(&field, request.settings);
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    println!(
+        "rendered field particles sequence with {} frame(s) ({} particles, spacing {}, size {}, advect {}) from {} to {}",
+        request.frames,
+        field.particle_count(),
+        request.settings.spacing,
+        request.settings.particle_size,
+        request.settings.advect,
+        request.source_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult {
+        frame_count: request.frames,
+    })
 }
 
 /// Advance the dye one frame on the chosen backend. Frame zero (`previous == None`) is the

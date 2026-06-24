@@ -490,6 +490,39 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
     },
+    /// Render the discrete-carrier particle advection (experimental, deterministic, CPU-only):
+    /// a grid of coloured particles seeded from the source rides the shared steady-vortex
+    /// field. Frame zero is the initial grid (a posterised source); each later frame flows the
+    /// particles along the field and splats them onto black. `--advect 0` holds the static grid
+    /// (the off case). Distinct from the fluid mosaic — no cohesion/repulsion, just flow.
+    RenderFieldParticlesSequence {
+        /// Source video frames (PNG sequence) — only the first frame seeds the particle colours.
+        source_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        /// Grid spacing in pixels — one particle per spacing×spacing cell (smaller = denser).
+        #[arg(long, default_value_t = 8)]
+        spacing: u32,
+        /// Edge length (pixels) of each particle's splat square (= spacing tiles the canvas).
+        #[arg(long, default_value_t = 8)]
+        particle_size: u32,
+        /// Field strength per frame (pixels). 0 holds the static grid; higher = flows further.
+        #[arg(long, default_value_t = 6.0)]
+        advect: f32,
+        /// Vortex scale (lattice cells per pixel). Smaller = larger coherent vortices.
+        #[arg(long, default_value_t = 0.008)]
+        turbulence_scale: f32,
+        /// Drift rate of the field's fine detail per frame (the big vortices stay steady).
+        #[arg(long, default_value_t = 0.06)]
+        turbulence_speed: f32,
+        /// Fine-detail octave weight relative to the steady big vortices (0 = pure vortices).
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains

@@ -8,6 +8,7 @@ pub mod disperse;
 pub mod datamosh;
 pub mod error;
 pub mod feedback_state;
+pub mod field_particles;
 pub mod fluid_advect;
 pub mod fluid_mosaic;
 pub mod flow;
@@ -57,6 +58,10 @@ pub use error::RenderError;
 pub use feedback_state::{
     feedback_state_path, read_flow_feedback_state, write_flow_feedback_state,
     FlowFeedbackStateDescriptor, FLOW_FEEDBACK_STATE_VERSION,
+};
+pub use field_particles::{
+    advance_field_particles, initialize_field_particles, render_field_particles,
+    FieldParticleSettings, ParticleField, FIELD_PARTICLES_ALGORITHM,
 };
 pub use fluid_advect::{
     fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
