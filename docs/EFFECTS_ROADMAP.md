@@ -287,7 +287,14 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
 - First MVP version: **Landed** (CPU + CLI `render-fluid-mosaic-sequence`). Algorithm
   id `fluid_mosaic_colour_sort_cpu_v1`; off case (`--cohesion 0 --repulsion 0
   --fluid-strength 0 --jitter 0 --settle-iterations 0`) = source grids overlaid.
-- Future high-quality version: tiles carrying **texture patches** (not just mean
-  colour), **varying tile sizes** (quadtree by detail / mixed scales), **live
-  per-frame colour refresh** from the moving sources, a **cluster-blob** layout
-  option, a spatially-varying dispersion/mix band, and a parity-gated Metal port.
+- **Texture-carrying tiles: Landed** (algorithm id bumped to
+  `fluid_mosaic_colour_sort_cpu_v2`). Each tile carries its source cell's original
+  pixel patch; with `carry_texture` on (the default) the render paints that patch
+  (nearest-sampled into the tile square) so footage grain survives instead of a flat
+  mean colour. Sorting/cohesion still key on the mean colour, so the temporal motion
+  is byte-identical to flat — `--flat-tiles` is the off case (v1 look) and isolates
+  exactly the texture (off-vs-on cross-delta ≈9.3/255).
+- Future high-quality version: **varying tile sizes** (quadtree by detail / mixed
+  scales), **live per-frame colour refresh** from the moving sources, a
+  **cluster-blob** layout option, a spatially-varying dispersion/mix band, and a
+  parity-gated Metal port.

@@ -17,11 +17,15 @@
 //!    colours then flow and intermix like dye — the marcscully.com fluid look — while
 //!    the tiles keep their crisp edges (the hybrid "crisp tiles ride a fluid" model).
 //!
-//! This is **Slice 1**: a deterministic CPU reference. Tiles are uniform-size and
-//! carry each cell's mean colour (texture patches and varying tile sizes are
-//! deferred); the simulation is seeded from the first frame of each source and runs
-//! self-contained (live per-frame colour refresh is deferred). Metal is a later
-//! slice. Determinism: splitmix64 hashing, fixed-timestep integration, no wall clock.
+//! Deterministic CPU reference. Tiles are uniform-size; each carries the original
+//! pixel **patch** of its source cell, so with `carry_texture` on the render paints
+//! that patch (footage texture survives, not just a flat colour) while the *sorting
+//! and motion stay keyed on the patch's mean colour* — turning texture off renders
+//! the flat mean square and is the only difference, so off-vs-on isolates exactly the
+//! texture. (Varying tile sizes and live per-frame colour refresh are still deferred;
+//! the simulation is seeded from the first frame of each source and runs
+//! self-contained.) Metal is a later slice. Determinism: splitmix64 hashing,
+//! fixed-timestep integration, no wall clock.
 //!
 //! Continuity identity (the off case for off-vs-on readout): with `cohesion`,
 //! `fluid_strength`, and `jitter` all `0` and `settle_iterations == 0`, every tile
@@ -33,9 +37,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ImageBufferF32, RenderError};
 
-/// Algorithm identifier for the Slice-1 CPU reference. Bump when the force model or
-/// tile formulation changes so stale caches/checkpoints invalidate.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v1";
+/// Algorithm identifier for the CPU reference. Bump when the force model or tile
+/// formulation changes so stale caches/checkpoints invalidate. `v2` adds texture
+/// patches to the tile formulation (`carry_texture`); `v1` was flat mean colour only.
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v2";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -74,8 +79,18 @@ pub struct FluidMosaicSettings {
     /// Per-step animated random nudge (pixels) added to every tile — keeps groups
     /// alive and stops them collapsing to a perfect point.
     pub jitter: f32,
+    /// When `true`, render each tile's original source pixel patch (footage texture
+    /// survives). When `false`, render the flat mean-colour square (the v1 look).
+    /// Sorting and motion are unaffected either way — they key on the mean colour —
+    /// so this flag isolates exactly the texture in an off-vs-on comparison.
+    #[serde(default = "default_carry_texture")]
+    pub carry_texture: bool,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
+}
+
+fn default_carry_texture() -> bool {
+    true
 }
 
 impl Default for FluidMosaicSettings {
@@ -93,6 +108,7 @@ impl Default for FluidMosaicSettings {
             damping: 0.88,
             settle_iterations: 60,
             jitter: 0.03,
+            carry_texture: true,
             seed: 0,
         }
     }
@@ -131,6 +147,16 @@ impl FluidMosaicSettings {
     }
 }
 
+/// The original pixel patch of a source cell, carried by its tile so the render can
+/// paint footage texture rather than a flat colour. Row-major RGB; `width`/`height`
+/// are the cell's own dimensions (edge cells may be smaller than `tile_size`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TilePatch {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<[f32; 3]>,
+}
+
 /// The stateful particle set. All `Vec`s are parallel and index-aligned; tile order
 /// is fixed (Source A tiles first, then Source B), which fixes the painter order in
 /// [`render_fluid_mosaic`] and keeps the render deterministic.
@@ -144,8 +170,10 @@ pub struct FluidMosaicState {
     pub positions: Vec<[f32; 2]>,
     /// Per-tile velocity in pixels/step.
     pub velocities: Vec<[f32; 2]>,
-    /// Fixed per-tile mean colour (RGB).
+    /// Fixed per-tile mean colour (RGB) — drives binning, cohesion, and the flat-mode render.
     pub colors: Vec<[f32; 3]>,
+    /// Fixed per-tile original pixel patch (for the `carry_texture` render).
+    pub patches: Vec<TilePatch>,
     /// Fixed per-tile colour bin index in `0..color_bins^3`.
     pub bins: Vec<u32>,
 }
@@ -175,9 +203,18 @@ pub fn initialize_fluid_mosaic(
 
     let mut positions = Vec::new();
     let mut colors = Vec::new();
+    let mut patches = Vec::new();
     let mut bins = Vec::new();
     for source in [source_a, source_b] {
-        append_source_tiles(source, tile, settings.color_bins, &mut positions, &mut colors, &mut bins);
+        append_source_tiles(
+            source,
+            tile,
+            settings.color_bins,
+            &mut positions,
+            &mut colors,
+            &mut patches,
+            &mut bins,
+        );
     }
     let velocities = vec![[0.0_f32, 0.0]; positions.len()];
 
@@ -189,6 +226,7 @@ pub fn initialize_fluid_mosaic(
         positions,
         velocities,
         colors,
+        patches,
         bins,
     };
 
@@ -262,15 +300,18 @@ pub fn advance_fluid_mosaic(
         positions,
         velocities,
         colors: state.colors.clone(),
+        patches: state.patches.clone(),
         bins: state.bins.clone(),
         ..*state
     })
 }
 
-/// Render the current particle set as crisp colour tiles. Each tile paints a
+/// Render the current particle set as crisp tiles. Each tile paints a
 /// `tile_size`×`tile_size` opaque square centred on its (rounded) position; tiles are
 /// painted in fixed index order (painter's algorithm), so later tiles overwrite
-/// earlier ones. Uncovered pixels stay opaque black.
+/// earlier ones. Uncovered pixels stay opaque black. With `carry_texture` on, each
+/// pixel of the square is sampled (nearest) from the tile's original source patch so
+/// footage texture survives; off, the flat mean colour fills the square.
 pub fn render_fluid_mosaic(
     state: &FluidMosaicState,
     settings: FluidMosaicSettings,
@@ -278,21 +319,37 @@ pub fn render_fluid_mosaic(
     settings.validate()?;
     let width = state.width;
     let height = state.height;
-    let half = (state.tile_size as i64) / 2;
+    let tile = state.tile_size as i64;
+    let half = tile / 2;
     let mut pixels = vec![[0.0_f32, 0.0, 0.0, 1.0]; (width as usize) * (height as usize)];
 
     for (i, pos) in state.positions.iter().enumerate() {
         let color = state.colors[i];
+        let patch = &state.patches[i];
         let cx = pos[0].round() as i64;
         let cy = pos[1].round() as i64;
-        let x0 = (cx - half).max(0);
-        let y0 = (cy - half).max(0);
-        let x1 = (cx - half + state.tile_size as i64).min(width as i64);
-        let y1 = (cy - half + state.tile_size as i64).min(height as i64);
+        let left = cx - half;
+        let top = cy - half;
+        let x0 = left.max(0);
+        let y0 = top.max(0);
+        let x1 = (left + tile).min(width as i64);
+        let y1 = (top + tile).min(height as i64);
         for y in y0..y1 {
             let row = (y as usize) * (width as usize);
             for x in x0..x1 {
-                pixels[row + x as usize] = [color[0], color[1], color[2], 1.0];
+                let rgb = if settings.carry_texture {
+                    // Nearest-sample the square's local offset (0..tile_size, relative
+                    // to the *unclamped* top-left so the patch isn't shifted) into the
+                    // patch's own dimensions (edge cells may be smaller than tile_size).
+                    let sx = (x - left).max(0);
+                    let sy = (y - top).max(0);
+                    let px = (sx * patch.width as i64 / tile).clamp(0, patch.width as i64 - 1);
+                    let py = (sy * patch.height as i64 / tile).clamp(0, patch.height as i64 - 1);
+                    patch.pixels[(py * patch.width as i64 + px) as usize]
+                } else {
+                    color
+                };
+                pixels[row + x as usize] = [rgb[0], rgb[1], rgb[2], 1.0];
             }
         }
     }
@@ -302,12 +359,14 @@ pub fn render_fluid_mosaic(
 
 /// Append one source's tiles (mean colour per `tile`-sized cell, centre position,
 /// colour bin) to the parallel state vectors.
+#[allow(clippy::too_many_arguments)]
 fn append_source_tiles(
     source: &ImageBufferF32,
     tile: u32,
     color_bins: u32,
     positions: &mut Vec<[f32; 2]>,
     colors: &mut Vec<[f32; 3]>,
+    patches: &mut Vec<TilePatch>,
     bins: &mut Vec<u32>,
 ) {
     let cols = source.width.div_ceil(tile);
@@ -320,6 +379,8 @@ fn append_source_tiles(
             let y1 = (y0 + tile).min(source.height);
             let mut sum = [0.0_f32; 3];
             let mut count = 0.0_f32;
+            let mut patch_pixels =
+                Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
             for y in y0..y1 {
                 for x in x0..x1 {
                     let px = source.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 1.0]);
@@ -327,6 +388,7 @@ fn append_source_tiles(
                     sum[1] += px[1];
                     sum[2] += px[2];
                     count += 1.0;
+                    patch_pixels.push([px[0], px[1], px[2]]);
                 }
             }
             let mean = if count > 0.0 {
@@ -339,6 +401,11 @@ fn append_source_tiles(
                 (y0 + y1) as f32 * 0.5,
             ]);
             colors.push(mean);
+            patches.push(TilePatch {
+                width: x1 - x0,
+                height: y1 - y0,
+                pixels: patch_pixels,
+            });
             bins.push(color_bin(mean, color_bins));
         }
     }
@@ -683,5 +750,55 @@ mod tests {
         assert!((center[0] - 0.2).abs() < 1e-6);
         assert!((center[1] - 0.4).abs() < 1e-6);
         assert!((center[2] - 0.6).abs() < 1e-6);
+    }
+
+    /// A source whose red channel ramps across each tile so within-tile detail exists.
+    /// `carry_texture` on must reproduce that ramp; off must paint a flat mean square.
+    fn red_ramp(size: u32) -> ImageBufferF32 {
+        ImageBufferF32::from_fn(size, size, |x, _| [(x % 8) as f32 / 7.0, 0.0, 0.0, 1.0])
+            .expect("red ramp")
+    }
+
+    #[test]
+    fn carry_texture_preserves_within_tile_detail() {
+        let a = red_ramp(32);
+        let b = red_ramp(32);
+        let base = FluidMosaicSettings {
+            cohesion: 0.0,
+            repulsion: 0.0,
+            fluid_strength: 0.0,
+            jitter: 0.0,
+            settle_iterations: 0,
+            tile_size: 8,
+            ..FluidMosaicSettings::default()
+        };
+        let textured = FluidMosaicSettings {
+            carry_texture: true,
+            ..base
+        };
+        let flat = FluidMosaicSettings {
+            carry_texture: false,
+            ..base
+        };
+        // No forces ⇒ tiles stay on the grid; the top-left tile spans x∈[0,8).
+        let state = initialize_fluid_mosaic(&a, &b, base).expect("state");
+        let tex = render_fluid_mosaic(&state, textured).expect("textured");
+        let mean = render_fluid_mosaic(&state, flat).expect("flat");
+
+        // Textured: the ramp survives — left edge dark, right edge bright.
+        let tex_left = tex.pixel(0, 0).expect("tex left")[0];
+        let tex_right = tex.pixel(7, 0).expect("tex right")[0];
+        assert!(tex_left < 0.05, "ramp start should be dark: {tex_left}");
+        assert!(tex_right > 0.95, "ramp end should be bright: {tex_right}");
+
+        // Flat: every pixel of the tile is the same mean value (no within-tile detail).
+        let flat_left = mean.pixel(0, 0).expect("flat left")[0];
+        let flat_right = mean.pixel(7, 0).expect("flat right")[0];
+        assert!(
+            (flat_left - flat_right).abs() < 1e-6,
+            "flat tile must be uniform: {flat_left} vs {flat_right}"
+        );
+        // Sanity: the flat value is the ramp's mean (≈0.5), distinct from both edges.
+        assert!((flat_left - 0.5).abs() < 0.1, "flat ≈ mean: {flat_left}");
     }
 }

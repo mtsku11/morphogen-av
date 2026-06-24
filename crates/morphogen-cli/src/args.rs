@@ -484,6 +484,11 @@ pub(crate) enum Commands {
         /// Per-step animated random nudge (pixels) keeping groups alive.
         #[arg(long, default_value_t = 0.03)]
         jitter: f32,
+        /// Render flat mean-colour tiles instead of carrying each tile's original
+        /// source pixel patch (the v1 look; this is the off case for the texture
+        /// readout). Sorting/motion are identical either way.
+        #[arg(long)]
+        flat_tiles: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
