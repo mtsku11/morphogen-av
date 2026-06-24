@@ -56,6 +56,18 @@
 //! into an opt-in, spatially-confined transition. It runs only at advance time (the
 //! warmup settle, which establishes the base grouping, is untouched), so behind the
 //! sweep cohesion re-gathers the scattered tiles (disperse-then-re-form). `0` = off.
+//!
+//! `turbulence` ports the *faux-fluid* look: the analytic streamfunction above gives a
+//! regular swirl lattice, so this adds an **organic** streamfunction — two octaves of
+//! value noise (built on the same splitmix hash, not trig-hashing, so it is GPU-safe)
+//! whose lattices drift in different directions so the field genuinely *evolves* rather
+//! than rigidly translating. Its analytic curl `(∂/∂y, -∂/∂x)` (central finite
+//! difference) is divergence-free by construction — the same property the base field
+//! relies on to marble without collapsing to voids — so the carefully balanced forces
+//! are preserved. The turbulence velocity is added to the fluid velocity and shares the
+//! dispersion band's `fluid_gain` (the band amplifies it in-band). `turbulence == 0`
+//! (the default) early-returns a zero contribution, so the path is byte-identical to the
+//! analytic-only `v7` field.
 //! Metal is a later slice. Determinism: splitmix64 hashing, fixed-timestep
 //! integration, no wall clock.
 //!
@@ -71,7 +83,11 @@ use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the force model, tile
 /// formulation, or the content a tile paints changes so stale caches/checkpoints
-/// invalidate. `v7` adds the spatially-varying dispersion band (`dispersion_band`: a
+/// invalidate. `v8` adds the faux-fluid **turbulence** field (`turbulence`: a
+/// curl-of-value-noise streamfunction added to the analytic fluid velocity so the
+/// flow marbles with organic, multi-octave, evolving currents instead of a regular
+/// swirl lattice — divergence-free, deterministic, `0` = off);
+/// `v7` adds the spatially-varying dispersion band (`dispersion_band`: a
 /// soft-edged vertical band that sweeps across the canvas and amplifies each in-band
 /// tile's jitter + fluid at advance time so colour domains shatter where the wipe sits);
 /// `v6` adds the cluster-blob layout (`cluster_blob`: cohesion pulls each
@@ -82,7 +98,7 @@ use crate::{ImageBufferF32, RenderError};
 /// painted colour/patch from the current source frame); `v3` added variable-size tiles
 /// (`adaptive_tiles`: quadtree subdivision + size-aware repulsion); `v2` added texture
 /// patches (`carry_texture`); `v1` was flat uniform mean colour only.
-pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v7";
+pub const FLUID_MOSAIC_ALGORITHM: &str = "fluid_mosaic_colour_sort_cpu_v8";
 
 /// Knobs for the fluid colour-sort mosaic (Slice 1).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -193,6 +209,21 @@ pub struct FluidMosaicSettings {
     /// `[0, 1)`. Only used when `dispersion_band > 0`.
     #[serde(default = "default_band_start")]
     pub band_start: f32,
+    /// Amplitude (pixels/step) of the faux-fluid **turbulence** velocity added to the
+    /// analytic fluid field — a curl of two octaves of value noise that gives the flow
+    /// organic, evolving, multi-scale currents instead of the regular analytic swirl.
+    /// Reads in the same pixel units as `fluid_strength`. `0` (the default) early-returns
+    /// a zero contribution, byte-identical to the analytic-only field.
+    #[serde(default = "default_turbulence")]
+    pub turbulence: f32,
+    /// Spatial frequency of the turbulence noise (lattice cells per pixel). Smaller ⇒
+    /// broader, smoother turbulent currents. Only used when `turbulence > 0`.
+    #[serde(default = "default_turbulence_scale")]
+    pub turbulence_scale: f32,
+    /// Temporal evolution rate of the turbulence field per frame (how fast the organic
+    /// currents churn). Only used when `turbulence > 0`.
+    #[serde(default = "default_turbulence_speed")]
+    pub turbulence_speed: f32,
     /// Seed for the deterministic per-tile hashes and the fluid field phase.
     pub seed: u64,
 }
@@ -241,6 +272,18 @@ fn default_band_start() -> f32 {
     0.0
 }
 
+fn default_turbulence() -> f32 {
+    0.0
+}
+
+fn default_turbulence_scale() -> f32 {
+    0.02
+}
+
+fn default_turbulence_speed() -> f32 {
+    0.3
+}
+
 impl Default for FluidMosaicSettings {
     fn default() -> Self {
         Self {
@@ -267,6 +310,9 @@ impl Default for FluidMosaicSettings {
             band_width: 0.25,
             band_speed: 0.02,
             band_start: 0.0,
+            turbulence: 0.0,
+            turbulence_scale: 0.02,
+            turbulence_speed: 0.3,
             seed: 0,
         }
     }
@@ -309,6 +355,9 @@ impl FluidMosaicSettings {
             ("band_width", self.band_width),
             ("band_speed", self.band_speed),
             ("band_start", self.band_start),
+            ("turbulence", self.turbulence),
+            ("turbulence_scale", self.turbulence_scale),
+            ("turbulence_speed", self.turbulence_speed),
         ] {
             if !value.is_finite() {
                 return Err(RenderError::InvalidCoagulationSettings(format!(
@@ -371,6 +420,8 @@ pub struct FluidMosaicState {
 /// Phase salt so a different seed gives a different fluid field.
 const FLUID_PHASE_SALT: u64 = 0xF1D5_0FF5_E712_0A37;
 const JITTER_SALT: u64 = 0x101A_7E55_2C0F_FEE1;
+const TURBULENCE_SALT_0: u64 = 0x7E12_B0FF_5EED_C0A1;
+const TURBULENCE_SALT_1: u64 = 0x9A3C_44D7_1F0B_E215;
 
 /// Seed the particle set from the first frame of each source and run the warmup
 /// settle so frame zero is already colour-grouped.
@@ -439,6 +490,7 @@ pub fn advance_fluid_mosaic(
 
     let damping = settings.damping.clamp(0.0, 1.0);
     let time = frame_index as f32 * settings.fluid_drift;
+    let turb_time = frame_index as f32 * settings.turbulence_speed;
     let width = state.width as f32;
     let height = state.height as f32;
 
@@ -469,6 +521,12 @@ pub fn advance_fluid_mosaic(
         let (fx, fy) = fluid_velocity(p[0], p[1], time, settings);
         ax += fx * settings.fluid_strength * fluid_gain;
         ay += fy * settings.fluid_strength * fluid_gain;
+
+        // Faux-fluid turbulence (curl of evolving value noise) — organic currents on top
+        // of the analytic field; shares the band gain (it is fluid). `0` ⇒ zero, no-op.
+        let (tx, ty) = turbulence_velocity(p[0], p[1], turb_time, settings);
+        ax += tx * settings.turbulence * fluid_gain;
+        ay += ty * settings.turbulence * fluid_gain;
 
         // Animated jitter keeps groups alive (no perfect collapse); boosted in the band.
         let angle = hash01(settings.seed ^ JITTER_SALT, i as u64, u64::from(frame_index)) * TAU;
@@ -981,6 +1039,64 @@ fn fluid_velocity(x: f32, y: f32, time: f32, settings: FluidMosaicSettings) -> (
     // Normalize out the spatial-frequency scale so fluid_strength reads in pixels.
     let inv = if settings.fluid_scale != 0.0 {
         1.0 / settings.fluid_scale
+    } else {
+        0.0
+    };
+    (dpsi_dy * inv, -dpsi_dx * inv)
+}
+
+/// 2D value noise on the splitmix lattice: hash the four integer cell corners and
+/// smoothstep-interpolate. Deterministic and GPU-safe (no trig hashing, which the
+/// reference shaders themselves flag as accuracy-dependent across GPUs). Output in
+/// `[0, 1)`.
+fn value_noise2(seed: u64, x: f32, y: f32) -> f32 {
+    let xi = x.floor();
+    let yi = y.floor();
+    let xf = x - xi;
+    let yf = y - yi;
+    let ix = xi as i64 as u64;
+    let iy = yi as i64 as u64;
+    let c00 = hash01(seed, ix, iy);
+    let c10 = hash01(seed, ix.wrapping_add(1), iy);
+    let c01 = hash01(seed, ix, iy.wrapping_add(1));
+    let c11 = hash01(seed, ix.wrapping_add(1), iy.wrapping_add(1));
+    // smoothstep weights for C1-continuous interpolation (smooth finite-difference curl).
+    let u = xf * xf * (3.0 - 2.0 * xf);
+    let v = yf * yf * (3.0 - 2.0 * yf);
+    let a = c00 + (c10 - c00) * u;
+    let b = c01 + (c11 - c01) * u;
+    a + (b - a) * v
+}
+
+/// A two-octave value-noise streamfunction. Each octave's lattice drifts in a *different*
+/// direction with `time`, so their sum's interference evolves (the field churns) rather
+/// than rigidly translating — the organic faux-fluid look.
+fn turbulence_streamfunction(x: f32, y: f32, time: f32, settings: FluidMosaicSettings) -> f32 {
+    let s = settings.turbulence_scale;
+    // Coarse octave drifts along +x; fine octave (2x frequency, half weight) drifts +y.
+    let n0 = value_noise2(settings.seed ^ TURBULENCE_SALT_0, x * s + time, y * s);
+    let n1 = value_noise2(settings.seed ^ TURBULENCE_SALT_1, x * 2.0 * s, y * 2.0 * s + time);
+    n0 + 0.5 * n1
+}
+
+/// Divergence-free turbulence velocity: the analytic curl `(∂psi/∂y, -∂psi/∂x)` of the
+/// noise streamfunction, by central finite difference. Normalized by `turbulence_scale`
+/// (as [`fluid_velocity`] is by `fluid_scale`) so the amplitude reads in pixels
+/// regardless of frequency. Returns `(0, 0)` when `turbulence == 0` so the caller's
+/// path is byte-identical to the analytic-only field.
+fn turbulence_velocity(x: f32, y: f32, time: f32, settings: FluidMosaicSettings) -> (f32, f32) {
+    if settings.turbulence == 0.0 {
+        return (0.0, 0.0);
+    }
+    const E: f32 = 1.0; // 1px epsilon (small vs a lattice cell at the default scale)
+    let psi_yp = turbulence_streamfunction(x, y + E, time, settings);
+    let psi_ym = turbulence_streamfunction(x, y - E, time, settings);
+    let psi_xp = turbulence_streamfunction(x + E, y, time, settings);
+    let psi_xm = turbulence_streamfunction(x - E, y, time, settings);
+    let dpsi_dy = (psi_yp - psi_ym) / (2.0 * E);
+    let dpsi_dx = (psi_xp - psi_xm) / (2.0 * E);
+    let inv = if settings.turbulence_scale != 0.0 {
+        1.0 / settings.turbulence_scale
     } else {
         0.0
     };
@@ -1560,6 +1676,89 @@ mod tests {
 
         // Determinism.
         let again = advance_fluid_mosaic(&state, on, 1).expect("again");
+        assert_eq!(on_state.positions, again.positions);
+    }
+
+    #[test]
+    fn turbulence_perturbs_flow_and_off_is_byte_identical() {
+        // Two tiles riding the analytic fluid field; turbulence adds an organic curl on
+        // top. With turbulence off the path must be byte-identical to the analytic-only
+        // field (and must ignore turbulence_scale/speed); with it on, positions move.
+        let grey = [0.5_f32, 0.5, 0.5];
+        let bin = color_bin(grey, 5);
+        let state = FluidMosaicState {
+            width: 200,
+            height: 200,
+            tile_size: 8,
+            color_bins: 5,
+            positions: vec![[60.0, 90.0], [140.0, 110.0]],
+            velocities: vec![[0.0, 0.0]; 2],
+            colors: vec![grey; 2],
+            patches: vec![
+                TilePatch {
+                    width: 0,
+                    height: 0,
+                    pixels: Vec::new(),
+                };
+                2
+            ],
+            bins: vec![bin; 2],
+            sizes: vec![8; 2],
+            origin: vec![
+                TileOrigin {
+                    source: 0,
+                    x0: 0,
+                    y0: 0,
+                    x1: 8,
+                    y1: 8,
+                };
+                2
+            ],
+        };
+        // Cohesion/repulsion/jitter off; analytic fluid on so there is a base flow to add to.
+        let base = FluidMosaicSettings {
+            cohesion: 0.0,
+            repulsion: 0.0,
+            jitter: 0.0,
+            fluid_strength: 0.5,
+            turbulence_scale: 0.03,
+            turbulence_speed: 0.25,
+            ..FluidMosaicSettings::default()
+        };
+        let off = FluidMosaicSettings {
+            turbulence: 0.0,
+            ..base
+        };
+        let on = FluidMosaicSettings {
+            turbulence: 4.0,
+            ..base
+        };
+
+        let off_state = advance_fluid_mosaic(&state, off, 3).expect("off");
+        let on_state = advance_fluid_mosaic(&state, on, 3).expect("on");
+
+        // Turbulence on moves both tiles measurably off the analytic-only trajectory.
+        for i in 0..2 {
+            assert_ne!(
+                on_state.positions[i], off_state.positions[i],
+                "turbulence should perturb tile {i}"
+            );
+        }
+
+        // Off path (turbulence 0) is byte-identical regardless of turbulence geometry.
+        let off_other_geom = FluidMosaicSettings {
+            turbulence_scale: 0.1,
+            turbulence_speed: 2.0,
+            ..off
+        };
+        let off_other_state = advance_fluid_mosaic(&state, off_other_geom, 3).expect("off geom");
+        assert_eq!(
+            off_state.positions, off_other_state.positions,
+            "turbulence 0 must ignore turbulence_scale/speed entirely"
+        );
+
+        // Determinism.
+        let again = advance_fluid_mosaic(&state, on, 3).expect("again");
         assert_eq!(on_state.positions, again.positions);
     }
 }

@@ -8,13 +8,34 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **281 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **282 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Fluid Colour-Sort Mosaic — faux-fluid turbulence (Slice 8, CPU + CLI).** Ported the
+  *faux-fluid* shadertoy look. The analytic fluid field is a regular swirl lattice; with
+  `--turbulence > 0` a curl-of-value-noise streamfunction is **added** to it, giving the
+  flow organic, evolving, multi-scale currents. Two octaves of value noise built on the
+  existing splitmix `hash01` (GPU-safe — the reference shaders' own `sin()`-hashing is
+  flagged accuracy-dependent), lattices drifting in different directions so the field
+  *evolves* not just translates; the velocity is the analytic curl `(∂/∂y, -∂/∂x)` by
+  central finite difference, **divergence-free by construction** (so the tuned force
+  balance is preserved), normalized by `--turbulence-scale` so amplitude reads in pixels.
+  Shares the dispersion band's `fluid_gain`. Three serde-defaulted settings, algo id
+  bumped `…_v7` → `…_v8`; `turbulence 0` early-returns a zero contribution ⇒ off path
+  **byte-identical** to v7. **Tuning finding:** amplitude is in the same pixel units as
+  `fluid_strength` (≈0.5) — sweet spot ≈**0.6** (coherent domains, organic currents);
+  overdriving (≈6) reproduces the boil-to-confetti failure mode *globally* (what the
+  dispersion band does locally). **Off-vs-on readout** (harp→cello, `--turbulence 0.6`):
+  frame 0 byte-identical (turbulence is advance-time only), cross-delta ≈23/255 by frame 5
+  → ≈41/255 by frame 59; Read confirms coherent marbling along irregular currents, not
+  boil. Workspace 281 → 282. New unit test (turbulence perturbs both tiles, off is
+  byte-identical regardless of scale/speed, deterministic). See
+  [[fluid-colour-sort-mosaic]]. Metal port deferred.
 
 - **Fluid Colour-Sort Mosaic — spatially-varying dispersion band (Slice 7, CPU + CLI).**
   The destabilizing forces made spatially *local*: `--dispersion-band > 0` adds a
