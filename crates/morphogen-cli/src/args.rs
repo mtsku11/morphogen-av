@@ -444,12 +444,16 @@ pub(crate) enum Commands {
         /// Advection distance per frame (pixels) — how far the dye is pushed each step.
         #[arg(long, default_value_t = 6.0)]
         advect: f32,
-        /// Turbulence spatial frequency (lattice cells per pixel). Smaller = broader currents.
-        #[arg(long, default_value_t = 0.02)]
+        /// Vortex scale (lattice cells per pixel). Smaller = larger coherent vortices.
+        #[arg(long, default_value_t = 0.008)]
         turbulence_scale: f32,
-        /// Turbulence temporal evolution rate per frame (how fast the currents churn).
-        #[arg(long, default_value_t = 0.3)]
+        /// Temporal evolution rate per frame (how fast vortices form, drift, re-form).
+        #[arg(long, default_value_t = 0.15)]
         turbulence_speed: f32,
+        /// Fine-detail octave weight relative to the big vortices (shader uses 0.1).
+        /// Higher = finer structure (and eventually a busy wobble); 0 = pure large vortices.
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
         /// Source bled back into the dye each frame, in [0, 1] (the "frame refresh").
         /// 0 = pure smear, 1 = source verbatim; ~0.05-0.15 keeps the video marbling.
         #[arg(long, default_value_t = 0.08)]

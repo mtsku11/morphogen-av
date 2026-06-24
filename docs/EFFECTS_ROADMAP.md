@@ -366,10 +366,15 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   turbulence perturbs *tiles*, so it can't produce the smooth flowing **pixel** behaviour
   of the Faux Fluid Sim; this spin-off does. A single source video is treated as a
   continuous dye: each frame the held dye (RGBA32F state) is advected semi-Lagrangian-style
-  along the same divergence-free curl-of-value-noise field, and `--reinject` of the current
+  along a divergence-free curl-noise field, and `--reinject` of the current
   source frame is bled back in (the "frame refresh"). The picture becomes liquid and
   marbles — no tiles/particles. Stateful (frame 0 = source verbatim, prior state = dye
-  buffer). Levers: `--advect` (flow), `--reinject` 0→1 (pure smear → source verbatim,
-  ~0.08 marble). Off cases unit-tested. Deferred variants: optical-flow-driven, two-source
-  A→B, a discrete carrier (tiles/particles on this field), and Metal.
+  buffer). **Velocity field reworked (id v1 → v2)** to match the shader's *large emergent
+  vortices* (v1 read as wobbly): 3D gradient (Perlin) noise (round vortices), a dominant
+  low-frequency octave + a `--detail`-weighted (0.1) fine octave, time as the noise's 3rd
+  axis + coherent drift. Levers: `--advect` (flow), `--turbulence-scale` (vortex size),
+  `--turbulence-speed` (evolution), `--detail` (0 = pure big vortices), `--reinject` 0→1
+  (pure smear → source verbatim, ~0.08 marble). Off cases unit-tested. Deferred variants:
+  optical-flow-driven, two-source A→B, a discrete carrier (tiles/particles on this field),
+  and Metal.
 - Next: a parity-gated Metal port for the fluid mosaic.

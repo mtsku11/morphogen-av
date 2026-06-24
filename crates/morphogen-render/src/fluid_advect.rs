@@ -8,12 +8,16 @@
 //! itself becomes liquid and marbles (folds, stretches, swirls) like ink in water.
 //!
 //! Per frame `n` (with `D` the dye buffer, `S_n` the current source frame):
-//! 1. **Velocity field** `v(p, t)` — the analytic curl `(∂ψ/∂y, -∂ψ/∂x)` of a two-octave
-//!    value-noise streamfunction `ψ` (built on a splitmix hash, GPU-safe — not the
-//!    reference shader's `sin()`-hashing). The curl is divergence-free, so the dye is
-//!    transported without sources/sinks (no pooling to bright/black blobs). The two
-//!    octaves drift in different directions with `t = n · turbulence_speed` so the field
-//!    *evolves* rather than rigidly translating.
+//! 1. **Velocity field** `v(p, t)` — the analytic curl `(∂ψ/∂y, -∂ψ/∂x)` of a streamfunction
+//!    `ψ` built to match the reference shader's *character*: large coherent vortices that
+//!    emerge and slowly re-form, not a busy wobble. `ψ` is **3D gradient (Perlin) noise**
+//!    (splitmix-hashed gradients, GPU-safe — not the shader's `sin()`-hashing) with a
+//!    **dominant low-frequency octave** (the big vortices) plus a `detail`-weighted octave
+//!    at 2× frequency (the shader weights its small turbulence only `0.1`). Time is the
+//!    noise's **3rd axis**, so vortices form and dissolve smoothly in place; a coherent
+//!    `x` drift scrolls them across the frame so they appear to emerge (the shader's
+//!    `+ iTime` scroll). The curl is divergence-free, so the dye is transported without
+//!    sources/sinks (no pooling to bright/black blobs).
 //! 2. **Semi-Lagrangian advection** — `D'[p] = bilinear(D, p - v · advect)`: each output
 //!    pixel reads the dye that was *upstream*, so the colour flows downstream along `v`.
 //! 3. **Source reinjection (the "frame refresh")** — `D'[p] = mix(D'[p], S_n[p], reinject)`:
@@ -36,10 +40,13 @@ use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the velocity model, advection
 /// scheme, or reinjection changes so stale caches/checkpoints invalidate.
-pub const FLUID_ADVECT_ALGORITHM: &str = "fluid_advect_curl_noise_cpu_v1";
+pub const FLUID_ADVECT_ALGORITHM: &str = "fluid_advect_curl_noise_cpu_v2";
 
 const TURBULENCE_SALT_0: u64 = 0x7E12_B0FF_5EED_C0A1;
 const TURBULENCE_SALT_1: u64 = 0x9A3C_44D7_1F0B_E215;
+/// Coherent horizontal scroll of the big vortices per unit time (lattice cells), so they
+/// translate across the frame and appear to emerge — the shader's `+ iTime` scroll.
+const VORTEX_DRIFT: f32 = 0.5;
 
 /// Settings for [`fluid_advect_frame_cpu`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -47,12 +54,16 @@ pub struct FluidAdvectSettings {
     /// Advection distance per frame (pixels) — how far the dye is pushed along the
     /// velocity field each step. `0` holds the dye in place (the field never displaces).
     pub advect: f32,
-    /// Spatial frequency of the turbulence noise (lattice cells per pixel). Smaller ⇒
-    /// broader, smoother currents.
+    /// Spatial frequency of the dominant vortex octave (lattice cells per pixel). Smaller
+    /// ⇒ larger vortices. The size of the big coherent swirls.
     pub turbulence_scale: f32,
-    /// Temporal evolution rate of the velocity field per frame (how fast the currents
-    /// churn).
+    /// Temporal evolution rate of the velocity field per frame (how fast vortices form,
+    /// drift, and re-form). Smaller ⇒ slower, calmer flow.
     pub turbulence_speed: f32,
+    /// Weight of the fine (2× frequency) detail octave relative to the dominant vortex
+    /// octave. The reference shader uses `0.1`; raising it adds finer structure (and, past
+    /// a point, the busy "wobble"); `0` is pure large vortices.
+    pub detail: f32,
     /// Fraction of the current source frame bled back into the dye each frame, in
     /// `[0, 1]` — the "frame refresh". `0` lets the dye smear freely with no fresh
     /// content (frame zero dissolves into pure flow); `1` shows the source verbatim
@@ -66,8 +77,9 @@ impl Default for FluidAdvectSettings {
     fn default() -> Self {
         Self {
             advect: 6.0,
-            turbulence_scale: 0.02,
-            turbulence_speed: 0.3,
+            turbulence_scale: 0.008,
+            turbulence_speed: 0.15,
+            detail: 0.1,
             reinject: 0.08,
             seed: 0,
         }
@@ -80,6 +92,7 @@ impl FluidAdvectSettings {
             ("advect", self.advect),
             ("turbulence_scale", self.turbulence_scale),
             ("turbulence_speed", self.turbulence_speed),
+            ("detail", self.detail),
             ("reinject", self.reinject),
         ] {
             if !value.is_finite() {
@@ -87,6 +100,11 @@ impl FluidAdvectSettings {
                     "{name} must be finite"
                 )));
             }
+        }
+        if self.detail < 0.0 {
+            return Err(RenderError::InvalidCoagulationSettings(
+                "detail must be non-negative".to_string(),
+            ));
         }
         if self.advect < 0.0 {
             return Err(RenderError::InvalidCoagulationSettings(
@@ -163,38 +181,111 @@ fn curl_noise_velocity(x: f32, y: f32, time: f32, settings: FluidAdvectSettings)
     (dpsi_dy * inv, -dpsi_dx * inv)
 }
 
-/// Two octaves of value noise whose lattices drift in different directions with `time`,
-/// so their interference evolves (the field churns) rather than rigidly translating.
+/// The streamfunction `ψ`: a dominant low-frequency gradient-noise octave (the large
+/// vortices) plus a `detail`-weighted octave at 2× frequency. Time is the noise's 3rd
+/// axis (smooth in-place evolution) and also scrolls the big octave in `x` (coherent
+/// drift), so vortices emerge, translate, and re-form rather than churning/wobbling.
 fn turbulence_streamfunction(x: f32, y: f32, time: f32, settings: FluidAdvectSettings) -> f32 {
     let s = settings.turbulence_scale;
-    let n0 = value_noise2(settings.seed ^ TURBULENCE_SALT_0, x * s + time, y * s);
-    let n1 = value_noise2(settings.seed ^ TURBULENCE_SALT_1, x * 2.0 * s, y * 2.0 * s + time);
-    n0 + 0.5 * n1
+    let drift = time * VORTEX_DRIFT;
+    // Big, low-frequency octave — the large coherent vortices.
+    let big = gradient_noise3(settings.seed ^ TURBULENCE_SALT_0, x * s + drift, y * s, time);
+    // Fine octave at 2× frequency, low weight — a touch of structure, evolving a little
+    // faster so it doesn't lock to the big octave.
+    let small = gradient_noise3(
+        settings.seed ^ TURBULENCE_SALT_1,
+        x * 2.0 * s + drift,
+        y * 2.0 * s,
+        time * 1.7,
+    );
+    big + settings.detail * small
 }
 
-/// 2D value noise on the splitmix lattice: hash the four integer cell corners and
-/// smoothstep-interpolate. Deterministic and GPU-safe (no trig hashing). Output `[0, 1)`.
-fn value_noise2(seed: u64, x: f32, y: f32) -> f32 {
+/// 3D gradient (Perlin) noise on the splitmix lattice: hash the eight integer cell corners
+/// into gradient directions, quintic-fade, trilinearly interpolate the corner dot
+/// products. Deterministic and GPU-safe (no trig hashing). Output ~`[-1, 1]`, smooth (C2),
+/// so its curl gives clean round vortices rather than the grid-aligned blobs of value noise.
+fn gradient_noise3(seed: u64, x: f32, y: f32, z: f32) -> f32 {
     let xi = x.floor();
     let yi = y.floor();
+    let zi = z.floor();
     let xf = x - xi;
     let yf = y - yi;
+    let zf = z - zi;
     let ix = xi as i64 as u64;
     let iy = yi as i64 as u64;
-    let c00 = hash01(seed, ix, iy);
-    let c10 = hash01(seed, ix.wrapping_add(1), iy);
-    let c01 = hash01(seed, ix, iy.wrapping_add(1));
-    let c11 = hash01(seed, ix.wrapping_add(1), iy.wrapping_add(1));
-    let u = xf * xf * (3.0 - 2.0 * xf);
-    let v = yf * yf * (3.0 - 2.0 * yf);
-    let a = c00 + (c10 - c00) * u;
-    let b = c01 + (c11 - c01) * u;
-    a + (b - a) * v
+    let iz = zi as i64 as u64;
+    let u = fade(xf);
+    let v = fade(yf);
+    let w = fade(zf);
+
+    let corner = |dx: u64, dy: u64, dz: u64, gx: f32, gy: f32, gz: f32| -> f32 {
+        let h = hash_coords(seed, ix.wrapping_add(dx), iy.wrapping_add(dy), iz.wrapping_add(dz));
+        grad3(h, gx, gy, gz)
+    };
+
+    let x00 = lerp(
+        corner(0, 0, 0, xf, yf, zf),
+        corner(1, 0, 0, xf - 1.0, yf, zf),
+        u,
+    );
+    let x10 = lerp(
+        corner(0, 1, 0, xf, yf - 1.0, zf),
+        corner(1, 1, 0, xf - 1.0, yf - 1.0, zf),
+        u,
+    );
+    let x01 = lerp(
+        corner(0, 0, 1, xf, yf, zf - 1.0),
+        corner(1, 0, 1, xf - 1.0, yf, zf - 1.0),
+        u,
+    );
+    let x11 = lerp(
+        corner(0, 1, 1, xf, yf - 1.0, zf - 1.0),
+        corner(1, 1, 1, xf - 1.0, yf - 1.0, zf - 1.0),
+        u,
+    );
+    let y0 = lerp(x00, x10, v);
+    let y1 = lerp(x01, x11, v);
+    lerp(y0, y1, w)
 }
 
-fn hash01(seed: u64, a: u64, b: u64) -> f32 {
-    let h = hash_u64(seed ^ a.wrapping_mul(0x100_0000_01B3) ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93));
-    (h >> 40) as f32 / (1u64 << 24) as f32
+/// Perlin quintic fade `6t^5 - 15t^4 + 10t^3` (C2-continuous interpolant).
+fn fade(t: f32) -> f32 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+/// Perlin's 12 edge-midpoint gradient directions, selected by the low bits of the hash.
+fn grad3(hash: u64, x: f32, y: f32, z: f32) -> f32 {
+    match hash & 15 {
+        0 => x + y,
+        1 => -x + y,
+        2 => x - y,
+        3 => -x - y,
+        4 => x + z,
+        5 => -x + z,
+        6 => x - z,
+        7 => -x - z,
+        8 => y + z,
+        9 => -y + z,
+        10 => y - z,
+        11 => -y - z,
+        12 => x + y,
+        13 => -y + z,
+        14 => -x + y,
+        _ => -y - z,
+    }
+}
+
+fn hash_coords(seed: u64, a: u64, b: u64, c: u64) -> u64 {
+    hash_u64(
+        seed ^ a.wrapping_mul(0x100_0000_01B3)
+            ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93)
+            ^ c.wrapping_mul(0x59E3_9B1F_9A2D_7C4B),
+    )
 }
 
 /// splitmix64 finalizer (matches `fluid_mosaic`/`coagulate`).
