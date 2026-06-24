@@ -502,6 +502,12 @@ pub(crate) enum Commands {
         /// --adaptive-tiles). Lower ⇒ finer tiles.
         #[arg(long, default_value_t = 0.004)]
         subdivide_threshold: f32,
+        /// Live colour refresh: re-sample each tile's painted colour/patch from the
+        /// current source frame every frame so the two videos play through the flowing
+        /// mosaic (render-only; the simulation is unaffected). Sources cycle if the
+        /// render outlasts the clip. Off by default; omitting it is the off case.
+        #[arg(long)]
+        live_refresh: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },

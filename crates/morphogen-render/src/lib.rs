@@ -57,8 +57,9 @@ pub use feedback_state::{
     FlowFeedbackStateDescriptor, FLOW_FEEDBACK_STATE_VERSION,
 };
 pub use fluid_mosaic::{
-    advance_fluid_mosaic, initialize_fluid_mosaic, render_fluid_mosaic, FluidMosaicSettings,
-    FluidMosaicState, TilePatch, FLUID_MOSAIC_ALGORITHM,
+    advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
+    render_fluid_mosaic, FluidMosaicSettings, FluidMosaicState, TileOrigin, TilePatch,
+    FLUID_MOSAIC_ALGORITHM,
 };
 pub use flow::FlowField;
 pub use flow_cache::{
