@@ -519,6 +519,21 @@ pub(crate) enum Commands {
         /// local phase-separation into screen-filling domains. Off by default.
         #[arg(long)]
         cluster_blob: bool,
+        /// Dispersion-band intensity: when > 0, a soft-edged vertical band that sweeps
+        /// across the canvas amplifies each in-band tile's jitter + fluid so colour
+        /// domains shatter into confetti where the wipe sits, then re-gather behind it
+        /// (advance-time only). 0 (default) = no band.
+        #[arg(long, default_value_t = 0.0)]
+        dispersion_band: f32,
+        /// Dispersion-band width as a fraction of the canvas width (0..1).
+        #[arg(long, default_value_t = 0.25)]
+        band_width: f32,
+        /// Dispersion-band sweep speed in canvas-widths per frame (0 = static band).
+        #[arg(long, default_value_t = 0.02)]
+        band_speed: f32,
+        /// Dispersion-band centre at frame zero, as a fraction of the canvas width (0..1).
+        #[arg(long, default_value_t = 0.0)]
+        band_start: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
