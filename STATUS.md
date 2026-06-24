@@ -16,6 +16,21 @@ _Last updated: 2026-06-24_
 
 ## What just landed
 
+- **Single-source optical-flow-driven advection — NEW effect (CLI).** The video advected by
+  its OWN motion: each frame the source's Lucas-Kanade flow (between consecutive frames)
+  advects the held dye, then a fraction of the current frame is reinjected. The **self-driven
+  case of the two-source advection** (source is both modulator and carrier), so it reuses
+  `fluid_advect_two_source_frame_cpu` — no new render-crate logic, just an ergonomic
+  single-source CLI command `render-optical-flow-advect-sequence` (CPU). Distinct from the
+  procedural-vortex `render-fluid-advect-sequence`: the field is the source's *real* motion.
+  **Off-vs-on** (moving testsrc2): OFF (reinject 1) == source verbatim (0.000), frame 0
+  ON==OFF 0.000, ON-vs-OFF *tracks the source's actual motion* (23.9 f3 → 30.7 f7 → 21.2
+  f12 — non-monotonic, ebbing with real motion, unlike the procedural field's steady
+  accumulation); Read-confirmed the picture smears where content moves while static regions
+  stay intact. No new tests (the per-frame core is the unit-tested two-source path); workspace
+  stays 330. Metal deferred (would reuse `flow_displace_metal` + reinject, like two-source).
+  See [[faux-fluid-advect]].
+
 - **Discrete-carrier particle advection — NEW single-source effect (`field_particles.rs`,
   CPU + CLI).** The third "what rides the field?" option (after the continuous dye and the
   force-driven tile mosaic): a grid of coloured particles seeded from the source rides the

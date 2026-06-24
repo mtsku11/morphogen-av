@@ -385,8 +385,7 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   `--detail` (0.1) octave drifts. Levers: `--advect` (flow / how fast the dye wraps),
   `--turbulence-scale` (vortex size), `--turbulence-speed` (detail drift), `--detail`
   (0 = pure big vortices), `--reinject` (lower = more spiralling, 0→1 smear→verbatim).
-  Off cases unit-tested. Deferred variants:
-  optical-flow-driven (single source).
+  Off cases unit-tested.
 - **Two-source A→B advection (mutual cross-synth): Landed** (`fluid_advect_two_source_frame_cpu`,
   id `fluid_advect_two_source_cpu_v1`, CLI `render-fluid-advect-two-source-sequence`, CPU).
   Source A's optical-flow motion (Lucas-Kanade between consecutive A frames, sized to B)
@@ -410,6 +409,15 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   ON-vs-OFF grows 77 → 98/255. Tuning: vortex scale must match canvas size (0.008 ~125px is for
   real footage; a 128px fixture needs ~0.03 so particles swirl rather than sweep to the void
   edges). Live colour re-sampling and Metal (a scatter splat) deferred.
+- **Single-source optical-flow-driven advection: Landed** (CLI
+  `render-optical-flow-advect-sequence`, CPU). The video advected by its own motion — the
+  self-driven case of the two-source advection (source = both modulator and carrier), so it
+  reuses `fluid_advect_two_source_frame_cpu` with the flow taken from the source's consecutive
+  frames. Distinct from the procedural-vortex `render-fluid-advect-sequence`: the field is the
+  source's *real* motion. Off-vs-on (moving testsrc2): OFF (reinject 1) == source verbatim,
+  ON-vs-OFF tracks the source's actual motion (non-monotonic — ebbs with the real motion,
+  unlike the procedural field's steady accumulation). Metal deferred (reuses
+  `flow_displace_metal` + reinject, like two-source).
 - **Parity-gated Metal port: Landed** (`fluid_advect.metal`, CLI `--backend metal`). A
   `fluid_advect` compute kernel reproduces the steady curl-noise vortex field in MSL —
   splitmix64 `ulong` hashing + 3D gradient (Perlin) noise on the proven
