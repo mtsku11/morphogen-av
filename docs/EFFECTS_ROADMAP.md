@@ -369,12 +369,14 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   along a divergence-free curl-noise field, and `--reinject` of the current
   source frame is bled back in (the "frame refresh"). The picture becomes liquid and
   marbles — no tiles/particles. Stateful (frame 0 = source verbatim, prior state = dye
-  buffer). **Velocity field reworked (id v1 → v2)** to match the shader's *large emergent
-  vortices* (v1 read as wobbly): 3D gradient (Perlin) noise (round vortices), a dominant
-  low-frequency octave + a `--detail`-weighted (0.1) fine octave, time as the noise's 3rd
-  axis + coherent drift. Levers: `--advect` (flow), `--turbulence-scale` (vortex size),
-  `--turbulence-speed` (evolution), `--detail` (0 = pure big vortices), `--reinject` 0→1
-  (pure smear → source verbatim, ~0.08 marble). Off cases unit-tested. Deferred variants:
+  buffer). **Velocity field reworked (id v1 → v2)** to match the shader's *flowing swirls*
+  (read as wobbly): 3D gradient (Perlin) noise (round vortices) and — the key fix — a
+  **steady** big-vortex octave so the dye flows along its streamlines and spirals into the
+  persistent vortex centres over frames (an evolving field only wobbles in place); only a
+  `--detail` (0.1) octave drifts. Levers: `--advect` (flow / how fast the dye wraps),
+  `--turbulence-scale` (vortex size), `--turbulence-speed` (detail drift), `--detail`
+  (0 = pure big vortices), `--reinject` (lower = more spiralling, 0→1 smear→verbatim).
+  Off cases unit-tested. Deferred variants:
   optical-flow-driven, two-source A→B, a discrete carrier (tiles/particles on this field),
   and Metal.
 - Next: a parity-gated Metal port for the fluid mosaic.

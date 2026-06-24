@@ -442,21 +442,24 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 120)]
         frames: usize,
         /// Advection distance per frame (pixels) — how far the dye is pushed each step.
-        #[arg(long, default_value_t = 6.0)]
+        /// Higher = the dye wraps around the vortices faster (tighter spirals).
+        #[arg(long, default_value_t = 12.0)]
         advect: f32,
         /// Vortex scale (lattice cells per pixel). Smaller = larger coherent vortices.
         #[arg(long, default_value_t = 0.008)]
         turbulence_scale: f32,
-        /// Temporal evolution rate per frame (how fast vortices form, drift, re-form).
-        #[arg(long, default_value_t = 0.15)]
+        /// Drift/evolution rate of the fine detail per frame. The big vortices are steady
+        /// (so the dye can spiral into them); this only stirs the fine texture.
+        #[arg(long, default_value_t = 0.06)]
         turbulence_speed: f32,
-        /// Fine-detail octave weight relative to the big vortices (shader uses 0.1).
-        /// Higher = finer structure (and eventually a busy wobble); 0 = pure large vortices.
+        /// Fine-detail octave weight relative to the steady big vortices (shader uses 0.1).
+        /// Higher = finer structure (and eventually wobble); 0 = pure large vortices.
         #[arg(long, default_value_t = 0.1)]
         detail: f32,
         /// Source bled back into the dye each frame, in [0, 1] (the "frame refresh").
-        /// 0 = pure smear, 1 = source verbatim; ~0.05-0.15 keeps the video marbling.
-        #[arg(long, default_value_t = 0.08)]
+        /// Lower = the dye persists longer and spirals more; 0 = pure smear, 1 = source
+        /// verbatim. ~0.05 lets the swirls build while the video stays present.
+        #[arg(long, default_value_t = 0.05)]
         reinject: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,

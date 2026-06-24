@@ -44,9 +44,12 @@ pub const FLUID_ADVECT_ALGORITHM: &str = "fluid_advect_curl_noise_cpu_v2";
 
 const TURBULENCE_SALT_0: u64 = 0x7E12_B0FF_5EED_C0A1;
 const TURBULENCE_SALT_1: u64 = 0x9A3C_44D7_1F0B_E215;
-/// Coherent horizontal scroll of the big vortices per unit time (lattice cells), so they
-/// translate across the frame and appear to emerge — the shader's `+ iTime` scroll.
-const VORTEX_DRIFT: f32 = 0.5;
+/// Slow horizontal drift of the fine detail octave per unit time (lattice cells) — a
+/// little life in the texture without unanchoring the steady large vortices.
+const VORTEX_DRIFT: f32 = 0.25;
+/// The fixed z-slice of the noise used for the steady big-vortex octave (any constant —
+/// it just selects one time-independent plane of the 3D field).
+const BIG_VORTEX_PLANE: f32 = 0.5;
 
 /// Settings for [`fluid_advect_frame_cpu`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -76,11 +79,11 @@ pub struct FluidAdvectSettings {
 impl Default for FluidAdvectSettings {
     fn default() -> Self {
         Self {
-            advect: 6.0,
+            advect: 12.0,
             turbulence_scale: 0.008,
-            turbulence_speed: 0.15,
+            turbulence_speed: 0.06,
             detail: 0.1,
-            reinject: 0.08,
+            reinject: 0.05,
             seed: 0,
         }
     }
@@ -182,21 +185,26 @@ fn curl_noise_velocity(x: f32, y: f32, time: f32, settings: FluidAdvectSettings)
 }
 
 /// The streamfunction `ψ`: a dominant low-frequency gradient-noise octave (the large
-/// vortices) plus a `detail`-weighted octave at 2× frequency. Time is the noise's 3rd
-/// axis (smooth in-place evolution) and also scrolls the big octave in `x` (coherent
-/// drift), so vortices emerge, translate, and re-form rather than churning/wobbling.
+/// vortices) plus a `detail`-weighted octave at 2× frequency.
+///
+/// The big octave is **steady** (a fixed z-slice, no time, no drift): a velocity field
+/// that holds still over frames is what lets the dye flow *along* its streamlines and
+/// spiral into the vortex centres — the accumulation over time is what generates the
+/// swirls. (A field that evolves every frame instead pushes the dye in a different
+/// direction each step, so it only wobbles in place and never wraps.) Only the small
+/// detail octave drifts slowly with `time`, for a little life without unanchoring the
+/// vortices.
 fn turbulence_streamfunction(x: f32, y: f32, time: f32, settings: FluidAdvectSettings) -> f32 {
     let s = settings.turbulence_scale;
+    // Big, low-frequency, STEADY octave — the persistent large vortices the dye spirals into.
+    let big = gradient_noise3(settings.seed ^ TURBULENCE_SALT_0, x * s, y * s, BIG_VORTEX_PLANE);
+    // Fine octave at 2× frequency, low weight, drifting slowly so the texture has some life.
     let drift = time * VORTEX_DRIFT;
-    // Big, low-frequency octave — the large coherent vortices.
-    let big = gradient_noise3(settings.seed ^ TURBULENCE_SALT_0, x * s + drift, y * s, time);
-    // Fine octave at 2× frequency, low weight — a touch of structure, evolving a little
-    // faster so it doesn't lock to the big octave.
     let small = gradient_noise3(
         settings.seed ^ TURBULENCE_SALT_1,
         x * 2.0 * s + drift,
         y * 2.0 * s,
-        time * 1.7,
+        time,
     );
     big + settings.detail * small
 }
