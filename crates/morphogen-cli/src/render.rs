@@ -1052,6 +1052,7 @@ pub(crate) struct FluidAdvectTwoSourceSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FluidAdvectTwoSourceSettings,
     pub(crate) frames: usize,
+    pub(crate) backend: RenderBackend,
 }
 
 /// Render the mutual two-source faux-fluid advection: Source A (modulator) supplies the
@@ -1100,11 +1101,12 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
                     LUCAS_KANADE_WINDOW_RADIUS,
                 )?
                 .flow;
-                fluid_advect_two_source_frame_cpu(
+                render_two_source_advect_frame(
                     &carrier_b,
-                    Some(previous),
+                    previous,
                     &flow,
                     request.settings,
+                    request.backend,
                 )?
             }
             // Frame zero (or a missing prior A frame): B is the output verbatim.
@@ -1120,10 +1122,11 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
     }
 
     println!(
-        "rendered two-source fluid advect sequence with {} frame(s) (advect {}, reinject {}) from A {} advecting B {} to {}",
+        "rendered two-source fluid advect sequence with {} frame(s) (advect {}, reinject {}, {:?}) from A {} advecting B {} to {}",
         frame_count,
         request.settings.advect,
         request.settings.reinject,
+        request.backend,
         request.source_a_dir.display(),
         request.source_b_dir.display(),
         request.output_dir.display()
@@ -1131,11 +1134,71 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
     Ok(FrameSequenceRenderResult { frame_count })
 }
 
+/// Advance the two-source dye one frame on the chosen backend (the per-frame core shared by the
+/// two-source and single-source optical-flow sequences). `previous` is always present here —
+/// frame zero (B verbatim) is handled by the callers. CPU runs the reference; Metal runs the
+/// parity-gated kernel and is checked against the CPU per frame.
+pub(crate) fn render_two_source_advect_frame(
+    carrier_b: &ImageBufferF32,
+    previous: &ImageBufferF32,
+    flow: &FlowField,
+    settings: FluidAdvectTwoSourceSettings,
+    backend: RenderBackend,
+) -> Result<ImageBufferF32, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(fluid_advect_two_source_frame_cpu(
+            carrier_b,
+            Some(previous),
+            flow,
+            settings,
+        )?),
+        RenderBackend::Metal => {
+            render_two_source_advect_frame_metal(carrier_b, previous, flow, settings)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_two_source_advect_frame_metal(
+    carrier_b: &ImageBufferF32,
+    previous: &ImageBufferF32,
+    flow: &FlowField,
+    settings: FluidAdvectTwoSourceSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::fluid_advect_two_source_metal(carrier_b, previous, flow, settings)?;
+    let cpu = fluid_advect_two_source_frame_cpu(carrier_b, Some(previous), flow, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU two-source fluid advect outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal two-source fluid advect render diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_two_source_advect_frame_metal(
+    _carrier_b: &ImageBufferF32,
+    _previous: &ImageBufferF32,
+    _flow: &FlowField,
+    _settings: FluidAdvectTwoSourceSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
 pub(crate) struct OpticalFlowAdvectSequenceRequest<'a> {
     pub(crate) source_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FluidAdvectTwoSourceSettings,
     pub(crate) frames: usize,
+    pub(crate) backend: RenderBackend,
 }
 
 /// Render the single-source optical-flow-driven advection: the video is advected by its own
@@ -1181,7 +1244,13 @@ pub(crate) fn render_optical_flow_advect_sequence(
                     LUCAS_KANADE_WINDOW_RADIUS,
                 )?
                 .flow;
-                fluid_advect_two_source_frame_cpu(&source, Some(previous), &flow, request.settings)?
+                render_two_source_advect_frame(
+                    &source,
+                    previous,
+                    &flow,
+                    request.settings,
+                    request.backend,
+                )?
             }
             // Frame zero (or a missing prior frame): the source is the output verbatim.
             _ => source.clone(),
@@ -1196,10 +1265,11 @@ pub(crate) fn render_optical_flow_advect_sequence(
     }
 
     println!(
-        "rendered optical-flow advect sequence with {} frame(s) (advect {}, reinject {}) from {} to {}",
+        "rendered optical-flow advect sequence with {} frame(s) (advect {}, reinject {}, {:?}) from {} to {}",
         frame_count,
         request.settings.advect,
         request.settings.reinject,
+        request.backend,
         request.source_dir.display(),
         request.output_dir.display()
     );

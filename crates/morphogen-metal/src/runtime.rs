@@ -3,8 +3,8 @@ use metal::{
     MTLSize, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
 };
 use morphogen_render::{
-    FlowFeedbackSettings, FlowField, FluidAdvectSettings, GrainPool, GrainSelection,
-    GranularMosaicSettings, ImageBufferF32, StructureMode,
+    FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
+    GrainSelection, GranularMosaicSettings, ImageBufferF32, StructureMode,
 };
 
 use crate::{
@@ -13,7 +13,8 @@ use crate::{
     COAGULATED_COMPOSITE_SHADER_SOURCE, CONVOLUTION_BLEND_COLOR_KERNEL_NAME,
     CONVOLUTION_BLEND_COLOR_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
     CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
-    FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
+    FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME,
+    FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
     GRANULAR_MOSAIC_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
@@ -80,6 +81,14 @@ struct FluidAdvectParams {
     height: u32,
     seed_lo: u32,
     seed_hi: u32,
+}
+
+#[repr(C)]
+struct FluidAdvectTwoSourceParams {
+    advect: f32,
+    reinject: f32,
+    width: u32,
+    height: u32,
 }
 
 #[repr(C)]
@@ -753,6 +762,126 @@ pub fn fluid_advect_metal(
     read_rgba_f32_texture(&output_texture, plan.width, plan.height)
 }
 
+/// Two-source faux-fluid advection on the GPU — the Metal port of
+/// `morphogen_render::fluid_advect_two_source_frame_cpu`. Source A's flow advects the
+/// `previous` dye (the parity-gated displace) and a fraction of the current B frame is
+/// reinjected, in one pass. Frame zero (B verbatim) is handled by the caller, so `previous`
+/// is always present here. Compiled with fast-math disabled so the float math matches the CPU
+/// reference; the CLI gates this output against the CPU per frame.
+pub fn fluid_advect_two_source_metal(
+    carrier_b: &ImageBufferF32,
+    previous: &ImageBufferF32,
+    flow: &FlowField,
+    settings: FluidAdvectTwoSourceSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    settings
+        .validate()
+        .map_err(|error| MetalDispatchError::InvalidFluidAdvectSettings(error.to_string()))?;
+
+    if previous.width != carrier_b.width || previous.height != carrier_b.height {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "previous dye is {}x{}, carrier B is {}x{}",
+            previous.width, previous.height, carrier_b.width, carrier_b.height
+        )));
+    }
+    if flow.width != carrier_b.width || flow.height != carrier_b.height {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "Source A flow is {}x{}, carrier B is {}x{}",
+            flow.width, flow.height, carrier_b.width, carrier_b.height
+        )));
+    }
+
+    let plan = FlowDisplaceDispatchPlan::new(carrier_b.width, carrier_b.height, settings.advect)?;
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let carrier_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let previous_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let flow_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RG32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        plan.width,
+        plan.height,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&carrier_texture, carrier_b)?;
+    upload_rgba_f32_texture(&previous_texture, previous)?;
+    upload_rg_f32_texture(&flow_texture, flow)?;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&carrier_texture));
+    encoder.set_texture(1, Some(&previous_texture));
+    encoder.set_texture(2, Some(&flow_texture));
+    encoder.set_texture(3, Some(&output_texture));
+    let params = FluidAdvectTwoSourceParams {
+        advect: settings.advect,
+        reinject: settings.reinject,
+        width: plan.width,
+        height: plan.height,
+    };
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<FluidAdvectTwoSourceParams>() as u64,
+        (&params as *const FluidAdvectTwoSourceParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(
+            plan.threadgroups_per_grid.width as u64,
+            plan.threadgroups_per_grid.height as u64,
+            plan.threadgroups_per_grid.depth as u64,
+        ),
+        MTLSize::new(
+            plan.threads_per_threadgroup.width as u64,
+            plan.threads_per_threadgroup.height as u64,
+            plan.threads_per_threadgroup.depth as u64,
+        ),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+}
+
 /// Descriptor-coagulated flow blend — composite stage on the GPU. Given Source A,
 /// Source B, and the CPU-built `cols × rows` ownership field, evaluates the same
 /// per-pixel block-jitter + bilinear field sample + dithered hard/soft edge blend +
@@ -1377,10 +1506,11 @@ mod tests {
         analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
         analyze_grain_pool_cpu, apply_tone_map_cpu, coagulation_field, composite_with_field,
         convolution_blend_color_cpu, convolution_blend_cpu, flow_displace_cpu,
-        flow_feedback_frame_cpu, fluid_advect_frame_cpu, granular_mosaic_with_pool_selection_cpu,
-        granular_mosaic_with_selection_cpu, luma_specification_tone_map,
-        select_grains_from_pool_cpu, CoagulationSettings, FlowFeedbackSettings, FlowField,
-        GrainSelection, GranularMosaicSettings, ImageBufferF32, StructureMode,
+        flow_feedback_frame_cpu, fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu,
+        granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
+        luma_specification_tone_map, select_grains_from_pool_cpu, CoagulationSettings,
+        FlowFeedbackSettings, FlowField, GrainSelection, GranularMosaicSettings, ImageBufferF32,
+        StructureMode,
     };
 
     use super::*;
@@ -1985,6 +2115,50 @@ mod tests {
         let gpu = fluid_advect_metal(&source, None, 0, FluidAdvectSettings::default())
             .expect("frame zero");
         assert_eq!(gpu.pixels, source.pixels);
+    }
+
+    #[test]
+    fn metal_fluid_advect_two_source_matches_cpu_reference() {
+        // A textured carrier B, a distinct previous dye, and a non-uniform flow field so the
+        // displace lands on fractional positions (the manual bilinear) and the reinject blends
+        // a real difference. Parity at the project's 1/255 bound (the manual-bilinear class).
+        let carrier_b = ImageBufferF32::from_fn(20, 16, |x, y| {
+            let v = if (x + y) % 2 == 0 { 0.75 } else { 0.25 };
+            [v, 1.0 - v, v * 0.5, 1.0]
+        })
+        .expect("carrier");
+        let previous = ImageBufferF32::from_fn(20, 16, |x, y| {
+            [
+                (x as f32 * 0.04).fract(),
+                (y as f32 * 0.05).fract(),
+                0.3,
+                1.0,
+            ]
+        })
+        .expect("previous");
+        let flow = FlowField::from_fn(20, 16, |x, y| {
+            [(x as f32).sin() * 1.5, (y as f32).cos() * 1.2]
+        })
+        .expect("flow");
+        let settings = FluidAdvectTwoSourceSettings {
+            advect: 1.5,
+            reinject: 0.2,
+        };
+
+        let cpu = fluid_advect_two_source_frame_cpu(&carrier_b, Some(&previous), &flow, settings)
+            .expect("cpu render");
+        let gpu = match fluid_advect_two_source_metal(&carrier_b, &previous, &flow, settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal two-source fluid advect parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal two-source fluid advect render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
     }
 
     fn assert_image_near(actual: &ImageBufferF32, expected: &ImageBufferF32, epsilon: f32) {

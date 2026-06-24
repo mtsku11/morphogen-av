@@ -424,12 +424,14 @@ fn run() -> Result<(), CliError> {
             frames,
             advect,
             reinject,
+            backend,
         } => render_fluid_advect_two_source_sequence(FluidAdvectTwoSourceSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
             settings: FluidAdvectTwoSourceSettings { advect, reinject },
             frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderOpticalFlowAdvectSequence {
@@ -438,11 +440,13 @@ fn run() -> Result<(), CliError> {
             frames,
             advect,
             reinject,
+            backend,
         } => render_optical_flow_advect_sequence(OpticalFlowAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
             settings: FluidAdvectTwoSourceSettings { advect, reinject },
             frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderFieldParticlesSequence {

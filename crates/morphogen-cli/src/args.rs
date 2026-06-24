@@ -468,11 +468,11 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
-    /// Render the mutual two-source faux-fluid advection (experimental, deterministic,
-    /// CPU-only): Source A's optical-flow motion advects Source B's colour as a continuous
-    /// dye. Frame zero is B verbatim; thereafter A's Lucas-Kanade flow between consecutive A
-    /// frames flows B's dye and `--reinject` of the current B frame is bled back in. This is
-    /// the cross-synth model (A reshapes B). `--reinject 1` = B verbatim (the off case).
+    /// Render the mutual two-source faux-fluid advection (experimental, deterministic):
+    /// Source A's optical-flow motion advects Source B's colour as a continuous dye. Frame
+    /// zero is B verbatim; thereafter A's Lucas-Kanade flow between consecutive A frames flows
+    /// B's dye and `--reinject` of the current B frame is bled back in. This is the cross-synth
+    /// model (A reshapes B). `--reinject 1` = B verbatim (the off case).
     RenderFluidAdvectTwoSourceSequence {
         /// Source A video frames (PNG sequence) — the modulator whose motion drives the flow.
         source_a_dir: PathBuf,
@@ -490,14 +490,17 @@ pub(crate) enum Commands {
         /// B smears further along A's motion; 0 = pure smear, 1 = B verbatim. ~0.08 marbles.
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
+        /// Render backend. `metal` is gated against the CPU reference per frame.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
-    /// Render the single-source optical-flow-driven advection (experimental, deterministic,
-    /// CPU-only): the video is advected by its OWN motion. Each frame the source's Lucas-Kanade
-    /// flow (between consecutive frames) flows the held dye and `--reinject` of the current
-    /// frame is bled back in — so the picture liquefies along where it is actually moving
-    /// (vs the procedural vortices of render-fluid-advect-sequence). The self-driven case of
-    /// the two-source advection. `--reinject 1` = source verbatim (the off case). A static
-    /// clip has no motion ⇒ source verbatim.
+    /// Render the single-source optical-flow-driven advection (experimental, deterministic):
+    /// the video is advected by its OWN motion. Each frame the source's Lucas-Kanade flow
+    /// (between consecutive frames) flows the held dye and `--reinject` of the current frame is
+    /// bled back in — so the picture liquefies along where it is actually moving (vs the
+    /// procedural vortices of render-fluid-advect-sequence). The self-driven case of the
+    /// two-source advection. `--reinject 1` = source verbatim (the off case). A static clip has
+    /// no motion ⇒ source verbatim.
     RenderOpticalFlowAdvectSequence {
         /// Source video frames (PNG sequence) — both the dye and the motion source.
         source_dir: PathBuf,
@@ -513,6 +516,9 @@ pub(crate) enum Commands {
         /// the dye smears further along the motion; 0 = pure smear, 1 = source verbatim.
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
+        /// Render backend. `metal` is gated against the CPU reference per frame.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     /// Render the discrete-carrier particle advection (experimental, deterministic, CPU-only):
     /// a grid of coloured particles seeded from the source rides the shared steady-vortex

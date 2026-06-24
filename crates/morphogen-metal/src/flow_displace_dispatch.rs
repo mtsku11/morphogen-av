@@ -22,6 +22,9 @@ pub const COAGULATED_COMPOSITE_SHADER_SOURCE: &str =
     include_str!("../shaders/coagulated_composite.metal");
 pub const FLUID_ADVECT_KERNEL_NAME: &str = "fluid_advect";
 pub const FLUID_ADVECT_SHADER_SOURCE: &str = include_str!("../shaders/fluid_advect.metal");
+pub const FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME: &str = "fluid_advect_two_source";
+pub const FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE: &str =
+    include_str!("../shaders/fluid_advect_two_source.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -122,6 +125,12 @@ pub enum MetalDispatchError {
     MissingFluidAdvectKernelEntryPoint,
     #[error("fluid_advect.metal does not contain the expected texture and buffer bindings")]
     MissingFluidAdvectBindingLayout,
+    #[error("fluid_advect_two_source.metal does not contain the expected kernel entry point")]
+    MissingFluidAdvectTwoSourceKernelEntryPoint,
+    #[error(
+        "fluid_advect_two_source.metal does not contain the expected texture and buffer bindings"
+    )]
+    MissingFluidAdvectTwoSourceBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -387,6 +396,26 @@ pub fn validate_fluid_advect_shader_source() -> Result<(), MetalDispatchError> {
     Ok(())
 }
 
+pub fn validate_fluid_advect_two_source_shader_source() -> Result<(), MetalDispatchError> {
+    if !FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE.contains("kernel void fluid_advect_two_source") {
+        return Err(MetalDispatchError::MissingFluidAdvectTwoSourceKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::sample> carrierB [[texture(0)]]",
+        "texture2d<float, access::sample> previous [[texture(1)]]",
+        "texture2d<float, access::read> flow [[texture(2)]]",
+        "texture2d<float, access::write> output [[texture(3)]]",
+        "constant FluidAdvectTwoSourceParams& params [[buffer(0)]]",
+    ] {
+        if !FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingFluidAdvectTwoSourceBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -484,5 +513,11 @@ mod tests {
     #[test]
     fn fluid_advect_shader_has_expected_bindings() {
         validate_fluid_advect_shader_source().expect("fluid advect shader preflight");
+    }
+
+    #[test]
+    fn fluid_advect_two_source_shader_has_expected_bindings() {
+        validate_fluid_advect_two_source_shader_source()
+            .expect("fluid advect two-source shader preflight");
     }
 }
