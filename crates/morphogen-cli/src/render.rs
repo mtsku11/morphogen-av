@@ -11,9 +11,10 @@ use morphogen_core::{
     RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    advance_coagulation_field, apply_history_smear, average_cell_flows, coagulation_field,
-    composite_with_field, downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
-    CoagulationFlowSource, CoagulationSettings,
+    advance_coagulation_field, advance_dispersion_field, apply_history_smear, average_cell_flows,
+    coagulation_field, composite_with_field, disperse_composite_cpu, downsample_flow_to_cells,
+    synthesize_turbulence_flow, CoagulationField, CoagulationFlowSource, CoagulationSettings,
+    DispersionField, DispersionSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
@@ -806,6 +807,155 @@ pub(crate) fn render_convolutional_blend_sequence(
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct DispersionBlendSequenceRequest<'a> {
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: DispersionSettings,
+    pub(crate) ownership_refresh: f32,
+    pub(crate) dispersion_ramp: u32,
+    pub(crate) smear: f32,
+    pub(crate) smear_decay: f32,
+    pub(crate) max_frames: Option<usize>,
+}
+
+/// Render the colour-group dispersion blend over a paired PNG sequence. Carries two
+/// stateful fields frame-to-frame: the colour-grouped A/B ownership field (advected
+/// by the source current) and the per-block content-offset field (which accumulates
+/// the current plus a ramping random walk). Content is sampled at the displaced
+/// coordinate, so tiles of both sources physically flow, shatter, and intermix.
+pub(crate) fn render_dispersion_blend_sequence(
+    request: DispersionBlendSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if matches!(request.max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_a_frames = collect_image_frames(request.source_a_dir)?;
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_a_frames.is_empty() || source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "dispersion blend requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    let paired_count = source_a_frames.len().min(source_b_frames.len());
+    let frame_count = request
+        .max_frames
+        .map(|limit| limit.min(paired_count))
+        .unwrap_or(paired_count);
+    fs::create_dir_all(request.output_dir)?;
+
+    let block = request.settings.block_size;
+    let ownership_settings = request.settings.ownership_settings();
+    let mut previous_ownership: Option<CoagulationField> = None;
+    let mut previous_dispersion: Option<DispersionField> = None;
+    let mut previous_a: Option<ImageBufferF32> = None;
+    let mut previous_output: Option<ImageBufferF32> = None;
+
+    for index in 0..frame_count {
+        let source_a = load_image_f32(&source_a_frames[index])?;
+        let source_b = load_image_f32(&source_b_frames[index])?;
+        let cols = source_a.width.div_ceil(block);
+        let rows = source_a.height.div_ceil(block);
+
+        // The directional current = Source A's optical flow, downsampled to the tile
+        // grid (cell units). Drives both the ownership advection and the content offset.
+        let cell_flow = if index == 0 {
+            None
+        } else {
+            let previous = previous_a.as_ref().ok_or_else(|| {
+                CliError::Message(
+                    "internal error: missing previous frame for dispersion flow".to_string(),
+                )
+            })?;
+            let flow = pyramidal_lucas_kanade_flow_cpu(
+                previous,
+                &source_a,
+                source_a.width,
+                source_a.height,
+                LUCAS_KANADE_WINDOW_RADIUS,
+            )?
+            .flow;
+            Some(downsample_flow_to_cells(&flow, block)?)
+        };
+
+        let ownership = advance_coagulation_field(
+            &source_a,
+            &source_b,
+            cell_flow.as_ref(),
+            previous_ownership.as_ref(),
+            ownership_settings,
+            request.settings.coherent_amount,
+            request.ownership_refresh,
+        )?;
+
+        let dispersion = if request.dispersion_ramp == 0 {
+            1.0
+        } else {
+            (index as f32 / request.dispersion_ramp as f32).min(1.0)
+        };
+        let dispersion_field = advance_dispersion_field(
+            previous_dispersion.as_ref(),
+            cell_flow.as_ref(),
+            cols,
+            rows,
+            dispersion,
+            request.settings,
+            index as u32,
+        )?;
+
+        let composite =
+            disperse_composite_cpu(&source_a, &source_b, &ownership, &dispersion_field, block)?;
+        // Optional directional smear: hold a decayed fraction of the previous output,
+        // leaving streaks as tiles flow (RGB only; alpha from the composite).
+        let rendered = if request.smear != 0.0 {
+            let smeared = apply_history_smear(
+                &composite,
+                previous_output.as_ref(),
+                request.smear,
+                request.smear_decay,
+            )?;
+            previous_output = Some(smeared.clone());
+            smeared
+        } else {
+            composite
+        };
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+
+        previous_ownership = Some(ownership);
+        previous_dispersion = Some(dispersion_field);
+        previous_a = Some(source_a);
+    }
+
+    if source_a_frames.len() != source_b_frames.len() {
+        println!(
+            "source frame counts differ: {} A frame(s), {} B frame(s); rendered common prefix",
+            source_a_frames.len(),
+            source_b_frames.len()
+        );
+    }
+    println!(
+        "rendered dispersion blend sequence with {} frame(s) (block {}, coherent {}, scatter {}, damping {}, ramp {}) from {} dispersed with {} to {}",
+        frame_count,
+        block,
+        request.settings.coherent_amount,
+        request.settings.scatter_amount,
+        request.settings.damping,
+        request.dispersion_ramp,
+        request.source_a_dir.display(),
+        request.source_b_dir.display(),
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
