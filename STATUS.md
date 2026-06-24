@@ -8,13 +8,32 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **282 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **287 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Faux-fluid dye advection — NEW effect (`fluid_advect.rs`, CPU + CLI).** A separate,
+  single-source effect that ports the *Faux Fluid Sim* shadertoy **pixel** behaviour —
+  built after the mosaic's turbulence knob (Slice 8) read as "≈off" because the mosaic is
+  a tile/particle system and the blocky sorted look dominates. This is a **continuous
+  per-pixel feedback advection**: a dye buffer is advected semi-Lagrangian-style (sample
+  the previous frame at `p − v·advect` via `sample_bilinear_clamped`) along the same
+  divergence-free curl-of-value-noise velocity field, and a little of the current source
+  frame is bled back in each frame (`--reinject` = the "frame refresh"). The video becomes
+  liquid and marbles — no tiles, no particles (Read-confirmed on harp: the figure
+  dissolves into swirling dye trails). Stateful temporal node: frame 0 = source verbatim,
+  prior state = RGBA32F dye buffer (the checkpoint). CLI `render-fluid-advect-sequence`
+  (single source). **Levers:** `--advect` (flow strength), `--reinject` in [0,1] (0 = pure
+  smear, 1 = source verbatim, ~0.08 marble). Continuity identities unit-tested (reinject 1
+  ⇒ source; advect 0 + reinject 0 ⇒ hold previous). **Readout** (harp, advect 6 reinject
+  0.08): output frame 0 = source (cross-delta 0.000), source-vs-fluid ~14.5/255 steady,
+  within-sequence frame-delta 3.45/255 (continuously flowing). Workspace 282 → 287 (+5
+  tests). Deferred variants: optical-flow-driven, two-source A→B, a discrete carrier
+  (tiles/particles on this field), Metal. See [[faux-fluid-advect]].
 
 - **Fluid Colour-Sort Mosaic — faux-fluid turbulence (Slice 8, CPU + CLI).** Ported the
   *faux-fluid* shadertoy look. The analytic fluid field is a regular swirl lattice; with
