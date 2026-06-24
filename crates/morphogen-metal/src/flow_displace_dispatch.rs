@@ -20,6 +20,8 @@ pub const CONVOLUTION_BLEND_COLOR_SHADER_SOURCE: &str =
 pub const COAGULATED_COMPOSITE_KERNEL_NAME: &str = "coagulated_composite";
 pub const COAGULATED_COMPOSITE_SHADER_SOURCE: &str =
     include_str!("../shaders/coagulated_composite.metal");
+pub const FLUID_ADVECT_KERNEL_NAME: &str = "fluid_advect";
+pub const FLUID_ADVECT_SHADER_SOURCE: &str = include_str!("../shaders/fluid_advect.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -110,6 +112,12 @@ pub enum MetalDispatchError {
     MissingCoagulatedCompositeKernelEntryPoint,
     #[error("coagulated_composite.metal does not contain the expected texture and buffer bindings")]
     MissingCoagulatedCompositeBindingLayout,
+    #[error("invalid fluid advect settings: {0}")]
+    InvalidFluidAdvectSettings(String),
+    #[error("fluid_advect.metal does not contain the expected kernel entry point")]
+    MissingFluidAdvectKernelEntryPoint,
+    #[error("fluid_advect.metal does not contain the expected texture and buffer bindings")]
+    MissingFluidAdvectBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -356,6 +364,25 @@ pub fn validate_convolution_blend_color_shader_source() -> Result<(), MetalDispa
     Ok(())
 }
 
+pub fn validate_fluid_advect_shader_source() -> Result<(), MetalDispatchError> {
+    if !FLUID_ADVECT_SHADER_SOURCE.contains("kernel void fluid_advect") {
+        return Err(MetalDispatchError::MissingFluidAdvectKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::sample> source [[texture(0)]]",
+        "texture2d<float, access::sample> previous [[texture(1)]]",
+        "texture2d<float, access::write> output [[texture(2)]]",
+        "constant FluidAdvectParams& params [[buffer(0)]]",
+    ] {
+        if !FLUID_ADVECT_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingFluidAdvectBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -448,5 +475,10 @@ mod tests {
     fn convolution_blend_color_shader_has_expected_bindings() {
         validate_convolution_blend_color_shader_source()
             .expect("colour convolution blend shader preflight");
+    }
+
+    #[test]
+    fn fluid_advect_shader_has_expected_bindings() {
+        validate_fluid_advect_shader_source().expect("fluid advect shader preflight");
     }
 }
