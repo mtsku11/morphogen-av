@@ -9,14 +9,13 @@ use morphogen_render::{
 
 use crate::{
     FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
-    COAGULATED_COMPOSITE_KERNEL_NAME, COAGULATED_COMPOSITE_SHADER_SOURCE,
-    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE,
-    CONVOLUTION_BLEND_COLOR_KERNEL_NAME, CONVOLUTION_BLEND_COLOR_SHADER_SOURCE,
-    CONVOLUTION_BLEND_KERNEL_NAME, CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME,
-    FLOW_DISPLACE_SHADER_SOURCE, FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE,
-    GRANULAR_MOSAIC_KERNEL_NAME, GRANULAR_MOSAIC_POOL_KERNEL_NAME,
-    GRANULAR_MOSAIC_POOL_SHADER_SOURCE, GRANULAR_MOSAIC_SHADER_SOURCE,
-    VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
+    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, COAGULATED_COMPOSITE_KERNEL_NAME,
+    COAGULATED_COMPOSITE_SHADER_SOURCE, CONVOLUTION_BLEND_COLOR_KERNEL_NAME,
+    CONVOLUTION_BLEND_COLOR_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
+    CONVOLUTION_BLEND_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
+    FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
+    GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
+    GRANULAR_MOSAIC_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -1911,18 +1910,25 @@ mod tests {
         )
         .expect("selection");
 
-        let cpu =
-            granular_mosaic_with_pool_selection_cpu(&pool_frames, &pool, carrier, &selection, settings)
-                .expect("cpu render");
-        let gpu = match granular_mosaic_pool_metal(&pool_frames, &pool, carrier, &selection, settings)
-        {
-            Ok(image) => image,
-            Err(MetalDispatchError::DeviceUnavailable) => {
-                eprintln!("skipping Metal pool parity assertion because no Metal device is available");
-                return;
-            }
-            Err(error) => panic!("metal pool render failed: {error}"),
-        };
+        let cpu = granular_mosaic_with_pool_selection_cpu(
+            &pool_frames,
+            &pool,
+            carrier,
+            &selection,
+            settings,
+        )
+        .expect("cpu render");
+        let gpu =
+            match granular_mosaic_pool_metal(&pool_frames, &pool, carrier, &selection, settings) {
+                Ok(image) => image,
+                Err(MetalDispatchError::DeviceUnavailable) => {
+                    eprintln!(
+                        "skipping Metal pool parity assertion because no Metal device is available"
+                    );
+                    return;
+                }
+                Err(error) => panic!("metal pool render failed: {error}"),
+            };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
     }
@@ -1974,8 +1980,8 @@ mod tests {
 
     #[test]
     fn metal_fluid_advect_frame_zero_is_source() {
-        let source = ImageBufferF32::from_fn(8, 8, |x, _| [x as f32 / 7.0, 0.1, 0.2, 1.0])
-            .expect("source");
+        let source =
+            ImageBufferF32::from_fn(8, 8, |x, _| [x as f32 / 7.0, 0.1, 0.2, 1.0]).expect("source");
         let gpu = fluid_advect_metal(&source, None, 0, FluidAdvectSettings::default())
             .expect("frame zero");
         assert_eq!(gpu.pixels, source.pixels);

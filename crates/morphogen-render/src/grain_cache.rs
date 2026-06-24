@@ -591,9 +591,7 @@ mod tests {
             ]
         });
         fs::write(
-            temp_dir
-                .path()
-                .join(GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME),
+            temp_dir.path().join(GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME),
             serde_json::to_string(&cache).expect("serialize cache"),
         )
         .expect("write cache");
@@ -655,9 +653,7 @@ mod tests {
             }
         });
         fs::write(
-            temp_dir
-                .path()
-                .join(GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME),
+            temp_dir.path().join(GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME),
             serde_json::to_string(&cache).expect("serialize cache"),
         )
         .expect("write cache");

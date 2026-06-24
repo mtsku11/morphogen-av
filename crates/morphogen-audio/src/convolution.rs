@@ -571,8 +571,12 @@ mod tests {
         assert_eq!(out.frames, 3);
         let left: Vec<f32> = (0..3).map(|f| out.samples[f * 2]).collect();
         let right: Vec<f32> = (0..3).map(|f| out.samples[f * 2 + 1]).collect();
-        assert!((left[0] - 0.2).abs() < 1e-6 && (left[1] - 0.4).abs() < 1e-6 && left[2].abs() < 1e-6);
-        assert!(right[0].abs() < 1e-6 && (right[1] - 0.6).abs() < 1e-6 && (right[2] + 0.8).abs() < 1e-6);
+        assert!(
+            (left[0] - 0.2).abs() < 1e-6 && (left[1] - 0.4).abs() < 1e-6 && left[2].abs() < 1e-6
+        );
+        assert!(
+            right[0].abs() < 1e-6 && (right[1] - 0.6).abs() < 1e-6 && (right[2] + 0.8).abs() < 1e-6
+        );
     }
 
     #[test]
@@ -603,6 +607,9 @@ mod tests {
         let carrier = buf(2, 48_000, vec![0.9, -0.7, -0.9, 0.7, 0.5, -0.5]);
         let out = blend_per_channel(&modulator, &carrier, 1.0).expect("per-channel blend");
         let peak = out.samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
-        assert!(peak <= 0.9 + 1e-6, "per-channel L1 IR amplified past carrier peak: {peak}");
+        assert!(
+            peak <= 0.9 + 1e-6,
+            "per-channel L1 IR amplified past carrier peak: {peak}"
+        );
     }
 }

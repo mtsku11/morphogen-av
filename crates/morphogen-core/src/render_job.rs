@@ -486,10 +486,14 @@ pub fn video_audio_route_algorithm_id(
     match (descriptor, mode) {
         (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Gain) => "luma_gain_route_cpu_v1",
         (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Pan) => "luma_pan_route_cpu_v1",
-        (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Filter) => "luma_filter_route_cpu_v1",
+        (VideoAudioRouteDescriptor::Luma, VideoAudioRouteMode::Filter) => {
+            "luma_filter_route_cpu_v1"
+        }
         (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Gain) => "flow_gain_route_cpu_v1",
         (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Pan) => "flow_pan_route_cpu_v1",
-        (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Filter) => "flow_filter_route_cpu_v1",
+        (VideoAudioRouteDescriptor::Flow, VideoAudioRouteMode::Filter) => {
+            "flow_filter_route_cpu_v1"
+        }
     }
 }
 
@@ -849,8 +853,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&task).expect("serialize vocoder task");
-        let decoded: RenderJobTask =
-            serde_json::from_str(&json).expect("deserialize vocoder task");
+        let decoded: RenderJobTask = serde_json::from_str(&json).expect("deserialize vocoder task");
 
         assert_eq!(decoded, task);
     }
@@ -939,8 +942,15 @@ mod tests {
             "fps": 24.0
         }"#;
 
-        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize video-audio route");
-        let RenderJobTask::VideoAudioRoute { descriptor, mode, filter_type, sampling, .. } = task
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize video-audio route");
+        let RenderJobTask::VideoAudioRoute {
+            descriptor,
+            mode,
+            filter_type,
+            sampling,
+            ..
+        } = task
         else {
             panic!("expected video-audio route task");
         };
@@ -955,12 +965,30 @@ mod tests {
         use VideoAudioRouteDescriptor::*;
         use VideoAudioRouteMode::*;
         // Luma ids are unchanged from the original slice (back-compatible).
-        assert_eq!(video_audio_route_algorithm_id(Luma, Gain), "luma_gain_route_cpu_v1");
-        assert_eq!(video_audio_route_algorithm_id(Luma, Pan), "luma_pan_route_cpu_v1");
-        assert_eq!(video_audio_route_algorithm_id(Luma, Filter), "luma_filter_route_cpu_v1");
-        assert_eq!(video_audio_route_algorithm_id(Flow, Gain), "flow_gain_route_cpu_v1");
-        assert_eq!(video_audio_route_algorithm_id(Flow, Pan), "flow_pan_route_cpu_v1");
-        assert_eq!(video_audio_route_algorithm_id(Flow, Filter), "flow_filter_route_cpu_v1");
+        assert_eq!(
+            video_audio_route_algorithm_id(Luma, Gain),
+            "luma_gain_route_cpu_v1"
+        );
+        assert_eq!(
+            video_audio_route_algorithm_id(Luma, Pan),
+            "luma_pan_route_cpu_v1"
+        );
+        assert_eq!(
+            video_audio_route_algorithm_id(Luma, Filter),
+            "luma_filter_route_cpu_v1"
+        );
+        assert_eq!(
+            video_audio_route_algorithm_id(Flow, Gain),
+            "flow_gain_route_cpu_v1"
+        );
+        assert_eq!(
+            video_audio_route_algorithm_id(Flow, Pan),
+            "flow_pan_route_cpu_v1"
+        );
+        assert_eq!(
+            video_audio_route_algorithm_id(Flow, Filter),
+            "flow_filter_route_cpu_v1"
+        );
     }
 
     #[test]

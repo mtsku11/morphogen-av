@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::args::*;
+use crate::error::CliError;
+use crate::imaging::{collect_image_frames, load_image_f32, write_parent_dirs};
 use morphogen_audio::{
     centroid_filter_cross_synth, descriptor_filter_route, descriptor_gain_route,
     descriptor_pan_route, impulse_convolution_blend, load_wav_f32, rms_gain_cross_synth,
@@ -14,10 +17,9 @@ use morphogen_core::{
     RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VideoAudioRouteDescriptor,
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling,
 };
-use morphogen_render::{lucas_kanade_flow_cpu, FlowField, ImageBufferF32, LUCAS_KANADE_WINDOW_RADIUS};
-use crate::args::*;
-use crate::error::CliError;
-use crate::imaging::{collect_image_frames, load_image_f32, write_parent_dirs};
+use morphogen_render::{
+    lucas_kanade_flow_cpu, FlowField, ImageBufferF32, LUCAS_KANADE_WINDOW_RADIUS,
+};
 
 /// Mean Rec.709 luma of a frame, in `[0,1]`. An empty image yields `0.0`.
 pub(crate) fn frame_mean_luma(image: &ImageBufferF32) -> f32 {
@@ -914,7 +916,13 @@ pub(crate) fn queue_run_video_audio_route(queue_path: &Path) -> Result<(), CliEr
         let samples =
             build_descriptor_samples(Path::new(&modulator_directory), descriptor, fps, None)?;
         let (output, algorithm) = apply_video_audio_route(
-            &carrier, &samples, descriptor, mode, filter_type, sampling, amount,
+            &carrier,
+            &samples,
+            descriptor,
+            mode,
+            filter_type,
+            sampling,
+            amount,
         )?;
 
         let stem_rel = "audio/video_audio_route.wav";

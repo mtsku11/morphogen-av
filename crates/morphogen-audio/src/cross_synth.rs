@@ -151,8 +151,11 @@ pub fn centroid_filter_cross_synth(
     let mut times = Vec::with_capacity(cache.frames.len());
     let mut cnorm = Vec::with_capacity(cache.frames.len());
     for frame in &cache.frames {
-        let centroid =
-            spectral_centroid_from_magnitudes(&frame.magnitudes, stft_config.fft_size, modulator.sample_rate)?;
+        let centroid = spectral_centroid_from_magnitudes(
+            &frame.magnitudes,
+            stft_config.fft_size,
+            modulator.sample_rate,
+        )?;
         times.push(frame.time_seconds);
         cnorm.push((centroid as f64 / nyquist_a).clamp(0.0, 1.0));
     }
@@ -185,10 +188,16 @@ mod tests {
         let out = rms_gain_cross_synth(&modulator, &carrier, 4, 4, 1.0).expect("gain");
         // First half (A silent) ⇒ ~0; second half (A peak) ⇒ unchanged 0.5.
         for &s in &out.samples[0..4] {
-            assert!(s.abs() < 1e-6, "expected silence where A is silent, got {s}");
+            assert!(
+                s.abs() < 1e-6,
+                "expected silence where A is silent, got {s}"
+            );
         }
         for &s in &out.samples[4..8] {
-            assert!((s - 0.5).abs() < 1e-6, "expected carrier where A is loud, got {s}");
+            assert!(
+                (s - 0.5).abs() < 1e-6,
+                "expected carrier where A is loud, got {s}"
+            );
         }
     }
 
@@ -216,12 +225,13 @@ mod tests {
         };
         // Dark A: a DC/constant signal ⇒ centroid 0 ⇒ cutoff 0 ⇒ B fully removed.
         let dark = buf(1, 4, vec![1.0; 8]);
-        let dark_out =
-            centroid_filter_cross_synth(&dark, &carrier, cfg, FilterType::Lowpass, 1.0).expect("dark");
+        let dark_out = centroid_filter_cross_synth(&dark, &carrier, cfg, FilterType::Lowpass, 1.0)
+            .expect("dark");
         // Bright A: Nyquist alternation ⇒ centroid ≈ Nyquist ⇒ cutoff high ⇒ B kept.
         let bright = buf(1, 4, vec![1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]);
-        let bright_out = centroid_filter_cross_synth(&bright, &carrier, cfg, FilterType::Lowpass, 1.0)
-            .expect("bright");
+        let bright_out =
+            centroid_filter_cross_synth(&bright, &carrier, cfg, FilterType::Lowpass, 1.0)
+                .expect("bright");
 
         let dark_energy: f32 = dark_out.samples.iter().map(|s| s.abs()).sum();
         let bright_carrier_err: f32 = bright_out
@@ -230,7 +240,10 @@ mod tests {
             .zip(&carrier.samples)
             .map(|(o, c)| (o - c).abs())
             .sum();
-        assert!(dark_energy < 1e-6, "dark A should silence B, got {dark_energy}");
+        assert!(
+            dark_energy < 1e-6,
+            "dark A should silence B, got {dark_energy}"
+        );
         let carrier_energy: f32 = carrier.samples.iter().map(|s| s.abs()).sum();
         assert!(
             bright_carrier_err < 0.25 * carrier_energy,

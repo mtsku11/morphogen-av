@@ -18,8 +18,7 @@ pub const CONVOLUTION_BLEND_ALGORITHM: &str = "image_kernel_convolution_blend_cp
 /// extracted from each of Source A's R/G/B channels and applied to the matching
 /// carrier channel. A different transform from luma mode, so a distinct id (luma
 /// caches stay valid).
-pub const CONVOLUTION_BLEND_COLOR_ALGORITHM: &str =
-    "image_color_kernel_convolution_blend_cpu_v1";
+pub const CONVOLUTION_BLEND_COLOR_ALGORITHM: &str = "image_color_kernel_convolution_blend_cpu_v1";
 
 /// A normalized K×K convolution kernel derived from a Source A frame: `weights`
 /// is row-major with `size * size` entries summing to 1 (a weighted average).
@@ -349,8 +348,8 @@ mod tests {
             [v, 1.0 - v, 0.5, 1.0]
         })
         .expect("carrier");
-        let kernel = analyze_convolution_kernel_cpu(&solid(2, 2, [0.5, 0.5, 0.5, 1.0]), 1)
-            .expect("kernel");
+        let kernel =
+            analyze_convolution_kernel_cpu(&solid(2, 2, [0.5, 0.5, 0.5, 1.0]), 1).expect("kernel");
         assert_eq!(kernel.weights, vec![1.0]);
         let out = convolution_blend_cpu(&carrier, &kernel, 1.0).expect("render");
         assert_eq!(out.pixels, carrier.pixels);
@@ -391,7 +390,12 @@ mod tests {
         let kernel = analyze_convolution_kernel_cpu(&modulator, 3).expect("kernel");
         // Compare column sums (left = cols 0, middle = 1, right = 2).
         let col = |c: usize| kernel.weights[c] + kernel.weights[3 + c] + kernel.weights[6 + c];
-        assert!(col(2) > col(0), "right {} should exceed left {}", col(2), col(0));
+        assert!(
+            col(2) > col(0),
+            "right {} should exceed left {}",
+            col(2),
+            col(0)
+        );
     }
 
     #[test]
@@ -450,10 +454,9 @@ mod tests {
 
     #[test]
     fn color_passthrough_amount_zero_preserves_carrier() {
-        let modulator = ImageBufferF32::from_fn(6, 6, |x, y| {
-            [x as f32 / 5.0, y as f32 / 5.0, 0.5, 1.0]
-        })
-        .expect("modulator");
+        let modulator =
+            ImageBufferF32::from_fn(6, 6, |x, y| [x as f32 / 5.0, y as f32 / 5.0, 0.5, 1.0])
+                .expect("modulator");
         let carrier = ImageBufferF32::from_fn(4, 4, |x, y| {
             let v = if (x + y) % 2 == 0 { 0.9 } else { 0.1 };
             [v, v * 0.5, 0.25, 1.0]

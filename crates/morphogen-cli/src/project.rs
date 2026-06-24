@@ -123,7 +123,11 @@ pub(crate) fn extract_audio(
     }
 }
 
-pub(crate) fn export_audio_stem(input_wav: &Path, output_wav: &Path, gain: f32) -> Result<(), CliError> {
+pub(crate) fn export_audio_stem(
+    input_wav: &Path,
+    output_wav: &Path,
+    gain: f32,
+) -> Result<(), CliError> {
     if !gain.is_finite() {
         return Err(CliError::Message("gain must be finite".to_string()));
     }
@@ -271,7 +275,9 @@ pub(crate) struct ProjectRegisterProxyRequest<'a> {
     pub(crate) analysis_cache: &'a [String],
 }
 
-pub(crate) fn project_register_proxy(request: ProjectRegisterProxyRequest<'_>) -> Result<(), CliError> {
+pub(crate) fn project_register_proxy(
+    request: ProjectRegisterProxyRequest<'_>,
+) -> Result<(), CliError> {
     let json = fs::read_to_string(request.project_path)?;
     let mut project: Project = serde_json::from_str(&json)?;
     let source_id = resolve_project_source_id(&project, request.source_id, request.source_role)?;
@@ -336,7 +342,10 @@ pub(crate) fn resolve_project_source_id(
     }
 }
 
-pub(crate) fn parse_analysis_cache_spec(spec: &str, source_id: &str) -> Result<AnalysisCacheEntry, CliError> {
+pub(crate) fn parse_analysis_cache_spec(
+    spec: &str,
+    source_id: &str,
+) -> Result<AnalysisCacheEntry, CliError> {
     let (kind_name, path) = spec.split_once('=').ok_or_else(|| {
         CliError::Message(format!(
             "analysis-cache '{spec}' must be in the form kind=path"
@@ -375,7 +384,11 @@ pub(crate) fn parse_analysis_kind(name: &str) -> Result<AnalysisKind, CliError> 
         ))),
     }
 }
-pub(crate) fn cache_synthetic_flow(output_dir: &Path, width: u32, height: u32) -> Result<(), CliError> {
+pub(crate) fn cache_synthetic_flow(
+    output_dir: &Path,
+    width: u32,
+    height: u32,
+) -> Result<(), CliError> {
     let flow = synthetic_flow(width, height)?;
     let manifest = write_flow_cache(output_dir, &flow, "synthetic_swirl_v1")?;
     println!(

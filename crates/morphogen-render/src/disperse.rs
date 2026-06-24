@@ -200,8 +200,11 @@ pub fn advance_dispersion_field(
             ];
 
             // Animated per-block random step (decorrelated by frame ⇒ churn).
-            let angle = hash01(settings.seed ^ SCATTER_SALT, index as u64, u64::from(frame_index))
-                * TAU;
+            let angle = hash01(
+                settings.seed ^ SCATTER_SALT,
+                index as u64,
+                u64::from(frame_index),
+            ) * TAU;
             let magnitude = settings.scatter_amount * dispersion;
             let scatter = [angle.cos() * magnitude, angle.sin() * magnitude];
 
@@ -270,9 +273,8 @@ fn hash_u64(x: u64) -> u64 {
 }
 
 fn hash01(seed: u64, a: u64, b: u64) -> f32 {
-    let h = hash_u64(
-        seed ^ a.wrapping_mul(0x100_0000_01B3) ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93),
-    );
+    let h =
+        hash_u64(seed ^ a.wrapping_mul(0x100_0000_01B3) ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93));
     (h >> 40) as f32 / (1u64 << 24) as f32
 }
 
@@ -292,16 +294,9 @@ mod tests {
 
     #[test]
     fn frame_zero_has_zero_offsets() {
-        let field = advance_dispersion_field(
-            None,
-            None,
-            4,
-            3,
-            1.0,
-            DispersionSettings::default(),
-            0,
-        )
-        .expect("frame zero");
+        let field =
+            advance_dispersion_field(None, None, 4, 3, 1.0, DispersionSettings::default(), 0)
+                .expect("frame zero");
         assert!(field.offsets.iter().all(|o| o == &[0.0, 0.0]));
     }
 
@@ -377,18 +372,23 @@ mod tests {
         let rows = 8u32.div_ceil(4);
         let flow = FlowField::new(cols, rows, vec![[1.0, 0.0]; (cols * rows) as usize])
             .expect("cell flow"); // 1 cell-unit = block_size px rightward sampling
-        let ownership = coagulation_field(&a, &b, settings.ownership_settings()).expect("ownership");
+        let ownership =
+            coagulation_field(&a, &b, settings.ownership_settings()).expect("ownership");
         let disp = advance_dispersion_field(None, Some(&flow), cols, rows, 0.0, settings, 0)
             .expect("disp frame0");
         // frame 0 offsets are zero; advance once from that state to apply the current.
-        let disp1 = advance_dispersion_field(Some(&disp), Some(&flow), cols, rows, 0.0, settings, 1)
-            .expect("disp frame1");
+        let disp1 =
+            advance_dispersion_field(Some(&disp), Some(&flow), cols, rows, 0.0, settings, 1)
+                .expect("disp frame1");
         let out =
             disperse_composite_cpu(&a, &b, &ownership, &disp1, settings.block_size).expect("out");
         // Sampling shifted right by block_size px ⇒ the bright/dark boundary in the
         // output sits left of its input column 8.
         let left = out.pixel(2, 4).expect("left")[0];
         let right = out.pixel(13, 4).expect("right")[0];
-        assert!(right > left, "content should translate: left={left}, right={right}");
+        assert!(
+            right > left,
+            "content should translate: left={left}, right={right}"
+        );
     }
 }

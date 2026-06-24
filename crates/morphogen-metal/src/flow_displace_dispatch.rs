@@ -94,7 +94,9 @@ pub enum MetalDispatchError {
     MissingGranularMosaicBindingLayout,
     #[error("granular_mosaic_pool.metal does not contain the expected kernel entry point")]
     MissingGranularMosaicPoolKernelEntryPoint,
-    #[error("granular_mosaic_pool.metal does not contain the expected texture and buffer bindings")]
+    #[error(
+        "granular_mosaic_pool.metal does not contain the expected texture and buffer bindings"
+    )]
     MissingGranularMosaicPoolBindingLayout,
     #[error("video_vocoder.metal does not contain the expected kernel entry point")]
     MissingVideoVocoderKernelEntryPoint,
@@ -110,7 +112,9 @@ pub enum MetalDispatchError {
     InvalidCoagulationSettings(String),
     #[error("coagulated_composite.metal does not contain the expected kernel entry point")]
     MissingCoagulatedCompositeKernelEntryPoint,
-    #[error("coagulated_composite.metal does not contain the expected texture and buffer bindings")]
+    #[error(
+        "coagulated_composite.metal does not contain the expected texture and buffer bindings"
+    )]
     MissingCoagulatedCompositeBindingLayout,
     #[error("invalid fluid advect settings: {0}")]
     InvalidFluidAdvectSettings(String),

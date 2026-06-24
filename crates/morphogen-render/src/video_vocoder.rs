@@ -160,7 +160,11 @@ fn luma_cdf(image: &ImageBufferF32) -> Vec<f32> {
     let mut accumulated = 0.0_f32;
     for (slot, &count) in cdf.iter_mut().zip(histogram.iter()) {
         accumulated += count;
-        *slot = if total > 0.0 { accumulated / total } else { 0.0 };
+        *slot = if total > 0.0 {
+            accumulated / total
+        } else {
+            0.0
+        };
     }
     cdf
 }
@@ -217,7 +221,11 @@ pub fn apply_tone_map_cpu(
             let luma = luminance(pixel).clamp(0.0, 1.0);
             let index = ((luma * (SPEC_LEVELS - 1) as f32).round() as usize).min(SPEC_LEVELS - 1);
             let target_luma = lerp(luma, tone[index], amount);
-            let gain = if luma > 1.0e-4 { target_luma / luma } else { 1.0 };
+            let gain = if luma > 1.0e-4 {
+                target_luma / luma
+            } else {
+                1.0
+            };
             [
                 (pixel[0] * gain).clamp(0.0, 1.0),
                 (pixel[1] * gain).clamp(0.0, 1.0),
@@ -348,7 +356,7 @@ mod tests {
         assert_eq!(soft_gain(0.25, &gains), 0.0); // center of band 0 = 0.25
         assert_eq!(soft_gain(0.75, &gains), 4.0); // center of band 1 = 0.75
         assert_eq!(soft_gain(0.5, &gains), 2.0); // midpoint -> average
-        // Below the first / above the last center clamps (no extrapolation).
+                                                 // Below the first / above the last center clamps (no extrapolation).
         assert_eq!(soft_gain(0.0, &gains), 0.0);
         assert_eq!(soft_gain(1.0, &gains), 4.0);
     }
@@ -390,7 +398,10 @@ mod tests {
         let before: f32 = carrier.pixels.iter().map(|p| p[0]).sum();
         let out = histogram_specification_cpu(&modulator, &carrier, 1.0).expect("render");
         let after: f32 = out.pixels.iter().map(|p| p[0]).sum();
-        assert!(after > before, "matched mean {after} should exceed {before}");
+        assert!(
+            after > before,
+            "matched mean {after} should exceed {before}"
+        );
     }
 
     #[test]

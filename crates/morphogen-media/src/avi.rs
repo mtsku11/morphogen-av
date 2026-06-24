@@ -37,13 +37,15 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, MediaError> {
     bytes
         .get(offset..offset + 4)
         .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .ok_or_else(|| MediaError::MalformedAvi(format!("truncated 32-bit read at offset {offset}")))
+        .ok_or_else(|| {
+            MediaError::MalformedAvi(format!("truncated 32-bit read at offset {offset}"))
+        })
 }
 
 fn write_u32(bytes: &mut [u8], offset: usize, value: u32) -> Result<(), MediaError> {
-    let slot = bytes
-        .get_mut(offset..offset + 4)
-        .ok_or_else(|| MediaError::MalformedAvi(format!("truncated 32-bit write at offset {offset}")))?;
+    let slot = bytes.get_mut(offset..offset + 4).ok_or_else(|| {
+        MediaError::MalformedAvi(format!("truncated 32-bit write at offset {offset}"))
+    })?;
     slot.copy_from_slice(&value.to_le_bytes());
     Ok(())
 }
@@ -142,8 +144,8 @@ fn parse(bytes: &[u8]) -> Result<AviLayout, MediaError> {
         p = data + padded_len(size);
     }
 
-    let movi_list_start = movi_list_start
-        .ok_or_else(|| MediaError::MalformedAvi("no movi list".to_string()))?;
+    let movi_list_start =
+        movi_list_start.ok_or_else(|| MediaError::MalformedAvi("no movi list".to_string()))?;
     let avih_total_frames_pos = avih_total_frames_pos
         .ok_or_else(|| MediaError::MalformedAvi("no avih header".to_string()))?;
 
@@ -420,8 +422,7 @@ mod tests {
 
         let mut strh = vec![0u8; 56];
         strh[0..4].copy_from_slice(FOURCC_VIDS);
-        strh[STRH_LENGTH_OFFSET..STRH_LENGTH_OFFSET + 4]
-            .copy_from_slice(&(k as u32).to_le_bytes());
+        strh[STRH_LENGTH_OFFSET..STRH_LENGTH_OFFSET + 4].copy_from_slice(&(k as u32).to_le_bytes());
         let strf = vec![0u8; 40];
 
         let mut strl_inner = Vec::new();
@@ -508,10 +509,7 @@ mod tests {
         }
         // Frame-count headers reflect the 2 inserted frames (4 -> 6).
         assert_eq!(read_u32(&out, layout.avih_total_frames_pos).unwrap(), 6);
-        assert_eq!(
-            read_u32(&out, layout.strh_length_pos.unwrap()).unwrap(),
-            6
-        );
+        assert_eq!(read_u32(&out, layout.strh_length_pos.unwrap()).unwrap(), 6);
         // idx1 offsets stay monotonically increasing and self-consistent.
         assert!(count_p_frames(&out).unwrap() == 5);
     }

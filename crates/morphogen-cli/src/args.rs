@@ -428,7 +428,8 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
-    /// Render a faux-fluid dye advection (experimental, deterministic; CPU-only).
+    /// Render a faux-fluid dye advection (experimental, deterministic; CPU reference with
+    /// an optional parity-gated Metal backend).
     /// A single source video is treated as a continuous "dye": each frame every pixel
     /// is pushed along a procedural divergence-free turbulence field (semi-Lagrangian
     /// advection) and a little of the current source frame is bled back in. The picture
@@ -519,7 +520,8 @@ pub(crate) enum Commands {
     /// particles along the field and splats them onto black. `--advect 0` holds the static grid
     /// (the off case). Distinct from the fluid mosaic — no cohesion/repulsion, just flow.
     RenderFieldParticlesSequence {
-        /// Source video frames (PNG sequence) — only the first frame seeds the particle colours.
+        /// Source video frames (PNG sequence). The first frame seeds particle positions and
+        /// colours; `--live-colour` additionally samples each current frame at particle origins.
         source_dir: PathBuf,
         output_dir: PathBuf,
         /// Number of output frames to render.

@@ -3,20 +3,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use morphogen_audio::{
-    save_wav_f32,
-    AudioBufferF32,
-};
+use morphogen_audio::{save_wav_f32, AudioBufferF32};
 use morphogen_core::{
-    AnalysisKind, ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, KernelMode,
-    RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
+    AnalysisKind, ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation,
+    KernelMode, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
     RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
     RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
     VideoVocoderMode,
 };
 use morphogen_render::{
-    ConvolutionBlendSettings,
-    flow_displace_cpu, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode, datamosh_algorithm, RMS_DISPLACEMENT_ROUTE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    datamosh_algorithm, flow_displace_cpu, ConvolutionBlendSettings, FlowFeedbackSettings,
+    GranularMosaicSettings, StructureMode, VideoVocoderSettings, POOLED_GRAIN_ALGORITHM,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
 use crate::args::*;
@@ -30,7 +28,10 @@ pub(crate) fn queue_init(queue_path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(crate) fn queue_add_test(queue_path: &Path, project_path: Option<&Path>) -> Result<(), CliError> {
+pub(crate) fn queue_add_test(
+    queue_path: &Path,
+    project_path: Option<&Path>,
+) -> Result<(), CliError> {
     let mut queue = if queue_path.exists() {
         RenderQueue::load_json(queue_path)?
     } else {
@@ -75,7 +76,9 @@ pub(crate) struct QueueAddFrameSequenceRequest<'a> {
     pub(crate) project_path: Option<&'a Path>,
 }
 
-pub(crate) fn queue_add_frame_sequence(request: QueueAddFrameSequenceRequest<'_>) -> Result<(), CliError> {
+pub(crate) fn queue_add_frame_sequence(
+    request: QueueAddFrameSequenceRequest<'_>,
+) -> Result<(), CliError> {
     let QueueAddFrameSequenceRequest {
         queue_path,
         modulator_dir,
@@ -1154,7 +1157,9 @@ pub(crate) fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), 
             )
         })
         .ok_or_else(|| {
-            CliError::Message("render queue has no queued or running video-vocoder jobs".to_string())
+            CliError::Message(
+                "render queue has no queued or running video-vocoder jobs".to_string(),
+            )
         })?;
 
     let job_id = queue.jobs[job_index].id.clone();
@@ -1643,7 +1648,10 @@ pub(crate) fn queue_add_datamosh_sequence(
         failure: None,
     });
     queue.save_json(queue_path)?;
-    println!("queued datamosh render job {job_id} in {}", queue_path.display());
+    println!(
+        "queued datamosh render job {job_id} in {}",
+        queue_path.display()
+    );
     Ok(())
 }
 
@@ -1763,7 +1771,11 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             queue.jobs[job_index].output = Some(metadata);
             queue.jobs[job_index].failure = None;
             queue.save_json(queue_path)?;
-            println!("rendered queued datamosh job {} to {}", job_id, output_dir.display());
+            println!(
+                "rendered queued datamosh job {} to {}",
+                job_id,
+                output_dir.display()
+            );
             Ok(())
         }
         Err(error) => {
@@ -2000,8 +2012,6 @@ pub(crate) fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Resul
         }
     }
 }
-
-
 
 pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliError> {
     let mut queue = RenderQueue::load_json(queue_path)?;
@@ -2451,7 +2461,10 @@ pub(crate) fn write_frame_sequence_checkpoint(
     Ok(())
 }
 
-pub(crate) fn synthetic_stereo_stem(sample_rate: u32, frames: usize) -> Result<AudioBufferF32, CliError> {
+pub(crate) fn synthetic_stereo_stem(
+    sample_rate: u32,
+    frames: usize,
+) -> Result<AudioBufferF32, CliError> {
     let mut samples = Vec::with_capacity(frames.saturating_mul(2));
     for frame in 0..frames {
         let phase = frame as f32 / sample_rate as f32;

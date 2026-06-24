@@ -125,12 +125,8 @@ mod tests {
 
     #[test]
     fn zero_amount_is_passthrough() {
-        let carrier = ImageBufferF32::new(
-            2,
-            1,
-            vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
-        )
-        .expect("valid carrier");
+        let carrier = ImageBufferF32::new(2, 1, vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
+            .expect("valid carrier");
         let field = uniform_displacement_field(2, 1, 8.0, 0.0).expect("valid field");
 
         // Silence ⇒ gain 0 ⇒ amount 0 ⇒ each pixel samples itself ⇒ identity.
@@ -143,17 +139,13 @@ mod tests {
     fn loud_frame_displaces_by_amount() {
         // Left pixel red, right pixel blue. A unit +x shift at amount 1.0 makes
         // the left output sample the right input ⇒ left pixel turns blue.
-        let carrier = ImageBufferF32::new(
-            2,
-            1,
-            vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
-        )
-        .expect("valid carrier");
+        let carrier = ImageBufferF32::new(2, 1, vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
+            .expect("valid carrier");
         let field = uniform_displacement_field(2, 1, 1.0, 0.0).expect("valid field");
 
         let rendered = flow_displace_cpu(&carrier, &field, 1.0).expect("render");
         assert_eq!(rendered.pixels[0], [0.0, 0.0, 1.0, 1.0]); // sampled x=1 (blue)
-        // The right pixel clamps at the border (x=2 → x=1), staying blue.
+                                                              // The right pixel clamps at the border (x=2 → x=1), staying blue.
         assert_eq!(rendered.pixels[1], [0.0, 0.0, 1.0, 1.0]);
     }
 }

@@ -1561,13 +1561,37 @@ mod tests {
         };
 
         // Query audio = frame 1's descriptor; weighted audio picks grain 1.
-        let weighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 1.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
-            .expect("weighted selection");
+        let weighted = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[1.0],
+            &pool,
+            settings,
+            1.0,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("weighted selection");
         assert_eq!(weighted.indices, vec![1]);
 
         // audio_weight 0 ignores audio; the color tie breaks to ascending index.
-        let unweighted = select_grains_from_pool_cpu(&modulator, 1, 1, &[1.0], &pool, settings, 0.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
-            .expect("unweighted selection");
+        let unweighted = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[1.0],
+            &pool,
+            settings,
+            0.0,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("unweighted selection");
         assert_eq!(unweighted.indices, vec![0]);
     }
 
@@ -1588,8 +1612,20 @@ mod tests {
         // k = 1 (RMS only): grain 0's RMS (0.5) is nearest the 0.52 query.
         let rms_only = vec![vec![0.5_f32], vec![0.6_f32]];
         let pool_k1 = analyze_grain_pool_cpu(&frames, &rms_only, 1).expect("k1 pool");
-        let pick_k1 = select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52], &pool_k1, settings, 1.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
-            .expect("k1 selection");
+        let pick_k1 = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[0.52],
+            &pool_k1,
+            settings,
+            1.0,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("k1 selection");
         assert_eq!(pick_k1.indices, vec![0]);
 
         // k = 2 ([RMS, centroid]): grain 1's centroid (0.9) matches the query,
@@ -1597,9 +1633,20 @@ mod tests {
         let rms_centroid = vec![vec![0.5_f32, 0.0], vec![0.6, 0.9]];
         let pool_k2 = analyze_grain_pool_cpu(&frames, &rms_centroid, 1).expect("k2 pool");
         assert_eq!(pool_k2.audio_dims, 2);
-        let pick_k2 =
-            select_grains_from_pool_cpu(&modulator, 1, 1, &[0.52, 0.9], &pool_k2, settings, 1.0, 0.0, PoolSelectionWindow::WholeClip, None, None)
-                .expect("k2 selection");
+        let pick_k2 = select_grains_from_pool_cpu(
+            &modulator,
+            1,
+            1,
+            &[0.52, 0.9],
+            &pool_k2,
+            settings,
+            1.0,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("k2 selection");
         assert_eq!(pick_k2.indices, vec![1]);
     }
 
@@ -2013,18 +2060,20 @@ mod tests {
             seed: 0,
         };
 
-        let preserved =
-            granular_mosaic_with_pool_selection_cpu(&frames, &pool, &frames[0], &selection, preserve)
-                .expect("preserved");
+        let preserved = granular_mosaic_with_pool_selection_cpu(
+            &frames, &pool, &frames[0], &selection, preserve,
+        )
+        .expect("preserved");
         assert_eq!(preserved, frames[0]);
 
         let take_grain = GranularMosaicSettings {
             rearrangement: 1.0,
             ..preserve
         };
-        let grain =
-            granular_mosaic_with_pool_selection_cpu(&frames, &pool, &frames[0], &selection, take_grain)
-                .expect("grain");
+        let grain = granular_mosaic_with_pool_selection_cpu(
+            &frames, &pool, &frames[0], &selection, take_grain,
+        )
+        .expect("grain");
         assert_eq!(grain, frames[1]);
     }
 
@@ -2044,10 +2093,34 @@ mod tests {
             seed: 17,
         };
 
-        let first = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, 0.0, PoolSelectionWindow::WholeClip, None, None)
-            .expect("first selection");
-        let second = select_grains_from_pool_cpu(&modulator, 2, 1, &[0.4, 0.4], &pool, settings, 0.7, 0.0, PoolSelectionWindow::WholeClip, None, None)
-            .expect("second selection");
+        let first = select_grains_from_pool_cpu(
+            &modulator,
+            2,
+            1,
+            &[0.4, 0.4],
+            &pool,
+            settings,
+            0.7,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("first selection");
+        let second = select_grains_from_pool_cpu(
+            &modulator,
+            2,
+            1,
+            &[0.4, 0.4],
+            &pool,
+            settings,
+            0.7,
+            0.0,
+            PoolSelectionWindow::WholeClip,
+            None,
+            None,
+        )
+        .expect("second selection");
 
         assert_eq!(first, second);
     }

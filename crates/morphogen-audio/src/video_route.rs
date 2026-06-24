@@ -50,11 +50,20 @@ impl DescriptorEnvelope {
     /// Peak-normalize raw `(time, value)` samples by their maximum. Yields
     /// all-zero values when the peak is ~0 (a flat/dark modulator ⇒ no effect).
     fn from_samples(samples: &[(f64, f32)]) -> Self {
-        let peak = samples.iter().map(|(_, value)| *value).fold(0.0_f32, f32::max);
+        let peak = samples
+            .iter()
+            .map(|(_, value)| *value)
+            .fold(0.0_f32, f32::max);
         let times = samples.iter().map(|(time, _)| *time).collect();
         let norm = samples
             .iter()
-            .map(|(_, value)| if peak > 0.0 { (value / peak).clamp(0.0, 1.0) } else { 0.0 })
+            .map(|(_, value)| {
+                if peak > 0.0 {
+                    (value / peak).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            })
             .collect();
         Self { times, norm }
     }
@@ -272,7 +281,10 @@ mod tests {
             assert!(s.abs() < 1e-6, "expected silence where A is weak, got {s}");
         }
         for &s in &out.samples[4..8] {
-            assert!((s - 0.5).abs() < 1e-6, "expected carrier where A is strong, got {s}");
+            assert!(
+                (s - 0.5).abs() < 1e-6,
+                "expected carrier where A is strong, got {s}"
+            );
         }
     }
 
@@ -302,7 +314,10 @@ mod tests {
         for frame in 4..8 {
             let l = out.samples[frame * 2];
             let r = out.samples[frame * 2 + 1];
-            assert!(r > 0.4 && l.abs() < 1e-6, "strong frame {frame}: L {l} R {r}");
+            assert!(
+                r > 0.4 && l.abs() < 1e-6,
+                "strong frame {frame}: L {l} R {r}"
+            );
         }
     }
 
@@ -318,7 +333,10 @@ mod tests {
         for frame in 0..4 {
             let l = out.samples[frame * 2];
             let r = out.samples[frame * 2 + 1];
-            assert!((l - expected).abs() < 1e-6 && (r - expected).abs() < 1e-6, "L {l} R {r}");
+            assert!(
+                (l - expected).abs() < 1e-6 && (r - expected).abs() < 1e-6,
+                "L {l} R {r}"
+            );
         }
     }
 
@@ -330,8 +348,14 @@ mod tests {
         let out = descriptor_pan_route(&carrier, &env, EnvelopeSampling::Hold, 1.0).expect("pan");
         assert_eq!(out.channels, 2);
         assert_eq!(out.frames, 2);
-        assert!(out.samples[0].abs() < 1e-6, "left should be ~0 (hard right)");
-        assert!((out.samples[1] - 0.5).abs() < 1e-6, "right should carry mono mix 0.5");
+        assert!(
+            out.samples[0].abs() < 1e-6,
+            "left should be ~0 (hard right)"
+        );
+        assert!(
+            (out.samples[1] - 0.5).abs() < 1e-6,
+            "right should carry mono mix 0.5"
+        );
     }
 
     #[test]
@@ -348,14 +372,28 @@ mod tests {
         let carrier = buf(1, 4, vec![0.5; 8]);
         assert!(descriptor_gain_route(&carrier, &[], EnvelopeSampling::Hold, 1.0).is_err());
         assert!(descriptor_pan_route(&carrier, &[], EnvelopeSampling::Hold, 1.0).is_err());
-        assert!(descriptor_filter_route(&carrier, &[], FilterType::Lowpass, EnvelopeSampling::Hold, 1.0).is_err());
+        assert!(descriptor_filter_route(
+            &carrier,
+            &[],
+            FilterType::Lowpass,
+            EnvelopeSampling::Hold,
+            1.0
+        )
+        .is_err());
     }
 
     #[test]
     fn filter_amount_zero_is_byte_identical_passthrough() {
         let carrier = buf(1, 8, vec![1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]);
         let env = [(0.0, 0.0), (1.0, 1.0)];
-        let out = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, EnvelopeSampling::Hold, 0.0).expect("filter");
+        let out = descriptor_filter_route(
+            &carrier,
+            &env,
+            FilterType::Lowpass,
+            EnvelopeSampling::Hold,
+            0.0,
+        )
+        .expect("filter");
         assert_eq!(out.samples, carrier.samples);
         assert_eq!(out.channels, 1);
     }
@@ -366,10 +404,22 @@ mod tests {
         // descriptor closes the cutoff ⇒ heavy attenuation; a strong (bright) one
         // opens it ⇒ the alternation survives. sr=8 ⇒ samples 0..7 weak (t<1),
         // 8..15 strong (t>=1).
-        let carrier = buf(1, 8, (0..16).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect());
+        let carrier = buf(
+            1,
+            8,
+            (0..16)
+                .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+                .collect(),
+        );
         let env = [(0.0, 0.0), (1.0, 1.0)];
-        let out =
-            descriptor_filter_route(&carrier, &env, FilterType::Lowpass, EnvelopeSampling::Hold, 1.0).expect("filter");
+        let out = descriptor_filter_route(
+            &carrier,
+            &env,
+            FilterType::Lowpass,
+            EnvelopeSampling::Hold,
+            1.0,
+        )
+        .expect("filter");
         let weak_energy: f32 = out.samples[0..8].iter().map(|s| s * s).sum();
         let strong_energy: f32 = out.samples[8..16].iter().map(|s| s * s).sum();
         assert!(
@@ -380,10 +430,30 @@ mod tests {
 
     #[test]
     fn filter_lowpass_and_highpass_differ() {
-        let carrier = buf(1, 8, (0..16).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect());
+        let carrier = buf(
+            1,
+            8,
+            (0..16)
+                .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+                .collect(),
+        );
         let env = [(0.0, 0.3), (10.0, 1.0)]; // mid cutoff over the whole carrier
-        let lp = descriptor_filter_route(&carrier, &env, FilterType::Lowpass, EnvelopeSampling::Hold, 1.0).expect("lp");
-        let hp = descriptor_filter_route(&carrier, &env, FilterType::Highpass, EnvelopeSampling::Hold, 1.0).expect("hp");
+        let lp = descriptor_filter_route(
+            &carrier,
+            &env,
+            FilterType::Lowpass,
+            EnvelopeSampling::Hold,
+            1.0,
+        )
+        .expect("lp");
+        let hp = descriptor_filter_route(
+            &carrier,
+            &env,
+            FilterType::Highpass,
+            EnvelopeSampling::Hold,
+            1.0,
+        )
+        .expect("hp");
         assert_ne!(lp.samples, hp.samples, "lowpass and highpass must differ");
     }
 }

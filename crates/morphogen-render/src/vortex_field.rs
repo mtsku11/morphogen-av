@@ -54,7 +54,12 @@ fn streamfunction(seed: u64, x: f32, y: f32, time: f32, scale: f32, detail: f32)
     let big = gradient_noise3(seed ^ TURBULENCE_SALT_0, x * s, y * s, BIG_VORTEX_PLANE);
     // Fine octave at 2× frequency, low weight, drifting slowly so the texture has some life.
     let drift = time * VORTEX_DRIFT;
-    let small = gradient_noise3(seed ^ TURBULENCE_SALT_1, x * 2.0 * s + drift, y * 2.0 * s, time);
+    let small = gradient_noise3(
+        seed ^ TURBULENCE_SALT_1,
+        x * 2.0 * s + drift,
+        y * 2.0 * s,
+        time,
+    );
     big + detail * small
 }
 
@@ -76,7 +81,12 @@ fn gradient_noise3(seed: u64, x: f32, y: f32, z: f32) -> f32 {
     let w = fade(zf);
 
     let corner = |dx: u64, dy: u64, dz: u64, gx: f32, gy: f32, gz: f32| -> f32 {
-        let h = hash_coords(seed, ix.wrapping_add(dx), iy.wrapping_add(dy), iz.wrapping_add(dz));
+        let h = hash_coords(
+            seed,
+            ix.wrapping_add(dx),
+            iy.wrapping_add(dy),
+            iz.wrapping_add(dz),
+        );
         grad3(h, gx, gy, gz)
     };
 

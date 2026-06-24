@@ -1,8 +1,9 @@
-
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CoagulationSettings, DispersionSettings, FieldParticleSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, ConvolutionBlendSettings, VideoVocoderSettings, FlowFeedbackSettings, GranularMosaicSettings, StructureMode,
+    CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
+    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
+    GranularMosaicSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -18,8 +19,6 @@ use error::CliError;
 use project::*;
 use queue::*;
 use render::*;
-
-
 
 fn main() {
     if let Err(error) = run() {
@@ -540,26 +539,26 @@ fn run() -> Result<(), CliError> {
                     damping,
                     settle_iterations,
                     jitter,
-                carry_texture: !flat_tiles,
-                adaptive_tiles,
-                min_tile_size,
-                subdivide_threshold,
-                live_refresh,
-                live_resort,
-                cluster_blob,
-                dispersion_band,
-                band_width,
-                band_speed,
-                band_start,
-                turbulence,
-                turbulence_scale,
-                turbulence_speed,
-                vortex_flow,
-                vortex_scale,
-                vortex_detail,
-                vortex_speed,
-                seed,
-            },
+                    carry_texture: !flat_tiles,
+                    adaptive_tiles,
+                    min_tile_size,
+                    subdivide_threshold,
+                    live_refresh,
+                    live_resort,
+                    cluster_blob,
+                    dispersion_band,
+                    band_width,
+                    band_speed,
+                    band_start,
+                    turbulence,
+                    turbulence_scale,
+                    turbulence_speed,
+                    vortex_flow,
+                    vortex_scale,
+                    vortex_detail,
+                    vortex_speed,
+                    seed,
+                },
                 frames,
             })
             .map(|_| ())
@@ -1172,7 +1171,3 @@ fn run() -> Result<(), CliError> {
         }),
     }
 }
-
-
-
-

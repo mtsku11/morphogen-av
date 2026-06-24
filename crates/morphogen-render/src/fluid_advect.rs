@@ -279,7 +279,8 @@ mod tests {
     #[test]
     fn frame_zero_is_the_source_verbatim() {
         let src = ramp(16, 16);
-        let out = fluid_advect_frame_cpu(&src, None, 0, FluidAdvectSettings::default()).expect("f0");
+        let out =
+            fluid_advect_frame_cpu(&src, None, 0, FluidAdvectSettings::default()).expect("f0");
         assert_eq!(out.pixels, src.pixels);
     }
 
@@ -301,7 +302,12 @@ mod tests {
         // No displacement and no fresh content ⇒ the dye is held unchanged.
         let src = ramp(16, 16);
         let prev = ImageBufferF32::from_fn(16, 16, |x, y| {
-            [(x as f32 * 0.05).fract(), (y as f32 * 0.03).fract(), 0.25, 1.0]
+            [
+                (x as f32 * 0.05).fract(),
+                (y as f32 * 0.03).fract(),
+                0.25,
+                1.0,
+            ]
         })
         .expect("prev");
         let settings = FluidAdvectSettings {
@@ -369,8 +375,7 @@ mod tests {
             reinject: 1.0,
             ..FluidAdvectTwoSourceSettings::default()
         };
-        let out =
-            fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("on");
+        let out = fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("on");
         assert_eq!(out.pixels, b.pixels);
     }
 
@@ -379,7 +384,12 @@ mod tests {
         // No displacement and no fresh content ⇒ the dye is held unchanged, even if A moved.
         let b = ramp(16, 16);
         let prev = ImageBufferF32::from_fn(16, 16, |x, y| {
-            [(x as f32 * 0.05).fract(), (y as f32 * 0.03).fract(), 0.25, 1.0]
+            [
+                (x as f32 * 0.05).fract(),
+                (y as f32 * 0.03).fract(),
+                0.25,
+                1.0,
+            ]
         })
         .expect("prev");
         let flow = uniform_flow(16, 16, [4.0, 4.0]);
@@ -404,7 +414,10 @@ mod tests {
         };
         let out =
             fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("flow");
-        assert_ne!(out.pixels, prev.pixels, "A's motion should relocate B's dye");
+        assert_ne!(
+            out.pixels, prev.pixels,
+            "A's motion should relocate B's dye"
+        );
     }
 
     #[test]

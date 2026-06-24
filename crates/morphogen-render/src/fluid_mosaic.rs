@@ -390,7 +390,9 @@ impl FluidMosaicSettings {
                 self.min_tile_size, self.tile_size
             )));
         }
-        if self.adaptive_tiles && !(self.subdivide_threshold.is_finite() && self.subdivide_threshold >= 0.0) {
+        if self.adaptive_tiles
+            && !(self.subdivide_threshold.is_finite() && self.subdivide_threshold >= 0.0)
+        {
             return Err(RenderError::InvalidCoagulationSettings(
                 "subdivide_threshold must be finite and non-negative".to_string(),
             ));
@@ -604,7 +606,11 @@ pub fn advance_fluid_mosaic(
         }
 
         // Animated jitter keeps groups alive (no perfect collapse); boosted in the band.
-        let angle = hash01(settings.seed ^ JITTER_SALT, i as u64, u64::from(frame_index)) * TAU;
+        let angle = hash01(
+            settings.seed ^ JITTER_SALT,
+            i as u64,
+            u64::from(frame_index),
+        ) * TAU;
         ax += angle.cos() * jitter_amt;
         ay += angle.sin() * jitter_amt;
 
@@ -734,7 +740,13 @@ impl TileAccumulator {
 /// Mean colour + original pixel patch of the in-bounds cell `[x0,x1)×[y0,y1)`. Shared
 /// by the initial seed and the live refresh so a refreshed tile matches a freshly seeded
 /// one byte-for-byte when the source frame is identical.
-fn sample_cell(source: &ImageBufferF32, x0: u32, y0: u32, x1: u32, y1: u32) -> ([f32; 3], TilePatch) {
+fn sample_cell(
+    source: &ImageBufferF32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+) -> ([f32; 3], TilePatch) {
     let mut sum = [0.0_f32; 3];
     let mut count = 0.0_f32;
     let mut patch_pixels = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
@@ -810,7 +822,11 @@ fn resample_tiles(
     let color_bins = state.color_bins;
     for i in 0..state.origin.len() {
         let origin = state.origin[i];
-        let source = if origin.source == 0 { source_a } else { source_b };
+        let source = if origin.source == 0 {
+            source_a
+        } else {
+            source_b
+        };
         let (mean, patch) = sample_cell(source, origin.x0, origin.y0, origin.x1, origin.y1);
         state.colors[i] = mean;
         state.patches[i] = patch;
@@ -841,7 +857,16 @@ fn append_source_tiles(
             } else {
                 let x1 = (x0 + tile).min(source.width);
                 let y1 = (y0 + tile).min(source.height);
-                acc.push_cell(source, source_index, x0, y0, x1, y1, tile, settings.color_bins);
+                acc.push_cell(
+                    source,
+                    source_index,
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    tile,
+                    settings.color_bins,
+                );
             }
         }
     }
@@ -871,9 +896,26 @@ fn subdivide_cell(
         subdivide_cell(source, source_index, x0, y0, half, settings, acc);
         subdivide_cell(source, source_index, x0 + half, y0, half, settings, acc);
         subdivide_cell(source, source_index, x0, y0 + half, half, settings, acc);
-        subdivide_cell(source, source_index, x0 + half, y0 + half, half, settings, acc);
+        subdivide_cell(
+            source,
+            source_index,
+            x0 + half,
+            y0 + half,
+            half,
+            settings,
+            acc,
+        );
     } else {
-        acc.push_cell(source, source_index, x0, y0, x1, y1, size, settings.color_bins);
+        acc.push_cell(
+            source,
+            source_index,
+            x0,
+            y0,
+            x1,
+            y1,
+            size,
+            settings.color_bins,
+        );
     }
 }
 
@@ -1150,7 +1192,11 @@ fn turbulence_streamfunction(x: f32, y: f32, time: f32, settings: FluidMosaicSet
     let s = settings.turbulence_scale;
     // Coarse octave drifts along +x; fine octave (2x frequency, half weight) drifts +y.
     let n0 = value_noise2(settings.seed ^ TURBULENCE_SALT_0, x * s + time, y * s);
-    let n1 = value_noise2(settings.seed ^ TURBULENCE_SALT_1, x * 2.0 * s, y * 2.0 * s + time);
+    let n1 = value_noise2(
+        settings.seed ^ TURBULENCE_SALT_1,
+        x * 2.0 * s,
+        y * 2.0 * s + time,
+    );
     n0 + 0.5 * n1
 }
 
@@ -1187,7 +1233,8 @@ fn hash_u64(x: u64) -> u64 {
 }
 
 fn hash01(seed: u64, a: u64, b: u64) -> f32 {
-    let h = hash_u64(seed ^ a.wrapping_mul(0x100_0000_01B3) ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93));
+    let h =
+        hash_u64(seed ^ a.wrapping_mul(0x100_0000_01B3) ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93));
     (h >> 40) as f32 / (1u64 << 24) as f32
 }
 
@@ -1506,9 +1553,15 @@ mod tests {
         let a1 = solid(16, 16, [0.8, 0.1, 0.1]);
         let b1 = solid(16, 16, [0.1, 0.1, 0.8]);
         refresh_fluid_mosaic_colors(&mut state, &a1, &b1).expect("refresh");
-        assert_ne!(state.colors, before.colors, "refresh should repaint colours");
+        assert_ne!(
+            state.colors, before.colors,
+            "refresh should repaint colours"
+        );
         assert_eq!(state.positions, before.positions, "sim positions unchanged");
-        assert_eq!(state.velocities, before.velocities, "sim velocities unchanged");
+        assert_eq!(
+            state.velocities, before.velocities,
+            "sim velocities unchanged"
+        );
         assert_eq!(state.bins, before.bins, "sorting bins frozen");
         assert_eq!(state.sizes, before.sizes, "sizes unchanged");
         assert_eq!(state.origin, before.origin, "origin cells unchanged");
@@ -1548,12 +1601,21 @@ mod tests {
         resort_fluid_mosaic_colors(&mut state, &a1, &b1).expect("resort");
         assert_ne!(state.colors, before.colors, "resort should repaint colours");
         assert_ne!(state.bins, before.bins, "resort should re-bin tiles");
-        assert_eq!(state.positions, before.positions, "sim positions carry forward");
-        assert_eq!(state.velocities, before.velocities, "sim velocities carry forward");
+        assert_eq!(
+            state.positions, before.positions,
+            "sim positions carry forward"
+        );
+        assert_eq!(
+            state.velocities, before.velocities,
+            "sim velocities carry forward"
+        );
         // The new bins match the new colours (red A tiles vs blue B tiles diverge).
         assert_eq!(state.bins[0], color_bin([0.8, 0.1, 0.1], s.color_bins));
         assert_eq!(state.bins[4], color_bin([0.1, 0.1, 0.8], s.color_bins));
-        assert_ne!(state.bins[0], state.bins[4], "A and B now sort into different groups");
+        assert_ne!(
+            state.bins[0], state.bins[4],
+            "A and B now sort into different groups"
+        );
 
         // Determinism: re-sorting the same `before` state with the same frames reproduces
         // byte-identical bins and colours.
@@ -1641,9 +1703,18 @@ mod tests {
                 ..base
             },
         );
-        assert!((blob[0][0] - 4.0).abs() < 1e-4, "left tile pulled to centre: {blob:?}");
-        assert!((blob[1][0] + 4.0).abs() < 1e-4, "right tile pulled to centre: {blob:?}");
-        assert!(blob[0][1].abs() < 1e-6 && blob[1][1].abs() < 1e-6, "no y pull: {blob:?}");
+        assert!(
+            (blob[0][0] - 4.0).abs() < 1e-4,
+            "left tile pulled to centre: {blob:?}"
+        );
+        assert!(
+            (blob[1][0] + 4.0).abs() < 1e-4,
+            "right tile pulled to centre: {blob:?}"
+        );
+        assert!(
+            blob[0][1].abs() < 1e-6 && blob[1][1].abs() < 1e-6,
+            "no y pull: {blob:?}"
+        );
 
         // Determinism.
         let again = neighbor_forces(

@@ -242,9 +242,8 @@ pub fn composite_with_field(
         };
         let w_soft = field.sample_pixel(px, py).clamp(0.0, 1.0);
         let w_eff = if hardness > 0.0 {
-            let dither =
-                (hash01(settings.seed ^ EDGE_SALT, u64::from(x), u64::from(y)) - 0.5)
-                    * settings.edge_dither;
+            let dither = (hash01(settings.seed ^ EDGE_SALT, u64::from(x), u64::from(y)) - 0.5)
+                * settings.edge_dither;
             let hard = if w_soft + dither >= 0.5 { 1.0 } else { 0.0 };
             w_soft + (hard - w_soft) * hardness
         } else {
@@ -574,9 +573,8 @@ fn hash_u64(x: u64) -> u64 {
 
 /// Deterministic hash of `(seed, a, b)` into `[0, 1)`.
 fn hash01(seed: u64, a: u64, b: u64) -> f32 {
-    let h = hash_u64(
-        seed ^ a.wrapping_mul(0x100_0000_01B3) ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93),
-    );
+    let h =
+        hash_u64(seed ^ a.wrapping_mul(0x100_0000_01B3) ^ b.wrapping_mul(0xD6E8_FEB8_6659_FD93));
     (h >> 40) as f32 / (1u64 << 24) as f32
 }
 
@@ -650,7 +648,11 @@ mod tests {
         let out = coagulated_blend_frame_cpu(&a, &b, settings).expect("frame");
         // A is fully more energetic than B (raw_a=1, raw_b=0) so ownership saturates
         // to A; output luma rises far above the all-black carrier.
-        assert!(mean_luma(&out) > 0.5, "A should intrude: {}", mean_luma(&out));
+        assert!(
+            mean_luma(&out) > 0.5,
+            "A should intrude: {}",
+            mean_luma(&out)
+        );
     }
 
     #[test]
@@ -806,8 +808,7 @@ mod tests {
             composite
         );
 
-        let smeared =
-            apply_history_smear(&composite, Some(&previous), 0.5, 0.8).expect("smeared");
+        let smeared = apply_history_smear(&composite, Some(&previous), 0.5, 0.8).expect("smeared");
         // out = 0*(1-0.5) + 1*(0.8*0.5) = 0.4 ghost; alpha stays 1.
         let pixel = smeared.pixel(0, 0).expect("pixel");
         assert!((pixel[0] - 0.4).abs() < 1e-6, "trail value: {}", pixel[0]);
@@ -847,16 +848,9 @@ mod tests {
 
         let previous = coagulation_field(&a, &b, settings).expect("previous field");
         let stateless = coagulated_blend_frame_cpu(&a, &b, settings).expect("stateless");
-        let (temporal, _field) = coagulated_blend_temporal_frame_cpu(
-            &a,
-            &b,
-            None,
-            Some(&previous),
-            settings,
-            0.0,
-            1.0,
-        )
-        .expect("temporal");
+        let (temporal, _field) =
+            coagulated_blend_temporal_frame_cpu(&a, &b, None, Some(&previous), settings, 0.0, 1.0)
+                .expect("temporal");
         assert_eq!(temporal, stateless);
     }
 

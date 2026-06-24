@@ -262,11 +262,17 @@ fn render_granular_mosaic_pool_sequence_writes_frames_and_pool_sidecar() {
     // RMS caches for Source A (query) and Source B (pool grains).
     let modulator_wav = temp_dir.path().join("modulator.wav");
     let carrier_wav = temp_dir.path().join("carrier.wav");
-    write_test_wav(&modulator_wav, &[0.0, 0.5, -0.5, 1.0, -1.0, 0.25, -0.25, 0.75]);
+    write_test_wav(
+        &modulator_wav,
+        &[0.0, 0.5, -0.5, 1.0, -1.0, 0.25, -0.25, 0.75],
+    );
     write_test_wav(&carrier_wav, &[1.0, -1.0, 0.5, -0.5, 0.0, 0.8, -0.8, 0.2]);
     let modulator_rms = temp_dir.path().join("mod-rms.json");
     let carrier_rms = temp_dir.path().join("car-rms.json");
-    for (wav, json) in [(&modulator_wav, &modulator_rms), (&carrier_wav, &carrier_rms)] {
+    for (wav, json) in [
+        (&modulator_wav, &modulator_rms),
+        (&carrier_wav, &carrier_rms),
+    ] {
         Command::cargo_bin("morphogen")
             .expect("morphogen binary")
             .args([
@@ -1441,7 +1447,10 @@ fn granular_mosaic_pool_queue_job_persists_provenance_and_writes_bundle_output()
 
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
-        .args(["queue-run-granular-mosaic-pool-sequence", queue_arg.as_str()])
+        .args([
+            "queue-run-granular-mosaic-pool-sequence",
+            queue_arg.as_str(),
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -2060,7 +2069,14 @@ fn queue_spectral_cross_synth_matches_direct_and_records_knobs() {
     let direct_wav = temp_dir.path().join("direct.wav");
     let direct_arg = direct_wav.to_string_lossy().to_string();
     let common = [
-        "--mode", "gain", "--amount", "1", "--rms-window", "4", "--rms-hop", "4",
+        "--mode",
+        "gain",
+        "--amount",
+        "1",
+        "--rms-window",
+        "4",
+        "--rms-hop",
+        "4",
     ];
 
     // Direct render.
@@ -2444,7 +2460,10 @@ fn queue_audio_impulse_convolution_matches_direct_and_records_knobs() {
     assert_eq!(manifest["task"], "audio_impulse_convolution");
     assert_eq!(manifest["audio_stems"][0], "audio/impulse_convolution.wav");
     let knobs = &manifest["impulse_convolution"];
-    assert_eq!(knobs["algorithm"], "impulse_response_convolution_blend_cpu_v1");
+    assert_eq!(
+        knobs["algorithm"],
+        "impulse_response_convolution_blend_cpu_v1"
+    );
     assert_eq!(knobs["amount"], 1.0);
     assert_eq!(knobs["max_impulse_samples"], 8);
     // HQ-tier knobs default to the direct, non-resampling MVP path.
@@ -2980,7 +2999,10 @@ fn queue_datamosh_residual_path_records_residual_algorithm_and_matches_direct() 
     .expect("parse manifest");
     let knobs = &manifest["datamosh"];
     // block_size >= 2 AND residual_gain > 0 ⇒ the block-residual algorithm id.
-    assert_eq!(knobs["algorithm"], "flow_reuse_datamosh_block_residual_cpu_v1");
+    assert_eq!(
+        knobs["algorithm"],
+        "flow_reuse_datamosh_block_residual_cpu_v1"
+    );
     assert_eq!(knobs["block_size"], 16);
     assert_eq!(knobs["residual_gain"], 1.0);
     assert_eq!(knobs["residual_decay"], 0.5);
@@ -3077,7 +3099,10 @@ fn queue_datamosh_refresh_path_records_refresh_algorithm_and_matches_direct() {
     .expect("parse manifest");
     let knobs = &manifest["datamosh"];
     // block_size >= 2 AND block_refresh_threshold > 0 ⇒ the per-block-refresh id.
-    assert_eq!(knobs["algorithm"], "flow_reuse_datamosh_block_refresh_cpu_v1");
+    assert_eq!(
+        knobs["algorithm"],
+        "flow_reuse_datamosh_block_refresh_cpu_v1"
+    );
     assert_eq!(knobs["block_size"], 16);
     assert_eq!(knobs["block_refresh_threshold"], 0.5);
 }

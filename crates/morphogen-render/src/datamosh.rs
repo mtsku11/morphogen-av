@@ -114,10 +114,7 @@ pub fn datamosh_bloom_frame_cpu(
             if previous_output.width != carrier.width || previous_output.height != carrier.height {
                 return Err(RenderError::IncompatibleInputs(format!(
                     "previous output is {}x{}, carrier is {}x{}",
-                    previous_output.width,
-                    previous_output.height,
-                    carrier.width,
-                    carrier.height
+                    previous_output.width, previous_output.height, carrier.width, carrier.height
                 )));
             }
             flow_displace_cpu(previous_output, flow, amount)
@@ -192,10 +189,7 @@ pub fn datamosh_block_frame_cpu(
             if previous_output.width != carrier.width || previous_output.height != carrier.height {
                 return Err(RenderError::IncompatibleInputs(format!(
                     "previous output is {}x{}, carrier is {}x{}",
-                    previous_output.width,
-                    previous_output.height,
-                    carrier.width,
-                    carrier.height
+                    previous_output.width, previous_output.height, carrier.width, carrier.height
                 )));
             }
             let quantized = quantize_flow_to_blocks(flow, block_size)?;
@@ -296,17 +290,12 @@ pub fn datamosh_residual_frame_cpu(
     match previous_output {
         // Frame zero or a keyframe refresh: carrier verbatim, accumulator cleared.
         None => Ok((carrier.clone(), zero_flow(carrier.width, carrier.height)?)),
-        Some(_) if is_keyframe => {
-            Ok((carrier.clone(), zero_flow(carrier.width, carrier.height)?))
-        }
+        Some(_) if is_keyframe => Ok((carrier.clone(), zero_flow(carrier.width, carrier.height)?)),
         Some(previous_output) => {
             if previous_output.width != carrier.width || previous_output.height != carrier.height {
                 return Err(RenderError::IncompatibleInputs(format!(
                     "previous output is {}x{}, carrier is {}x{}",
-                    previous_output.width,
-                    previous_output.height,
-                    carrier.width,
-                    carrier.height
+                    previous_output.width, previous_output.height, carrier.width, carrier.height
                 )));
             }
             let (effective, new_accum) = datamosh_residual_flow(
@@ -439,7 +428,8 @@ pub fn datamosh_refresh_frame_cpu(
         return Ok((advected, new_accum));
     }
     let block_means = quantize_flow_to_blocks(flow, block_size)?;
-    let out = datamosh_block_refresh_composite(&advected, carrier, &block_means, refresh_threshold)?;
+    let out =
+        datamosh_block_refresh_composite(&advected, carrier, &block_means, refresh_threshold)?;
     let reset_accum =
         reset_residual_in_refreshed_blocks(&new_accum, &block_means, refresh_threshold)?;
     Ok((out, reset_accum))
@@ -511,8 +501,8 @@ mod tests {
     #[test]
     fn amount_zero_holds_previous_output() {
         let carrier = solid(3, 1, [0.0, 0.0, 0.0, 1.0]);
-        let previous = ImageBufferF32::from_fn(3, 1, |x, _| [x as f32, 0.0, 0.0, 1.0])
-            .expect("previous");
+        let previous =
+            ImageBufferF32::from_fn(3, 1, |x, _| [x as f32, 0.0, 0.0, 1.0]).expect("previous");
         let flow = FlowField::from_fn(3, 1, |_, _| [1.0, 0.0]).expect("flow");
         // amount 0 ⇒ no displacement ⇒ the held buffer passes through unchanged.
         let out =
@@ -649,14 +639,8 @@ mod tests {
         let previous = ImageBufferF32::from_fn(4, 1, |x, _| [0.0, x as f32 / 3.0, 0.0, 1.0])
             .expect("previous");
         // Block 0 (x=0,1): zero mean motion (calm). Block 1 (x=2,3): large motion (busy).
-        let flow = FlowField::from_fn(4, 1, |x, _| {
-            if x < 2 {
-                [0.0, 0.0]
-            } else {
-                [10.0, 0.0]
-            }
-        })
-        .expect("flow");
+        let flow = FlowField::from_fn(4, 1, |x, _| if x < 2 { [0.0, 0.0] } else { [10.0, 0.0] })
+            .expect("flow");
         let accum = zero_flow(4, 1).expect("accum");
         let (out, _) = datamosh_refresh_frame_cpu(
             &carrier,
@@ -891,10 +875,9 @@ mod tests {
         let dirty = FlowField::from_fn(2, 2, |_, _| [9.0, 9.0]).expect("dirty");
 
         // Frame zero (no previous output): carrier verbatim, accumulator cleared.
-        let (zero_out, zero_accum) = datamosh_residual_frame_cpu(
-            &carrier, None, &dirty, &flow, true, 1.0, 16, 0.5, 0.9,
-        )
-        .expect("zero");
+        let (zero_out, zero_accum) =
+            datamosh_residual_frame_cpu(&carrier, None, &dirty, &flow, true, 1.0, 16, 0.5, 0.9)
+                .expect("zero");
         assert_eq!(zero_out, carrier);
         for y in 0..2 {
             for x in 0..2 {
@@ -990,13 +973,11 @@ mod tests {
         let previous = solid(2, 2, [0.9, 0.8, 0.7, 1.0]);
         let flow = FlowField::from_fn(2, 2, |_, _| [1.0, 0.0]).expect("flow");
         // Frame zero (no previous output).
-        let zero =
-            datamosh_block_frame_cpu(&carrier, None, &flow, true, 1.0, 16).expect("zero");
+        let zero = datamosh_block_frame_cpu(&carrier, None, &flow, true, 1.0, 16).expect("zero");
         assert_eq!(zero, carrier);
         // Keyframe refresh ignores held state + flow.
-        let keyframe =
-            datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, true, 1.0, 16)
-                .expect("keyframe");
+        let keyframe = datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, true, 1.0, 16)
+            .expect("keyframe");
         assert_eq!(keyframe, carrier);
     }
 }

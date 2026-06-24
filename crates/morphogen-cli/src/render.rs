@@ -4,45 +4,46 @@ use std::{
 };
 
 use morphogen_audio::{
-    load_wav_f32, rms_envelope, spectral_centroid_from_magnitudes, AudioAnalysisCache, AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache,
+    load_wav_f32, rms_envelope, spectral_centroid_from_magnitudes, AudioAnalysisCache,
+    AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache,
 };
 use morphogen_core::{
     AnalysisKind, FlowSource, GrainSelectionMode, GranularAudioModulation, KernelMode,
-    RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
+    RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance,
+    RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    advance_coagulation_field, advance_dispersion_field, apply_history_smear, average_cell_flows,
-    coagulation_field, composite_with_field, disperse_composite_cpu, downsample_flow_to_cells,
-    synthesize_turbulence_flow, CoagulationField, CoagulationFlowSource, CoagulationSettings,
-    DispersionField, DispersionSettings,
-    advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
-    resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings,
-    advance_field_particles, initialize_field_particles, refresh_field_particle_colors,
-    render_field_particles, FieldParticleSettings,
-    fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings,
-    analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
-    convolution_blend_color_cpu, convolution_blend_cpu, ConvolutionBlendSettings, ConvolutionKernel,
-    analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, feedback_state_path,
-    is_datamosh_keyframe, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
-    datamosh_block_refresh_composite, datamosh_residual_flow, quantize_flow_to_blocks,
-    reset_residual_in_refreshed_blocks, zero_flow,
+    advance_coagulation_field, advance_dispersion_field, advance_field_particles,
+    advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
+    analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu,
+    analyze_luma_band_envelope_cpu, apply_history_smear, apply_tone_map_cpu, average_cell_flows,
+    coagulation_field, composite_with_field, convolution_blend_color_cpu, convolution_blend_cpu,
+    datamosh_block_refresh_composite, datamosh_residual_flow, disperse_composite_cpu,
+    downsample_flow_to_cells, feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu,
+    flow_temporal_supersample_cpu, fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
-    luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, read_flow_cache,
-    read_flow_feedback_state, read_grain_color_descriptor_cache, read_grain_descriptor_cache,
-    read_grain_pool_descriptor_cache, read_grain_selection_cache, select_grains_cpu,
-    select_grains_from_pool_cpu, select_grains_multimodal_cpu, video_vocoder_cpu,
-    analyze_luma_band_envelope_cpu, apply_tone_map_cpu, luma_specification_tone_map, AntiRepeat,
-    TemporalCoherence, VideoVocoderSettings, write_flow_cache,
+    initialize_field_particles, initialize_fluid_mosaic, is_datamosh_keyframe,
+    luma_specification_tone_map, luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu,
+    quantize_flow_to_blocks, read_flow_cache, read_flow_feedback_state,
+    read_grain_color_descriptor_cache, read_grain_descriptor_cache,
+    read_grain_pool_descriptor_cache, read_grain_selection_cache, refresh_field_particle_colors,
+    refresh_fluid_mosaic_colors, render_field_particles, render_fluid_mosaic,
+    reset_residual_in_refreshed_blocks, resort_fluid_mosaic_colors, select_grains_cpu,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, synthesize_turbulence_flow,
+    uniform_displacement_field, video_vocoder_cpu, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
-    write_grain_pool_descriptor_cache, write_grain_selection_cache, FlowFeedbackSettings,
-    FlowFeedbackStateDescriptor, FlowField, GrainColorDescriptor, GrainDescriptor, GrainPool,
-    GrainSelection, GranularMosaicSettings, ImageBufferF32, PoolSelectionWindow,
-    RmsDisplacementEnvelope, uniform_displacement_field,
-    FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
-    GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM,
-    LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    write_grain_pool_descriptor_cache, write_grain_selection_cache, zero_flow, AntiRepeat,
+    CoagulationField, CoagulationFlowSource, CoagulationSettings, ConvolutionBlendSettings,
+    ConvolutionKernel, DispersionField, DispersionSettings, FieldParticleSettings,
+    FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor, GrainDescriptor,
+    GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, PoolSelectionWindow,
+    RmsDisplacementEnvelope, TemporalCoherence, VideoVocoderSettings, FLOW_VECTOR_CONVENTION,
+    GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
+    GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
+    POOLED_GRAIN_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -153,7 +154,14 @@ pub(crate) fn render_granular_mosaic(
             selection_mode,
         )?
     } else {
-        render_granular_mosaic_frame(&modulator, &carrier, settings, None, backend, selection_mode)?
+        render_granular_mosaic_frame(
+            &modulator,
+            &carrier,
+            settings,
+            None,
+            backend,
+            selection_mode,
+        )?
     };
 
     write_parent_dirs(output_path)?;
@@ -257,12 +265,8 @@ pub(crate) fn render_video_vocoder_sequence(
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
-        let rendered =
-            render_video_vocoder_frame(&modulator, &carrier, settings, mode, backend)?;
-        save_png(
-            &rendered,
-            &output_dir.join(format!("frame_{index:06}.png")),
-        )?;
+        let rendered = render_video_vocoder_frame(&modulator, &carrier, settings, mode, backend)?;
+        save_png(&rendered, &output_dir.join(format!("frame_{index:06}.png")))?;
     }
 
     if modulator_frames.len() != carrier_frames.len() {
@@ -324,7 +328,11 @@ pub(crate) fn render_audio_video_route_sequence(
     }
 
     let buffer = load_wav_f32(request.modulator_wav)?;
-    let rms_frames = rms_envelope(&buffer, request.rms_window as usize, request.rms_hop as usize)?;
+    let rms_frames = rms_envelope(
+        &buffer,
+        request.rms_window as usize,
+        request.rms_hop as usize,
+    )?;
     let samples: Vec<(f64, f32)> = rms_frames
         .iter()
         .map(|frame| (frame.time_seconds, frame.rms))
@@ -346,8 +354,12 @@ pub(crate) fn render_audio_video_route_sequence(
 
     for (index, carrier_path) in carrier_frames.iter().enumerate().take(frame_count) {
         let carrier = load_image_f32(carrier_path)?;
-        let field =
-            uniform_displacement_field(carrier.width, carrier.height, request.shift_x, request.shift_y)?;
+        let field = uniform_displacement_field(
+            carrier.width,
+            carrier.height,
+            request.shift_x,
+            request.shift_y,
+        )?;
         let time_seconds = index as f64 / request.fps;
         let amount = request.amount * envelope.gain_at(time_seconds);
         let rendered = render_audio_video_route_frame(&carrier, &field, amount, request.backend)?;
@@ -781,8 +793,10 @@ pub(crate) fn render_convolutional_blend_sequence(
                 )?
             }
             KernelMode::Color => {
-                let kernels =
-                    analyze_convolution_kernels_color_cpu(&modulator, request.settings.kernel_size)?;
+                let kernels = analyze_convolution_kernels_color_cpu(
+                    &modulator,
+                    request.settings.kernel_size,
+                )?;
                 render_convolutional_blend_color_frame(
                     &carrier,
                     &kernels,
@@ -1167,12 +1181,7 @@ pub(crate) fn render_optical_flow_advect_sequence(
                     LUCAS_KANADE_WINDOW_RADIUS,
                 )?
                 .flow;
-                fluid_advect_two_source_frame_cpu(
-                    &source,
-                    Some(previous),
-                    &flow,
-                    request.settings,
-                )?
+                fluid_advect_two_source_frame_cpu(&source, Some(previous), &flow, request.settings)?
             }
             // Frame zero (or a missing prior frame): the source is the output verbatim.
             _ => source.clone(),
@@ -1208,8 +1217,8 @@ pub(crate) struct FieldParticlesSequenceRequest<'a> {
 /// the source's first frame rides the shared steady-vortex field. Frame zero is the initial
 /// grid (a posterised source); each later frame integrates the particle positions along the
 /// field and splats them onto a black canvas. The particle state (positions + colours) is the
-/// stateful carrier, carried in memory (never a re-read PNG). Colours are fixed at seed time,
-/// so only the first source frame is read.
+/// stateful carrier, carried in memory (never a re-read PNG). With live colour disabled,
+/// colours are fixed at seed time; enabled live colour re-samples each particle's source cell.
 pub(crate) fn render_field_particles_sequence(
     request: FieldParticlesSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
@@ -1241,7 +1250,7 @@ pub(crate) fn render_field_particles_sequence(
             let current = load_image_f32(&source_frames[index % source_frames.len()])?;
             refresh_field_particle_colors(&mut field, &current);
         }
-        let rendered = render_field_particles(&field, request.settings);
+        let rendered = render_field_particles(&field, request.settings)?;
         save_png(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
@@ -1274,9 +1283,12 @@ pub(crate) fn render_fluid_advect_frame(
     backend: RenderBackend,
 ) -> Result<ImageBufferF32, CliError> {
     match backend {
-        RenderBackend::Cpu => {
-            Ok(fluid_advect_frame_cpu(source, previous, frame_index, settings)?)
-        }
+        RenderBackend::Cpu => Ok(fluid_advect_frame_cpu(
+            source,
+            previous,
+            frame_index,
+            settings,
+        )?),
         RenderBackend::Metal => {
             render_fluid_advect_frame_metal(source, previous, frame_index, settings)
         }
@@ -1583,7 +1595,9 @@ fn coagulation_cell_flow(
                              current: &ImageBufferF32|
      -> Result<FlowField, CliError> {
         let previous = previous.ok_or_else(|| {
-            CliError::Message("internal error: missing previous frame for coagulation flow".to_string())
+            CliError::Message(
+                "internal error: missing previous frame for coagulation flow".to_string(),
+            )
         })?;
         let flow = pyramidal_lucas_kanade_flow_cpu(
             previous,
@@ -2630,7 +2644,13 @@ pub(crate) fn render_granular_mosaic_frame(
     let selection = match selection_mode {
         GrainSelectionMode::Luma => {
             let descriptors = analyze_grains_cpu(carrier, settings.grain_size)?;
-            select_grains_cpu(modulator, carrier.width, carrier.height, &descriptors, settings)?
+            select_grains_cpu(
+                modulator,
+                carrier.width,
+                carrier.height,
+                &descriptors,
+                settings,
+            )?
         }
         GrainSelectionMode::MultimodalRgb => {
             let descriptors = analyze_grain_colors_cpu(carrier, settings.grain_size)?;
@@ -2875,9 +2895,13 @@ pub(crate) fn render_granular_mosaic_pool_output(
             selection,
             settings,
         )?),
-        RenderBackend::Metal => {
-            render_granular_mosaic_pool_output_metal(pool_frames, pool, carrier, selection, settings)
-        }
+        RenderBackend::Metal => render_granular_mosaic_pool_output_metal(
+            pool_frames,
+            pool,
+            carrier,
+            selection,
+            settings,
+        ),
     }
 }
 
@@ -2889,9 +2913,15 @@ pub(crate) fn render_granular_mosaic_pool_output_metal(
     selection: &morphogen_render::GrainSelection,
     settings: GranularMosaicSettings,
 ) -> Result<ImageBufferF32, CliError> {
-    let gpu =
-        morphogen_metal::granular_mosaic_pool_metal(pool_frames, pool, carrier, selection, settings)?;
-    let cpu = granular_mosaic_with_pool_selection_cpu(pool_frames, pool, carrier, selection, settings)?;
+    let gpu = morphogen_metal::granular_mosaic_pool_metal(
+        pool_frames,
+        pool,
+        carrier,
+        selection,
+        settings,
+    )?;
+    let cpu =
+        granular_mosaic_with_pool_selection_cpu(pool_frames, pool, carrier, selection, settings)?;
     let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
         CliError::Message(
             "Metal and CPU granular pool outputs have mismatched dimensions; cannot verify parity"
@@ -3681,7 +3711,10 @@ pub(crate) fn granular_mosaic_pool_provenance(
             }]
         })
         .unwrap_or_default();
-    for cache in [modulator_rms_cache, carrier_rms_cache].into_iter().flatten() {
+    for cache in [modulator_rms_cache, carrier_rms_cache]
+        .into_iter()
+        .flatten()
+    {
         analysis_caches.push(RenderJobAnalysisCacheProvenance {
             kind: AnalysisKind::AudioRms,
             path: cache.to_string(),
@@ -3727,7 +3760,6 @@ pub(crate) fn feedback_source_fingerprint(
         checksum: format!("fnv1a64:{checksum:016x}"),
     })
 }
-
 
 pub(crate) fn load_feedback_resume_state(
     output_dir: &Path,

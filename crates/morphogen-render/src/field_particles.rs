@@ -13,7 +13,7 @@
 //! is then rendered by splatting each particle as a `particle_size × particle_size` square of
 //! its colour onto a black canvas, in fixed particle-index order (last writer wins on overlap
 //! — deterministic). Colours are sampled once from the seed frame, so the particles carry the
-//! frame-zero image as they flow (live colour re-sampling is a deferred variant).
+//! frame-zero image as they flow unless opt-in live colour re-sampling is enabled.
 //!
 //! Stateful temporal node: frame zero is the initial grid (the particle state is the
 //! checkpoint — positions + colours, never a re-read PNG); each later frame advances that
@@ -230,7 +230,7 @@ pub fn refresh_field_particle_colors(field: &mut ParticleField, source: &ImageBu
 pub fn render_field_particles(
     field: &ParticleField,
     settings: FieldParticleSettings,
-) -> ImageBufferF32 {
+) -> Result<ImageBufferF32, RenderError> {
     let width = field.width;
     let height = field.height;
     let mut pixels = vec![[0.0, 0.0, 0.0, 1.0]; (width as usize) * (height as usize)];
@@ -257,7 +257,6 @@ pub fn render_field_particles(
     }
 
     ImageBufferF32::new(width, height, pixels)
-        .expect("particle canvas dimensions are valid by construction")
 }
 
 #[cfg(test)]
@@ -294,9 +293,9 @@ mod tests {
             ..FieldParticleSettings::default()
         };
         let mut field = initialize_field_particles(&src, settings).expect("init");
-        let frame0 = render_field_particles(&field, settings);
+        let frame0 = render_field_particles(&field, settings).expect("render frame zero");
         advance_field_particles(&mut field, 5, settings).expect("advance");
-        let frame5 = render_field_particles(&field, settings);
+        let frame5 = render_field_particles(&field, settings).expect("render frame five");
         assert_eq!(frame0.pixels, frame5.pixels);
     }
 
@@ -308,12 +307,15 @@ mod tests {
             ..FieldParticleSettings::default()
         };
         let mut field = initialize_field_particles(&src, settings).expect("init");
-        let frame0 = render_field_particles(&field, settings);
+        let frame0 = render_field_particles(&field, settings).expect("render frame zero");
         for index in 1..=8 {
             advance_field_particles(&mut field, index, settings).expect("advance");
         }
-        let frame8 = render_field_particles(&field, settings);
-        assert_ne!(frame0.pixels, frame8.pixels, "the field should relocate particles");
+        let frame8 = render_field_particles(&field, settings).expect("render frame eight");
+        assert_ne!(
+            frame0.pixels, frame8.pixels,
+            "the field should relocate particles"
+        );
     }
 
     #[test]
@@ -330,9 +332,11 @@ mod tests {
             ..FieldParticleSettings::default()
         };
         let off_frame =
-            render_field_particles(&initialize_field_particles(&src, off).expect("init"), off);
+            render_field_particles(&initialize_field_particles(&src, off).expect("init"), off)
+                .expect("render off frame");
         let on_frame =
-            render_field_particles(&initialize_field_particles(&src, on).expect("init"), on);
+            render_field_particles(&initialize_field_particles(&src, on).expect("init"), on)
+                .expect("render on frame");
         assert_eq!(off_frame.pixels, on_frame.pixels);
     }
 
@@ -347,8 +351,12 @@ mod tests {
             advance_field_particles(&mut b, index, settings).expect("b advance");
         }
         assert_eq!(
-            render_field_particles(&a, settings).pixels,
-            render_field_particles(&b, settings).pixels
+            render_field_particles(&a, settings)
+                .expect("render a")
+                .pixels,
+            render_field_particles(&b, settings)
+                .expect("render b")
+                .pixels
         );
     }
 
@@ -370,10 +378,13 @@ mod tests {
         let seed = gradient(24, 24);
         let settings = FieldParticleSettings::default();
         let mut field = initialize_field_particles(&seed, settings).expect("init");
-        let before = render_field_particles(&field, settings);
+        let before = render_field_particles(&field, settings).expect("render before");
         let next = ImageBufferF32::from_fn(24, 24, |_, _| [0.9, 0.1, 0.4, 1.0]).expect("next");
         refresh_field_particle_colors(&mut field, &next);
-        let after = render_field_particles(&field, settings);
-        assert_ne!(before.pixels, after.pixels, "live colour should track the new frame");
+        let after = render_field_particles(&field, settings).expect("render after");
+        assert_ne!(
+            before.pixels, after.pixels,
+            "live colour should track the new frame"
+        );
     }
 }

@@ -4,15 +4,15 @@ pub mod audio_route;
 pub mod coagulate;
 pub mod conv_blend;
 pub mod cpu_reference;
-pub mod disperse;
 pub mod datamosh;
+pub mod disperse;
 pub mod error;
 pub mod feedback_state;
 pub mod field_particles;
-pub mod fluid_advect;
-pub mod fluid_mosaic;
 pub mod flow;
 pub mod flow_cache;
+pub mod fluid_advect;
+pub mod fluid_mosaic;
 pub mod grain_cache;
 pub mod granular_mosaic;
 pub mod image_buffer;
@@ -27,18 +27,13 @@ pub use audio_route::{
 };
 pub use coagulate::{
     advance_coagulation_field, advect_coagulation_field, apply_history_smear, average_cell_flows,
-    coagulated_blend_frame_cpu,
-    coagulated_blend_temporal_frame_cpu, coagulation_field, composite_with_field,
-    downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
+    coagulated_blend_frame_cpu, coagulated_blend_temporal_frame_cpu, coagulation_field,
+    composite_with_field, downsample_flow_to_cells, synthesize_turbulence_flow, CoagulationField,
     CoagulationFlowSource, CoagulationSettings, COAGULATED_BLEND_ALGORITHM,
 };
-pub use disperse::{
-    advance_dispersion_field, disperse_composite_cpu, DispersionField, DispersionSettings,
-    DISPERSION_BLEND_ALGORITHM,
-};
 pub use conv_blend::{
-    analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu, convolution_blend_color_cpu,
-    convolution_blend_color_from_modulator_cpu, convolution_blend_cpu,
+    analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
+    convolution_blend_color_cpu, convolution_blend_color_from_modulator_cpu, convolution_blend_cpu,
     convolution_blend_from_modulator_cpu, ConvolutionBlendSettings, ConvolutionKernel,
     CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
 };
@@ -51,8 +46,12 @@ pub use datamosh::{
     datamosh_block_refresh_composite, datamosh_bloom_frame_cpu, datamosh_refresh_frame_cpu,
     datamosh_residual_flow, datamosh_residual_frame_cpu, is_datamosh_keyframe,
     quantize_flow_to_blocks, reset_residual_in_refreshed_blocks, zero_flow,
-    DATAMOSH_BLOCK_ALGORITHM, DATAMOSH_BLOCK_REFRESH_ALGORITHM,
-    DATAMOSH_BLOCK_RESIDUAL_ALGORITHM, DATAMOSH_BLOOM_ALGORITHM,
+    DATAMOSH_BLOCK_ALGORITHM, DATAMOSH_BLOCK_REFRESH_ALGORITHM, DATAMOSH_BLOCK_RESIDUAL_ALGORITHM,
+    DATAMOSH_BLOOM_ALGORITHM,
+};
+pub use disperse::{
+    advance_dispersion_field, disperse_composite_cpu, DispersionField, DispersionSettings,
+    DISPERSION_BLEND_ALGORITHM,
 };
 pub use error::RenderError;
 pub use feedback_state::{
@@ -63,20 +62,19 @@ pub use field_particles::{
     advance_field_particles, initialize_field_particles, refresh_field_particle_colors,
     render_field_particles, FieldParticleSettings, ParticleField, FIELD_PARTICLES_ALGORITHM,
 };
+pub use flow::FlowField;
+pub use flow_cache::{
+    read_flow_cache, write_flow_cache, write_flow_cache_with_source_fingerprint, FlowCacheFrame,
+    FlowCacheManifest, FLOW_VECTOR_CONVENTION,
+};
 pub use fluid_advect::{
     fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
 };
 pub use fluid_mosaic::{
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
-    resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings, FluidMosaicState,
-    TileOrigin, TilePatch,
-    FLUID_MOSAIC_ALGORITHM,
-};
-pub use flow::FlowField;
-pub use flow_cache::{
-    read_flow_cache, write_flow_cache, write_flow_cache_with_source_fingerprint, FlowCacheFrame,
-    FlowCacheManifest, FLOW_VECTOR_CONVENTION,
+    render_fluid_mosaic, resort_fluid_mosaic_colors, FluidMosaicSettings, FluidMosaicState,
+    TileOrigin, TilePatch, FLUID_MOSAIC_ALGORITHM,
 };
 pub use grain_cache::{
     read_grain_color_descriptor_cache, read_grain_descriptor_cache,
@@ -93,8 +91,8 @@ pub use granular_mosaic::{
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu, select_grains_cpu,
     select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, GrainColorDescriptor,
     GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, PoolSelectionWindow,
-    PooledGrainDescriptor, TemporalCoherence,
-    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    PooledGrainDescriptor, TemporalCoherence, GRANULAR_MOSAIC_ALGORITHM,
+    MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
@@ -104,12 +102,12 @@ pub use optical_flow::{
     PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
 };
 pub use sampler::sample_bilinear_clamped;
-pub use vortex_field::steady_vortex_velocity;
 pub use video_vocoder::{
     analyze_luma_band_envelope_cpu, apply_tone_map_cpu, histogram_specification_cpu,
     luma_specification_tone_map, video_vocoder_cpu, video_vocoder_from_modulator_cpu,
     LumaBandEnvelope, VideoVocoderSettings, TONE_MAP_LEVELS, VIDEO_VOCODER_ALGORITHM,
 };
+pub use vortex_field::steady_vortex_velocity;
 
 #[cfg(test)]
 mod tests {
