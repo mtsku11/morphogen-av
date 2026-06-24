@@ -415,6 +415,7 @@ fn run() -> Result<(), CliError> {
             subdivide_threshold,
             live_refresh,
             live_resort,
+            cluster_blob,
             seed,
         } => render_fluid_mosaic_sequence(FluidMosaicSequenceRequest {
             source_a_dir: &source_a_dir,
@@ -439,6 +440,7 @@ fn run() -> Result<(), CliError> {
                 subdivide_threshold,
                 live_refresh,
                 live_resort,
+                cluster_blob,
                 seed,
             },
             frames,

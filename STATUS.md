@@ -4,17 +4,37 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-23_
+_Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **279 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **280 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Fluid Colour-Sort Mosaic — cluster-blob layout (Slice 6, CPU + CLI).** The
+  deferred alternate layout. `--cluster-blob` swaps the cohesion *target*: each tile is
+  pulled toward its colour bin's **global** centroid (precomputed once per force pass by
+  `global_bin_centroids`) instead of the local same-colour mean, so each colour gathers
+  into one compact blob rather than phase-separating into screen-filling domains. This is
+  the effect's documented failure-mode #1 ("global-centroid → collapse to points") turned
+  into an opt-in feature; stiff repulsion still keeps a blob a disc, not a point. Setting
+  `cluster_blob: bool` serde-default false, algo id bumped `…_v5` → `…_v6`; the
+  local-cohesion branch is untouched so the off path is byte-identical. **Centralization
+  caveat** (why it isn't the default): spatially-uniform colours share a near-identical
+  centroid (the canvas centre), so blobs only separate when each colour is spatially
+  concentrated. **Off-vs-on readout** (fixture: red split into two discs + a blue disc,
+  cohesion amplified, fluid/jitter off): cluster-blob merges the two red discs into one
+  blob at red's global centroid while local cohesion keeps them as two domains (Read
+  confirmed); cross-delta **57.8/255 at frame 0** (the *settle pass* already runs the
+  cluster force, so frame 0 diverges — unlike refresh/resort which are frame-0-identical)
+  settling to **49.5/255**. Workspace 279 → 280. New unit test builds a 2-tile state
+  directly: local force ~0 across the gap, cluster pulls both to the midpoint by exactly
+  dist·cohesion. See [[fluid-colour-sort-mosaic]]. Metal port + dispersion band deferred.
 
 - **Controlled Datamosh — REAL bitstream mosh, P-frame "bloom" (experimental,
   non-deterministic CLI).** The authentic codec-artifact tier — mangles the
