@@ -428,6 +428,65 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_frames: Option<usize>,
     },
+    /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
+    /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
+    /// cohesion plus colour-blind repulsion phase-separate them into colour domains
+    /// that fill the frame (settled before frame zero), then a divergence-free fluid
+    /// field advects them so the colour groups flow and intermix. `--cohesion 0
+    /// --repulsion 0 --fluid-strength 0 --jitter 0 --settle-iterations 0` leaves the
+    /// source grids overlaid in place.
+    RenderFluidMosaicSequence {
+        /// Source A video frames (PNG sequence; only the first frame seeds the sim).
+        source_a_dir: PathBuf,
+        /// Source B video frames (PNG sequence; only the first frame seeds the sim).
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to simulate.
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        /// Uniform tile edge length in pixels.
+        #[arg(long, default_value_t = 8)]
+        tile_size: u32,
+        /// Quantization levels per RGB channel for colour binning (>= 2). Colour
+        /// groups = bins^3.
+        #[arg(long, default_value_t = 5)]
+        color_bins: u32,
+        /// Per-step pull of each tile toward the local mean of nearby same-colour
+        /// tiles, in [0, 1] (local cohesion → emergent colour domains).
+        #[arg(long, default_value_t = 0.035)]
+        cohesion: f32,
+        /// Neighbourhood radius (pixels) over which same-colour cohesion is gathered.
+        #[arg(long, default_value_t = 24.0)]
+        cohesion_radius: f32,
+        /// Colour-blind short-range repulsion (pixels/step) — the stiff incompressible
+        /// pressure that keeps tiles spread so colour domains fill the frame instead
+        /// of contracting into voids.
+        #[arg(long, default_value_t = 1.4)]
+        repulsion: f32,
+        /// Radius (pixels) within which tiles repel one another.
+        #[arg(long, default_value_t = 10.0)]
+        repulsion_radius: f32,
+        /// Amplitude of the fluid velocity field (pixels/step).
+        #[arg(long, default_value_t = 0.5)]
+        fluid_strength: f32,
+        /// Spatial frequency of the curl field (radians/pixel); smaller = broader currents.
+        #[arg(long, default_value_t = 0.01)]
+        fluid_scale: f32,
+        /// Temporal phase advance of the fluid per frame (churn speed).
+        #[arg(long, default_value_t = 0.15)]
+        fluid_drift: f32,
+        /// Per-step velocity damping in [0, 1) (keeps motion bounded).
+        #[arg(long, default_value_t = 0.88)]
+        damping: f32,
+        /// Warmup cohesion+repulsion iterations before frame zero (grouped initial state).
+        #[arg(long, default_value_t = 60)]
+        settle_iterations: u32,
+        /// Per-step animated random nudge (pixels) keeping groups alive.
+        #[arg(long, default_value_t = 0.03)]
+        jitter: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
     /// Render a descriptor-coagulated flow blend (experimental, deterministic;
     /// Slice 1 — CPU-only, single-frame, no advection/feedback yet). Both sources
     /// are mangled together: cells group into irregular coagulated patches by

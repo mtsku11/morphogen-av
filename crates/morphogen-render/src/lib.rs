@@ -8,6 +8,7 @@ pub mod disperse;
 pub mod datamosh;
 pub mod error;
 pub mod feedback_state;
+pub mod fluid_mosaic;
 pub mod flow;
 pub mod flow_cache;
 pub mod grain_cache;
@@ -54,6 +55,10 @@ pub use error::RenderError;
 pub use feedback_state::{
     feedback_state_path, read_flow_feedback_state, write_flow_feedback_state,
     FlowFeedbackStateDescriptor, FLOW_FEEDBACK_STATE_VERSION,
+};
+pub use fluid_mosaic::{
+    advance_fluid_mosaic, initialize_fluid_mosaic, render_fluid_mosaic, FluidMosaicSettings,
+    FluidMosaicState, FLUID_MOSAIC_ALGORITHM,
 };
 pub use flow::FlowField;
 pub use flow_cache::{
