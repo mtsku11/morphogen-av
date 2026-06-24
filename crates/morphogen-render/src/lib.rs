@@ -60,8 +60,8 @@ pub use feedback_state::{
     FlowFeedbackStateDescriptor, FLOW_FEEDBACK_STATE_VERSION,
 };
 pub use field_particles::{
-    advance_field_particles, initialize_field_particles, render_field_particles,
-    FieldParticleSettings, ParticleField, FIELD_PARTICLES_ALGORITHM,
+    advance_field_particles, initialize_field_particles, refresh_field_particle_colors,
+    render_field_particles, FieldParticleSettings, ParticleField, FIELD_PARTICLES_ALGORITHM,
 };
 pub use fluid_advect::{
     fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,

@@ -456,6 +456,7 @@ fn run() -> Result<(), CliError> {
             turbulence_scale,
             turbulence_speed,
             detail,
+            live_colour,
             seed,
         } => render_field_particles_sequence(FieldParticlesSequenceRequest {
             source_dir: &source_dir,
@@ -467,6 +468,7 @@ fn run() -> Result<(), CliError> {
                 turbulence_scale,
                 turbulence_speed,
                 detail,
+                live_color: live_colour,
                 seed,
             },
             frames,

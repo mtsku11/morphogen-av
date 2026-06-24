@@ -543,6 +543,10 @@ pub(crate) enum Commands {
         /// Fine-detail octave weight relative to the steady big vortices (0 = pure vortices).
         #[arg(long, default_value_t = 0.1)]
         detail: f32,
+        /// Re-sample each particle's colour from its origin cell in the current source frame
+        /// every frame, so a video plays through the flowing carrier (off = frozen seed colour).
+        #[arg(long, default_value_t = false)]
+        live_colour: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },

@@ -19,9 +19,17 @@
 //! checkpoint — positions + colours, never a re-read PNG); each later frame advances that
 //! state. Deterministic: the field hashing is splitmix64 and the splat order is fixed.
 //!
-//! Continuity identity (the off case for an off-vs-on readout): `advect == 0.0` ⇒ the
+//! **Live colour (opt-in).** By default a particle's colour is frozen at seed time, so a video
+//! does not play through. [`refresh_field_particle_colors`] re-samples each particle's colour
+//! from its *origin cell* in the current source frame (the [`crate::fluid_mosaic`] live-refresh
+//! semantics): the video's colour at the particle's birthpoint is carried to wherever the
+//! particle has flowed, so the current frame plays through, displaced by the accumulated flow.
+//!
+//! Continuity identities (the off cases for an off-vs-on readout): `advect == 0.0` ⇒ the
 //! particles never move, so every frame renders the same initial grid (a posterised source).
-//! Frame zero is identical for any `advect` (the advance never runs at frame zero).
+//! Frame zero is identical for any `advect` (the advance never runs at frame zero). Refreshing
+//! colours from the seed frame is a no-op (the colour already came from it), so live colour is
+//! byte-identical until the source frame changes.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,8 +37,9 @@ use crate::vortex_field::steady_vortex_velocity;
 use crate::{ImageBufferF32, RenderError};
 
 /// Algorithm identifier for the CPU reference. Bump when the integration scheme, the field
-/// model, or the splat/render changes so stale caches/checkpoints invalidate.
-pub const FIELD_PARTICLES_ALGORITHM: &str = "field_particles_vortex_cpu_v1";
+/// model, or the splat/render changes so stale caches/checkpoints invalidate. `v2` adds the
+/// opt-in live-colour refresh (byte-identical to `v1` when colours are not refreshed).
+pub const FIELD_PARTICLES_ALGORITHM: &str = "field_particles_vortex_cpu_v2";
 
 /// Settings for the discrete-carrier particle advection.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -52,6 +61,11 @@ pub struct FieldParticleSettings {
     /// Weight of the fine detail octave relative to the steady big vortices (`0` = pure large
     /// vortices).
     pub detail: f32,
+    /// When `true`, each particle's colour is re-sampled from its origin cell in the current
+    /// source frame every frame (via [`refresh_field_particle_colors`]) so the video plays
+    /// through the flowing carrier. When `false` (default), colours stay frozen at seed time.
+    #[serde(default)]
+    pub live_color: bool,
     /// Seed for the deterministic field.
     pub seed: u64,
 }
@@ -65,6 +79,7 @@ impl Default for FieldParticleSettings {
             turbulence_scale: 0.008,
             turbulence_speed: 0.06,
             detail: 0.1,
+            live_color: false,
             seed: 0,
         }
     }
@@ -107,6 +122,9 @@ impl FieldParticleSettings {
 struct Particle {
     x: f32,
     y: f32,
+    /// The grid cell the particle was seeded from — the origin re-sampled for live colour.
+    home_x: u32,
+    home_y: u32,
     color: [f32; 4],
 }
 
@@ -143,6 +161,8 @@ pub fn initialize_field_particles(
             particles.push(Particle {
                 x: gx as f32,
                 y: gy as f32,
+                home_x: gx,
+                home_y: gy,
                 color,
             });
             gx += settings.spacing;
@@ -189,6 +209,20 @@ pub fn advance_field_particles(
     }
 
     Ok(())
+}
+
+/// Re-sample each particle's colour from its origin cell in the current source frame (the
+/// live-colour refresh — the [`crate::fluid_mosaic`] live-refresh semantics). Positions are
+/// untouched: only the colour each flowing particle carries updates, so the video plays
+/// through the carrier. A no-op against the seed frame (colours already came from it).
+pub fn refresh_field_particle_colors(field: &mut ParticleField, source: &ImageBufferF32) {
+    let max_x = source.width.saturating_sub(1);
+    let max_y = source.height.saturating_sub(1);
+    for particle in &mut field.particles {
+        let sx = particle.home_x.min(max_x);
+        let sy = particle.home_y.min(max_y);
+        particle.color = source.pixel(sx, sy).unwrap_or(particle.color);
+    }
 }
 
 /// Render the carrier: splat each particle as a `particle_size` square of its colour onto a
@@ -316,5 +350,30 @@ mod tests {
             render_field_particles(&a, settings).pixels,
             render_field_particles(&b, settings).pixels
         );
+    }
+
+    #[test]
+    fn refresh_against_seed_frame_is_a_no_op() {
+        // Colours already came from the seed frame, so refreshing against it changes nothing
+        // (the basis for live colour being byte-identical until the source frame moves).
+        let src = gradient(24, 24);
+        let settings = FieldParticleSettings::default();
+        let field = initialize_field_particles(&src, settings).expect("init");
+        let mut refreshed = field.clone();
+        refresh_field_particle_colors(&mut refreshed, &src);
+        assert_eq!(field, refreshed);
+    }
+
+    #[test]
+    fn refresh_updates_colour_from_the_current_frame() {
+        // A changed source frame ⇒ the particles pick up the new colour at their origin cell.
+        let seed = gradient(24, 24);
+        let settings = FieldParticleSettings::default();
+        let mut field = initialize_field_particles(&seed, settings).expect("init");
+        let before = render_field_particles(&field, settings);
+        let next = ImageBufferF32::from_fn(24, 24, |_, _| [0.9, 0.1, 0.4, 1.0]).expect("next");
+        refresh_field_particle_colors(&mut field, &next);
+        let after = render_field_particles(&field, settings);
+        assert_ne!(before.pixels, after.pixels, "live colour should track the new frame");
     }
 }

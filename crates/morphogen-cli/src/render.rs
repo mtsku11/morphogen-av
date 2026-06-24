@@ -17,8 +17,8 @@ use morphogen_render::{
     DispersionField, DispersionSettings,
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
     resort_fluid_mosaic_colors, render_fluid_mosaic, FluidMosaicSettings,
-    advance_field_particles, initialize_field_particles, render_field_particles,
-    FieldParticleSettings,
+    advance_field_particles, initialize_field_particles, refresh_field_particle_colors,
+    render_field_particles, FieldParticleSettings,
     fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings,
     analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
@@ -1234,6 +1234,12 @@ pub(crate) fn render_field_particles_sequence(
     for index in 0..request.frames {
         if index > 0 {
             advance_field_particles(&mut field, index as u32, request.settings)?;
+        }
+        // Live colour: each particle re-samples its origin cell from the current source frame
+        // (frames cycle if the render outlasts the clip) so the video plays through the flow.
+        if request.settings.live_color {
+            let current = load_image_f32(&source_frames[index % source_frames.len()])?;
+            refresh_field_particle_colors(&mut field, &current);
         }
         let rendered = render_field_particles(&field, request.settings);
         save_png(
