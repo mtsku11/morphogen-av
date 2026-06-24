@@ -386,6 +386,17 @@ self-sorting, hybrid "crisp tiles ride a fluid", uniform tile size.
   `--turbulence-scale` (vortex size), `--turbulence-speed` (detail drift), `--detail`
   (0 = pure big vortices), `--reinject` (lower = more spiralling, 0→1 smear→verbatim).
   Off cases unit-tested. Deferred variants:
-  optical-flow-driven, two-source A→B, a discrete carrier (tiles/particles on this field),
-  and Metal.
-- Next: a parity-gated Metal port for the fluid mosaic.
+  optical-flow-driven, two-source A→B, a discrete carrier (tiles/particles on this field).
+- **Parity-gated Metal port: Landed** (`fluid_advect.metal`, CLI `--backend metal`). A
+  `fluid_advect` compute kernel reproduces the steady curl-noise vortex field in MSL —
+  splitmix64 `ulong` hashing + 3D gradient (Perlin) noise on the proven
+  `coagulated_composite` hash precedent — plus the semi-Lagrangian gather with the manual
+  bilinear from `advect_feedback`. `time = frame_index · turbulence_speed` is computed
+  CPU-side and the seed is split lo/hi so the GPU matches the reference bit-for-bit. Parity
+  holds to ~2e-6 (integer hashing exact, float math with fast-math disabled), gated at 1e-5
+  (the flow-feedback manual-bilinear precedent, well under 1/255); the CLI runs the kernel
+  + CPU reference per frame and errors past `METAL_CPU_PARITY_EPSILON`.
+- **The fluid colour-sort mosaic stays CPU** (deliberate): it is a sequential particle sim
+  (neighbour-radius reductions, warmup iterations, quadtree) whose parallel reduction order
+  would not hold byte-parity with the sequential reference — a poor, parity-hostile Metal
+  target for little gain.

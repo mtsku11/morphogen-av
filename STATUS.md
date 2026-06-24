@@ -8,13 +8,29 @@ _Last updated: 2026-06-24_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **288 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **320 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Tree clean as of the experimental bitstream-datamosh commit. Manual-testing
   clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Faux-fluid dye advection — parity-gated Metal port (`fluid_advect.metal` + CLI
+  `--backend metal`).** The first deferred Metal step. A new `fluid_advect` compute kernel
+  reproduces the steady curl-noise vortex field in MSL — splitmix64 `ulong` hashing + 3D
+  gradient (Perlin) noise, on the proven `coagulated_composite` precedent — plus the
+  semi-Lagrangian gather with manual bilinear from `advect_feedback`. `time =
+  frame_index · turbulence_speed` is computed CPU-side and the seed split lo/hi so the GPU
+  matches bit-for-bit. **Parity holds to ~2e-6** vs `fluid_advect_frame_cpu` (integer
+  hashing exact, float math with fast-math disabled), gated at **1e-5** (the flow-feedback
+  manual-bilinear precedent, well under 1/255). `render-fluid-advect-sequence --backend
+  metal` runs the GPU kernel + CPU reference per frame and errors past
+  `METAL_CPU_PARITY_EPSILON`. End-to-end on a 96×72 testsrc2 clip: CPU-vs-Metal output
+  0.000–0.001/255 (byte-identical after PNG quantization), temporal delta 27.1/255 (the dye
+  flows). **The fluid colour-sort mosaic stays CPU** — a 1923-line sequential particle sim
+  whose parallel reduction order would not hold byte-parity (decided with the user).
+  Workspace 317 → 320 (+3). See [[faux-fluid-advect]].
 
 - **Fluid Colour-Sort Mosaic — steady-vortex flow mode (Slice 9, CPU + CLI).** The
   perfected faux-fluid vortex field, now driving the mosaic *tiles* as a new opt-in flow
@@ -56,8 +72,9 @@ _Last updated: 2026-06-24_
   ⇒ source; advect 0 + reinject 0 ⇒ hold previous). **Readout** (harp, advect 6 reinject
   0.08): output frame 0 = source (cross-delta 0.000), source-vs-fluid ~14.5/255 steady,
   within-sequence frame-delta 3.45/255 (continuously flowing). Workspace 282 → 287 (+5
-  tests). Deferred variants: optical-flow-driven, two-source A→B, a discrete carrier
-  (tiles/particles on this field), Metal. See [[faux-fluid-advect]].
+  tests). **Metal port now landed** (see top entry). Deferred variants: optical-flow-driven,
+  two-source A→B, a discrete carrier (tiles/particles on this field). See
+  [[faux-fluid-advect]].
 
 - **Fluid Colour-Sort Mosaic — faux-fluid turbulence (Slice 8, CPU + CLI).** Ported the
   *faux-fluid* shadertoy look. The analytic fluid field is a regular swirl lattice; with
