@@ -8,12 +8,33 @@ _Last updated: 2026-06-25_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **349 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **354 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **52 passing, 0 failing** (Swift shell + service tests).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — vector-remix tier (FFglitch MV sort/shuffle, deterministic; slice 1 CPU + CLI).**
+  The deterministic "family look" of FFglitch's motion-vector sort/shuffle, on the
+  optical-flow field rather than the codec bitstream (user chose this over an
+  FFglitch external dep or a pure-Rust MPEG-4 MV codec). The block-quantized flow
+  *is* a per-block MV grid (FFglitch's "vector" unit), so a remix is a **permutation
+  of that grid** before the parity-gated displace — pure flow→flow, **Metal free**.
+  `remix_block_vectors(flow, block_size, mode, seed)` (shares a factored-out
+  `block_mean_grid` with `quantize_flow_to_blocks`): `sort` reassigns block MVs by
+  descending magnitude (motion pools), `shuffle` is a seeded Fisher–Yates permutation
+  (motion scrambles); both preserve the motion-energy multiset. New id
+  `flow_reuse_datamosh_vector_remix_cpu_v1` via a 4th `datamosh_algorithm` arg
+  (`remix != None` + blocks ≥ 2 ⇒ most-specific). CLI `--vector-remix none|sort|shuffle
+  --remix-seed N` on `render-datamosh-sequence`. **Continuity:** `none` ⇒ byte-identical
+  to the block path; `block_size ≤ 1` ⇒ bloom. **Verified** (fixture, block 16, melt):
+  none-vs-sort cross-delta 0 → 70.9/255, none-vs-shuffle 0 → ~37 (non-monotonic
+  scramble), frame 0 identical (both B[0]), re-rendered sort byte-identical
+  (deterministic); frames Read — sort redistributes the displacement, shuffle scatters
+  it. +5 tests (render crate), workspace 349 → **354**, clippy clean. **Follow-up:
+  queue/SwiftUI exposure** (queue caller passes `VectorRemixMode::None` for now).
+  `docs/DATAMOSH_MILESTONE.md` updated.
 
 - **Controlled Datamosh — real bitstream motion transfer (experimental, non-deterministic).**
   "Swap Source A's motion onto Source B's content" — and, contrary to the original

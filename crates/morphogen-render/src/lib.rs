@@ -45,9 +45,9 @@ pub use datamosh::{
     block_motion_refreshes, datamosh_algorithm, datamosh_block_frame_cpu,
     datamosh_block_refresh_composite, datamosh_bloom_frame_cpu, datamosh_refresh_frame_cpu,
     datamosh_residual_flow, datamosh_residual_frame_cpu, is_datamosh_keyframe,
-    quantize_flow_to_blocks, reset_residual_in_refreshed_blocks, zero_flow,
-    DATAMOSH_BLOCK_ALGORITHM, DATAMOSH_BLOCK_REFRESH_ALGORITHM, DATAMOSH_BLOCK_RESIDUAL_ALGORITHM,
-    DATAMOSH_BLOOM_ALGORITHM,
+    quantize_flow_to_blocks, remix_block_vectors, reset_residual_in_refreshed_blocks, zero_flow,
+    VectorRemixMode, DATAMOSH_BLOCK_ALGORITHM, DATAMOSH_BLOCK_REFRESH_ALGORITHM,
+    DATAMOSH_BLOCK_RESIDUAL_ALGORITHM, DATAMOSH_BLOOM_ALGORITHM, DATAMOSH_VECTOR_REMIX_ALGORITHM,
 };
 pub use disperse::{
     advance_dispersion_field, disperse_composite_cpu, DispersionField, DispersionSettings,

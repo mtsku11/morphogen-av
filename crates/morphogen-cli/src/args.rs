@@ -12,7 +12,7 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    CoagulationFlowSource, StructureMode, CONVOLUTION_BLEND_ALGORITHM,
+    CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
     CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
@@ -317,6 +317,14 @@ pub(crate) enum Commands {
         /// blocks rot. `0` = no per-block refresh; needs block-size >= 2.
         #[arg(long, default_value_t = 0.0)]
         block_refresh_threshold: f32,
+        /// FFglitch-style motion-vector remix on the block-MV grid (block-size 2 or
+        /// more): `sort` reassigns block MVs by descending magnitude (motion pools),
+        /// `shuffle` permutes them by `--remix-seed` (motion scrambles). `none` = off.
+        #[arg(long, value_enum, default_value_t = CliVectorRemixMode::None)]
+        vector_remix: CliVectorRemixMode,
+        /// Seed for `--vector-remix shuffle` (deterministic permutation).
+        #[arg(long, default_value_t = 0)]
+        remix_seed: u64,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -1770,6 +1778,27 @@ impl From<CliRenderBackend> for RenderBackend {
         match value {
             CliRenderBackend::Cpu => Self::Cpu,
             CliRenderBackend::Metal => Self::Metal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliVectorRemixMode {
+    /// No remix — the block-quantized flow is used unchanged (off path).
+    #[default]
+    None,
+    /// Reassign block MVs in descending-magnitude order (motion pools coherently).
+    Sort,
+    /// Deterministic seeded permutation of block MVs (motion scrambles).
+    Shuffle,
+}
+
+impl From<CliVectorRemixMode> for VectorRemixMode {
+    fn from(value: CliVectorRemixMode) -> Self {
+        match value {
+            CliVectorRemixMode::None => Self::None,
+            CliVectorRemixMode::Sort => Self::Sort,
+            CliVectorRemixMode::Shuffle => Self::Shuffle,
         }
     }
 }

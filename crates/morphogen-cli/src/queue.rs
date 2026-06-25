@@ -2366,6 +2366,9 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             residual_gain,
             residual_decay,
             refresh_threshold: block_refresh_threshold,
+            // The queue job has no vector-remix field yet (CLI-only slice).
+            vector_remix: morphogen_render::VectorRemixMode::None,
+            remix_seed: 0,
             backend,
             max_frames: max_frames.map(|value| value as usize),
         })?;
@@ -2399,7 +2402,14 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 "audio_sample_count": timing.audio_sample_count
             },
             "datamosh": {
-                "algorithm": datamosh_algorithm(block_size, residual_gain, block_refresh_threshold),
+                // The queue job has no vector-remix field yet (CLI-only slice), so
+                // None preserves the existing block/residual/refresh id resolution.
+                "algorithm": datamosh_algorithm(
+                    block_size,
+                    residual_gain,
+                    block_refresh_threshold,
+                    morphogen_render::VectorRemixMode::None,
+                ),
                 "keyframe_interval": keyframe_interval,
                 "amount": amount,
                 "block_size": block_size,

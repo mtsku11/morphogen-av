@@ -24,7 +24,7 @@ use morphogen_render::{
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
     initialize_field_particles, initialize_fluid_mosaic, is_datamosh_keyframe,
     luma_specification_tone_map, luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu,
-    quantize_flow_to_blocks, read_flow_cache, read_flow_feedback_state,
+    quantize_flow_to_blocks, read_flow_cache, read_flow_feedback_state, remix_block_vectors,
     read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, refresh_field_particle_colors,
     refresh_fluid_mosaic_colors, render_field_particles, render_fluid_mosaic,
@@ -39,7 +39,8 @@ use morphogen_render::{
     FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor, GrainDescriptor,
     GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, ParticleField,
-    PoolSelectionWindow, RmsDisplacementEnvelope, TemporalCoherence, VideoVocoderSettings,
+    PoolSelectionWindow, RmsDisplacementEnvelope, TemporalCoherence, VectorRemixMode,
+    VideoVocoderSettings,
     FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS,
@@ -438,6 +439,8 @@ pub(crate) struct DatamoshSequenceRequest<'a> {
     pub(crate) residual_gain: f32,
     pub(crate) residual_decay: f32,
     pub(crate) refresh_threshold: f32,
+    pub(crate) vector_remix: VectorRemixMode,
+    pub(crate) remix_seed: u64,
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
 }
@@ -499,6 +502,10 @@ pub(crate) fn render_datamosh_sequence(
     // Per-block keep/drop refresh is active only with a positive threshold over
     // coarse blocks (threshold 0 ⇒ byte-identical to the block/residual path).
     let refresh_active = request.refresh_threshold > 0.0 && request.block_size >= 2;
+    // Vector remix permutes the block-MV grid before advection; active only with a
+    // non-None mode over coarse blocks (None ⇒ byte-identical to the block path). It
+    // computes `effective` itself, so it takes precedence over residual.
+    let remix_active = request.vector_remix != VectorRemixMode::None && request.block_size >= 2;
 
     let mut previous_output: Option<ImageBufferF32> = None;
     let mut previous_modulator: Option<ImageBufferF32> = None;
@@ -535,7 +542,17 @@ pub(crate) fn render_datamosh_sequence(
                 // re-injected (also a pure CPU flow transform). The displace that
                 // follows is the existing parity-gated kernel on either backend, so
                 // Metal stays free.
-                let effective = if residual_active {
+                let effective = if remix_active {
+                    // FFglitch-style MV remix: permute the block-mean grid (sort by
+                    // magnitude / seeded shuffle) before the parity-gated displace.
+                    // A pure flow→flow transform like quantize, so Metal stays free.
+                    remix_block_vectors(
+                        &flow,
+                        request.block_size,
+                        request.vector_remix,
+                        request.remix_seed,
+                    )?
+                } else if residual_active {
                     let accum = accumulated_residual
                         .take()
                         .unwrap_or(zero_flow(carrier.width, carrier.height)?);
@@ -599,7 +616,7 @@ pub(crate) fn render_datamosh_sequence(
     }
 
     println!(
-        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, {:?}) from {} moshing {} to {}",
+        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, vector-remix {:?} seed {}, {:?}) from {} moshing {} to {}",
         frame_count,
         request.keyframe_interval,
         request.amount,
@@ -607,6 +624,8 @@ pub(crate) fn render_datamosh_sequence(
         request.residual_gain,
         request.residual_decay,
         request.refresh_threshold,
+        request.vector_remix,
+        request.remix_seed,
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),

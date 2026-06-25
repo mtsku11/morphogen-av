@@ -33,7 +33,7 @@ This file is the canonical entry point for agents (auto-loaded each session).
 ## Everyday Commands
 
 ```sh
-cargo test --workspace          # Rust tests (baseline: 349 passing across 7 crates)
+cargo test --workspace          # Rust tests (baseline: 354 passing across 7 crates)
 cargo build --workspace         # build all crates
 cargo run -p morphogen-cli -- <subcommand>   # engine validation path
 swift build && swift test       # macOS SwiftUI shell + its service tests

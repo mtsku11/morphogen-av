@@ -314,6 +314,57 @@ smear only at the square's current position. Cross-delta grows **0 → 31.6/255*
 30 frames (frame 0 identical, both `B[0]`); the Metal refresh path renders (gate
 passes ⇒ Metal free).
 
+## Vector-remix tier (FFglitch MV sort/shuffle, deterministic) — LANDED (slice 1: CPU + CLI)
+
+The deterministic "family look" of FFglitch's motion-vector sort/shuffle, **on the
+optical-flow field rather than the codec bitstream** (chosen over an FFglitch
+external dependency or a pure-Rust MPEG-4 MV codec — see the user decision). The
+block-quantized flow *is* a per-block motion-vector grid (the same grid the block
+tier builds), exactly FFglitch's "vector" unit, so a remix is a **permutation of
+that block-MV grid** before the advection — pure flow→flow, so the displace stays
+the parity-gated kernel and **Metal comes free again** (no new kernel).
+
+`remix_block_vectors(flow, block_size, mode, seed)` (sharing a factored-out
+`block_mean_grid` with `quantize_flow_to_blocks`):
+- `--vector-remix sort` ⇒ reassign block MVs in **descending-magnitude** order along
+  the raster scan (top-left blocks take the strongest motion) ⇒ motion pools
+  coherently across the frame.
+- `--vector-remix shuffle` (`--remix-seed`) ⇒ a deterministic seeded Fisher–Yates
+  permutation ⇒ motion scrambles between blocks.
+- Both are **pure permutations** of the existing block MVs (no new magnitudes
+  invented), so total motion energy is preserved — only its spatial assignment moves.
+
+- **Algorithm id:** `datamosh_algorithm(block_size, residual_gain, refresh_threshold,
+  remix_mode)` gains a 4th arg; `remix_mode != None` **and** blocks ≥ 2px ⇒
+  `flow_reuse_datamosh_vector_remix_cpu_v1` (most-specific, takes precedence). `none`
+  or `block_size ≤ 1` ⇒ the prior precedence unchanged. In the render loop the remix
+  computes `effective` itself (precedence over residual; refresh can still composite).
+- **Continuity:** `--vector-remix none` ⇒ byte-identical to the block path;
+  `block_size ≤ 1` ⇒ the bloom path (remix is a no-op without macroblocks).
+- **Scope:** slice 1 is CPU + CLI on `render-datamosh-sequence` (the proven inner
+  core). Queue/SwiftUI exposure is the follow-up (the queue caller passes
+  `VectorRemixMode::None`, so existing jobs keep their id).
+
+### Acceptance criteria (vector remix)
+
+1. **Block continuity.** `--vector-remix none` ⇒ byte-identical to the block path.
+2. **Bloom continuity.** `block_size ≤ 1` ⇒ the bloom path regardless of mode.
+3. **Permutation.** the remixed block MVs are exactly the original block MVs
+   reordered (multiset preserved); `sort` is descending-magnitude.
+4. **Determinism.** same seed ⇒ byte-identical; a different seed differs.
+5. No `unwrap()` in library code.
+
+### Verification (off-vs-on)
+
+Datamosh fixture (bouncing-square A over a static stripe+dot B), block 16, full
+melt. `none` vs `sort` cross-delta grows **0 → 70.9/255** over 8 frames (frame 0
+identical, both `B[0]`); `none` vs `shuffle` (seed 42) grows **0 → ~37/255**
+(non-monotonic — a scramble, not a pooling). Re-rendered `sort` byte-identical
+(deterministic). Frames Read: `sort` redistributes the stripe displacement (the
+strong-motion block reassigned toward the top-left), `shuffle` scatters it into a
+different layout. The synthetic fixture concentrates motion in one band so the look
+is subtle; a real moving clip with motion spread across the frame shows it stronger.
+
 ## Real bitstream mosh — P-frame bloom + keyframe removal — LANDED (experimental, non-deterministic)
 
 The authentic codec-artifact tier, shipped as a **standalone experimental CLI**
@@ -405,10 +456,15 @@ guards this with an `avi_dimensions` equality check).
 
 ## Deferred
 
-- **Real bitstream mosh — richer FFglitch vocabulary**: vector sort/shuffle/fluid
-  remix of the motion field stays deferred (genuinely needs FFglitch-class
-  packet/vector tooling, unlike motion-transfer which was pure chunk splicing). Same
-  carve-out (see `/memory/datamosh-real-vs-simulated.md`).
+- **Vector-remix — queue/SwiftUI exposure**: slice 1 is CPU + CLI; threading
+  `vector_remix`/`remix_seed` through the persisted `frame_sequence_datamosh` job +
+  queue-add/run + the Render panel is the follow-up slice (the queue caller currently
+  passes `VectorRemixMode::None`).
+- **Real bitstream MV remix (the *true* codec artifact)**: sort/shuffle/fluid applied
+  to the actual MPEG-4 motion vectors (not the optical-flow approximation the
+  deterministic vector-remix tier delivers) genuinely needs FFglitch-class
+  packet/vector tooling or a pure-Rust MPEG-4 MV codec — deliberately not pursued
+  (see the vector-remix user decision + `/memory/datamosh-real-vs-simulated.md`).
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.
 - **Disk checkpoint / resume** — the RGBA32F state serializers exist
