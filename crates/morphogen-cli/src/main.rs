@@ -317,6 +317,8 @@ fn run() -> Result<(), CliError> {
             operation,
             p_frame_index,
             duplicate_count,
+            carrier,
+            carrier_keyframes,
         } => datamosh_bitstream(DatamoshBitstreamRequest {
             input: &input,
             output_dir: &output_dir,
@@ -324,6 +326,8 @@ fn run() -> Result<(), CliError> {
             operation,
             p_frame_index,
             duplicate_count,
+            carrier: carrier.as_deref(),
+            carrier_keyframes,
         }),
         Commands::RenderConvolutionalBlendSequence {
             modulator_dir,

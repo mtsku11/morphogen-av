@@ -47,6 +47,19 @@ pub fn encode_datamosh_avi(
     ffmpeg::run_command_status(&spec)
 }
 
+/// Encode to the P-frame-only datamosh substrate, forced to `width`x`height` (the
+/// motion-transfer modulator is scaled to the carrier's macroblock grid).
+pub fn encode_datamosh_avi_scaled(
+    input: impl AsRef<Path>,
+    output_avi: impl AsRef<Path>,
+    fps: f64,
+    width: u32,
+    height: u32,
+) -> Result<(), MediaError> {
+    let spec = ffmpeg::encode_datamosh_avi_command_scaled(input, output_avi, fps, width, height);
+    ffmpeg::run_command_status(&spec)
+}
+
 /// Decode a (possibly mangled) AVI to a `frame_%06d.png` sequence.
 pub fn decode_avi_frames(
     input_avi: impl AsRef<Path>,

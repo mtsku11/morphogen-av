@@ -670,12 +670,18 @@ pub(crate) struct DatamoshBitstreamRequest<'a> {
     pub(crate) operation: CliDatamoshBitstreamOperation,
     pub(crate) p_frame_index: u32,
     pub(crate) duplicate_count: u32,
+    /// `motion-transfer` only: the carrier (Source B) whose I-frame seeds the output.
+    pub(crate) carrier: Option<&'a Path>,
+    /// `motion-transfer` only: leading carrier frames kept before the modulator's motion.
+    pub(crate) carrier_keyframes: u32,
 }
 
 const DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM: &str =
     "datamosh_bitstream_pframe_dup_experimental_v1";
 const DATAMOSH_BITSTREAM_REMOVE_KEYFRAME_ALGORITHM: &str =
     "datamosh_bitstream_remove_keyframe_experimental_v1";
+const DATAMOSH_BITSTREAM_MOTION_TRANSFER_ALGORITHM: &str =
+    "datamosh_bitstream_motion_transfer_experimental_v1";
 
 #[derive(Serialize)]
 struct DatamoshBitstreamSidecar {
@@ -683,11 +689,16 @@ struct DatamoshBitstreamSidecar {
     /// Always false: ffmpeg's MPEG-4 codec makes this output non-reproducible.
     deterministic: bool,
     input: String,
+    /// The carrier (Source B) clip for `motion-transfer`; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    carrier: Option<String>,
     fps: f64,
     codec: String,
     operation: String,
     p_frame_index: u32,
     duplicate_count: u32,
+    /// Leading carrier frames kept before the modulator's motion (`motion-transfer`).
+    carrier_keyframes: u32,
     p_frames_available: u32,
     ffmpeg_version: String,
     note: String,
@@ -701,20 +712,62 @@ struct DatamoshBitstreamSidecar {
 /// not bit-reproducible (it depends on ffmpeg's codec).
 pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Result<(), CliError> {
     fs::create_dir_all(request.output_dir)?;
-    let encoded = request.output_dir.join("encoded.avi");
     let moshed = request.output_dir.join("moshed.avi");
 
-    morphogen_media::encode_datamosh_avi(request.input, &encoded, request.fps)?;
-    let encoded_bytes = fs::read(&encoded)?;
-    let p_frames_available = morphogen_media::count_p_frames(&encoded_bytes)?;
-    let moshed_bytes = match request.operation {
-        CliDatamoshBitstreamOperation::PframeDuplicate => morphogen_media::duplicate_p_frame(
-            &encoded_bytes,
-            request.p_frame_index,
-            request.duplicate_count,
-        )?,
-        CliDatamoshBitstreamOperation::RemoveKeyframe => {
-            morphogen_media::remove_leading_keyframe(&encoded_bytes)?
+    // Encode the substrate(s), perform the chunk surgery, and report how many
+    // P-frames the operation had to work with. For motion-transfer the carrier
+    // (Source B) seeds the I-frame and the modulator (`input`, Source A), scaled to
+    // the carrier's grid, supplies the P-frame motion.
+    let (moshed_bytes, p_frames_available, carrier_label) = match request.operation {
+        CliDatamoshBitstreamOperation::PframeDuplicate
+        | CliDatamoshBitstreamOperation::RemoveKeyframe => {
+            let encoded = request.output_dir.join("encoded.avi");
+            morphogen_media::encode_datamosh_avi(request.input, &encoded, request.fps)?;
+            let encoded_bytes = fs::read(&encoded)?;
+            let available = morphogen_media::count_p_frames(&encoded_bytes)?;
+            let bytes = match request.operation {
+                CliDatamoshBitstreamOperation::PframeDuplicate => {
+                    morphogen_media::duplicate_p_frame(
+                        &encoded_bytes,
+                        request.p_frame_index,
+                        request.duplicate_count,
+                    )?
+                }
+                _ => morphogen_media::remove_leading_keyframe(&encoded_bytes)?,
+            };
+            let _ = fs::remove_file(&encoded);
+            (bytes, available, None)
+        }
+        CliDatamoshBitstreamOperation::MotionTransfer => {
+            let carrier = request.carrier.ok_or_else(|| {
+                CliError::Message(
+                    "motion-transfer requires --carrier <Source B> (the clip whose appearance is kept)"
+                        .to_string(),
+                )
+            })?;
+            let carrier_avi = request.output_dir.join("carrier.avi");
+            let modulator_avi = request.output_dir.join("modulator.avi");
+            morphogen_media::encode_datamosh_avi(carrier, &carrier_avi, request.fps)?;
+            let carrier_bytes = fs::read(&carrier_avi)?;
+            let (w, h) = morphogen_media::avi_dimensions(&carrier_bytes)?;
+            // Scale the modulator to the carrier's macroblock grid before splicing.
+            morphogen_media::encode_datamosh_avi_scaled(
+                request.input,
+                &modulator_avi,
+                request.fps,
+                w,
+                h,
+            )?;
+            let modulator_bytes = fs::read(&modulator_avi)?;
+            let available = morphogen_media::count_p_frames(&modulator_bytes)?;
+            let bytes = morphogen_media::transfer_motion(
+                &carrier_bytes,
+                &modulator_bytes,
+                request.carrier_keyframes,
+            )?;
+            let _ = fs::remove_file(&carrier_avi);
+            let _ = fs::remove_file(&modulator_avi);
+            (bytes, available, Some(carrier.to_string_lossy().to_string()))
         }
     };
     fs::write(&moshed, &moshed_bytes)?;
@@ -726,11 +779,13 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
         algorithm: algorithm.to_string(),
         deterministic: false,
         input: request.input.to_string_lossy().to_string(),
+        carrier: carrier_label,
         fps: request.fps,
         codec: "mpeg4".to_string(),
         operation: operation.to_string(),
         p_frame_index: request.p_frame_index,
         duplicate_count: request.duplicate_count,
+        carrier_keyframes: request.carrier_keyframes,
         p_frames_available,
         ffmpeg_version: morphogen_media::ffmpeg_version().unwrap_or_default(),
         note: "Experimental real bitstream datamosh: output is NOT bit-reproducible \
@@ -740,10 +795,6 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
     };
     let sidecar_path = request.output_dir.join("datamosh_bitstream.json");
     fs::write(&sidecar_path, serde_json::to_vec_pretty(&sidecar)?)?;
-
-    // The encoded source AVI is a disposable intermediate; the moshed AVI is itself
-    // a playable deliverable, so it is kept alongside the decoded frames.
-    let _ = fs::remove_file(&encoded);
 
     match request.operation {
         CliDatamoshBitstreamOperation::PframeDuplicate => {
@@ -762,6 +813,14 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
                 request.output_dir.display()
             );
         }
+        CliDatamoshBitstreamOperation::MotionTransfer => {
+            println!(
+                "datamosh-bitstream (EXPERIMENTAL, non-deterministic): transferred {} P-frames of modulator motion onto the carrier (kept {} carrier frame(s)) -> {}",
+                p_frames_available,
+                request.carrier_keyframes,
+                request.output_dir.display()
+            );
+        }
     }
     Ok(())
 }
@@ -772,6 +831,9 @@ fn datamosh_bitstream_algorithm(operation: CliDatamoshBitstreamOperation) -> &'s
         CliDatamoshBitstreamOperation::RemoveKeyframe => {
             DATAMOSH_BITSTREAM_REMOVE_KEYFRAME_ALGORITHM
         }
+        CliDatamoshBitstreamOperation::MotionTransfer => {
+            DATAMOSH_BITSTREAM_MOTION_TRANSFER_ALGORITHM
+        }
     }
 }
 
@@ -779,6 +841,7 @@ fn datamosh_bitstream_operation_name(operation: CliDatamoshBitstreamOperation) -
     match operation {
         CliDatamoshBitstreamOperation::PframeDuplicate => "pframe_duplicate",
         CliDatamoshBitstreamOperation::RemoveKeyframe => "remove_keyframe",
+        CliDatamoshBitstreamOperation::MotionTransfer => "motion_transfer",
     }
 }
 

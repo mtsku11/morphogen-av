@@ -111,6 +111,32 @@ pub fn encode_datamosh_avi_command(
     output_avi: impl AsRef<Path>,
     fps: f64,
 ) -> CommandSpec {
+    encode_datamosh_avi_command_sized(input, output_avi, fps, None)
+}
+
+/// Like [`encode_datamosh_avi_command`] but forces the output to `width`x`height`.
+/// Motion-transfer splices one clip's P-frames onto another's I-frame, so both must
+/// share a macroblock grid — the modulator is scaled to the carrier's dimensions.
+pub fn encode_datamosh_avi_command_scaled(
+    input: impl AsRef<Path>,
+    output_avi: impl AsRef<Path>,
+    fps: f64,
+    width: u32,
+    height: u32,
+) -> CommandSpec {
+    encode_datamosh_avi_command_sized(input, output_avi, fps, Some((width, height)))
+}
+
+fn encode_datamosh_avi_command_sized(
+    input: impl AsRef<Path>,
+    output_avi: impl AsRef<Path>,
+    fps: f64,
+    size: Option<(u32, u32)>,
+) -> CommandSpec {
+    let vf = match size {
+        Some((w, h)) => format!("scale={w}:{h},fps={fps}"),
+        None => format!("fps={fps}"),
+    };
     CommandSpec::new(
         "ffmpeg",
         vec![
@@ -119,7 +145,7 @@ pub fn encode_datamosh_avi_command(
             input.as_ref().to_string_lossy().to_string(),
             "-an".to_string(),
             "-vf".to_string(),
-            format!("fps={fps}"),
+            vf,
             "-c:v".to_string(),
             "mpeg4".to_string(),
             "-q:v".to_string(),
@@ -250,6 +276,15 @@ mod tests {
         assert!(spec.args.contains(&"-sc_threshold".to_string()));
         assert!(spec.args.contains(&"fps=24".to_string()));
         assert!(spec.args.iter().any(|arg| arg.ends_with("out.avi")));
+    }
+
+    #[test]
+    fn datamosh_encode_command_scaled_forces_common_dimensions() {
+        let spec = encode_datamosh_avi_command_scaled("in.mov", "out.avi", 24.0, 128, 96);
+
+        assert!(spec.args.contains(&"mpeg4".to_string()));
+        // The scale filter precedes the fps filter so both clips share a grid.
+        assert!(spec.args.contains(&"scale=128:96,fps=24".to_string()));
     }
 
     #[test]

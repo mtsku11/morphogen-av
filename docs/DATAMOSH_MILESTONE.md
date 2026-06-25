@@ -365,12 +365,50 @@ digits smear into macroblock glitches, blocky codec decay scatters across the fr
 frame-to-frame delta **5.982 → 4.081 /255** (repeated identical-motion frames change
 less per step than normal motion).
 
+## Real bitstream mosh — motion transfer — LANDED (experimental, non-deterministic)
+
+The classic "swap A's motion onto B's content" mosh, and — contrary to the
+original "likely FFglitch" guess — achievable with the **same pure-Rust AVI chunk
+surgery**, no FFglitch. Both clips are encoded to the P-frame-only MPEG-4
+substrate; `avi.rs::transfer_motion` keeps the **carrier**'s (Source B) leading
+I-frame (its appearance) and then replays the **modulator**'s (Source A) P-frames
+(its motion vectors + residuals), so B's pixels are pushed around by motion that
+never belonged to them. The carrier supplies the rebuilt headers (output inherits
+its dimensions + `idx1` convention), so the modulator is encoded **scaled to the
+carrier's size** (`encode_datamosh_avi_scaled`) — the macroblock grids must match,
+or the spliced P-frames address a grid that no longer exists (`transfer_motion`
+guards this with an `avi_dimensions` equality check).
+
+- **CLI:** `datamosh-bitstream <MODULATOR> <OUT> --operation motion-transfer
+  --carrier <CARRIER> [--carrier-keyframes N]`. For this op the positional `input`
+  is the modulator (Source A, motion donor); `--carrier` is Source B. Missing
+  `--carrier` is a clear error. `--carrier-keyframes` (default `1`) keeps that many
+  leading carrier frames before the modulator's motion takes over (`1` = pure
+  transfer = just the I-frame).
+- **Algorithm id:** `datamosh_bitstream_motion_transfer_experimental_v1`. The
+  sidecar records both `input` (modulator) and `carrier`, `carrier_keyframes`, and
+  the usual `deterministic: false` + ffmpeg version.
+- **Carve-out:** identical to P-frame bloom / keyframe removal — the surgery is
+  deterministic + unit-tested (5 new `avi.rs` tests: splice order, carrier-keyframes
+  retention, dimension-mismatch + no-P-frame rejection, `avi_dimensions`), but the
+  decoded look depends on the external MPEG-4 codec, so it lives outside the render
+  graph (no queue/SwiftUI/parity).
+- **Verification (off-vs-on, look check).** Modulator A = `testsrc2` (strong,
+  varied motion), carrier B = `mandelbrot` (a recognizable fractal), both 160×120
+  @ 24fps, `--operation motion-transfer --carrier mandelbrot.mp4`. Frame 1 of the
+  output is **byte-identical to the carrier** (the I-frame seed; cross-delta
+  0.000); subsequent frames show the fractal's palette dragged and smeared by
+  testsrc2's macroblock motion (testsrc2's moving structures bleed in as the
+  vectors carve B's content). Frame-to-frame delta **8.83/255** (vs the plain
+  carrier transcode's 3.94 — A's motion is more energetic than B's gentle zoom).
+  Read-confirmed: B's appearance, A's motion.
+
 ## Deferred
 
-- **Real bitstream mosh — further ops**: motion-transfer (swap A's vectors into B
-  — likely FFglitch). Same carve-out; P-frame bloom and leading-keyframe removal
-  are the pure-Rust AVI surgery ops landed so far. The richer FFglitch vocabulary
-  (sort/shuffle/fluid) stays deferred (see `/memory/datamosh-real-vs-simulated.md`).
+- **Real bitstream mosh — richer FFglitch vocabulary**: vector sort/shuffle/fluid
+  remix of the motion field stays deferred (genuinely needs FFglitch-class
+  packet/vector tooling, unlike motion-transfer which was pure chunk splicing). Same
+  carve-out (see `/memory/datamosh-real-vs-simulated.md`).
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.
 - **Disk checkpoint / resume** — the RGBA32F state serializers exist

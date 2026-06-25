@@ -8,12 +8,34 @@ _Last updated: 2026-06-25_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **343 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **349 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **52 passing, 0 failing** (Swift shell + service tests).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — real bitstream motion transfer (experimental, non-deterministic).**
+  "Swap Source A's motion onto Source B's content" — and, contrary to the original
+  "likely FFglitch" guess, done with the **same pure-Rust AVI chunk surgery**.
+  `avi.rs::transfer_motion` keeps the carrier's (B) leading I-frame and replays the
+  modulator's (A) P-frames, so B's pixels are pushed by motion that never belonged
+  to them. The carrier supplies the rebuilt headers, so the modulator is encoded
+  **scaled to the carrier's dimensions** (`encode_datamosh_avi_scaled`); a new
+  `avi_dimensions` equality guard rejects mismatched macroblock grids. CLI:
+  `datamosh-bitstream <MODULATOR> <OUT> --operation motion-transfer --carrier <B>
+  [--carrier-keyframes N]` (default 1 = pure transfer = just the I-frame). Algorithm
+  id `datamosh_bitstream_motion_transfer_experimental_v1`; sidecar records both
+  inputs + `carrier_keyframes` + `deterministic: false`. Same carve-out as the other
+  bitstream ops (surgery deterministic + unit-tested, decoded look codec-dependent,
+  outside the render graph). **Verified** (testsrc2 motion → mandelbrot carrier,
+  160×120): output frame 1 byte-identical to the carrier (I-frame seed, cross-delta
+  0.000), then the fractal smears under testsrc2's macroblock motion (its moving
+  structures bleed in); frame-delta 8.83/255 vs the plain carrier's 3.94 — Read-
+  confirmed B's appearance + A's motion. +6 tests (5 avi splice/guard, 1 ffmpeg
+  scaled-encode), workspace 343 → **349**, clippy clean. `docs/DATAMOSH_MILESTONE.md`
+  updated (Deferred → Landed). **Remaining datamosh deferrals: richer FFglitch vector
+  remix (genuinely FFglitch-class), reusable flow sidecars, disk resume, presets.**
 
 - **Datamosh visual-regression contact sheet (tooling).**
   `scripts/datamosh-contact-sheet.py` renders every named destructive datamosh

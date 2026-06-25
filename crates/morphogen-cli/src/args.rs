@@ -328,15 +328,18 @@ pub(crate) enum Commands {
     /// is NOT bit-reproducible (depends on ffmpeg's codec); this path lives outside
     /// the deterministic render graph by design.
     DatamoshBitstream {
-        /// Input video (any ffmpeg-decodable container; provides the motion).
+        /// Input video (any ffmpeg-decodable container). For `pframe-duplicate` /
+        /// `remove-keyframe` this is the clip to mosh; for `motion-transfer` it is
+        /// the MODULATOR (Source A, the motion donor) and `--carrier` is the carrier.
         input: PathBuf,
         /// Output directory for the decoded `frame_%06d.png` sequence.
         output_dir: PathBuf,
         /// Frame rate to encode/decode at.
         #[arg(long, default_value_t = 24.0)]
         fps: f64,
-        /// Bitstream operation: duplicate a P-frame for bloom, or remove the leading
-        /// keyframe so the decoder starts from prediction data.
+        /// Bitstream operation: duplicate a P-frame for bloom, remove the leading
+        /// keyframe so the decoder starts from prediction data, or transfer the
+        /// modulator's motion onto the carrier (needs `--carrier`).
         #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamOperation::PframeDuplicate)]
         operation: CliDatamoshBitstreamOperation,
         /// Which P-frame to bloom (0-based among P-frames; 0 = the first P-frame).
@@ -345,6 +348,15 @@ pub(crate) enum Commands {
         /// Extra copies of that P-frame to insert; `0` = a plain transcode (off).
         #[arg(long, default_value_t = 0)]
         duplicate_count: u32,
+        /// `motion-transfer` only: the CARRIER (Source B) whose appearance is kept.
+        /// Its leading I-frame seeds the output; the modulator (`input`) supplies the
+        /// motion. Scaled to the carrier's dimensions before splicing.
+        #[arg(long)]
+        carrier: Option<PathBuf>,
+        /// `motion-transfer` only: how many leading carrier frames to keep before the
+        /// modulator's motion takes over. `1` = just the I-frame (pure transfer).
+        #[arg(long, default_value_t = 1)]
+        carrier_keyframes: u32,
     },
     /// Render a convolutional AV blend sequence: each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved
@@ -1437,6 +1449,7 @@ pub(crate) enum CliDatamoshBitstreamOperation {
     #[default]
     PframeDuplicate,
     RemoveKeyframe,
+    MotionTransfer,
 }
 
 impl From<CliWindowFunction> for WindowFunction {
