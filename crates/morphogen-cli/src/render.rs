@@ -497,6 +497,9 @@ pub(crate) fn render_datamosh_sequence(
     request: DatamoshSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     let settings = resolve_datamosh_settings(&request);
+    if let Some(note) = datamosh_preset_resolution_note(&request, &settings) {
+        println!("{note}");
+    }
     if !settings.amount.is_finite() || settings.amount < 0.0 {
         return Err(CliError::Message(
             "amount must be finite and non-negative".to_string(),
@@ -844,17 +847,7 @@ impl DatamoshSequenceSettings {
 pub(crate) fn resolve_datamosh_settings(
     request: &DatamoshSequenceRequest<'_>,
 ) -> DatamoshSequenceSettings {
-    let custom = DatamoshSequenceSettings {
-        keyframe_interval: request.keyframe_interval,
-        amount: request.amount,
-        block_size: request.block_size,
-        residual_gain: request.residual_gain,
-        residual_decay: request.residual_decay,
-        refresh_threshold: request.refresh_threshold,
-        vector_remix: vector_remix_name(request.vector_remix).to_string(),
-        remix_seed: request.remix_seed,
-        preset: request.preset,
-    };
+    let custom = datamosh_custom_settings(request);
     match request.preset {
         DatamoshPreset::Custom => custom,
         DatamoshPreset::CodecBloom => DatamoshSequenceSettings {
@@ -902,6 +895,54 @@ pub(crate) fn resolve_datamosh_settings(
             preset: request.preset,
         },
     }
+}
+
+pub(crate) fn datamosh_custom_settings(
+    request: &DatamoshSequenceRequest<'_>,
+) -> DatamoshSequenceSettings {
+    DatamoshSequenceSettings {
+        keyframe_interval: request.keyframe_interval,
+        amount: request.amount,
+        block_size: request.block_size,
+        residual_gain: request.residual_gain,
+        residual_decay: request.residual_decay,
+        refresh_threshold: request.refresh_threshold,
+        vector_remix: vector_remix_name(request.vector_remix).to_string(),
+        remix_seed: request.remix_seed,
+        preset: request.preset,
+    }
+}
+
+pub(crate) fn datamosh_preset_resolution_note(
+    request: &DatamoshSequenceRequest<'_>,
+    resolved: &DatamoshSequenceSettings,
+) -> Option<String> {
+    if matches!(request.preset, DatamoshPreset::Custom) {
+        return None;
+    }
+    let explicit = datamosh_custom_settings(request);
+    let overridden = explicit.keyframe_interval != resolved.keyframe_interval
+        || explicit.amount != resolved.amount
+        || explicit.block_size != resolved.block_size
+        || explicit.residual_gain != resolved.residual_gain
+        || explicit.residual_decay != resolved.residual_decay
+        || explicit.refresh_threshold != resolved.refresh_threshold
+        || explicit.vector_remix != resolved.vector_remix
+        || explicit.remix_seed != resolved.remix_seed;
+    overridden.then(|| {
+        format!(
+            "datamosh preset '{}' resolved to keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, vector-remix {} seed {}; explicit datamosh knobs are ignored unless the preset uses them. Use --preset custom for manual control.",
+            datamosh_preset_label(request.preset),
+            resolved.keyframe_interval,
+            resolved.amount,
+            resolved.block_size,
+            resolved.residual_gain,
+            resolved.residual_decay,
+            resolved.refresh_threshold,
+            resolved.vector_remix,
+            resolved.remix_seed
+        )
+    })
 }
 
 pub(crate) fn vector_remix_name(mode: VectorRemixMode) -> &'static str {

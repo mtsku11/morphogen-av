@@ -289,11 +289,11 @@ struct RenderPanelView: View {
             .pickerStyle(.segmented)
             .frame(width: 220)
 
-            Picker("Iterations", selection: $state.feedbackIterations) {
-              Text("1").tag(1)
+            LabeledContent("Feedback Passes") {
+              Text("1")
+                .foregroundStyle(.secondary)
             }
-            .pickerStyle(.menu)
-            .frame(width: 100)
+            .frame(width: 130)
 
             Picker("Output", selection: $state.feedbackOutputBitDepth) {
               ForEach(FeedbackOutputBitDepthOption.allCases) { bitDepth in

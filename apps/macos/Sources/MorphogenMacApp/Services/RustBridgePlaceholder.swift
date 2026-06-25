@@ -100,6 +100,20 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultShowcasePreviewOutputURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-showcase-preview",
+      isDirectory: true
+    )
+  }
+
+  static func defaultEffectPreviewOutputRootURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-effect-preview",
+      isDirectory: true
+    )
+  }
+
   static func defaultVideoAudioRouteRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-video-audio-route-queue.json"
@@ -136,6 +150,29 @@ enum RustBridgePlaceholder {
       outputURL.path
     ]
     return try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
+  }
+
+  static func runShowcasePreview(
+    request: ShowcaseRenderCommandRequest
+  ) throws -> ShowcaseRenderCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    let result = try runCommand(
+      arguments: try renderShowcaseArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let mp4URL = request.encodeMP4
+      ? request.outputDirectoryURL.appendingPathComponent("showcase.mp4")
+      : nil
+    return ShowcaseRenderCommandResult(
+      outputDirectoryURL: request.outputDirectoryURL,
+      frameDirectoryURL: request.outputDirectoryURL.appendingPathComponent(
+        "frames",
+        isDirectory: true
+      ),
+      contactSheetURL: request.outputDirectoryURL.appendingPathComponent("contact_sheet.png"),
+      mp4URL: mp4URL,
+      commandSummary: result.summary
+    )
   }
 
   static func runQueuedFrameSequenceRender(
@@ -1508,6 +1545,60 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  static func renderShowcaseArguments(
+    request: ShowcaseRenderCommandRequest
+  ) throws -> [String] {
+    guard request.framesPerEffect > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase frames per effect must be greater than zero"
+      )
+    }
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase frame rate must be a positive finite number"
+      )
+    }
+    guard request.granularGrainSize > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase granular grain size must be greater than zero"
+      )
+    }
+    guard request.seed >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase seed must be greater than or equal to zero"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "render-showcase",
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputDirectoryURL.path,
+      "--intensity",
+      request.intensity.cliValue,
+      "--frames-per-effect",
+      String(request.framesPerEffect),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--granular-grain-size",
+      String(request.granularGrainSize),
+      "--seed",
+      String(request.seed),
+      "--backend",
+      request.backend.cliValue
+    ]
+    if !request.encodeMP4 {
+      arguments.append("--no-mp4")
+    }
+    return arguments
+  }
+
   static func extractMediaProxies(
     request: MediaProxyExtractionCommandRequest
   ) throws -> MediaProxyExtractionCommandResult {
@@ -1924,6 +2015,27 @@ struct FeedbackSequenceRenderQueueCommandRequest {
 struct FeedbackSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
+  let commandSummary: String
+}
+
+struct ShowcaseRenderCommandRequest {
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputDirectoryURL: URL
+  let intensity: ShowcaseIntensityOption
+  let framesPerEffect: Int
+  let frameRate: Double
+  let granularGrainSize: Int
+  let seed: Int
+  let backend: FeedbackRenderBackendOption
+  let encodeMP4: Bool
+}
+
+struct ShowcaseRenderCommandResult {
+  let outputDirectoryURL: URL
+  let frameDirectoryURL: URL
+  let contactSheetURL: URL
+  let mp4URL: URL?
   let commandSummary: String
 }
 

@@ -140,6 +140,8 @@ final class AppState: ObservableObject {
   @Published var datamoshRemixSeed = 0
   @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
   @Published var datamoshSummary = "No datamosh rendered"
+  @Published var showcaseSummary = "No showcase preview rendered"
+  @Published var showcaseIntensity: ShowcaseIntensityOption = .destructive
   @Published var videoAudioRouteModulatorURL: URL?
   @Published var videoAudioRouteCarrierURL: URL?
   @Published var videoAudioRouteOutputURL: URL?
@@ -165,6 +167,13 @@ final class AppState: ObservableObject {
   @Published var mediaProxyMaxFrames = 120
   @Published var statusMessage = "Analysis cache idle. Offline queue empty."
 
+  /// Number of frames rendered for a quick effect preview (a short look at the
+  /// selected effect before committing to the full clip).
+  let previewFrameCount = 8
+  @Published var previewFrames: [NSImage] = []
+  @Published var previewSummary = "No preview rendered"
+  @Published var isRenderingPreview = false
+
   private var sourceAURL: URL?
   private var sourceBURL: URL?
   private var projectURL: URL?
@@ -172,7 +181,14 @@ final class AppState: ObservableObject {
   private var frameSequenceModulatorURL: URL?
   private var frameSequenceCarrierURL: URL?
   private var frameSequenceOutputURL: URL?
-  private var lastFrameSequenceOutputURL: URL?
+  private var lastFrameSequenceOutputURL: URL? {
+    didSet {
+      if let lastFrameSequenceOutputURL {
+        finishPreviewIfNeeded(frameDirectory: lastFrameSequenceOutputURL)
+      }
+    }
+  }
+  private var previewSession: EffectPreviewSession?
   private var sourceARMSCacheURL: URL?
   private var sourceBRMSCacheURL: URL?
   private var sourceASTFTCacheURL: URL?
@@ -196,6 +212,79 @@ final class AppState: ObservableObject {
     }
 
     statusMessage = "\(role.rawValue) source selected: \(url.lastPathComponent)"
+  }
+
+  /// Begin a quick preview of the selected effect: the matching render method is
+  /// invoked next and, because `previewSession` is set, it writes a small frame
+  /// cap into a temp directory instead of the user's chosen output. Returns
+  /// `false` (and reports why) when the required sources are not loaded yet.
+  func beginEffectPreview(requiresModulator: Bool) -> Bool {
+    guard frameSequenceCarrierURL != nil else {
+      statusMessage = "Select Source B frames before previewing."
+      return false
+    }
+    if requiresModulator && frameSequenceModulatorURL == nil {
+      statusMessage = "Select Source A frames before previewing."
+      return false
+    }
+
+    previewSession = EffectPreviewSession(
+      outputRootURL: RustBridgePlaceholder.defaultEffectPreviewOutputRootURL(),
+      maxFrames: previewFrameCount
+    )
+    previewFrames = []
+    isRenderingPreview = true
+    previewSummary = "Rendering \(previewFrameCount)-frame preview…"
+    return true
+  }
+
+  /// Output root a render should use: the preview temp directory while a preview
+  /// is active, otherwise the user's chosen directory.
+  private func effectiveOutputRoot(_ chosen: URL?) -> URL? {
+    previewSession?.outputRootURL ?? chosen
+  }
+
+  private func effectiveMaxFrames(_ chosen: Int) -> Int {
+    previewSession?.maxFrames ?? chosen
+  }
+
+  private func effectiveOptionalMaxFrames(_ chosen: Int?) -> Int? {
+    previewSession?.maxFrames ?? chosen
+  }
+
+  private func finishPreviewIfNeeded(frameDirectory: URL) {
+    guard previewSession != nil else {
+      return
+    }
+    previewSession = nil
+    let limit = previewFrameCount
+    DispatchQueue.global(qos: .userInitiated).async {
+      let images = Self.loadPreviewFrames(from: frameDirectory, limit: limit)
+      DispatchQueue.main.async {
+        self.previewFrames = images
+        self.isRenderingPreview = false
+        self.previewSummary = images.isEmpty
+          ? "Preview produced no frames."
+          : "Preview: \(images.count) frame(s) of the selected effect."
+        self.statusMessage = "Effect preview complete."
+      }
+    }
+  }
+
+  private func failPreviewIfNeeded(message: String) {
+    guard previewSession != nil else {
+      return
+    }
+    previewSession = nil
+    isRenderingPreview = false
+    previewSummary = "Preview failed: \(message)"
+  }
+
+  private static func loadPreviewFrames(from frameDirectory: URL, limit: Int) -> [NSImage] {
+    guard let urls = try? ProResImageSequenceExporter.collectPNGFrameURLs(in: frameDirectory) else {
+      return []
+    }
+    return urls.prefix(limit).compactMap { NSImage(contentsOf: $0) }
   }
 
   func probeSelectedSources() {
@@ -677,7 +766,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering."
       return
     }
@@ -688,7 +777,7 @@ final class AppState: ObservableObject {
       carrierDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL,
       amount: frameSequenceAmount,
-      maxFrames: frameSequenceMaxFrames,
+      maxFrames: effectiveMaxFrames(frameSequenceMaxFrames),
       frameRate: proResFrameRate.framesPerSecond,
       writesFlowCache: frameSequenceWritesFlowCache,
       projectURL: projectURL
@@ -712,6 +801,7 @@ final class AppState: ObservableObject {
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.frameSequenceSummary = "Two-source frame sequence render failed: \(error.localizedDescription)"
           self.statusMessage = "Two-source frame sequence render failed: \(error.localizedDescription)"
         }
@@ -728,7 +818,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering flow feedback."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering flow feedback."
       return
     }
@@ -746,7 +836,7 @@ final class AppState: ObservableObject {
       structureMix: feedbackStructureMix,
       outputBitDepth: feedbackOutputBitDepth,
       temporalSupersampling: feedbackTemporalSupersampling,
-      maxFrames: frameSequenceMaxFrames,
+      maxFrames: effectiveMaxFrames(frameSequenceMaxFrames),
       resetAtFrame: feedbackResetEnabled ? feedbackResetAtFrame : nil,
       frameRate: proResFrameRate.framesPerSecond,
       writesFlowCache: feedbackWritesFlowCache,
@@ -774,8 +864,58 @@ final class AppState: ObservableObject {
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.feedbackSummary = "Temporal flow-feedback render failed: \(error.localizedDescription)"
           self.statusMessage = "Temporal flow-feedback render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runShowcasePreviewRender() {
+    guard let modulatorURL = frameSequenceModulatorURL else {
+      statusMessage = "Select Source A frame directory before rendering a showcase preview."
+      return
+    }
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering a showcase preview."
+      return
+    }
+    guard let outputRootURL = frameSequenceOutputURL else {
+      statusMessage = "Choose an output directory before rendering a showcase preview."
+      return
+    }
+
+    let outputURL = outputRootURL.appendingPathComponent("showcase-preview", isDirectory: true)
+    let request = ShowcaseRenderCommandRequest(
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputDirectoryURL: outputURL,
+      intensity: showcaseIntensity,
+      framesPerEffect: max(1, min(frameSequenceMaxFrames, 15)),
+      frameRate: proResFrameRate.framesPerSecond,
+      granularGrainSize: 48,
+      seed: 20260625,
+      backend: .cpu,
+      encodeMP4: true
+    )
+
+    statusMessage = "Rendering showcase preview through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runShowcasePreview(request: request)
+        DispatchQueue.main.async {
+          self.lastFrameSequenceOutputURL = result.frameDirectoryURL
+          self.showcaseSummary = "Showcase preview at \(result.outputDirectoryURL.path)"
+          self.frameSequenceSummary = "Showcase PNG sequence at \(result.frameDirectoryURL.path)"
+          self.proResExportSummary = "Showcase frames ready for ProRes export: \(result.frameDirectoryURL.path)"
+          self.statusMessage = "Showcase preview complete: \(result.outputDirectoryURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.showcaseSummary = "Showcase preview failed: \(error.localizedDescription)"
+          self.statusMessage = "Showcase preview failed: \(error.localizedDescription)"
         }
       }
     }
@@ -786,7 +926,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering procedural fluid advection."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering procedural fluid advection."
       return
     }
@@ -795,7 +935,7 @@ final class AppState: ObservableObject {
       queueURL: RustBridgePlaceholder.defaultFluidAdvectSequenceRenderQueueURL(),
       sourceDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("fluid-advect", isDirectory: true),
-      frames: frameSequenceMaxFrames,
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
       frameRate: proResFrameRate.framesPerSecond,
       advect: fluidProceduralAdvect,
       turbulenceScale: fluidTurbulenceScale,
@@ -824,7 +964,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering two-source fluid advection."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering two-source fluid advection."
       return
     }
@@ -834,7 +974,7 @@ final class AppState: ObservableObject {
       modulatorDirectoryURL: modulatorURL,
       carrierDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("fluid-advect-two-source", isDirectory: true),
-      frames: frameSequenceMaxFrames,
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
       frameRate: proResFrameRate.framesPerSecond,
       advect: fluidMotionAdvect,
       reinject: fluidReinject,
@@ -855,7 +995,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering self-flow advection."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering self-flow advection."
       return
     }
@@ -864,7 +1004,7 @@ final class AppState: ObservableObject {
       queueURL: RustBridgePlaceholder.defaultOpticalFlowAdvectSequenceRenderQueueURL(),
       sourceDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("optical-flow-advect", isDirectory: true),
-      frames: frameSequenceMaxFrames,
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
       frameRate: proResFrameRate.framesPerSecond,
       advect: fluidMotionAdvect,
       reinject: fluidReinject,
@@ -885,7 +1025,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering field particles."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering field particles."
       return
     }
@@ -894,7 +1034,7 @@ final class AppState: ObservableObject {
       queueURL: RustBridgePlaceholder.defaultFieldParticlesSequenceRenderQueueURL(),
       sourceDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("field-particles", isDirectory: true),
-      frames: frameSequenceMaxFrames,
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
       frameRate: proResFrameRate.framesPerSecond,
       spacing: fieldParticleSpacing,
       particleSize: fieldParticleSize,
@@ -938,6 +1078,7 @@ final class AppState: ObservableObject {
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.fluidAdvectionSummary = "\(label) render failed: \(error.localizedDescription)"
           self.statusMessage = "\(label) render failed: \(error.localizedDescription)"
         }
@@ -954,7 +1095,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering the grain pool."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering the grain pool."
       return
     }
@@ -996,7 +1137,7 @@ final class AppState: ObservableObject {
       coherenceWeight: granularPoolCoherenceWeight,
       coherenceReach: max(0, granularPoolCoherenceReach),
       spatialCoherenceWeight: granularPoolSpatialCoherenceWeight,
-      maxFrames: frameSequenceMaxFrames,
+      maxFrames: effectiveMaxFrames(frameSequenceMaxFrames),
       frameRate: proResFrameRate.framesPerSecond,
       backend: granularPoolBackend,
       projectURL: projectURL
@@ -1020,6 +1161,7 @@ final class AppState: ObservableObject {
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.granularPoolSummary = "Temporal grain pool render failed: \(error.localizedDescription)"
           self.statusMessage = "Temporal grain pool render failed: \(error.localizedDescription)"
         }
@@ -1036,7 +1178,7 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering the video vocoder."
       return
     }
-    guard let outputURL = frameSequenceOutputURL else {
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering the video vocoder."
       return
     }
@@ -1049,7 +1191,7 @@ final class AppState: ObservableObject {
       bands: vocoderBands,
       amount: vocoderAmount,
       mode: vocoderMode,
-      maxFrames: frameSequenceMaxFrames,
+      maxFrames: effectiveMaxFrames(frameSequenceMaxFrames),
       frameRate: proResFrameRate.framesPerSecond,
       backend: vocoderBackend,
       projectURL: projectURL
@@ -1073,6 +1215,7 @@ final class AppState: ObservableObject {
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.vocoderSummary = "Video vocoder render failed: \(error.localizedDescription)"
           self.statusMessage = "Video vocoder render failed: \(error.localizedDescription)"
         }
@@ -1229,15 +1372,15 @@ final class AppState: ObservableObject {
   }
 
   func runDatamoshRender() {
-    guard let modulatorURL = datamoshModulatorURL else {
+    guard let modulatorURL = datamoshModulatorURL ?? frameSequenceModulatorURL else {
       statusMessage = "Select a Source A frame directory before rendering the datamosh."
       return
     }
-    guard let carrierURL = datamoshCarrierURL else {
+    guard let carrierURL = datamoshCarrierURL ?? frameSequenceCarrierURL else {
       statusMessage = "Select a Source B frame directory before rendering the datamosh."
       return
     }
-    guard let outputURL = datamoshOutputURL else {
+    guard let outputURL = effectiveOutputRoot(datamoshOutputURL ?? frameSequenceOutputURL) else {
       statusMessage = "Choose an output directory before rendering the datamosh."
       return
     }
@@ -1256,7 +1399,7 @@ final class AppState: ObservableObject {
       vectorRemix: datamoshVectorRemix,
       preset: datamoshPreset,
       remixSeed: datamoshRemixSeed,
-      maxFrames: nil,
+      maxFrames: effectiveOptionalMaxFrames(nil),
       backend: datamoshBackend,
       projectURL: projectURL
     )
@@ -1266,12 +1409,19 @@ final class AppState: ObservableObject {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
         let result = try RustBridgePlaceholder.runQueuedDatamoshSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
         DispatchQueue.main.async {
-          self.datamoshSummary = "Datamosh bundle at \(result.bundleURL.path)"
-          self.statusMessage = "Datamosh render complete: \(result.bundleURL.path)"
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.datamoshSummary = "\(bundle.frameCount) datamosh frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued datamosh sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Datamosh render complete: \(bundle.bundleURL.path)"
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.datamoshSummary = "Datamosh render failed: \(error.localizedDescription)"
           self.statusMessage = "Datamosh render failed: \(error.localizedDescription)"
         }
@@ -1701,6 +1851,11 @@ final class AppState: ObservableObject {
   }
 }
 
+private struct EffectPreviewSession {
+  let outputRootURL: URL
+  let maxFrames: Int
+}
+
 enum RenderQualityOption: String, CaseIterable, Identifiable {
   case draftPreview = "Draft Preview"
   case highQualityOffline = "High Quality Offline"
@@ -1790,6 +1945,22 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
       return "macroblock-rot"
     case .vectorShuffle:
       return "vector-shuffle"
+    }
+  }
+}
+
+enum ShowcaseIntensityOption: String, CaseIterable, Identifiable {
+  case balanced = "Balanced"
+  case destructive = "Destructive"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .balanced:
+      return "balanced"
+    case .destructive:
+      return "destructive"
     }
   }
 }

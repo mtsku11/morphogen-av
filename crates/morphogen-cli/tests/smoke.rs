@@ -240,6 +240,81 @@ fn render_granular_mosaic_writes_image_and_frame_sequence() {
 }
 
 #[test]
+fn render_showcase_writes_preview_bundle_without_requiring_ffmpeg() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator");
+    let carrier_dir = temp_dir.path().join("carrier");
+    let output_dir = temp_dir.path().join("showcase");
+    write_texture_sequence(&modulator_dir, &[0, 1]);
+    write_texture_sequence(&carrier_dir, &[2, 3]);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-showcase",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--frames-per-effect",
+            "2",
+            "--frame-rate",
+            "12",
+            "--granular-grain-size",
+            "8",
+            "--seed",
+            "7",
+            "--no-mp4",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rendered destructive showcase"));
+
+    assert!(output_dir.join("showcase.json").exists());
+    assert!(output_dir.join("contact_sheet.png").exists());
+    assert!(output_dir.join("stills/01_flow_displace.png").exists());
+    assert!(output_dir.join("stills/04_vector_datamosh.png").exists());
+    for index in 0..8 {
+        assert!(output_dir
+            .join("frames")
+            .join(format!("frame_{index:06}.png"))
+            .exists());
+    }
+    assert!(!output_dir.join("showcase.mp4").exists());
+}
+
+#[test]
+fn feedback_iterations_are_rejected_by_cli_contract() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator");
+    let carrier_dir = temp_dir.path().join("carrier");
+    let output_dir = temp_dir.path().join("feedback");
+    write_texture_sequence(&modulator_dir, &[0, 1]);
+    write_texture_sequence(&carrier_dir, &[2, 3]);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--iterations",
+            "2",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("supports exactly one iteration"));
+}
+
+#[test]
 fn render_granular_mosaic_pool_sequence_writes_frames_and_pool_sidecar() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");

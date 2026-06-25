@@ -13,12 +13,14 @@ mod imaging;
 mod project;
 mod queue;
 mod render;
+mod showcase;
 use args::*;
 use audio::*;
 use error::CliError;
 use project::*;
 use queue::*;
 use render::*;
+use showcase::*;
 
 fn main() {
     if let Err(error) = run() {
@@ -721,6 +723,29 @@ fn run() -> Result<(), CliError> {
             },
         })
         .map(|_| ()),
+        Commands::RenderShowcase {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            intensity,
+            frames_per_effect,
+            frame_rate,
+            granular_grain_size,
+            seed,
+            backend,
+            no_mp4,
+        } => render_showcase(ShowcaseRenderRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            intensity,
+            frames_per_effect,
+            frame_rate,
+            granular_grain_size,
+            seed,
+            backend: backend.into(),
+            encode_mp4: !no_mp4,
+        }),
         Commands::RenderFeedbackSequence {
             modulator_dir,
             carrier_dir,

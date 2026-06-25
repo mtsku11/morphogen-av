@@ -8,8 +8,8 @@ struct ContentView: View {
       header
 
       ScrollView(.vertical) {
-        HStack(alignment: .top, spacing: 16) {
-          VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
+          HStack(alignment: .top, spacing: 16) {
             SourceSlotView(
               title: "Source A",
               role: .modulator,
@@ -29,16 +29,21 @@ struct ContentView: View {
               previewImage: state.sourceBPreviewImage,
               onChoose: { chooseSource(.carrier) }
             )
-
-            AnalysisPanelView()
           }
-          .frame(width: 300)
 
-          VStack(spacing: 16) {
-            NodeGraphPlaceholderView()
-            RenderPanelView(state: state)
+          WorkflowPanelView(state: state)
+
+          DisclosureGroup {
+            VStack(alignment: .leading, spacing: 16) {
+              NodeGraphPlaceholderView()
+              AnalysisPanelView()
+              RenderPanelView(state: state)
+            }
+            .padding(.top, 8)
+          } label: {
+            Label("Advanced render queue, diagnostics, and experimental controls", systemImage: "slider.horizontal.3")
+              .font(.headline)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 8)
@@ -51,7 +56,7 @@ struct ContentView: View {
     VStack(alignment: .leading, spacing: 4) {
       Text("Morphogen AV")
         .font(.system(size: 28, weight: .semibold, design: .rounded))
-      Text("A modulates B through cached analysis signals and deterministic offline rendering.")
+      Text("Load source material, route modulation, choose an effect, then render deterministically.")
         .foregroundStyle(.secondary)
     }
   }

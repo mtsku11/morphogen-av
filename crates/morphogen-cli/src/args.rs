@@ -907,6 +907,40 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Render a short curated A-modulates-B preview bundle from extracted PNG
+    /// source directories. This is the user-facing "show me the character of the
+    /// patch" path: flow displacement, flow feedback, granular mosaic, and
+    /// controlled datamosh are rendered into named stills, a contact sheet, a
+    /// continuous PNG sequence, and optionally an H.264 MP4 via external ffmpeg.
+    RenderShowcase {
+        /// Source A video frames (PNG sequence); acts as the modulator.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence); acts as the carrier.
+        carrier_dir: PathBuf,
+        /// Output bundle directory.
+        output_dir: PathBuf,
+        /// How aggressively the curated settings should degrade the carrier.
+        #[arg(long, value_enum, default_value_t = CliShowcaseIntensity::Destructive)]
+        intensity: CliShowcaseIntensity,
+        /// Frames rendered for each effect segment.
+        #[arg(long, default_value_t = 15)]
+        frames_per_effect: usize,
+        /// Render-frame rate for the preview sequence and MP4.
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        /// Granular tile size for the mosaic segment. Larger is faster and blockier.
+        #[arg(long, default_value_t = 48)]
+        granular_grain_size: u32,
+        /// Seed shared by seeded showcase effects.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Render backend for parity-gated effects.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        /// Skip the optional H.264 MP4 encode and write only PNG outputs.
+        #[arg(long)]
+        no_mp4: bool,
+    },
     RenderFeedbackSequence {
         modulator_dir: PathBuf,
         carrier_dir: PathBuf,
@@ -919,7 +953,7 @@ pub(crate) enum Commands {
         feedback_mix: f32,
         #[arg(long, default_value_t = 0.995)]
         decay: f32,
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, value_parser = parse_feedback_iterations)]
         iterations: u32,
         #[arg(long, default_value_t = 0.0)]
         structure_mix: f32,
@@ -998,7 +1032,7 @@ pub(crate) enum Commands {
         feedback_mix: f32,
         #[arg(long, default_value_t = 0.995)]
         decay: f32,
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, value_parser = parse_feedback_iterations)]
         iterations: u32,
         #[arg(long, default_value_t = 0.0)]
         structure_mix: f32,
@@ -1825,6 +1859,26 @@ pub(crate) enum CliDatamoshPreset {
     StructuredMelt,
     MacroblockRot,
     VectorShuffle,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliShowcaseIntensity {
+    /// Clearer source relationship, moderate degradation.
+    Balanced,
+    /// Stronger beyond-recognition preview settings.
+    #[default]
+    Destructive,
+}
+
+fn parse_feedback_iterations(value: &str) -> Result<u32, String> {
+    let parsed = value
+        .parse::<u32>()
+        .map_err(|_| "iterations must be an integer".to_string())?;
+    if parsed == 1 {
+        Ok(parsed)
+    } else {
+        Err("the current flow-feedback renderer supports exactly one iteration; use feedback amount, mix, decay, and structure instead".to_string())
+    }
 }
 
 impl From<CliVectorRemixMode> for VectorRemixMode {

@@ -50,6 +50,57 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertThrowsError(try RustBridgePlaceholder.queueAddFrameSequenceArguments(request: request))
   }
 
+  func testShowcaseArgumentsIncludeCuratedPreviewOptions() throws {
+    let request = ShowcaseRenderCommandRequest(
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/showcase-preview", isDirectory: true),
+      intensity: .destructive,
+      framesPerEffect: 15,
+      frameRate: 12.0,
+      granularGrainSize: 48,
+      seed: 20260625,
+      backend: .cpu,
+      encodeMP4: true
+    )
+
+    let arguments = try RustBridgePlaceholder.renderShowcaseArguments(request: request)
+
+    XCTAssertEqual(arguments.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "render-showcase"])
+    XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/showcase-preview"))
+    XCTAssertTrue(arguments.contains("--intensity"))
+    XCTAssertTrue(arguments.contains("destructive"))
+    XCTAssertTrue(arguments.contains("--frames-per-effect"))
+    XCTAssertTrue(arguments.contains("15"))
+    XCTAssertTrue(arguments.contains("--granular-grain-size"))
+    XCTAssertTrue(arguments.contains("48"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("cpu"))
+    XCTAssertFalse(arguments.contains("--no-mp4"))
+  }
+
+  func testShowcaseArgumentsCanSkipMP4() throws {
+    let request = ShowcaseRenderCommandRequest(
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/showcase-preview", isDirectory: true),
+      intensity: .balanced,
+      framesPerEffect: 2,
+      frameRate: 12.0,
+      granularGrainSize: 8,
+      seed: 1,
+      backend: .cpu,
+      encodeMP4: false
+    )
+
+    let arguments = try RustBridgePlaceholder.renderShowcaseArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--no-mp4"))
+    XCTAssertTrue(arguments.contains("balanced"))
+  }
+
   func testQueuedFeedbackSequenceArgumentsIncludeFlowControls() throws {
     let request = FeedbackSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),

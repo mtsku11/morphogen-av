@@ -16,6 +16,33 @@ _Last updated: 2026-06-25_
 
 ## What just landed
 
+- **Curated showcase preview path.** The CLI now has `render-showcase`, a
+  product-facing short preview renderer for extracted Source A/B frame folders. It
+  renders four A-modulates-B segments (flow displacement, flow feedback, temporal
+  granular mosaic, vector datamosh), writes named segment folders, a combined PNG
+  sequence, representative stills, `contact_sheet.png`, `showcase.json`, and an
+  optional H.264 `showcase.mp4` via external ffmpeg. The SwiftUI workflow exposes
+  the same path as a **Showcase Preview** action with Balanced/Destructive
+  intensity. The flow-feedback `--iterations` flag now rejects unsupported values
+  at CLI parse time, the advanced Swift panel shows the current fixed one-pass
+  contract instead of a fake menu, and datamosh presets print their resolved knob
+  set when they override manual values. **Verified:** `cargo test --workspace`
+  (358 passing), `cargo clippy --workspace --all-targets -- -D warnings`, a real
+  cello/harp `render-showcase` MP4/contact-sheet smoke, and `git diff --check`.
+  Swift build/test verification is pending because the approval system rejected
+  the required escalated SwiftPM module-cache write.
+
+- **SwiftUI workflow shell — source, route, effect, render.** The macOS app now
+  opens on a workflow-first surface instead of the dense render-parameter panel:
+  Source A/B cards sit at the top, then a guided flow handles proxy extraction,
+  modulation routing, effect-card selection, focused primary controls, output
+  selection, and render/export actions. The existing diagnostic render panel is
+  still available under an Advanced disclosure. Datamosh rendering now falls back
+  to the common extracted Source A/B frame directories and sequence output root,
+  so it works from the same workflow path as the other visual effects. **Verified:**
+  `swift build`, `swift test` (52 passing), and a short `swift run MorphogenMacApp`
+  launch check.
+
 - **Controlled Datamosh — reusable flow sidecars, disk resume, and curated presets.**
   Direct `render-datamosh-sequence` now accepts `--flow-cache-dir`, writes/reuses
   per-P-frame Source A temporal-flow sidecars, and records cache provenance. It also
