@@ -7,12 +7,13 @@ use morphogen_audio::{
     PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
 };
 use morphogen_core::{
-    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
-    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteDescriptor,
-    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
+    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, DatamoshPreset,
+    FlowSource, GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole,
+    VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
+    VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    CoagulationFlowSource, StructureMode, CONVOLUTION_BLEND_ALGORITHM,
+    CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
     CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
@@ -317,10 +318,27 @@ pub(crate) enum Commands {
         /// blocks rot. `0` = no per-block refresh; needs block-size >= 2.
         #[arg(long, default_value_t = 0.0)]
         block_refresh_threshold: f32,
+        /// FFglitch-style motion-vector remix on the block-MV grid (block-size 2 or
+        /// more): `sort` reassigns block MVs by descending magnitude (motion pools),
+        /// `shuffle` permutes them by `--remix-seed` (motion scrambles). `none` = off.
+        #[arg(long, value_enum, default_value_t = CliVectorRemixMode::None)]
+        vector_remix: CliVectorRemixMode,
+        /// Seed for `--vector-remix shuffle` (deterministic permutation).
+        #[arg(long, default_value_t = 0)]
+        remix_seed: u64,
+        /// Named deterministic destructive preset. `custom` keeps the explicit knobs.
+        #[arg(long, value_enum, default_value_t = CliDatamoshPreset::Custom)]
+        preset: CliDatamoshPreset,
+        /// Reuse/write per-frame temporal optical-flow sidecars.
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
+        /// Stop after writing one frame and a resumable float-state checkpoint.
+        #[arg(long)]
+        stop_after_frame: bool,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
     /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
@@ -328,15 +346,18 @@ pub(crate) enum Commands {
     /// is NOT bit-reproducible (depends on ffmpeg's codec); this path lives outside
     /// the deterministic render graph by design.
     DatamoshBitstream {
-        /// Input video (any ffmpeg-decodable container; provides the motion).
+        /// Input video (any ffmpeg-decodable container). For `pframe-duplicate` /
+        /// `remove-keyframe` this is the clip to mosh; for `motion-transfer` it is
+        /// the MODULATOR (Source A, the motion donor) and `--carrier` is the carrier.
         input: PathBuf,
         /// Output directory for the decoded `frame_%06d.png` sequence.
         output_dir: PathBuf,
         /// Frame rate to encode/decode at.
         #[arg(long, default_value_t = 24.0)]
         fps: f64,
-        /// Bitstream operation: duplicate a P-frame for bloom, or remove the leading
-        /// keyframe so the decoder starts from prediction data.
+        /// Bitstream operation: duplicate a P-frame for bloom, remove the leading
+        /// keyframe so the decoder starts from prediction data, or transfer the
+        /// modulator's motion onto the carrier (needs `--carrier`).
         #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamOperation::PframeDuplicate)]
         operation: CliDatamoshBitstreamOperation,
         /// Which P-frame to bloom (0-based among P-frames; 0 = the first P-frame).
@@ -345,6 +366,15 @@ pub(crate) enum Commands {
         /// Extra copies of that P-frame to insert; `0` = a plain transcode (off).
         #[arg(long, default_value_t = 0)]
         duplicate_count: u32,
+        /// `motion-transfer` only: the CARRIER (Source B) whose appearance is kept.
+        /// Its leading I-frame seeds the output; the modulator (`input`) supplies the
+        /// motion. Scaled to the carrier's dimensions before splicing.
+        #[arg(long)]
+        carrier: Option<PathBuf>,
+        /// `motion-transfer` only: how many leading carrier frames to keep before the
+        /// modulator's motion takes over. `1` = just the I-frame (pure transfer).
+        #[arg(long, default_value_t = 1)]
+        carrier_keyframes: u32,
     },
     /// Render a convolutional AV blend sequence: each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved
@@ -877,6 +907,40 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Render a short curated A-modulates-B preview bundle from extracted PNG
+    /// source directories. This is the user-facing "show me the character of the
+    /// patch" path: flow displacement, flow feedback, granular mosaic, and
+    /// controlled datamosh are rendered into named stills, a contact sheet, a
+    /// continuous PNG sequence, and optionally an H.264 MP4 via external ffmpeg.
+    RenderShowcase {
+        /// Source A video frames (PNG sequence); acts as the modulator.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence); acts as the carrier.
+        carrier_dir: PathBuf,
+        /// Output bundle directory.
+        output_dir: PathBuf,
+        /// How aggressively the curated settings should degrade the carrier.
+        #[arg(long, value_enum, default_value_t = CliShowcaseIntensity::Destructive)]
+        intensity: CliShowcaseIntensity,
+        /// Frames rendered for each effect segment.
+        #[arg(long, default_value_t = 15)]
+        frames_per_effect: usize,
+        /// Render-frame rate for the preview sequence and MP4.
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        /// Granular tile size for the mosaic segment. Larger is faster and blockier.
+        #[arg(long, default_value_t = 48)]
+        granular_grain_size: u32,
+        /// Seed shared by seeded showcase effects.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Render backend for parity-gated effects.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        /// Skip the optional H.264 MP4 encode and write only PNG outputs.
+        #[arg(long)]
+        no_mp4: bool,
+    },
     RenderFeedbackSequence {
         modulator_dir: PathBuf,
         carrier_dir: PathBuf,
@@ -889,7 +953,7 @@ pub(crate) enum Commands {
         feedback_mix: f32,
         #[arg(long, default_value_t = 0.995)]
         decay: f32,
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, value_parser = parse_feedback_iterations)]
         iterations: u32,
         #[arg(long, default_value_t = 0.0)]
         structure_mix: f32,
@@ -968,7 +1032,7 @@ pub(crate) enum Commands {
         feedback_mix: f32,
         #[arg(long, default_value_t = 0.995)]
         decay: f32,
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, value_parser = parse_feedback_iterations)]
         iterations: u32,
         #[arg(long, default_value_t = 0.0)]
         structure_mix: f32,
@@ -1312,6 +1376,20 @@ pub(crate) enum Commands {
         /// blocks rot. `0` = no per-block refresh; needs block-size >= 2.
         #[arg(long, default_value_t = 0.0)]
         block_refresh_threshold: f32,
+        /// FFglitch-style motion-vector remix on the block-MV grid (block-size 2 or
+        /// more): `sort` pools motion by descending magnitude, `shuffle` permutes by
+        /// `--remix-seed`. `none` = off.
+        #[arg(long, value_enum, default_value_t = CliVectorRemixMode::None)]
+        vector_remix: CliVectorRemixMode,
+        /// Seed for `--vector-remix shuffle` (deterministic permutation).
+        #[arg(long, default_value_t = 0)]
+        remix_seed: u64,
+        /// Named deterministic destructive preset. `custom` keeps the explicit knobs.
+        #[arg(long, value_enum, default_value_t = CliDatamoshPreset::Custom)]
+        preset: CliDatamoshPreset,
+        /// Reuse/write per-frame temporal optical-flow sidecars.
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]
@@ -1437,6 +1515,7 @@ pub(crate) enum CliDatamoshBitstreamOperation {
     #[default]
     PframeDuplicate,
     RemoveKeyframe,
+    MotionTransfer,
 }
 
 impl From<CliWindowFunction> for WindowFunction {
@@ -1757,6 +1836,81 @@ impl From<CliRenderBackend> for RenderBackend {
         match value {
             CliRenderBackend::Cpu => Self::Cpu,
             CliRenderBackend::Metal => Self::Metal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliVectorRemixMode {
+    /// No remix — the block-quantized flow is used unchanged (off path).
+    #[default]
+    None,
+    /// Reassign block MVs in descending-magnitude order (motion pools coherently).
+    Sort,
+    /// Deterministic seeded permutation of block MVs (motion scrambles).
+    Shuffle,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliDatamoshPreset {
+    #[default]
+    Custom,
+    CodecBloom,
+    StructuredMelt,
+    MacroblockRot,
+    VectorShuffle,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliShowcaseIntensity {
+    /// Clearer source relationship, moderate degradation.
+    Balanced,
+    /// Stronger beyond-recognition preview settings.
+    #[default]
+    Destructive,
+}
+
+fn parse_feedback_iterations(value: &str) -> Result<u32, String> {
+    let parsed = value
+        .parse::<u32>()
+        .map_err(|_| "iterations must be an integer".to_string())?;
+    if parsed == 1 {
+        Ok(parsed)
+    } else {
+        Err("the current flow-feedback renderer supports exactly one iteration; use feedback amount, mix, decay, and structure instead".to_string())
+    }
+}
+
+impl From<CliVectorRemixMode> for VectorRemixMode {
+    fn from(value: CliVectorRemixMode) -> Self {
+        match value {
+            CliVectorRemixMode::None => Self::None,
+            CliVectorRemixMode::Sort => Self::Sort,
+            CliVectorRemixMode::Shuffle => Self::Shuffle,
+        }
+    }
+}
+
+impl From<CliDatamoshPreset> for DatamoshPreset {
+    fn from(value: CliDatamoshPreset) -> Self {
+        match value {
+            CliDatamoshPreset::Custom => Self::Custom,
+            CliDatamoshPreset::CodecBloom => Self::CodecBloom,
+            CliDatamoshPreset::StructuredMelt => Self::StructuredMelt,
+            CliDatamoshPreset::MacroblockRot => Self::MacroblockRot,
+            CliDatamoshPreset::VectorShuffle => Self::VectorShuffle,
+        }
+    }
+}
+
+// The schema mirror in core (used by the persisted datamosh job). Allowed by the
+// orphan rule because the trait's type parameter (`CliVectorRemixMode`) is local.
+impl From<CliVectorRemixMode> for morphogen_core::VectorRemixMode {
+    fn from(value: CliVectorRemixMode) -> Self {
+        match value {
+            CliVectorRemixMode::None => Self::None,
+            CliVectorRemixMode::Sort => Self::Sort,
+            CliVectorRemixMode::Shuffle => Self::Shuffle,
         }
     }
 }

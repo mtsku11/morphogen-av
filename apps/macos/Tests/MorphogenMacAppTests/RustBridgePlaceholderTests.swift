@@ -50,6 +50,57 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertThrowsError(try RustBridgePlaceholder.queueAddFrameSequenceArguments(request: request))
   }
 
+  func testShowcaseArgumentsIncludeCuratedPreviewOptions() throws {
+    let request = ShowcaseRenderCommandRequest(
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/showcase-preview", isDirectory: true),
+      intensity: .destructive,
+      framesPerEffect: 15,
+      frameRate: 12.0,
+      granularGrainSize: 48,
+      seed: 20260625,
+      backend: .cpu,
+      encodeMP4: true
+    )
+
+    let arguments = try RustBridgePlaceholder.renderShowcaseArguments(request: request)
+
+    XCTAssertEqual(arguments.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "render-showcase"])
+    XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/showcase-preview"))
+    XCTAssertTrue(arguments.contains("--intensity"))
+    XCTAssertTrue(arguments.contains("destructive"))
+    XCTAssertTrue(arguments.contains("--frames-per-effect"))
+    XCTAssertTrue(arguments.contains("15"))
+    XCTAssertTrue(arguments.contains("--granular-grain-size"))
+    XCTAssertTrue(arguments.contains("48"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("cpu"))
+    XCTAssertFalse(arguments.contains("--no-mp4"))
+  }
+
+  func testShowcaseArgumentsCanSkipMP4() throws {
+    let request = ShowcaseRenderCommandRequest(
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/showcase-preview", isDirectory: true),
+      intensity: .balanced,
+      framesPerEffect: 2,
+      frameRate: 12.0,
+      granularGrainSize: 8,
+      seed: 1,
+      backend: .cpu,
+      encodeMP4: false
+    )
+
+    let arguments = try RustBridgePlaceholder.renderShowcaseArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--no-mp4"))
+    XCTAssertTrue(arguments.contains("balanced"))
+  }
+
   func testQueuedFeedbackSequenceArgumentsIncludeFlowControls() throws {
     let request = FeedbackSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),
@@ -752,6 +803,9 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualGain: 0.5,
       residualDecay: 0.8,
       blockRefreshThreshold: 1.5,
+      vectorRemix: .shuffle,
+      preset: .vectorShuffle,
+      remixSeed: 42,
       maxFrames: 48,
       backend: .metal,
       projectURL: nil
@@ -775,6 +829,9 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--residual-gain", in: arguments), "0.5")
     XCTAssertEqual(Self.value(after: "--residual-decay", in: arguments), "0.8")
     XCTAssertEqual(Self.value(after: "--block-refresh-threshold", in: arguments), "1.5")
+    XCTAssertEqual(Self.value(after: "--vector-remix", in: arguments), "shuffle")
+    XCTAssertEqual(Self.value(after: "--preset", in: arguments), "vector-shuffle")
+    XCTAssertEqual(Self.value(after: "--remix-seed", in: arguments), "42")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
     XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
   }
@@ -791,6 +848,9 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualGain: 0,
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
+      vectorRemix: .none,
+      preset: .custom,
+      remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil
@@ -813,6 +873,9 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualGain: 0,
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
+      vectorRemix: .none,
+      preset: .custom,
+      remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil
@@ -835,6 +898,9 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualGain: -0.5, // negative residual gain
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
+      vectorRemix: .none,
+      preset: .custom,
+      remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil
@@ -857,6 +923,9 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualGain: 0,
       residualDecay: 0.9,
       blockRefreshThreshold: -0.5, // negative refresh threshold
+      vectorRemix: .none,
+      preset: .custom,
+      remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
       projectURL: nil

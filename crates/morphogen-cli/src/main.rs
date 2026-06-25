@@ -13,12 +13,14 @@ mod imaging;
 mod project;
 mod queue;
 mod render;
+mod showcase;
 use args::*;
 use audio::*;
 use error::CliError;
 use project::*;
 use queue::*;
 use render::*;
+use showcase::*;
 
 fn main() {
     if let Err(error) = run() {
@@ -294,20 +296,32 @@ fn run() -> Result<(), CliError> {
             residual_gain,
             residual_decay,
             block_refresh_threshold,
+            vector_remix,
+            remix_seed,
+            preset,
+            flow_cache_dir,
             backend,
             max_frames,
+            stop_after_frame,
         } => render_datamosh_sequence(DatamoshSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
             output_dir: &output_dir,
+            flow_cache_dir: flow_cache_dir.as_deref(),
             keyframe_interval,
             amount,
             block_size,
             residual_gain,
             residual_decay,
             refresh_threshold: block_refresh_threshold,
+            vector_remix: vector_remix.into(),
+            remix_seed,
+            preset: preset.into(),
             backend: backend.into(),
             max_frames,
+            job_id: "direct-datamosh",
+            provenance: None,
+            stop_after_frame,
         })
         .map(|_| ()),
         Commands::DatamoshBitstream {
@@ -317,6 +331,8 @@ fn run() -> Result<(), CliError> {
             operation,
             p_frame_index,
             duplicate_count,
+            carrier,
+            carrier_keyframes,
         } => datamosh_bitstream(DatamoshBitstreamRequest {
             input: &input,
             output_dir: &output_dir,
@@ -324,6 +340,8 @@ fn run() -> Result<(), CliError> {
             operation,
             p_frame_index,
             duplicate_count,
+            carrier: carrier.as_deref(),
+            carrier_keyframes,
         }),
         Commands::RenderConvolutionalBlendSequence {
             modulator_dir,
@@ -705,6 +723,29 @@ fn run() -> Result<(), CliError> {
             },
         })
         .map(|_| ()),
+        Commands::RenderShowcase {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            intensity,
+            frames_per_effect,
+            frame_rate,
+            granular_grain_size,
+            seed,
+            backend,
+            no_mp4,
+        } => render_showcase(ShowcaseRenderRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            intensity,
+            frames_per_effect,
+            frame_rate,
+            granular_grain_size,
+            seed,
+            backend: backend.into(),
+            encode_mp4: !no_mp4,
+        }),
         Commands::RenderFeedbackSequence {
             modulator_dir,
             carrier_dir,
@@ -1190,6 +1231,10 @@ fn run() -> Result<(), CliError> {
             residual_gain,
             residual_decay,
             block_refresh_threshold,
+            vector_remix,
+            remix_seed,
+            preset,
+            flow_cache_dir,
             max_frames,
             project_path,
             backend,
@@ -1204,6 +1249,10 @@ fn run() -> Result<(), CliError> {
             residual_gain,
             residual_decay,
             refresh_threshold: block_refresh_threshold,
+            vector_remix: vector_remix.into(),
+            remix_seed,
+            preset: preset.into(),
+            flow_cache_dir: flow_cache_dir.as_deref(),
             max_frames,
             project_path: project_path.as_deref(),
             backend: backend.into(),

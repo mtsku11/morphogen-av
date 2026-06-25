@@ -289,11 +289,11 @@ struct RenderPanelView: View {
             .pickerStyle(.segmented)
             .frame(width: 220)
 
-            Picker("Iterations", selection: $state.feedbackIterations) {
-              Text("1").tag(1)
+            LabeledContent("Feedback Passes") {
+              Text("1")
+                .foregroundStyle(.secondary)
             }
-            .pickerStyle(.menu)
-            .frame(width: 100)
+            .frame(width: 130)
 
             Picker("Output", selection: $state.feedbackOutputBitDepth) {
               ForEach(FeedbackOutputBitDepthOption.allCases) { bitDepth in
@@ -880,6 +880,32 @@ struct RenderPanelView: View {
             }
             .frame(width: 230, alignment: .leading)
             .help("Per-block keep/drop: macroblocks whose mean motion is below this snap back to the carrier (intra-block refresh) while busier blocks rot. 0 = no per-block refresh; needs Macroblock Size >= 2.")
+          }
+
+          HStack(spacing: 16) {
+            Picker("Preset", selection: $state.datamoshPreset) {
+              ForEach(DatamoshPresetOption.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+              }
+            }
+            .frame(width: 220)
+            .help("Curated destructive recipes override the detailed datamosh knobs at render time. Custom uses the controls below.")
+
+            Picker("Vector Remix", selection: $state.datamoshVectorRemix) {
+              ForEach(DatamoshVectorRemixOption.allCases) { mode in
+                Text(mode.rawValue).tag(mode)
+              }
+            }
+            .frame(width: 280)
+            .help("FFglitch-style motion-vector remix on the block-MV grid (needs Macroblock Size >= 2). Sort pools motion by magnitude; Shuffle permutes it by the seed. None = off.")
+
+            if state.datamoshVectorRemix == .shuffle {
+              Stepper(value: $state.datamoshRemixSeed, in: 0...9999, step: 1) {
+                Text("Remix Seed \(state.datamoshRemixSeed)")
+              }
+              .frame(width: 180, alignment: .leading)
+              .help("Deterministic permutation seed for Shuffle.")
+            }
           }
 
           Picker("Backend", selection: $state.datamoshBackend) {

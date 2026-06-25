@@ -100,6 +100,20 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultShowcasePreviewOutputURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-showcase-preview",
+      isDirectory: true
+    )
+  }
+
+  static func defaultEffectPreviewOutputRootURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-effect-preview",
+      isDirectory: true
+    )
+  }
+
   static func defaultVideoAudioRouteRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-video-audio-route-queue.json"
@@ -136,6 +150,29 @@ enum RustBridgePlaceholder {
       outputURL.path
     ]
     return try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
+  }
+
+  static func runShowcasePreview(
+    request: ShowcaseRenderCommandRequest
+  ) throws -> ShowcaseRenderCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    let result = try runCommand(
+      arguments: try renderShowcaseArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let mp4URL = request.encodeMP4
+      ? request.outputDirectoryURL.appendingPathComponent("showcase.mp4")
+      : nil
+    return ShowcaseRenderCommandResult(
+      outputDirectoryURL: request.outputDirectoryURL,
+      frameDirectoryURL: request.outputDirectoryURL.appendingPathComponent(
+        "frames",
+        isDirectory: true
+      ),
+      contactSheetURL: request.outputDirectoryURL.appendingPathComponent("contact_sheet.png"),
+      mp4URL: mp4URL,
+      commandSummary: result.summary
+    )
   }
 
   static func runQueuedFrameSequenceRender(
@@ -1217,6 +1254,11 @@ enum RustBridgePlaceholder {
         "block refresh threshold must be finite and greater than or equal to zero"
       )
     }
+    guard request.remixSeed >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "vector-remix seed must be greater than or equal to zero"
+      )
+    }
     if let maxFrames = request.maxFrames, maxFrames <= 0 {
       throw RustBridgeError.invalidFrameSequenceRequest("max frame count must be greater than zero")
     }
@@ -1245,6 +1287,12 @@ enum RustBridgePlaceholder {
       cliNumber(request.residualDecay),
       "--block-refresh-threshold",
       cliNumber(request.blockRefreshThreshold),
+      "--vector-remix",
+      request.vectorRemix.cliValue,
+      "--preset",
+      request.preset.cliValue,
+      "--remix-seed",
+      String(request.remixSeed),
       "--backend",
       request.backend.cliValue
     ]
@@ -1494,6 +1542,60 @@ enum RustBridgePlaceholder {
       arguments.append(projectURL.path)
     }
 
+    return arguments
+  }
+
+  static func renderShowcaseArguments(
+    request: ShowcaseRenderCommandRequest
+  ) throws -> [String] {
+    guard request.framesPerEffect > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase frames per effect must be greater than zero"
+      )
+    }
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase frame rate must be a positive finite number"
+      )
+    }
+    guard request.granularGrainSize > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase granular grain size must be greater than zero"
+      )
+    }
+    guard request.seed >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase seed must be greater than or equal to zero"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "render-showcase",
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputDirectoryURL.path,
+      "--intensity",
+      request.intensity.cliValue,
+      "--frames-per-effect",
+      String(request.framesPerEffect),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--granular-grain-size",
+      String(request.granularGrainSize),
+      "--seed",
+      String(request.seed),
+      "--backend",
+      request.backend.cliValue
+    ]
+    if !request.encodeMP4 {
+      arguments.append("--no-mp4")
+    }
     return arguments
   }
 
@@ -1916,6 +2018,27 @@ struct FeedbackSequenceRenderQueueCommandResult {
   let commandSummary: String
 }
 
+struct ShowcaseRenderCommandRequest {
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputDirectoryURL: URL
+  let intensity: ShowcaseIntensityOption
+  let framesPerEffect: Int
+  let frameRate: Double
+  let granularGrainSize: Int
+  let seed: Int
+  let backend: FeedbackRenderBackendOption
+  let encodeMP4: Bool
+}
+
+struct ShowcaseRenderCommandResult {
+  let outputDirectoryURL: URL
+  let frameDirectoryURL: URL
+  let contactSheetURL: URL
+  let mp4URL: URL?
+  let commandSummary: String
+}
+
 struct FluidAdvectSequenceRenderQueueCommandRequest {
   let queueURL: URL
   let sourceDirectoryURL: URL
@@ -2134,6 +2257,9 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   let residualGain: Double
   let residualDecay: Double
   let blockRefreshThreshold: Double
+  let vectorRemix: DatamoshVectorRemixOption
+  let preset: DatamoshPresetOption
+  let remixSeed: Int
   let maxFrames: Int?
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?

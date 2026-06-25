@@ -378,6 +378,95 @@ pub fn remove_leading_keyframe(bytes: &[u8]) -> Result<Vec<u8>, MediaError> {
     rebuild_avi(bytes, &layout, &out_chunks, &movi_data)
 }
 
+/// Read `(dwWidth, dwHeight)` from the `avih` main header. The macroblock grid is
+/// fixed by these dimensions, so motion-transfer requires the carrier and modulator
+/// to agree (otherwise the spliced P-frames address a grid that no longer exists).
+pub fn avi_dimensions(bytes: &[u8]) -> Result<(u32, u32), MediaError> {
+    let layout = parse(bytes)?;
+    // `avih` layout: dwTotalFrames at +16, dwWidth at +32, dwHeight at +36, so the
+    // dimensions sit +16 / +20 past the total-frames slot we already located.
+    let width = read_u32(bytes, layout.avih_total_frames_pos + 16)?;
+    let height = read_u32(bytes, layout.avih_total_frames_pos + 20)?;
+    Ok((width, height))
+}
+
+/// Transfer the *modulator*'s motion onto the *carrier*'s content — the canonical
+/// "motion-transfer" mosh. The output keeps the carrier's leading I-frame
+/// (its appearance) and then replays the modulator's P-frames (its motion vectors +
+/// residuals), so the carrier's pixels are pushed around by motion that never
+/// belonged to them. Pure chunk surgery (no FFglitch): both clips are decoded by
+/// the same external MPEG-4 codec, so this stays in the experimental, non-
+/// deterministic carve-out.
+///
+/// `keep_carrier_frames` (clamped to `>= 1`) is how many leading carrier frames to
+/// keep before switching to the modulator's motion: `1` keeps only the I-frame
+/// (pure transfer); higher values keep some of the carrier's own motion first. The
+/// carrier supplies the rebuilt headers, so the output inherits its dimensions and
+/// `idx1` offset convention.
+pub fn transfer_motion(
+    carrier: &[u8],
+    modulator: &[u8],
+    keep_carrier_frames: u32,
+) -> Result<Vec<u8>, MediaError> {
+    let carrier_layout = parse(carrier)?;
+    let modulator_layout = parse(modulator)?;
+
+    let (cw, ch) = avi_dimensions(carrier)?;
+    let (mw, mh) = avi_dimensions(modulator)?;
+    if (cw, ch) != (mw, mh) {
+        return Err(MediaError::InvalidRequest(format!(
+            "carrier ({cw}x{ch}) and modulator ({mw}x{mh}) dimensions differ; \
+             encode both at the same size before motion transfer"
+        )));
+    }
+
+    if !carrier_layout
+        .chunks
+        .first()
+        .map(|c| c.keyframe)
+        .unwrap_or(false)
+    {
+        return Err(MediaError::InvalidRequest(
+            "the carrier's first video chunk is not a keyframe seed".to_string(),
+        ));
+    }
+    if modulator_layout.chunks.len() < 2 {
+        return Err(MediaError::InvalidRequest(
+            "the modulator needs at least one P-frame after its keyframe to transfer motion"
+                .to_string(),
+        ));
+    }
+
+    let keep = (keep_carrier_frames.max(1) as usize).min(carrier_layout.chunks.len());
+
+    let mut out_chunks: Vec<OutChunk> =
+        Vec::with_capacity(keep + modulator_layout.chunks.len() - 1);
+    let mut movi_data: Vec<u8> = Vec::new();
+
+    // Carrier seed: the I-frame (and any requested extra carrier frames).
+    for chunk in carrier_layout.chunks.iter().take(keep) {
+        movi_data.extend_from_slice(&carrier[chunk.start..chunk.start + chunk.total_len]);
+        out_chunks.push(OutChunk {
+            fourcc: chunk.fourcc,
+            data_size: chunk.data_size,
+            total_len: chunk.total_len,
+            keyframe: chunk.keyframe,
+        });
+    }
+    // Modulator motion: replay its P-frames, skipping its own leading I-frame.
+    for chunk in modulator_layout.chunks.iter().skip(1) {
+        movi_data.extend_from_slice(&modulator[chunk.start..chunk.start + chunk.total_len]);
+        out_chunks.push(OutChunk {
+            fourcc: chunk.fourcc,
+            data_size: chunk.data_size,
+            total_len: chunk.total_len,
+            keyframe: false,
+        });
+    }
+
+    rebuild_avi(carrier, &carrier_layout, &out_chunks, &movi_data)
+}
+
 fn rebuild_avi(
     bytes: &[u8],
     layout: &AviLayout,
@@ -461,11 +550,19 @@ mod tests {
     /// Build a minimal valid AVI: one video stream, `payloads.len()` frames
     /// (frame 0 = keyframe, rest = P-frames), with a movi-relative idx1 (base 4).
     fn synthetic_avi(payloads: &[Vec<u8>]) -> Vec<u8> {
+        synthetic_avi_dims(payloads, 16, 16)
+    }
+
+    /// As `synthetic_avi`, but with explicit `avih` dwWidth/dwHeight (offsets 32/36)
+    /// so the motion-transfer dimension guard can be exercised.
+    fn synthetic_avi_dims(payloads: &[Vec<u8>], width: u32, height: u32) -> Vec<u8> {
         let k = payloads.len();
 
         let mut avih = vec![0u8; 56];
         avih[AVIH_TOTAL_FRAMES_OFFSET..AVIH_TOTAL_FRAMES_OFFSET + 4]
             .copy_from_slice(&(k as u32).to_le_bytes());
+        avih[32..36].copy_from_slice(&width.to_le_bytes());
+        avih[36..40].copy_from_slice(&height.to_le_bytes());
 
         let mut strh = vec![0u8; 56];
         strh[0..4].copy_from_slice(FOURCC_VIDS);
@@ -593,5 +690,67 @@ mod tests {
     fn malformed_input_errors_cleanly() {
         let err = duplicate_p_frame(b"not an avi at all", 0, 1).expect_err("should reject");
         assert!(matches!(err, MediaError::MalformedAvi(_)));
+    }
+
+    #[test]
+    fn avi_dimensions_reads_avih_width_height() {
+        let avi = synthetic_avi_dims(&[vec![1, 2, 3], vec![4, 5]], 128, 96);
+        assert_eq!(avi_dimensions(&avi).expect("dims"), (128, 96));
+    }
+
+    #[test]
+    fn transfer_motion_keeps_carrier_seed_then_modulator_pframes() {
+        // Carrier: I-frame + 1 P-frame; modulator: I-frame + 3 P-frames.
+        let carrier = synthetic_avi(&[vec![100, 101, 102], vec![110, 111]]);
+        let modulator = synthetic_avi(&[
+            vec![1, 2, 3, 4],
+            vec![20, 21],
+            vec![30, 31, 32],
+            vec![40, 41],
+        ]);
+        let out = transfer_motion(&carrier, &modulator, 1).expect("transfer");
+        let layout = parse(&out).expect("reparse");
+
+        // 1 carrier seed frame + 3 modulator P-frames.
+        assert_eq!(layout.chunks.len(), 4);
+        // Frame 0 is the carrier's I-frame (its appearance), still a keyframe.
+        assert!(layout.chunks[0].keyframe);
+        let seed = &out[layout.chunks[0].start..layout.chunks[0].start + 8 + 3];
+        assert_eq!(&seed[8..11], &[100, 101, 102]);
+        // The rest are the modulator's P-frames (its motion), in order, never keyframes.
+        let p1 = &out[layout.chunks[1].start..layout.chunks[1].start + 8 + 2];
+        assert_eq!(&p1[8..10], &[20, 21]);
+        assert!(layout.chunks[1..].iter().all(|c| !c.keyframe));
+        // Headers reflect the spliced length.
+        assert_eq!(read_u32(&out, layout.avih_total_frames_pos).unwrap(), 4);
+        assert_eq!(read_u32(&out, layout.strh_length_pos.unwrap()).unwrap(), 4);
+    }
+
+    #[test]
+    fn transfer_motion_keep_carrier_frames_retains_carrier_motion() {
+        let carrier = synthetic_avi(&[vec![100, 101], vec![103, 104], vec![105, 106]]);
+        let modulator = synthetic_avi(&[vec![1, 2], vec![20, 21], vec![30, 31]]);
+        // Keep 2 carrier frames (I-frame + 1 carrier P-frame), then the modulator's.
+        let out = transfer_motion(&carrier, &modulator, 2).expect("transfer");
+        let layout = parse(&out).expect("reparse");
+        assert_eq!(layout.chunks.len(), 4); // 2 carrier + 2 modulator P-frames
+        let carrier_p = &out[layout.chunks[1].start..layout.chunks[1].start + 8 + 2];
+        assert_eq!(&carrier_p[8..10], &[103, 104]); // carrier's own first P-frame retained
+    }
+
+    #[test]
+    fn transfer_motion_rejects_dimension_mismatch() {
+        let carrier = synthetic_avi_dims(&[vec![1, 2], vec![3, 4]], 128, 96);
+        let modulator = synthetic_avi_dims(&[vec![1, 2], vec![3, 4]], 64, 64);
+        let err = transfer_motion(&carrier, &modulator, 1).expect_err("should reject");
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn transfer_motion_rejects_modulator_without_pframes() {
+        let carrier = synthetic_avi(&[vec![1, 2], vec![3, 4]]);
+        let modulator = synthetic_avi(&[vec![1, 2]]); // I-frame only
+        let err = transfer_motion(&carrier, &modulator, 1).expect_err("should reject");
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
     }
 }

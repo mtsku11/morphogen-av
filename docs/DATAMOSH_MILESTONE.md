@@ -123,6 +123,27 @@ Every new datamosh feature must ship with:
 - representative PNG frames or a contact sheet posted in the user-facing response
   so the output can be visually verified before the feature is treated as done.
 
+`scripts/datamosh-contact-sheet.py` is the standing tool for that last point. It
+renders the named destructive modes on the synthetic fixture and tiles sampled
+frames into one labeled review sheet (pure-stdlib PNG + a built-in 5×7 font, no
+deps), printing each deterministic mode's mean RGB cross-delta vs the PASSTHROUGH
+baseline alongside the pixels. The canonical mode set it covers:
+
+| Mode | Tier | Knobs |
+| --- | --- | --- |
+| PASSTHROUGH (baseline) | deterministic | `--keyframe-interval 1` (== Source B) |
+| CODEC BLOOM | deterministic | `--keyframe-interval 0 --amount 1.0` |
+| MACROBLOCK SLIDE | deterministic | `--keyframe-interval 0 --block-size 16` |
+| STRUCTURED MELT | deterministic | `+ --residual-gain 1.0 --residual-decay 0.9` |
+| MACROBLOCK ROT | deterministic | `+ --block-refresh-threshold 1.0` |
+| P-FRAME BLOOM | bitstream (`--video`) | `--operation pframe-duplicate --duplicate-count N` |
+| VOID MOSH | bitstream (`--video`) | `--operation remove-keyframe` |
+
+The deterministic rows are byte-reproducible (a true regression baseline); the
+bitstream rows need ffmpeg + a real clip and are flagged NON-DETERMINISTIC on the
+sheet (no stable baseline, per the carve-out below). Run:
+`scripts/datamosh-contact-sheet.py [out.png] [--video CLIP]`.
+
 ### Recursive-node Metal drift (known, accepted)
 
 Because this is a *recursive* node (Metal's output feeds its own next frame), the
@@ -293,6 +314,103 @@ smear only at the square's current position. Cross-delta grows **0 → 31.6/255*
 30 frames (frame 0 identical, both `B[0]`); the Metal refresh path renders (gate
 passes ⇒ Metal free).
 
+## Vector-remix tier (FFglitch MV sort/shuffle, deterministic) — LANDED (slice 1: CPU + CLI)
+
+The deterministic "family look" of FFglitch's motion-vector sort/shuffle, **on the
+optical-flow field rather than the codec bitstream** (chosen over an FFglitch
+external dependency or a pure-Rust MPEG-4 MV codec — see the user decision). The
+block-quantized flow *is* a per-block motion-vector grid (the same grid the block
+tier builds), exactly FFglitch's "vector" unit, so a remix is a **permutation of
+that block-MV grid** before the advection — pure flow→flow, so the displace stays
+the parity-gated kernel and **Metal comes free again** (no new kernel).
+
+`remix_block_vectors(flow, block_size, mode, seed)` (sharing a factored-out
+`block_mean_grid` with `quantize_flow_to_blocks`):
+- `--vector-remix sort` ⇒ reassign block MVs in **descending-magnitude** order along
+  the raster scan (top-left blocks take the strongest motion) ⇒ motion pools
+  coherently across the frame.
+- `--vector-remix shuffle` (`--remix-seed`) ⇒ a deterministic seeded Fisher–Yates
+  permutation ⇒ motion scrambles between blocks.
+- Both are **pure permutations** of the existing block MVs (no new magnitudes
+  invented), so total motion energy is preserved — only its spatial assignment moves.
+
+- **Algorithm id:** `datamosh_algorithm(block_size, residual_gain, refresh_threshold,
+  remix_mode)` gains a 4th arg; `remix_mode != None` **and** blocks ≥ 2px ⇒
+  `flow_reuse_datamosh_vector_remix_cpu_v1` (most-specific, takes precedence). `none`
+  or `block_size ≤ 1` ⇒ the prior precedence unchanged. In the render loop the remix
+  computes `effective` itself (precedence over residual; refresh can still composite).
+- **Continuity:** `--vector-remix none` ⇒ byte-identical to the block path;
+  `block_size ≤ 1` ⇒ the bloom path (remix is a no-op without macroblocks).
+- **Scope:** now a full vertical slice — CPU + CLI + persisted queue job +
+  SwiftUI. The schema mirror `VectorRemixMode` lives in core (with `RenderBackend`/
+  `KernelMode`); the persisted `frame_sequence_datamosh` job carries `vector_remix`
+  (serde-default `None`) + `remix_seed` (serde-default `0`), so jobs serialized
+  before this slice keep their id. `queue-add-datamosh-sequence` gained
+  `--vector-remix`/`--remix-seed`; `queue-run` maps the core mode to the render enum
+  (a free fn, orphan rule) and records both in the manifest. The macOS Render panel
+  adds a Vector Remix picker + a Remix Seed stepper (shown for Shuffle).
+
+### Acceptance criteria (vector remix)
+
+1. **Block continuity.** `--vector-remix none` ⇒ byte-identical to the block path.
+2. **Bloom continuity.** `block_size ≤ 1` ⇒ the bloom path regardless of mode.
+3. **Permutation.** the remixed block MVs are exactly the original block MVs
+   reordered (multiset preserved); `sort` is descending-magnitude.
+4. **Determinism.** same seed ⇒ byte-identical; a different seed differs.
+5. No `unwrap()` in library code.
+
+### Verification (off-vs-on)
+
+Datamosh fixture (bouncing-square A over a static stripe+dot B), block 16, full
+melt. `none` vs `sort` cross-delta grows **0 → 70.9/255** over 8 frames (frame 0
+identical, both `B[0]`); `none` vs `shuffle` (seed 42) grows **0 → ~37/255**
+(non-monotonic — a scramble, not a pooling). Re-rendered `sort` byte-identical
+(deterministic). Frames Read: `sort` redistributes the stripe displacement (the
+strong-motion block reassigned toward the top-left), `shuffle` scatters it into a
+different layout. The synthetic fixture concentrates motion in one band so the look
+is subtle; a real moving clip with motion spread across the frame shows it stronger.
+
+## Reusable Flow Sidecars, Resume, and Presets — LANDED
+
+The deterministic datamosh path now shares the same offline-render discipline as
+flow feedback: reusable analysis sidecars, validated resume state, and named
+recipes for destructive looks.
+
+- **Reusable Source A flow sidecars.** `render-datamosh-sequence --flow-cache-dir`
+  reads/writes one temporal optical-flow sidecar per P-frame at
+  `frame_000001/manifest.json` + `frame_000000.flowf32` (and so on). Sidecars use
+  `pyramidal_lucas_kanade_cpu_v1`, the existing cache format v2, and Source A
+  fingerprint validation; mismatched algorithm, dimensions, or source checksum
+  regenerates rather than silently reusing stale flow.
+- **Queued cache provenance.** `queue-add-datamosh-sequence` defaults the cache to
+  `job-0001/cache/datamosh-flow` when no explicit cache is supplied. The queued
+  job stores that path on `RenderJobTask::FrameSequenceDatamosh` and the output
+  manifest records it under both `datamosh.flow_cache_directory` and
+  `provenance.analysis_caches`.
+- **Disk checkpoint / resume.** Direct datamosh renders write `checkpoint.json`
+  plus unquantized `state/datamosh_output_frame_*.rgba32f` after every frame.
+  Residual-mode renders also persist `state/datamosh_residual_frame_*` flow-cache
+  directories. `--stop-after-frame` is the test hook; a subsequent identical
+  command resumes from `next_frame_index`. The checkpoint rejects changed source
+  provenance, settings, backend, job id, or unsafe relative state paths.
+- **Curated destructive presets.** `--preset custom|codec-bloom|structured-melt|
+  macroblock-rot|vector-shuffle` resolves to concrete deterministic settings
+  before rendering. `custom` preserves the explicit knobs. The persisted core job
+  carries `DatamoshPreset` with `serde(default)`, queue manifests record the
+  resolved settings, and SwiftUI exposes the preset picker beside Vector Remix.
+
+### Acceptance Criteria (sidecars / resume / presets)
+
+1. **Resume equivalence.** stop-after-one-frame + resume is byte-identical to an
+   uninterrupted render for the same inputs/settings.
+2. **Cache reuse.** a second render with the same Source A and cache directory
+   reuses generated temporal-flow sidecars.
+3. **Preset resolution.** the `vector-shuffle` preset resolves to the vector-remix
+   algorithm with block size 16 and deterministic seed handling.
+4. **Provenance.** queued datamosh jobs record the flow cache sidecar path and
+   producer in output provenance.
+5. No `unwrap()` in library code.
+
 ## Real bitstream mosh — P-frame bloom + keyframe removal — LANDED (experimental, non-deterministic)
 
 The authentic codec-artifact tier, shipped as a **standalone experimental CLI**
@@ -344,16 +462,50 @@ digits smear into macroblock glitches, blocky codec decay scatters across the fr
 frame-to-frame delta **5.982 → 4.081 /255** (repeated identical-motion frames change
 less per step than normal motion).
 
+## Real bitstream mosh — motion transfer — LANDED (experimental, non-deterministic)
+
+The classic "swap A's motion onto B's content" mosh, and — contrary to the
+original "likely FFglitch" guess — achievable with the **same pure-Rust AVI chunk
+surgery**, no FFglitch. Both clips are encoded to the P-frame-only MPEG-4
+substrate; `avi.rs::transfer_motion` keeps the **carrier**'s (Source B) leading
+I-frame (its appearance) and then replays the **modulator**'s (Source A) P-frames
+(its motion vectors + residuals), so B's pixels are pushed around by motion that
+never belonged to them. The carrier supplies the rebuilt headers (output inherits
+its dimensions + `idx1` convention), so the modulator is encoded **scaled to the
+carrier's size** (`encode_datamosh_avi_scaled`) — the macroblock grids must match,
+or the spliced P-frames address a grid that no longer exists (`transfer_motion`
+guards this with an `avi_dimensions` equality check).
+
+- **CLI:** `datamosh-bitstream <MODULATOR> <OUT> --operation motion-transfer
+  --carrier <CARRIER> [--carrier-keyframes N]`. For this op the positional `input`
+  is the modulator (Source A, motion donor); `--carrier` is Source B. Missing
+  `--carrier` is a clear error. `--carrier-keyframes` (default `1`) keeps that many
+  leading carrier frames before the modulator's motion takes over (`1` = pure
+  transfer = just the I-frame).
+- **Algorithm id:** `datamosh_bitstream_motion_transfer_experimental_v1`. The
+  sidecar records both `input` (modulator) and `carrier`, `carrier_keyframes`, and
+  the usual `deterministic: false` + ffmpeg version.
+- **Carve-out:** identical to P-frame bloom / keyframe removal — the surgery is
+  deterministic + unit-tested (5 new `avi.rs` tests: splice order, carrier-keyframes
+  retention, dimension-mismatch + no-P-frame rejection, `avi_dimensions`), but the
+  decoded look depends on the external MPEG-4 codec, so it lives outside the render
+  graph (no queue/SwiftUI/parity).
+- **Verification (off-vs-on, look check).** Modulator A = `testsrc2` (strong,
+  varied motion), carrier B = `mandelbrot` (a recognizable fractal), both 160×120
+  @ 24fps, `--operation motion-transfer --carrier mandelbrot.mp4`. Frame 1 of the
+  output is **byte-identical to the carrier** (the I-frame seed; cross-delta
+  0.000); subsequent frames show the fractal's palette dragged and smeared by
+  testsrc2's macroblock motion (testsrc2's moving structures bleed in as the
+  vectors carve B's content). Frame-to-frame delta **8.83/255** (vs the plain
+  carrier transcode's 3.94 — A's motion is more energetic than B's gentle zoom).
+  Read-confirmed: B's appearance, A's motion.
+
 ## Deferred
 
-- **Real bitstream mosh — further ops**: motion-transfer (swap A's vectors into B
-  — likely FFglitch). Same carve-out; P-frame bloom and leading-keyframe removal
-  are the pure-Rust AVI surgery ops landed so far. The richer FFglitch vocabulary
-  (sort/shuffle/fluid) stays deferred (see `/memory/datamosh-real-vs-simulated.md`).
+- **Real bitstream MV remix (the *true* codec artifact)**: sort/shuffle/fluid applied
+  to the actual MPEG-4 motion vectors (not the optical-flow approximation the
+  deterministic vector-remix tier delivers) genuinely needs FFglitch-class
+  packet/vector tooling or a pure-Rust MPEG-4 MV codec — deliberately not pursued
+  (see the vector-remix user decision + `/memory/datamosh-real-vs-simulated.md`).
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.
-- **Disk checkpoint / resume** — the RGBA32F state serializers exist
-  (`write_flow_feedback_state`); wiring the datamosh loop to resume mid-sequence
-  lands after the MVP.
-- **Reusable optical-flow sidecar** for A — the flow-feedback path already caches
-  temporal flow; sharing that cache here is a later optimization.

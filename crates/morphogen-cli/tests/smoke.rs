@@ -240,6 +240,81 @@ fn render_granular_mosaic_writes_image_and_frame_sequence() {
 }
 
 #[test]
+fn render_showcase_writes_preview_bundle_without_requiring_ffmpeg() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator");
+    let carrier_dir = temp_dir.path().join("carrier");
+    let output_dir = temp_dir.path().join("showcase");
+    write_texture_sequence(&modulator_dir, &[0, 1]);
+    write_texture_sequence(&carrier_dir, &[2, 3]);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-showcase",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--frames-per-effect",
+            "2",
+            "--frame-rate",
+            "12",
+            "--granular-grain-size",
+            "8",
+            "--seed",
+            "7",
+            "--no-mp4",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rendered destructive showcase"));
+
+    assert!(output_dir.join("showcase.json").exists());
+    assert!(output_dir.join("contact_sheet.png").exists());
+    assert!(output_dir.join("stills/01_flow_displace.png").exists());
+    assert!(output_dir.join("stills/04_vector_datamosh.png").exists());
+    for index in 0..8 {
+        assert!(output_dir
+            .join("frames")
+            .join(format!("frame_{index:06}.png"))
+            .exists());
+    }
+    assert!(!output_dir.join("showcase.mp4").exists());
+}
+
+#[test]
+fn feedback_iterations_are_rejected_by_cli_contract() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator");
+    let carrier_dir = temp_dir.path().join("carrier");
+    let output_dir = temp_dir.path().join("feedback");
+    write_texture_sequence(&modulator_dir, &[0, 1]);
+    write_texture_sequence(&carrier_dir, &[2, 3]);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--iterations",
+            "2",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("supports exactly one iteration"));
+}
+
+#[test]
 fn render_granular_mosaic_pool_sequence_writes_frames_and_pool_sidecar() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");
@@ -629,6 +704,146 @@ fn render_feedback_sequence_checkpoints_and_resumes() {
     )
     .expect("parse reset manifest");
     assert_eq!(reset_manifest["feedback_contract"]["reset_at_frame"], 1);
+}
+
+#[test]
+fn render_datamosh_sequence_reuses_flow_sidecars_and_resumes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let resumed_output_dir = temp_dir.path().join("resumed-output");
+    let uninterrupted_output_dir = temp_dir.path().join("uninterrupted-output");
+    let flow_cache_dir = temp_dir.path().join("datamosh-flow-cache");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let modulator_arg = modulator_dir.join(frame_name).to_string_lossy().to_string();
+        let carrier_arg = carrier_dir.join(frame_name).to_string_lossy().to_string();
+
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", modulator_arg.as_str()])
+            .assert()
+            .success();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", carrier_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let resumed_arg = resumed_output_dir.to_string_lossy().to_string();
+    let uninterrupted_arg = uninterrupted_output_dir.to_string_lossy().to_string();
+    let flow_cache_arg = flow_cache_dir.to_string_lossy().to_string();
+    let datamosh_args = [
+        "render-datamosh-sequence",
+        modulator_arg.as_str(),
+        carrier_arg.as_str(),
+        resumed_arg.as_str(),
+        "--keyframe-interval",
+        "0",
+        "--amount",
+        "1",
+        "--block-size",
+        "16",
+        "--residual-gain",
+        "0.5",
+        "--residual-decay",
+        "0.8",
+        "--flow-cache-dir",
+        flow_cache_arg.as_str(),
+        "--max-frames",
+        "3",
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(datamosh_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed datamosh sequence after frame 0",
+        ));
+
+    let partial_checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_output_dir.join("checkpoint.json"))
+            .expect("read partial datamosh checkpoint"),
+    )
+    .expect("parse partial datamosh checkpoint");
+    assert_eq!(partial_checkpoint["task"], "frame_sequence_datamosh");
+    assert_eq!(partial_checkpoint["status"], "running");
+    assert_eq!(partial_checkpoint["next_frame_index"], 1);
+    assert!(resumed_output_dir
+        .join("state/datamosh_output_frame_000000.rgba32f")
+        .exists());
+    assert!(resumed_output_dir.join("frame_000000.png").exists());
+    assert!(!flow_cache_dir.join("frame_000001/manifest.json").exists());
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(datamosh_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered datamosh sequence with 3 frame(s)",
+        ));
+
+    assert!(flow_cache_dir.join("frame_000001/manifest.json").exists());
+    assert!(flow_cache_dir
+        .join("frame_000001/frame_000000.flowf32")
+        .exists());
+    assert!(flow_cache_dir.join("frame_000002/manifest.json").exists());
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-datamosh-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            uninterrupted_arg.as_str(),
+            "--keyframe-interval",
+            "0",
+            "--amount",
+            "1",
+            "--block-size",
+            "16",
+            "--residual-gain",
+            "0.5",
+            "--residual-decay",
+            "0.8",
+            "--flow-cache-dir",
+            flow_cache_arg.as_str(),
+            "--max-frames",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "reused 2 and generated 0 datamosh optical-flow cache frame(s)",
+        ));
+
+    let final_checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_output_dir.join("checkpoint.json"))
+            .expect("read final datamosh checkpoint"),
+    )
+    .expect("parse final datamosh checkpoint");
+    assert_eq!(final_checkpoint["status"], "complete");
+    assert_eq!(final_checkpoint["next_frame_index"], 3);
+    assert_eq!(final_checkpoint["contract"]["settings"]["preset"], "custom");
+    assert_eq!(
+        final_checkpoint["provenance"]["analysis_caches"][0]["path"],
+        flow_cache_arg
+    );
+
+    for frame in ["frame_000000.png", "frame_000001.png", "frame_000002.png"] {
+        assert_eq!(
+            fs::read(resumed_output_dir.join(frame)).expect("resumed datamosh frame"),
+            fs::read(uninterrupted_output_dir.join(frame)).expect("uninterrupted datamosh frame"),
+            "resumed datamosh output must match uninterrupted render ({frame})"
+        );
+    }
 }
 
 #[test]
@@ -3125,6 +3340,7 @@ fn queue_datamosh_matches_direct_and_records_knobs() {
     assert_eq!(manifest["task"], "frame_sequence_datamosh");
     let knobs = &manifest["datamosh"];
     assert_eq!(knobs["algorithm"], "flow_reuse_datamosh_bloom_cpu_v1");
+    assert_eq!(knobs["preset"], "custom");
     assert_eq!(knobs["keyframe_interval"], 0);
     assert_eq!(knobs["amount"], 1.0);
     assert_eq!(knobs["block_size"], 1);
@@ -3135,6 +3351,13 @@ fn queue_datamosh_matches_direct_and_records_knobs() {
     // Per-block refresh default: threshold 0 (off ⇒ no block refresh).
     assert_eq!(knobs["block_refresh_threshold"], 0.0);
     assert_eq!(knobs["backend"], "CPU");
+    assert!(output_root
+        .join("job-0001/cache/datamosh-flow/frame_000001/manifest.json")
+        .exists());
+    assert_eq!(
+        manifest["provenance"]["analysis_caches"][0]["producer"],
+        "pyramidal_lucas_kanade_cpu_v1"
+    );
 }
 
 #[test]
@@ -3427,6 +3650,106 @@ fn queue_datamosh_refresh_path_records_refresh_algorithm_and_matches_direct() {
     );
     assert_eq!(knobs["block_size"], 16);
     assert_eq!(knobs["block_refresh_threshold"], 0.5);
+}
+
+#[test]
+fn queue_datamosh_vector_remix_path_records_remix_algorithm_and_matches_direct() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    // Identical modulator frames ⇒ zero flow ⇒ every block MV is zero ⇒ permuting
+    // zeros is still zero. This pins determinism + queue==direct + the curated
+    // vector-shuffle preset resolving to the vector-remix algorithm id.
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    for dir in [&modulator_dir, &carrier_dir] {
+        for frame_name in ["frame_000001.png", "frame_000002.png"] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-datamosh-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+            "--keyframe-interval",
+            "0",
+            "--amount",
+            "1",
+            "--preset",
+            "vector-shuffle",
+            "--remix-seed",
+            "42",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-datamosh-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--keyframe-interval",
+            "0",
+            "--amount",
+            "1",
+            "--preset",
+            "vector-shuffle",
+            "--remix-seed",
+            "42",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-datamosh-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    for frame in ["frame_000000.png", "frame_000001.png"] {
+        let queued = output_root.join("job-0001/frames").join(frame);
+        let direct = direct_dir.join(frame);
+        assert_eq!(
+            fs::read(&queued).expect("read queued frame"),
+            fs::read(&direct).expect("read direct frame"),
+            "queue render must be byte-identical to the direct render ({frame})"
+        );
+    }
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["datamosh"];
+    // block_size >= 2 AND vector_remix != none ⇒ the vector-remix algorithm id;
+    // the mode + seed round-trip through the persisted job into the manifest.
+    assert_eq!(
+        knobs["algorithm"],
+        "flow_reuse_datamosh_vector_remix_cpu_v1"
+    );
+    assert_eq!(knobs["preset"], "vector_shuffle");
+    assert_eq!(knobs["block_size"], 16);
+    assert_eq!(knobs["vector_remix"], "shuffle");
+    assert_eq!(knobs["remix_seed"], 42);
 }
 
 #[test]

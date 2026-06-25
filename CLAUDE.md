@@ -33,7 +33,7 @@ This file is the canonical entry point for agents (auto-loaded each session).
 ## Everyday Commands
 
 ```sh
-cargo test --workspace          # Rust tests (baseline: 343 passing across 7 crates)
+cargo test --workspace          # Rust tests (baseline: 355 passing across 7 crates)
 cargo build --workspace         # build all crates
 cargo run -p morphogen-cli -- <subcommand>   # engine validation path
 swift build && swift test       # macOS SwiftUI shell + its service tests
@@ -57,6 +57,11 @@ The full CLI catalog and key-path map are in **[docs/REFERENCE.md](docs/REFERENC
   (the pool render's 0.25 default scatters them).
 - **`scripts/frame-delta.py`** — mean frame-to-frame change of a PNG sequence; the
   quantitative half of the off-vs-on knob check (pair it with Reading the frames).
+- **`scripts/datamosh-contact-sheet.py`** — visual-regression review sheet for the
+  datamosh destructive modes: renders each named mode (Codec Bloom, Macroblock
+  Slide, Structured Melt, Macroblock Rot — and, with `--video`, the bitstream
+  P-Frame Bloom / Void Mosh) on the synthetic fixture, tiles sampled frames into
+  one labeled PNG, and prints each deterministic mode's cross-delta vs PASSTHROUGH.
 - **`/parity`** (project-local skill, `scripts/parity-check.sh`) — prove a
   granular-pool render is path-independent: render the same job via the direct CLI
   and the queue add→run path, byte-compare every frame, show the persisted

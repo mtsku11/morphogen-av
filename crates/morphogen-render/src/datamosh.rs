@@ -48,10 +48,37 @@ pub const DATAMOSH_BLOCK_RESIDUAL_ALGORITHM: &str = "flow_reuse_datamosh_block_r
 /// knobs are recorded separately and carry the rest).
 pub const DATAMOSH_BLOCK_REFRESH_ALGORITHM: &str = "flow_reuse_datamosh_block_refresh_cpu_v1";
 
-/// The datamosh policy id for a given `block_size`, `residual_gain`, and
-/// `refresh_threshold`. Precedence (most-specific active policy wins):
+/// Vector-remix datamosh policy id: the per-block motion-vector grid (the FFglitch
+/// "vector" unit — the same block-mean grid the block tier quantizes to) is
+/// **remixed** (sorted by magnitude or seeded-shuffled across blocks) before the
+/// advection, so motion is reorganized between macroblocks — the deterministic
+/// "family look" of FFglitch's MV sort/shuffle, on the optical-flow field rather
+/// than the codec bitstream. Still a pure flow→flow transform feeding the
+/// parity-gated `flow_displace`, so Metal stays free. A separate id; the
+/// `vector_remix` mode is recorded alongside.
+pub const DATAMOSH_VECTOR_REMIX_ALGORITHM: &str = "flow_reuse_datamosh_vector_remix_cpu_v1";
+
+/// How the per-block motion-vector grid is remixed before advection (the FFglitch
+/// "vector" operation, on the flow field). `None` (default) ⇒ no remix ⇒ the
+/// block-quantized flow unchanged (byte-identical off path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VectorRemixMode {
+    /// No remix — the block-quantized flow is used unchanged.
+    #[default]
+    None,
+    /// Reassign block MVs in descending-magnitude order along the raster scan, so
+    /// motion pools coherently across the frame (the "fluid sort" look).
+    Sort,
+    /// Apply a deterministic seeded permutation, so motion scrambles between blocks.
+    Shuffle,
+}
+
+/// The datamosh policy id for a given `block_size`, `residual_gain`,
+/// `refresh_threshold`, and `remix_mode`. Precedence (most-specific active policy
+/// wins):
 /// - blocks ≤ 1 (each pixel its own block) ⇒ the smooth bloom id (block quantize,
-///   residual, and refresh are all no-ops without macroblocks — recorded as bloom);
+///   residual, refresh, and remix are all no-ops without macroblocks);
+/// - blocks ≥ 2px **and** `remix_mode != None` ⇒ the vector-remix id;
 /// - blocks ≥ 2px **and** `refresh_threshold > 0` ⇒ the per-block refresh id;
 /// - blocks ≥ 2px and `residual_gain > 0` ⇒ the block-residual id;
 /// - blocks ≥ 2px otherwise ⇒ the codec-simulated block id.
@@ -59,9 +86,12 @@ pub fn datamosh_algorithm(
     block_size: u32,
     residual_gain: f32,
     refresh_threshold: f32,
+    remix_mode: VectorRemixMode,
 ) -> &'static str {
     if block_size < 2 {
         DATAMOSH_BLOOM_ALGORITHM
+    } else if remix_mode != VectorRemixMode::None {
+        DATAMOSH_VECTOR_REMIX_ALGORITHM
     } else if refresh_threshold > 0.0 {
         DATAMOSH_BLOCK_REFRESH_ALGORITHM
     } else if residual_gain > 0.0 {
@@ -135,6 +165,19 @@ pub fn quantize_flow_to_blocks(
     if block_size <= 1 {
         return Ok(flow.clone());
     }
+    let (blocks_x, _blocks_y, means) = block_mean_grid(flow, block_size);
+    FlowField::from_fn(flow.width, flow.height, |x, y| {
+        let bx = x / block_size;
+        let by = y / block_size;
+        means[(by * blocks_x + bx) as usize]
+    })
+}
+
+/// The per-block **mean** motion-vector grid: `(blocks_x, blocks_y, means)` where
+/// `means[by*blocks_x + bx]` is the f64-accumulated mean MV of that block (edge
+/// blocks average only the pixels they cover). Shared by `quantize_flow_to_blocks`
+/// and `remix_block_vectors`; deterministic (fixed iteration order).
+fn block_mean_grid(flow: &FlowField, block_size: u32) -> (u32, u32, Vec<[f32; 2]>) {
     let width = flow.width;
     let height = flow.height;
     let blocks_x = width.div_ceil(block_size);
@@ -163,10 +206,74 @@ pub fn quantize_flow_to_blocks(
             }
         }
     }
-    FlowField::from_fn(width, height, |x, y| {
+    (blocks_x, blocks_y, means)
+}
+
+/// One step of a deterministic splitmix64 PRNG — the seeded source for the shuffle
+/// permutation (so a given `seed` always yields the same remix).
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Remix the per-block motion-vector grid (the FFglitch "vector" unit), then expand
+/// it back to a full flow field — the parity-gated displace that follows is
+/// untouched (Metal stays free, exactly like `quantize_flow_to_blocks`).
+///
+/// `mode`:
+/// - [`VectorRemixMode::None`] (or `block_size ≤ 1`) ⇒ the block-quantized flow
+///   unchanged (byte-identical off path — block quantize without macroblocks is a
+///   no-op too).
+/// - [`VectorRemixMode::Sort`] ⇒ reassign block MVs in **descending-magnitude**
+///   order along the raster scan (top-left blocks take the strongest motion), so
+///   motion pools coherently across the frame.
+/// - [`VectorRemixMode::Shuffle`] ⇒ a deterministic seeded Fisher–Yates permutation
+///   of the block MVs, so motion scrambles between blocks.
+///
+/// Both remix modes are pure **permutations** of the existing block MVs (no new
+/// magnitudes are invented), so total motion energy is preserved — only its spatial
+/// assignment changes.
+pub fn remix_block_vectors(
+    flow: &FlowField,
+    block_size: u32,
+    mode: VectorRemixMode,
+    seed: u64,
+) -> Result<FlowField, RenderError> {
+    if mode == VectorRemixMode::None || block_size <= 1 {
+        return quantize_flow_to_blocks(flow, block_size);
+    }
+    let (blocks_x, _blocks_y, means) = block_mean_grid(flow, block_size);
+    let n = means.len();
+
+    // `order[i]` = which source block supplies the MV for raster block `i`.
+    let order: Vec<usize> = match mode {
+        VectorRemixMode::Sort => {
+            let mut idx: Vec<usize> = (0..n).collect();
+            let mag2 = |v: [f32; 2]| (v[0] as f64) * (v[0] as f64) + (v[1] as f64) * (v[1] as f64);
+            // Descending magnitude; ties keep raster order for determinism.
+            idx.sort_by(|&a, &b| mag2(means[b]).total_cmp(&mag2(means[a])).then(a.cmp(&b)));
+            idx
+        }
+        VectorRemixMode::Shuffle => {
+            let mut idx: Vec<usize> = (0..n).collect();
+            let mut state = seed;
+            for i in (1..n).rev() {
+                let j = (splitmix64(&mut state) % (i as u64 + 1)) as usize;
+                idx.swap(i, j);
+            }
+            idx
+        }
+        VectorRemixMode::None => unreachable!("None handled above"),
+    };
+
+    let remixed: Vec<[f32; 2]> = (0..n).map(|i| means[order[i]]).collect();
+    FlowField::from_fn(flow.width, flow.height, |x, y| {
         let bx = x / block_size;
         let by = y / block_size;
-        means[(by * blocks_x + bx) as usize]
+        remixed[(by * blocks_x + bx) as usize]
     })
 }
 
@@ -521,48 +628,102 @@ mod tests {
 
     #[test]
     fn algorithm_id_selects_block_only_for_coarse_blocks() {
+        let none = VectorRemixMode::None;
         // 0/1 ⇒ each pixel its own block ⇒ bloom path (no macroblocking).
-        assert_eq!(datamosh_algorithm(0, 0.0, 0.0), DATAMOSH_BLOOM_ALGORITHM);
-        assert_eq!(datamosh_algorithm(1, 0.0, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(0, 0.0, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(1, 0.0, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
         // ≥ 2 with no residual ⇒ the codec-simulated block id.
-        assert_eq!(datamosh_algorithm(2, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
-        assert_eq!(datamosh_algorithm(16, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(2, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
     }
 
     #[test]
     fn algorithm_id_selects_residual_only_when_active() {
+        let none = VectorRemixMode::None;
         // Residual id requires BOTH coarse blocks and a positive gain.
         assert_eq!(
-            datamosh_algorithm(16, 0.5, 0.0),
+            datamosh_algorithm(16, 0.5, 0.0, none),
             DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
         );
         // Gain 0 ⇒ block id even with coarse blocks.
-        assert_eq!(datamosh_algorithm(16, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
         // Residual is a no-op without quantization ⇒ bloom id regardless of gain.
-        assert_eq!(datamosh_algorithm(1, 0.5, 0.0), DATAMOSH_BLOOM_ALGORITHM);
-        assert_eq!(datamosh_algorithm(0, 0.9, 0.0), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(1, 0.5, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(0, 0.9, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
     }
 
     #[test]
     fn algorithm_id_selects_refresh_when_active() {
+        let none = VectorRemixMode::None;
         // Refresh id requires coarse blocks AND a positive threshold; it takes
         // precedence over residual in the recorded label.
         assert_eq!(
-            datamosh_algorithm(16, 0.0, 0.5),
+            datamosh_algorithm(16, 0.0, 0.5, none),
             DATAMOSH_BLOCK_REFRESH_ALGORITHM
         );
         assert_eq!(
-            datamosh_algorithm(16, 0.5, 0.5),
+            datamosh_algorithm(16, 0.5, 0.5, none),
             DATAMOSH_BLOCK_REFRESH_ALGORITHM
         );
         // Threshold 0 ⇒ falls back to residual / block as before.
         assert_eq!(
-            datamosh_algorithm(16, 0.5, 0.0),
+            datamosh_algorithm(16, 0.5, 0.0, none),
             DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
         );
-        assert_eq!(datamosh_algorithm(16, 0.0, 0.0), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
         // Refresh is a no-op without quantization ⇒ bloom id regardless of threshold.
-        assert_eq!(datamosh_algorithm(1, 0.0, 0.5), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(1, 0.0, 0.5, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
+    }
+
+    #[test]
+    fn algorithm_id_selects_vector_remix_when_active() {
+        // Remix id requires coarse blocks AND a non-None mode; it takes precedence
+        // over refresh/residual in the recorded label.
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, VectorRemixMode::Sort),
+            DATAMOSH_VECTOR_REMIX_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(16, 0.5, 0.5, VectorRemixMode::Shuffle),
+            DATAMOSH_VECTOR_REMIX_ALGORITHM
+        );
+        // None ⇒ falls back to the prior precedence.
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, VectorRemixMode::None),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
+        // Remix is a no-op without quantization ⇒ bloom id regardless of mode.
+        assert_eq!(
+            datamosh_algorithm(1, 0.0, 0.0, VectorRemixMode::Sort),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
     }
 
     #[test]
@@ -979,5 +1140,56 @@ mod tests {
         let keyframe = datamosh_block_frame_cpu(&carrier, Some(&previous), &flow, true, 1.0, 16)
             .expect("keyframe");
         assert_eq!(keyframe, carrier);
+    }
+
+    #[test]
+    fn remix_none_is_identical_to_block_quantize() {
+        let flow = FlowField::from_fn(4, 4, |x, y| [x as f32, y as f32]).expect("flow");
+        let quantized = quantize_flow_to_blocks(&flow, 2).expect("quantize");
+        let remixed = remix_block_vectors(&flow, 2, VectorRemixMode::None, 0).expect("remix");
+        assert_eq!(remixed, quantized);
+    }
+
+    #[test]
+    fn remix_is_no_op_without_macroblocks() {
+        // block_size <= 1 ⇒ the block grid is per-pixel ⇒ remix returns the flow
+        // unchanged regardless of mode (the bloom path).
+        let flow = FlowField::from_fn(3, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let remixed = remix_block_vectors(&flow, 1, VectorRemixMode::Shuffle, 7).expect("remix");
+        assert_eq!(remixed, flow);
+    }
+
+    #[test]
+    fn remix_sort_pools_strongest_motion_into_the_first_block() {
+        // Four 1x1 blocks (block_size 1 would be a no-op, so use a 4x1 flow with
+        // block_size 1? no — need >=2). Use a 4x1 flow, block_size 2 ⇒ two blocks:
+        // block 0 = mean of x∈{0,1} = 0.5, block 1 = mean of x∈{2,3} = 2.5.
+        let flow = FlowField::from_fn(4, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        let sorted = remix_block_vectors(&flow, 2, VectorRemixMode::Sort, 0).expect("sort");
+        // Descending magnitude ⇒ the stronger block (2.5) is reassigned to block 0
+        // (x∈{0,1}), the weaker (0.5) to block 1 (x∈{2,3}).
+        assert_eq!(sorted.vector(0, 0).unwrap(), [2.5, 0.0]);
+        assert_eq!(sorted.vector(1, 0).unwrap(), [2.5, 0.0]);
+        assert_eq!(sorted.vector(2, 0).unwrap(), [0.5, 0.0]);
+        assert_eq!(sorted.vector(3, 0).unwrap(), [0.5, 0.0]);
+    }
+
+    #[test]
+    fn remix_shuffle_is_a_deterministic_permutation_of_block_mvs() {
+        let flow = FlowField::from_fn(8, 1, |x, _| [x as f32, 0.0]).expect("flow");
+        // block_size 2 ⇒ 4 blocks with means 0.5, 2.5, 4.5, 6.5.
+        let a = remix_block_vectors(&flow, 2, VectorRemixMode::Shuffle, 42).expect("a");
+        let b = remix_block_vectors(&flow, 2, VectorRemixMode::Shuffle, 42).expect("b");
+        // Same seed ⇒ byte-identical (deterministic).
+        assert_eq!(a, b);
+        // A permutation reuses exactly the original block MVs (multiset preserved).
+        let block_mv = |field: &FlowField, block: u32| field.vector(block * 2, 0).unwrap()[0];
+        let mut got: Vec<f32> = (0..4).map(|blk| block_mv(&a, blk)).collect();
+        got.sort_by(|x, y| x.total_cmp(y));
+        assert_eq!(got, vec![0.5, 2.5, 4.5, 6.5]);
+        // A different seed yields a different assignment (with 4! permutations the
+        // chance of collision is low; these two seeds differ in practice).
+        let c = remix_block_vectors(&flow, 2, VectorRemixMode::Shuffle, 7).expect("c");
+        assert_ne!(a, c);
     }
 }
