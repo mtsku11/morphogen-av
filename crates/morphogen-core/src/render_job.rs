@@ -319,6 +319,14 @@ pub enum RenderJobTask {
         /// to `0`.
         #[serde(default)]
         remix_seed: u64,
+        /// Named destructive preset. `Custom` keeps the explicit knobs above.
+        /// Presets resolve to deterministic knob sets at render time.
+        #[serde(default)]
+        preset: DatamoshPreset,
+        /// Optional reusable temporal optical-flow cache root. Each P-frame stores
+        /// one `frame_XXXXXX/manifest.json` + `frame_000000.flowf32` sidecar.
+        #[serde(default)]
+        flow_cache_directory: Option<String>,
     },
     /// Convolutional AV blending (image kernel): each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved with
@@ -656,6 +664,24 @@ pub enum VectorRemixMode {
     Sort,
     /// Deterministic seeded permutation of block MVs (motion scrambles).
     Shuffle,
+}
+
+/// Named deterministic datamosh presets. Bitstream-only looks such as Void Mosh
+/// remain on `datamosh-bitstream --operation remove-keyframe`, outside the queue.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DatamoshPreset {
+    /// Use the explicit render knobs without modification.
+    #[default]
+    Custom,
+    /// Smooth recursive flow reuse: the foundational bloom/melt path.
+    CodecBloom,
+    /// Strong structured melt using block motion plus residual haze.
+    StructuredMelt,
+    /// Coarse macroblocks with residual haze and per-block refresh.
+    MacroblockRot,
+    /// Deterministic block-vector shuffle.
+    VectorShuffle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

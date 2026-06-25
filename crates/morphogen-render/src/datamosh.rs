@@ -254,11 +254,7 @@ pub fn remix_block_vectors(
             let mut idx: Vec<usize> = (0..n).collect();
             let mag2 = |v: [f32; 2]| (v[0] as f64) * (v[0] as f64) + (v[1] as f64) * (v[1] as f64);
             // Descending magnitude; ties keep raster order for determinism.
-            idx.sort_by(|&a, &b| {
-                mag2(means[b])
-                    .total_cmp(&mag2(means[a]))
-                    .then(a.cmp(&b))
-            });
+            idx.sort_by(|&a, &b| mag2(means[b]).total_cmp(&mag2(means[a])).then(a.cmp(&b)));
             idx
         }
         VectorRemixMode::Shuffle => {
@@ -634,11 +630,23 @@ mod tests {
     fn algorithm_id_selects_block_only_for_coarse_blocks() {
         let none = VectorRemixMode::None;
         // 0/1 ⇒ each pixel its own block ⇒ bloom path (no macroblocking).
-        assert_eq!(datamosh_algorithm(0, 0.0, 0.0, none), DATAMOSH_BLOOM_ALGORITHM);
-        assert_eq!(datamosh_algorithm(1, 0.0, 0.0, none), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(0, 0.0, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(1, 0.0, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
         // ≥ 2 with no residual ⇒ the codec-simulated block id.
-        assert_eq!(datamosh_algorithm(2, 0.0, 0.0, none), DATAMOSH_BLOCK_ALGORITHM);
-        assert_eq!(datamosh_algorithm(16, 0.0, 0.0, none), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(2, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
     }
 
     #[test]
@@ -650,10 +658,19 @@ mod tests {
             DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
         );
         // Gain 0 ⇒ block id even with coarse blocks.
-        assert_eq!(datamosh_algorithm(16, 0.0, 0.0, none), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
         // Residual is a no-op without quantization ⇒ bloom id regardless of gain.
-        assert_eq!(datamosh_algorithm(1, 0.5, 0.0, none), DATAMOSH_BLOOM_ALGORITHM);
-        assert_eq!(datamosh_algorithm(0, 0.9, 0.0, none), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(1, 0.5, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
+        assert_eq!(
+            datamosh_algorithm(0, 0.9, 0.0, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
     }
 
     #[test]
@@ -674,9 +691,15 @@ mod tests {
             datamosh_algorithm(16, 0.5, 0.0, none),
             DATAMOSH_BLOCK_RESIDUAL_ALGORITHM
         );
-        assert_eq!(datamosh_algorithm(16, 0.0, 0.0, none), DATAMOSH_BLOCK_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(16, 0.0, 0.0, none),
+            DATAMOSH_BLOCK_ALGORITHM
+        );
         // Refresh is a no-op without quantization ⇒ bloom id regardless of threshold.
-        assert_eq!(datamosh_algorithm(1, 0.0, 0.5, none), DATAMOSH_BLOOM_ALGORITHM);
+        assert_eq!(
+            datamosh_algorithm(1, 0.0, 0.5, none),
+            DATAMOSH_BLOOM_ALGORITHM
+        );
     }
 
     #[test]

@@ -7,9 +7,10 @@ use morphogen_audio::{
     PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
 };
 use morphogen_core::{
-    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
-    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteDescriptor,
-    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
+    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, DatamoshPreset,
+    FlowSource, GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole,
+    VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
+    VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
     CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
@@ -325,10 +326,19 @@ pub(crate) enum Commands {
         /// Seed for `--vector-remix shuffle` (deterministic permutation).
         #[arg(long, default_value_t = 0)]
         remix_seed: u64,
+        /// Named deterministic destructive preset. `custom` keeps the explicit knobs.
+        #[arg(long, value_enum, default_value_t = CliDatamoshPreset::Custom)]
+        preset: CliDatamoshPreset,
+        /// Reuse/write per-frame temporal optical-flow sidecars.
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
+        /// Stop after writing one frame and a resumable float-state checkpoint.
+        #[arg(long)]
+        stop_after_frame: bool,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
     /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
@@ -1340,6 +1350,12 @@ pub(crate) enum Commands {
         /// Seed for `--vector-remix shuffle` (deterministic permutation).
         #[arg(long, default_value_t = 0)]
         remix_seed: u64,
+        /// Named deterministic destructive preset. `custom` keeps the explicit knobs.
+        #[arg(long, value_enum, default_value_t = CliDatamoshPreset::Custom)]
+        preset: CliDatamoshPreset,
+        /// Reuse/write per-frame temporal optical-flow sidecars.
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]
@@ -1801,12 +1817,34 @@ pub(crate) enum CliVectorRemixMode {
     Shuffle,
 }
 
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliDatamoshPreset {
+    #[default]
+    Custom,
+    CodecBloom,
+    StructuredMelt,
+    MacroblockRot,
+    VectorShuffle,
+}
+
 impl From<CliVectorRemixMode> for VectorRemixMode {
     fn from(value: CliVectorRemixMode) -> Self {
         match value {
             CliVectorRemixMode::None => Self::None,
             CliVectorRemixMode::Sort => Self::Sort,
             CliVectorRemixMode::Shuffle => Self::Shuffle,
+        }
+    }
+}
+
+impl From<CliDatamoshPreset> for DatamoshPreset {
+    fn from(value: CliDatamoshPreset) -> Self {
+        match value {
+            CliDatamoshPreset::Custom => Self::Custom,
+            CliDatamoshPreset::CodecBloom => Self::CodecBloom,
+            CliDatamoshPreset::StructuredMelt => Self::StructuredMelt,
+            CliDatamoshPreset::MacroblockRot => Self::MacroblockRot,
+            CliDatamoshPreset::VectorShuffle => Self::VectorShuffle,
         }
     }
 }

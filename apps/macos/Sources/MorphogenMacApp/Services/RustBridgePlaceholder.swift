@@ -1252,6 +1252,8 @@ enum RustBridgePlaceholder {
       cliNumber(request.blockRefreshThreshold),
       "--vector-remix",
       request.vectorRemix.cliValue,
+      "--preset",
+      request.preset.cliValue,
       "--remix-seed",
       String(request.remixSeed),
       "--backend",
@@ -2144,6 +2146,7 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   let residualDecay: Double
   let blockRefreshThreshold: Double
   let vectorRemix: DatamoshVectorRemixOption
+  let preset: DatamoshPresetOption
   let remixSeed: Int
   let maxFrames: Int?
   let backend: FeedbackRenderBackendOption

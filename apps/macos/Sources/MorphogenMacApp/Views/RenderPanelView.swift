@@ -883,6 +883,14 @@ struct RenderPanelView: View {
           }
 
           HStack(spacing: 16) {
+            Picker("Preset", selection: $state.datamoshPreset) {
+              ForEach(DatamoshPresetOption.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+              }
+            }
+            .frame(width: 220)
+            .help("Curated destructive recipes override the detailed datamosh knobs at render time. Custom uses the controls below.")
+
             Picker("Vector Remix", selection: $state.datamoshVectorRemix) {
               ForEach(DatamoshVectorRemixOption.allCases) { mode in
                 Text(mode.rawValue).tag(mode)

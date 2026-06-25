@@ -136,6 +136,7 @@ final class AppState: ObservableObject {
   @Published var datamoshResidualDecay = 0.9
   @Published var datamoshBlockRefreshThreshold = 0.0
   @Published var datamoshVectorRemix: DatamoshVectorRemixOption = .none
+  @Published var datamoshPreset: DatamoshPresetOption = .custom
   @Published var datamoshRemixSeed = 0
   @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
   @Published var datamoshSummary = "No datamosh rendered"
@@ -1253,6 +1254,7 @@ final class AppState: ObservableObject {
       residualDecay: datamoshResidualDecay,
       blockRefreshThreshold: datamoshBlockRefreshThreshold,
       vectorRemix: datamoshVectorRemix,
+      preset: datamoshPreset,
       remixSeed: datamoshRemixSeed,
       maxFrames: nil,
       backend: datamoshBackend,
@@ -1763,6 +1765,31 @@ enum DatamoshVectorRemixOption: String, CaseIterable, Identifiable {
       return "sort"
     case .shuffle:
       return "shuffle"
+    }
+  }
+}
+
+enum DatamoshPresetOption: String, CaseIterable, Identifiable {
+  case custom = "Custom"
+  case codecBloom = "Codec Bloom"
+  case structuredMelt = "Structured Melt"
+  case macroblockRot = "Macroblock Rot"
+  case vectorShuffle = "Vector Shuffle"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .custom:
+      return "custom"
+    case .codecBloom:
+      return "codec-bloom"
+    case .structuredMelt:
+      return "structured-melt"
+    case .macroblockRot:
+      return "macroblock-rot"
+    case .vectorShuffle:
+      return "vector-shuffle"
     }
   }
 }

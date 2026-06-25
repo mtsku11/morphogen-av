@@ -5,11 +5,12 @@ use std::{
 
 use morphogen_audio::{save_wav_f32, AudioBufferF32};
 use morphogen_core::{
-    AnalysisKind, ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation,
-    KernelMode, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
-    RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
-    RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
-    VectorRemixMode, VideoVocoderMode,
+    AnalysisKind, DatamoshPreset, ExportFormat, FlowSource, GrainSelectionMode,
+    GranularAudioModulation, KernelMode, RenderBackend, RenderJob,
+    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
+    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
+    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode,
+    VideoVocoderMode,
 };
 use morphogen_render::{
     datamosh_algorithm, flow_displace_cpu, ConvolutionBlendSettings, FieldParticleSettings,
@@ -2204,6 +2205,8 @@ pub(crate) struct QueueAddDatamoshSequenceRequest<'a> {
     pub(crate) refresh_threshold: f32,
     pub(crate) vector_remix: VectorRemixMode,
     pub(crate) remix_seed: u64,
+    pub(crate) preset: DatamoshPreset,
+    pub(crate) flow_cache_dir: Option<&'a Path>,
     pub(crate) max_frames: Option<u32>,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) backend: RenderBackend,
@@ -2217,15 +2220,6 @@ fn render_vector_remix(mode: VectorRemixMode) -> morphogen_render::VectorRemixMo
         VectorRemixMode::None => morphogen_render::VectorRemixMode::None,
         VectorRemixMode::Sort => morphogen_render::VectorRemixMode::Sort,
         VectorRemixMode::Shuffle => morphogen_render::VectorRemixMode::Shuffle,
-    }
-}
-
-/// Manifest label for the persisted vector-remix mode.
-fn vector_remix_label(mode: VectorRemixMode) -> &'static str {
-    match mode {
-        VectorRemixMode::None => "none",
-        VectorRemixMode::Sort => "sort",
-        VectorRemixMode::Shuffle => "shuffle",
     }
 }
 
@@ -2245,6 +2239,8 @@ pub(crate) fn queue_add_datamosh_sequence(
         refresh_threshold,
         vector_remix,
         remix_seed,
+        preset,
+        flow_cache_dir,
         max_frames,
         project_path,
         backend,
@@ -2282,21 +2278,11 @@ pub(crate) fn queue_add_datamosh_sequence(
     };
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
     let job_output_dir = output_root_dir.join(&job_id);
-    let provenance = RenderJobProvenance {
-        sources: vec![
-            RenderJobSourceProvenance {
-                source_id: "source-a-frames".to_string(),
-                role: SourceRole::Modulator,
-                path: modulator_dir.to_string_lossy().to_string(),
-            },
-            RenderJobSourceProvenance {
-                source_id: "source-b-frames".to_string(),
-                role: SourceRole::Carrier,
-                path: carrier_dir.to_string_lossy().to_string(),
-            },
-        ],
-        analysis_caches: Vec::new(),
-    };
+    let flow_cache_directory = flow_cache_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| job_output_dir.join("cache").join("datamosh-flow"));
+    let provenance =
+        datamosh_sequence_provenance(modulator_dir, carrier_dir, Some(&flow_cache_directory));
 
     queue.enqueue(RenderJob {
         id: job_id.clone(),
@@ -2326,6 +2312,8 @@ pub(crate) fn queue_add_datamosh_sequence(
             block_refresh_threshold: refresh_threshold,
             vector_remix,
             remix_seed,
+            preset,
+            flow_cache_directory: Some(flow_cache_directory.to_string_lossy().to_string()),
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -2373,6 +2361,8 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
         block_refresh_threshold,
         vector_remix,
         remix_seed,
+        preset,
+        flow_cache_directory,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2380,14 +2370,17 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
         ));
     };
     let output_dir = PathBuf::from(output_directory);
+    let flow_cache_path = flow_cache_directory.as_deref().map(PathBuf::from);
+    let provenance = queue.jobs[job_index].provenance.clone();
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
-        let render_result = render_datamosh_sequence(DatamoshSequenceRequest {
+        let render_request = DatamoshSequenceRequest {
             modulator_dir: Path::new(&modulator_frame_directory),
             carrier_dir: Path::new(&carrier_frame_directory),
             output_dir: &output_dir.join("frames"),
+            flow_cache_dir: flow_cache_path.as_deref(),
             keyframe_interval,
             amount,
             block_size,
@@ -2396,9 +2389,15 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             refresh_threshold: block_refresh_threshold,
             vector_remix: render_vector_remix(vector_remix),
             remix_seed,
+            preset,
             backend,
             max_frames: max_frames.map(|value| value as usize),
-        })?;
+            job_id: &job_id,
+            provenance: provenance.as_ref(),
+            stop_after_frame: false,
+        };
+        let resolved_settings = resolve_datamosh_settings(&render_request);
+        let render_result = render_datamosh_sequence(render_request)?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
         })?;
@@ -2430,22 +2429,24 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             },
             "datamosh": {
                 "algorithm": datamosh_algorithm(
-                    block_size,
-                    residual_gain,
-                    block_refresh_threshold,
-                    render_vector_remix(vector_remix),
+                    resolved_settings.block_size,
+                    resolved_settings.residual_gain,
+                    resolved_settings.refresh_threshold,
+                    resolved_settings.vector_remix_mode(),
                 ),
-                "keyframe_interval": keyframe_interval,
-                "amount": amount,
-                "block_size": block_size,
-                "residual_gain": residual_gain,
-                "residual_decay": residual_decay,
-                "block_refresh_threshold": block_refresh_threshold,
-                "vector_remix": vector_remix_label(vector_remix),
-                "remix_seed": remix_seed,
+                "preset": datamosh_preset_label(preset),
+                "keyframe_interval": resolved_settings.keyframe_interval,
+                "amount": resolved_settings.amount,
+                "block_size": resolved_settings.block_size,
+                "residual_gain": resolved_settings.residual_gain,
+                "residual_decay": resolved_settings.residual_decay,
+                "block_refresh_threshold": resolved_settings.refresh_threshold,
+                "vector_remix": resolved_settings.vector_remix,
+                "remix_seed": resolved_settings.remix_seed,
+                "flow_cache_directory": flow_cache_directory,
                 "backend": render_backend_label(backend)
             },
-            "provenance": queue.jobs[job_index].provenance,
+            "provenance": provenance,
             "deterministic": true
         });
         fs::write(

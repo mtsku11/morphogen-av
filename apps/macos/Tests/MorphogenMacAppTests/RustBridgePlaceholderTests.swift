@@ -753,6 +753,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.8,
       blockRefreshThreshold: 1.5,
       vectorRemix: .shuffle,
+      preset: .vectorShuffle,
       remixSeed: 42,
       maxFrames: 48,
       backend: .metal,
@@ -778,6 +779,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--residual-decay", in: arguments), "0.8")
     XCTAssertEqual(Self.value(after: "--block-refresh-threshold", in: arguments), "1.5")
     XCTAssertEqual(Self.value(after: "--vector-remix", in: arguments), "shuffle")
+    XCTAssertEqual(Self.value(after: "--preset", in: arguments), "vector-shuffle")
     XCTAssertEqual(Self.value(after: "--remix-seed", in: arguments), "42")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
     XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
@@ -796,6 +798,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
@@ -820,6 +823,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
@@ -844,6 +848,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
@@ -868,6 +873,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: -0.5, // negative refresh threshold
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,

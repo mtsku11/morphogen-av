@@ -370,6 +370,47 @@ strong-motion block reassigned toward the top-left), `shuffle` scatters it into 
 different layout. The synthetic fixture concentrates motion in one band so the look
 is subtle; a real moving clip with motion spread across the frame shows it stronger.
 
+## Reusable Flow Sidecars, Resume, and Presets — LANDED
+
+The deterministic datamosh path now shares the same offline-render discipline as
+flow feedback: reusable analysis sidecars, validated resume state, and named
+recipes for destructive looks.
+
+- **Reusable Source A flow sidecars.** `render-datamosh-sequence --flow-cache-dir`
+  reads/writes one temporal optical-flow sidecar per P-frame at
+  `frame_000001/manifest.json` + `frame_000000.flowf32` (and so on). Sidecars use
+  `pyramidal_lucas_kanade_cpu_v1`, the existing cache format v2, and Source A
+  fingerprint validation; mismatched algorithm, dimensions, or source checksum
+  regenerates rather than silently reusing stale flow.
+- **Queued cache provenance.** `queue-add-datamosh-sequence` defaults the cache to
+  `job-0001/cache/datamosh-flow` when no explicit cache is supplied. The queued
+  job stores that path on `RenderJobTask::FrameSequenceDatamosh` and the output
+  manifest records it under both `datamosh.flow_cache_directory` and
+  `provenance.analysis_caches`.
+- **Disk checkpoint / resume.** Direct datamosh renders write `checkpoint.json`
+  plus unquantized `state/datamosh_output_frame_*.rgba32f` after every frame.
+  Residual-mode renders also persist `state/datamosh_residual_frame_*` flow-cache
+  directories. `--stop-after-frame` is the test hook; a subsequent identical
+  command resumes from `next_frame_index`. The checkpoint rejects changed source
+  provenance, settings, backend, job id, or unsafe relative state paths.
+- **Curated destructive presets.** `--preset custom|codec-bloom|structured-melt|
+  macroblock-rot|vector-shuffle` resolves to concrete deterministic settings
+  before rendering. `custom` preserves the explicit knobs. The persisted core job
+  carries `DatamoshPreset` with `serde(default)`, queue manifests record the
+  resolved settings, and SwiftUI exposes the preset picker beside Vector Remix.
+
+### Acceptance Criteria (sidecars / resume / presets)
+
+1. **Resume equivalence.** stop-after-one-frame + resume is byte-identical to an
+   uninterrupted render for the same inputs/settings.
+2. **Cache reuse.** a second render with the same Source A and cache directory
+   reuses generated temporal-flow sidecars.
+3. **Preset resolution.** the `vector-shuffle` preset resolves to the vector-remix
+   algorithm with block size 16 and deterministic seed handling.
+4. **Provenance.** queued datamosh jobs record the flow cache sidecar path and
+   producer in output provenance.
+5. No `unwrap()` in library code.
+
 ## Real bitstream mosh — P-frame bloom + keyframe removal — LANDED (experimental, non-deterministic)
 
 The authentic codec-artifact tier, shipped as a **standalone experimental CLI**
@@ -468,8 +509,3 @@ guards this with an `avi_dimensions` equality check).
   (see the vector-remix user decision + `/memory/datamosh-real-vs-simulated.md`).
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.
-- **Disk checkpoint / resume** — the RGBA32F state serializers exist
-  (`write_flow_feedback_state`); wiring the datamosh loop to resume mid-sequence
-  lands after the MVP.
-- **Reusable optical-flow sidecar** for A — the flow-feedback path already caches
-  temporal flow; sharing that cache here is a later optimization.

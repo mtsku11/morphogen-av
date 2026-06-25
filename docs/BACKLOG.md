@@ -55,6 +55,8 @@ contracts live in the `*_MILESTONE.md` docs.
 - Implement `advect_feedback.metal` and gate every Metal output frame against the CPU reference.
 - Add a temporal Lucas-Kanade optical-flow analysis and make it the feedback job's default flow source.
 - Add experimental real-bitstream datamosh keyframe-removal (`datamosh-bitstream --operation remove-keyframe`) on the existing pure-Rust AVI surgery path.
+- Add reusable controlled-datamosh Source A optical-flow sidecars, disk resume
+  checkpoints, and curated destructive presets across CLI, queue, and SwiftUI.
 
 ## Next
 
