@@ -835,6 +835,116 @@ fn run() -> Result<(), CliError> {
             flow_source: flow_source.into(),
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddFluidAdvectSequence {
+            queue_path,
+            source_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            advect,
+            turbulence_scale,
+            turbulence_speed,
+            detail,
+            reinject,
+            seed,
+            backend,
+            project_path,
+        } => queue_add_fluid_advect_sequence(QueueAddFluidAdvectSequenceRequest {
+            queue_path: &queue_path,
+            source_dir: &source_dir,
+            output_root_dir: &output_root_dir,
+            settings: FluidAdvectSettings {
+                advect,
+                turbulence_scale,
+                turbulence_speed,
+                detail,
+                reinject,
+                seed,
+            },
+            frames,
+            frame_rate,
+            backend: backend.into(),
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueAddFluidAdvectTwoSourceSequence {
+            queue_path,
+            source_a_dir,
+            source_b_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            advect,
+            reinject,
+            backend,
+            project_path,
+        } => queue_add_fluid_advect_two_source_sequence(
+            QueueAddFluidAdvectTwoSourceSequenceRequest {
+                queue_path: &queue_path,
+                source_a_dir: &source_a_dir,
+                source_b_dir: &source_b_dir,
+                output_root_dir: &output_root_dir,
+                settings: FluidAdvectTwoSourceSettings { advect, reinject },
+                frames,
+                frame_rate,
+                backend: backend.into(),
+                project_path: project_path.as_deref(),
+            },
+        ),
+        Commands::QueueAddOpticalFlowAdvectSequence {
+            queue_path,
+            source_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            advect,
+            reinject,
+            backend,
+            project_path,
+        } => queue_add_optical_flow_advect_sequence(QueueAddOpticalFlowAdvectSequenceRequest {
+            queue_path: &queue_path,
+            source_dir: &source_dir,
+            output_root_dir: &output_root_dir,
+            settings: FluidAdvectTwoSourceSettings { advect, reinject },
+            frames,
+            frame_rate,
+            backend: backend.into(),
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueAddFieldParticlesSequence {
+            queue_path,
+            source_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            spacing,
+            particle_size,
+            advect,
+            turbulence_scale,
+            turbulence_speed,
+            detail,
+            live_colour,
+            seed,
+            backend,
+            project_path,
+        } => queue_add_field_particles_sequence(QueueAddFieldParticlesSequenceRequest {
+            queue_path: &queue_path,
+            source_dir: &source_dir,
+            output_root_dir: &output_root_dir,
+            settings: FieldParticleSettings {
+                spacing,
+                particle_size,
+                advect,
+                turbulence_scale,
+                turbulence_speed,
+                detail,
+                live_color: live_colour,
+                seed,
+            },
+            frames,
+            frame_rate,
+            backend: backend.into(),
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueAddGranularMosaicSequence {
             queue_path,
             modulator_dir,
@@ -1135,6 +1245,18 @@ fn run() -> Result<(), CliError> {
         Commands::QueueRunFrameSequence { queue_path } => queue_run_frame_sequence(&queue_path),
         Commands::QueueRunFeedbackSequence { queue_path } => {
             queue_run_feedback_sequence(&queue_path)
+        }
+        Commands::QueueRunFluidAdvectSequence { queue_path } => {
+            queue_run_fluid_advect_sequence(&queue_path)
+        }
+        Commands::QueueRunFluidAdvectTwoSourceSequence { queue_path } => {
+            queue_run_fluid_advect_two_source_sequence(&queue_path)
+        }
+        Commands::QueueRunOpticalFlowAdvectSequence { queue_path } => {
+            queue_run_optical_flow_advect_sequence(&queue_path)
+        }
+        Commands::QueueRunFieldParticlesSequence { queue_path } => {
+            queue_run_field_particles_sequence(&queue_path)
         }
         Commands::QueueRunGranularMosaicSequence { queue_path } => {
             queue_run_granular_mosaic_sequence(&queue_path)

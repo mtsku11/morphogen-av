@@ -12,8 +12,10 @@ use morphogen_core::{
     VideoVocoderMode,
 };
 use morphogen_render::{
-    datamosh_algorithm, flow_displace_cpu, ConvolutionBlendSettings, FlowFeedbackSettings,
-    GranularMosaicSettings, StructureMode, VideoVocoderSettings, POOLED_GRAIN_ALGORITHM,
+    datamosh_algorithm, flow_displace_cpu, ConvolutionBlendSettings, FieldParticleSettings,
+    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
+    GranularMosaicSettings, StructureMode, VideoVocoderSettings, FIELD_PARTICLES_ALGORITHM,
+    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
     RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
@@ -61,6 +63,75 @@ pub(crate) fn queue_add_test(
     queue.save_json(queue_path)?;
     println!("queued render job {job_id} in {}", queue_path.display());
     Ok(())
+}
+
+fn load_or_default_queue(queue_path: &Path) -> Result<RenderQueue, CliError> {
+    if queue_path.exists() {
+        Ok(RenderQueue::load_json(queue_path)?)
+    } else {
+        Ok(RenderQueue::default())
+    }
+}
+
+fn png_sequence_settings(_frame_rate: f64) -> RenderSettings {
+    RenderSettings {
+        width: 1920,
+        height: 1080,
+        quality: RenderQuality::HighQualityOffline,
+        export_format: ExportFormat::ImageSequence {
+            extension: "png".to_string(),
+            bit_depth: 8,
+        },
+        temporal_supersampling: 1,
+        deterministic: true,
+    }
+}
+
+fn validate_queued_sequence_timing(frames: u32, frame_rate: f64) -> Result<(), CliError> {
+    if frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn single_source_provenance(
+    source_id: &str,
+    role: SourceRole,
+    source_dir: &Path,
+) -> RenderJobProvenance {
+    RenderJobProvenance {
+        sources: vec![RenderJobSourceProvenance {
+            source_id: source_id.to_string(),
+            role,
+            path: source_dir.to_string_lossy().to_string(),
+        }],
+        analysis_caches: Vec::new(),
+    }
+}
+
+fn two_source_provenance(modulator_dir: &Path, carrier_dir: &Path) -> RenderJobProvenance {
+    RenderJobProvenance {
+        sources: vec![
+            RenderJobSourceProvenance {
+                source_id: "source-a-frames".to_string(),
+                role: SourceRole::Modulator,
+                path: modulator_dir.to_string_lossy().to_string(),
+            },
+            RenderJobSourceProvenance {
+                source_id: "source-b-frames".to_string(),
+                role: SourceRole::Carrier,
+                path: carrier_dir.to_string_lossy().to_string(),
+            },
+        ],
+        analysis_caches: Vec::new(),
+    }
 }
 
 pub(crate) struct QueueAddFrameSequenceRequest<'a> {
@@ -174,6 +245,259 @@ pub(crate) fn queue_add_frame_sequence(
     queue.save_json(queue_path)?;
     println!(
         "queued frame-sequence render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) struct QueueAddFluidAdvectSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: FluidAdvectSettings,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) backend: RenderBackend,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_fluid_advect_sequence(
+    request: QueueAddFluidAdvectSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddFluidAdvectSequenceRequest {
+        queue_path,
+        source_dir,
+        output_root_dir,
+        settings,
+        frames,
+        frame_rate,
+        backend,
+        project_path,
+    } = request;
+    settings.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceFluidAdvect {
+            source_frame_directory: source_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            advect: settings.advect,
+            turbulence_scale: settings.turbulence_scale,
+            turbulence_speed: settings.turbulence_speed,
+            detail: settings.detail,
+            reinject: settings.reinject,
+            seed: settings.seed,
+            backend,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            source_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued fluid-advect render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) struct QueueAddFluidAdvectTwoSourceSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: FluidAdvectTwoSourceSettings,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) backend: RenderBackend,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_fluid_advect_two_source_sequence(
+    request: QueueAddFluidAdvectTwoSourceSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddFluidAdvectTwoSourceSequenceRequest {
+        queue_path,
+        source_a_dir,
+        source_b_dir,
+        output_root_dir,
+        settings,
+        frames,
+        frame_rate,
+        backend,
+        project_path,
+    } = request;
+    settings.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceFluidAdvectTwoSource {
+            modulator_frame_directory: source_a_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: source_b_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            advect: settings.advect,
+            reinject: settings.reinject,
+            backend,
+        },
+        provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued two-source fluid-advect render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) struct QueueAddOpticalFlowAdvectSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: FluidAdvectTwoSourceSettings,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) backend: RenderBackend,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_optical_flow_advect_sequence(
+    request: QueueAddOpticalFlowAdvectSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddOpticalFlowAdvectSequenceRequest {
+        queue_path,
+        source_dir,
+        output_root_dir,
+        settings,
+        frames,
+        frame_rate,
+        backend,
+        project_path,
+    } = request;
+    settings.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceOpticalFlowAdvect {
+            source_frame_directory: source_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            advect: settings.advect,
+            reinject: settings.reinject,
+            backend,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            source_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued optical-flow advect render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) struct QueueAddFieldParticlesSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: FieldParticleSettings,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) backend: RenderBackend,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_field_particles_sequence(
+    request: QueueAddFieldParticlesSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddFieldParticlesSequenceRequest {
+        queue_path,
+        source_dir,
+        output_root_dir,
+        settings,
+        frames,
+        frame_rate,
+        backend,
+        project_path,
+    } = request;
+    settings.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceFieldParticles {
+            source_frame_directory: source_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            spacing: settings.spacing,
+            particle_size: settings.particle_size,
+            advect: settings.advect,
+            turbulence_scale: settings.turbulence_scale,
+            turbulence_speed: settings.turbulence_speed,
+            detail: settings.detail,
+            live_color: settings.live_color,
+            seed: settings.seed,
+            backend,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            source_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued field-particles render job {job_id} in {}",
         queue_path.display()
     );
     Ok(())
@@ -841,6 +1165,341 @@ pub(crate) fn queue_run_frame_sequence(queue_path: &Path) -> Result<(), CliError
             Err(error)
         }
     }
+}
+
+pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceFluidAdvect { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message("render queue has no queued or running fluid-advect jobs".to_string())
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceFluidAdvect {
+        source_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        advect,
+        turbulence_scale,
+        turbulence_speed,
+        detail,
+        reinject,
+        seed,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a fluid-advect render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = FluidAdvectSettings {
+        advect,
+        turbulence_scale,
+        turbulence_speed,
+        detail,
+        reinject,
+        seed,
+    };
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_fluid_advect_sequence(FluidAdvectSequenceRequest {
+            source_dir: Path::new(&source_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames: frames as usize,
+            backend,
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_fluid_advect",
+            effect_key: "fluid_advect",
+            effect: serde_json::json!({
+                "algorithm": FLUID_ADVECT_ALGORITHM,
+                "settings": settings,
+                "backend": render_backend_label(backend)
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "fluid-advect",
+    )
+}
+
+pub(crate) fn queue_run_fluid_advect_two_source_sequence(
+    queue_path: &Path,
+) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceFluidAdvectTwoSource { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running two-source fluid-advect jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceFluidAdvectTwoSource {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        advect,
+        reinject,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a two-source fluid-advect render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = FluidAdvectTwoSourceSettings { advect, reinject };
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result =
+            render_fluid_advect_two_source_sequence(FluidAdvectTwoSourceSequenceRequest {
+                source_a_dir: Path::new(&modulator_frame_directory),
+                source_b_dir: Path::new(&carrier_frame_directory),
+                output_dir: &output_dir.join("frames"),
+                settings,
+                frames: frames as usize,
+                backend,
+            })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_fluid_advect_two_source",
+            effect_key: "fluid_advect_two_source",
+            effect: serde_json::json!({
+                "algorithm": FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
+                "settings": settings,
+                "backend": render_backend_label(backend)
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "two-source fluid-advect",
+    )
+}
+
+pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceOpticalFlowAdvect { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running optical-flow advect jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceOpticalFlowAdvect {
+        source_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        advect,
+        reinject,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not an optical-flow advect render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = FluidAdvectTwoSourceSettings { advect, reinject };
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result =
+            render_optical_flow_advect_sequence(OpticalFlowAdvectSequenceRequest {
+                source_dir: Path::new(&source_frame_directory),
+                output_dir: &output_dir.join("frames"),
+                settings,
+                frames: frames as usize,
+                backend,
+            })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_optical_flow_advect",
+            effect_key: "optical_flow_advect",
+            effect: serde_json::json!({
+                "algorithm": FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
+                "settings": settings,
+                "flow_source": "self_optical_flow",
+                "backend": render_backend_label(backend)
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "optical-flow advect",
+    )
+}
+
+pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceFieldParticles { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running field-particles jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceFieldParticles {
+        source_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        spacing,
+        particle_size,
+        advect,
+        turbulence_scale,
+        turbulence_speed,
+        detail,
+        live_color,
+        seed,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a field-particles render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = FieldParticleSettings {
+        spacing,
+        particle_size,
+        advect,
+        turbulence_scale,
+        turbulence_speed,
+        detail,
+        live_color,
+        seed,
+    };
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_field_particles_sequence(FieldParticlesSequenceRequest {
+            source_dir: Path::new(&source_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames: frames as usize,
+            backend,
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_field_particles",
+            effect_key: "field_particles",
+            effect: serde_json::json!({
+                "algorithm": FIELD_PARTICLES_ALGORITHM,
+                "settings": settings,
+                "backend": render_backend_label(backend)
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "field-particles",
+    )
 }
 
 pub(crate) fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError> {
@@ -2314,6 +2973,147 @@ pub(crate) fn write_frame_sequence_manifest(
     Ok(())
 }
 
+pub(crate) struct ExperimentalFrameSequenceManifest<'a> {
+    job_id: &'a str,
+    output_dir: &'a Path,
+    frame_count: usize,
+    frame_rate: f64,
+    task: &'a str,
+    effect_key: &'a str,
+    effect: serde_json::Value,
+    provenance: Option<&'a RenderJobProvenance>,
+}
+
+pub(crate) fn complete_experimental_frame_sequence_job(
+    manifest: ExperimentalFrameSequenceManifest<'_>,
+) -> Result<RenderJobOutputMetadata, CliError> {
+    let ExperimentalFrameSequenceManifest {
+        job_id,
+        output_dir,
+        frame_count,
+        frame_rate,
+        task,
+        effect_key,
+        effect,
+        provenance,
+    } = manifest;
+    let frame_count_u32 = u32::try_from(frame_count).map_err(|_| {
+        CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+    })?;
+    let timing = RenderTimingMetadata {
+        frame_rate,
+        frame_count: frame_count_u32,
+        start_seconds: 0.0,
+        duration_seconds: frame_count_u32 as f64 / frame_rate,
+        sample_rate: 48_000,
+        audio_sample_count: 0,
+    };
+    let frame_paths = (0..frame_count_u32)
+        .map(|index| format!("frames/frame_{index:06}.png"))
+        .collect::<Vec<_>>();
+    write_experimental_frame_sequence_manifest(ExperimentalFrameSequenceManifestWrite {
+        job_id,
+        output_dir,
+        frame_paths: &frame_paths,
+        timing: &timing,
+        task,
+        effect_key,
+        effect,
+        provenance,
+    })?;
+    write_frame_sequence_checkpoint(job_id, output_dir, &frame_paths, frame_count_u32)?;
+    Ok(RenderJobOutputMetadata {
+        output_directory: output_dir.to_string_lossy().to_string(),
+        frame_paths,
+        audio_stem_paths: Vec::new(),
+        timing,
+    })
+}
+
+pub(crate) struct ExperimentalFrameSequenceManifestWrite<'a> {
+    job_id: &'a str,
+    output_dir: &'a Path,
+    frame_paths: &'a [String],
+    timing: &'a RenderTimingMetadata,
+    task: &'a str,
+    effect_key: &'a str,
+    effect: serde_json::Value,
+    provenance: Option<&'a RenderJobProvenance>,
+}
+
+pub(crate) fn write_experimental_frame_sequence_manifest(
+    manifest: ExperimentalFrameSequenceManifestWrite<'_>,
+) -> Result<(), CliError> {
+    let ExperimentalFrameSequenceManifestWrite {
+        job_id,
+        output_dir,
+        frame_paths,
+        timing,
+        task,
+        effect_key,
+        effect,
+        provenance,
+    } = manifest;
+    let mut manifest = serde_json::json!({
+        "job_id": job_id,
+        "status": "complete",
+        "task": task,
+        "frames": frame_paths,
+        "audio_stems": [],
+        "timing": {
+            "frame_rate": timing.frame_rate,
+            "frame_count": timing.frame_count,
+            "start_seconds": timing.start_seconds,
+            "duration_seconds": timing.duration_seconds,
+            "sample_rate": timing.sample_rate,
+            "audio_sample_count": timing.audio_sample_count
+        },
+        "provenance": provenance,
+        "deterministic": true
+    });
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert(effect_key.to_string(), effect);
+    }
+    fs::write(
+        output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
+pub(crate) fn finish_frame_sequence_queue_job(
+    queue: &mut RenderQueue,
+    queue_path: &Path,
+    job_index: usize,
+    job_id: &str,
+    output_dir: &Path,
+    outcome: Result<RenderJobOutputMetadata, CliError>,
+    effect_label: &str,
+) -> Result<(), CliError> {
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued {effect_label} job {job_id} to {}",
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("{effect_label} job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn write_granular_mosaic_sequence_manifest(
     job_id: &str,
@@ -2493,6 +3293,14 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::TestRender => "test_render",
             RenderJobTask::FrameSequenceFlowDisplace { .. } => "frame_sequence_flow_displace",
             RenderJobTask::FrameSequenceFlowFeedback { .. } => "frame_sequence_flow_feedback",
+            RenderJobTask::FrameSequenceFluidAdvect { .. } => "frame_sequence_fluid_advect",
+            RenderJobTask::FrameSequenceFluidAdvectTwoSource { .. } => {
+                "frame_sequence_fluid_advect_two_source"
+            }
+            RenderJobTask::FrameSequenceOpticalFlowAdvect { .. } => {
+                "frame_sequence_optical_flow_advect"
+            }
+            RenderJobTask::FrameSequenceFieldParticles { .. } => "frame_sequence_field_particles",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",
             RenderJobTask::FrameSequenceGranularMosaicPool { .. } => {
                 "frame_sequence_granular_mosaic_pool"

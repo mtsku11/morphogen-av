@@ -987,6 +987,95 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    QueueAddFluidAdvectSequence {
+        queue_path: PathBuf,
+        source_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 12.0)]
+        advect: f32,
+        #[arg(long, default_value_t = 0.008)]
+        turbulence_scale: f32,
+        #[arg(long, default_value_t = 0.06)]
+        turbulence_speed: f32,
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
+        #[arg(long, default_value_t = 0.05)]
+        reinject: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddFluidAdvectTwoSourceSequence {
+        queue_path: PathBuf,
+        source_a_dir: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 1.0)]
+        advect: f32,
+        #[arg(long, default_value_t = 0.08)]
+        reinject: f32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddOpticalFlowAdvectSequence {
+        queue_path: PathBuf,
+        source_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 1.0)]
+        advect: f32,
+        #[arg(long, default_value_t = 0.08)]
+        reinject: f32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddFieldParticlesSequence {
+        queue_path: PathBuf,
+        source_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 8)]
+        spacing: u32,
+        #[arg(long, default_value_t = 8)]
+        particle_size: u32,
+        #[arg(long, default_value_t = 6.0)]
+        advect: f32,
+        #[arg(long, default_value_t = 0.008)]
+        turbulence_scale: f32,
+        #[arg(long, default_value_t = 0.06)]
+        turbulence_speed: f32,
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
+        #[arg(long, default_value_t = false)]
+        live_colour: bool,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,
@@ -1261,6 +1350,18 @@ pub(crate) enum Commands {
         queue_path: PathBuf,
     },
     QueueRunFeedbackSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunFluidAdvectSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunFluidAdvectTwoSourceSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunOpticalFlowAdvectSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunFieldParticlesSequence {
         queue_path: PathBuf,
     },
     QueueRunGranularMosaicSequence {

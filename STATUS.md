@@ -4,16 +4,28 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-25_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **336 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **340 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Fluid/advection family queue jobs.** The compact fluid effects now have
+  persisted render-queue contracts and CLI add/run paths:
+  `frame_sequence_fluid_advect`, `frame_sequence_fluid_advect_two_source`,
+  `frame_sequence_optical_flow_advect`, and
+  `frame_sequence_field_particles`. Each writes the standard ProRes-ready
+  `frames/`, `manifest.json`, and `checkpoint.json` bundle, records timing,
+  backend, source provenance, and algorithm id, and persists failures back to the
+  queue. New smoke tests prove queued output is byte-identical to the direct CPU
+  render for all four paths. Workspace 336 → 340 (+4). Next: SwiftUI render-panel
+  exposure for these queue jobs; decide separately whether the larger CPU-only
+  `fluid_mosaic` surface belongs in the queue now or after presets.
 
 - **Field-particles splat — parity-gated Metal port.** A `field_particles_splat` kernel
   rasterizes the CPU-computed particle carrier: each output pixel **gathers** the last

@@ -850,6 +850,17 @@ fn write_translated_texture(path: &Path, width: u32, height: u32, shift_x: i32) 
     image.save(path).expect("save translated texture");
 }
 
+fn write_texture_sequence(directory: &Path, shifts: &[i32]) {
+    for (index, shift) in shifts.iter().enumerate() {
+        write_translated_texture(
+            &directory.join(format!("frame_{:06}.png", index + 1)),
+            24,
+            16,
+            *shift,
+        );
+    }
+}
+
 fn write_horizontal_carrier(path: &Path, width: u32, height: u32) {
     let parent = path.parent().expect("parent directory");
     fs::create_dir_all(parent).expect("create frame directory");
@@ -859,6 +870,21 @@ fn write_horizontal_carrier(path: &Path, width: u32, height: u32) {
         Rgba([red, green, 0, 255])
     });
     image.save(path).expect("save carrier");
+}
+
+fn assert_png_frames_identical(direct_dir: &Path, queued_dir: &Path, frame_count: usize) {
+    for index in 0..frame_count {
+        let frame = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(queued_dir.join(&frame)).expect("read queued frame"),
+            fs::read(direct_dir.join(&frame)).expect("read direct frame"),
+            "queue render must be byte-identical to direct render ({frame})"
+        );
+    }
+}
+
+fn read_json(path: &Path) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(path).expect("read json")).expect("parse json")
 }
 
 #[test]
@@ -2053,6 +2079,291 @@ fn failed_frame_sequence_job_records_a_durable_failure() {
         .as_str()
         .expect("failure message")
         .contains("No such file"));
+}
+
+#[test]
+fn fluid_advect_queue_jobs_match_direct_and_record_manifests() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let direct_fluid = temp_dir.path().join("direct-fluid");
+    let direct_fluid_arg = direct_fluid.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-fluid-advect-sequence",
+            source_arg.as_str(),
+            direct_fluid_arg.as_str(),
+            "--frames",
+            "2",
+            "--advect",
+            "2",
+            "--reinject",
+            "0.2",
+            "--turbulence-scale",
+            "0.03",
+        ])
+        .assert()
+        .success();
+
+    let fluid_queue = temp_dir.path().join("fluid-queue.json");
+    let fluid_queue_arg = fluid_queue.to_string_lossy().to_string();
+    let fluid_output = temp_dir.path().join("fluid-output");
+    let fluid_output_arg = fluid_output.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-fluid-advect-sequence",
+            fluid_queue_arg.as_str(),
+            source_arg.as_str(),
+            fluid_output_arg.as_str(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "12",
+            "--advect",
+            "2",
+            "--reinject",
+            "0.2",
+            "--turbulence-scale",
+            "0.03",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued fluid-advect render job job-0001",
+        ));
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-fluid-advect-sequence", fluid_queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued fluid-advect job job-0001",
+        ));
+
+    let fluid_bundle = fluid_output.join("job-0001");
+    assert_png_frames_identical(&direct_fluid, &fluid_bundle.join("frames"), 2);
+    let fluid_manifest = read_json(&fluid_bundle.join("manifest.json"));
+    assert_eq!(fluid_manifest["task"], "frame_sequence_fluid_advect");
+    assert_eq!(
+        fluid_manifest["fluid_advect"]["algorithm"],
+        "fluid_advect_curl_noise_cpu_v2"
+    );
+    assert_eq!(fluid_manifest["fluid_advect"]["backend"], "CPU");
+    assert_eq!(fluid_manifest["timing"]["frame_rate"], 12.0);
+
+    let direct_particles = temp_dir.path().join("direct-particles");
+    let direct_particles_arg = direct_particles.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-field-particles-sequence",
+            source_arg.as_str(),
+            direct_particles_arg.as_str(),
+            "--frames",
+            "2",
+            "--spacing",
+            "8",
+            "--particle-size",
+            "4",
+            "--advect",
+            "2",
+            "--turbulence-scale",
+            "0.03",
+            "--live-colour",
+        ])
+        .assert()
+        .success();
+
+    let particles_queue = temp_dir.path().join("particles-queue.json");
+    let particles_queue_arg = particles_queue.to_string_lossy().to_string();
+    let particles_output = temp_dir.path().join("particles-output");
+    let particles_output_arg = particles_output.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-field-particles-sequence",
+            particles_queue_arg.as_str(),
+            source_arg.as_str(),
+            particles_output_arg.as_str(),
+            "--frames",
+            "2",
+            "--spacing",
+            "8",
+            "--particle-size",
+            "4",
+            "--advect",
+            "2",
+            "--turbulence-scale",
+            "0.03",
+            "--live-colour",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued field-particles render job job-0001",
+        ));
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-run-field-particles-sequence",
+            particles_queue_arg.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued field-particles job job-0001",
+        ));
+
+    let particles_bundle = particles_output.join("job-0001");
+    assert_png_frames_identical(&direct_particles, &particles_bundle.join("frames"), 2);
+    let particles_manifest = read_json(&particles_bundle.join("manifest.json"));
+    assert_eq!(particles_manifest["task"], "frame_sequence_field_particles");
+    assert_eq!(
+        particles_manifest["field_particles"]["algorithm"],
+        "field_particles_vortex_cpu_v2"
+    );
+    assert_eq!(
+        particles_manifest["field_particles"]["settings"]["live_color"],
+        true
+    );
+}
+
+#[test]
+fn optical_flow_advect_queue_jobs_match_direct_and_record_manifests() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    write_texture_sequence(&modulator_dir, &[0, 3]);
+    write_texture_sequence(&carrier_dir, &[1, 1]);
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    let direct_two_source = temp_dir.path().join("direct-two-source");
+    let direct_two_source_arg = direct_two_source.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-fluid-advect-two-source-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_two_source_arg.as_str(),
+            "--frames",
+            "2",
+            "--advect",
+            "0.75",
+            "--reinject",
+            "0.2",
+        ])
+        .assert()
+        .success();
+
+    let two_source_queue = temp_dir.path().join("two-source-queue.json");
+    let two_source_queue_arg = two_source_queue.to_string_lossy().to_string();
+    let two_source_output = temp_dir.path().join("two-source-output");
+    let two_source_output_arg = two_source_output.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-fluid-advect-two-source-sequence",
+            two_source_queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            two_source_output_arg.as_str(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "12",
+            "--advect",
+            "0.75",
+            "--reinject",
+            "0.2",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-run-fluid-advect-two-source-sequence",
+            two_source_queue_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    let two_source_bundle = two_source_output.join("job-0001");
+    assert_png_frames_identical(&direct_two_source, &two_source_bundle.join("frames"), 2);
+    let two_source_manifest = read_json(&two_source_bundle.join("manifest.json"));
+    assert_eq!(
+        two_source_manifest["task"],
+        "frame_sequence_fluid_advect_two_source"
+    );
+    assert_eq!(
+        two_source_manifest["fluid_advect_two_source"]["algorithm"],
+        "fluid_advect_two_source_cpu_v1"
+    );
+    assert_eq!(
+        two_source_manifest["provenance"]["sources"][0]["role"],
+        "modulator"
+    );
+
+    let direct_self = temp_dir.path().join("direct-self");
+    let direct_self_arg = direct_self.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-optical-flow-advect-sequence",
+            modulator_arg.as_str(),
+            direct_self_arg.as_str(),
+            "--frames",
+            "2",
+            "--advect",
+            "0.75",
+            "--reinject",
+            "0.2",
+        ])
+        .assert()
+        .success();
+
+    let self_queue = temp_dir.path().join("self-queue.json");
+    let self_queue_arg = self_queue.to_string_lossy().to_string();
+    let self_output = temp_dir.path().join("self-output");
+    let self_output_arg = self_output.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-optical-flow-advect-sequence",
+            self_queue_arg.as_str(),
+            modulator_arg.as_str(),
+            self_output_arg.as_str(),
+            "--frames",
+            "2",
+            "--advect",
+            "0.75",
+            "--reinject",
+            "0.2",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-run-optical-flow-advect-sequence",
+            self_queue_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    let self_bundle = self_output.join("job-0001");
+    assert_png_frames_identical(&direct_self, &self_bundle.join("frames"), 2);
+    let self_manifest = read_json(&self_bundle.join("manifest.json"));
+    assert_eq!(self_manifest["task"], "frame_sequence_optical_flow_advect");
+    assert_eq!(
+        self_manifest["optical_flow_advect"]["flow_source"],
+        "self_optical_flow"
+    );
 }
 
 #[test]

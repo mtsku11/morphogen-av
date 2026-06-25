@@ -170,3 +170,23 @@ The core idea: decouple carrier *texture* from carrier *position*. Re-inject the
 5. Done (CPU): added a `StructureMode::Multiscale` path selected by `--structure-mode multiscale` on the direct `render-feedback-sequence` CLI. It splits the displaced carrier into three full-resolution Burt-Adelson detail bands (repeated binomial blurs, differenced) and gates each band by a structure mask taken from the *morphed* (advected) frame — sharp mask for fine detail, progressively blurred mask for coarse — so re-seeded detail concentrates along the evolving geometry instead of the static carrier grid. `structure_mix` stays the single master gain; level count, mask floor (0.25), and gain (6.0) are fixed internal constants. `StructureMode::SingleScale` remains the default and is bitwise-unchanged, so existing outputs/checkpoints and the Metal parity path are untouched. The Metal backend rejects multiscale (`--backend metal` errors) since it has no shader port yet. Tests cover zero-mix identity across modes, washout resistance, and the mask biasing re-injection toward a morphed edge.
 
    Manual-testing finding (cello self-feedback, mix 0.97, structure-mix 0.8): multiscale is **mathematically correct but practically marginal on real footage** — single-scale vs multiscale differ by ~1.5% mean (concentrated in a handful of edge pixels), and the renders are visually indistinguishable. The mask earns its keep only when the morphed frame has large flat regions to separate from edges (as in the synthetic test); dense, low-contrast footage has gradient nearly everywhere, so the mask reads near-uniform and multiscale degenerates toward single-scale. Aggressively retuning the mask (floor 0.05, gain 12) did not change this, so the constants were left at 0.25 / 6.0. By contrast, single-scale `structure-mix` itself is a clear keeper — it visibly rescues the mix-0.99 fog collapse with regenerating edge detail. Conclusion: do **not** invest in the Metal port / queue / SwiftUI exposure for multiscale until a use case shows it mattering; it stands as a correct, opt-in, CPU-only path. Deferred (low priority): Metal parity port for multiscale, then queue/SwiftUI exposure.
+
+### Fluid Advect Family Queue Exposure
+
+1. Done: persisted queue task/schema + CLI add/run commands for the compact,
+   parity-gated fluid/advection jobs:
+   `frame_sequence_fluid_advect`,
+   `frame_sequence_fluid_advect_two_source`,
+   `frame_sequence_optical_flow_advect`, and
+   `frame_sequence_field_particles`. Each writes the standard ProRes-ready
+   `frames/`, `manifest.json`, and `checkpoint.json` bundle, records timing,
+   backend, source provenance, and the relevant algorithm id, and persists
+   failures back to the queue. Smoke tests prove queued output is byte-identical
+   to the direct CLI render for all four CPU paths.
+2. Next: expose these four queued jobs in the SwiftUI render panel with compact
+   controls and the existing CPU/Metal selector, then add Swift bridge argument
+   tests. Use the same selected frame directories/output root as the existing
+   two-source, feedback, and granular queue workflows.
+3. Next: decide whether `render-fluid-mosaic-sequence` deserves a queue task now
+   or should wait for a narrower preset surface. It is CPU-only and has a much
+   larger tuning API than the four compact fluid/advection jobs above.

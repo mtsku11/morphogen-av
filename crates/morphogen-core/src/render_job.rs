@@ -94,6 +94,58 @@ pub enum RenderJobTask {
         #[serde(default)]
         structure_mix: f32,
     },
+    FrameSequenceFluidAdvect {
+        source_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        advect: f32,
+        turbulence_scale: f32,
+        turbulence_speed: f32,
+        detail: f32,
+        reinject: f32,
+        seed: u64,
+        #[serde(default)]
+        backend: RenderBackend,
+    },
+    FrameSequenceFluidAdvectTwoSource {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        advect: f32,
+        reinject: f32,
+        #[serde(default)]
+        backend: RenderBackend,
+    },
+    FrameSequenceOpticalFlowAdvect {
+        source_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        advect: f32,
+        reinject: f32,
+        #[serde(default)]
+        backend: RenderBackend,
+    },
+    FrameSequenceFieldParticles {
+        source_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        spacing: u32,
+        particle_size: u32,
+        advect: f32,
+        turbulence_scale: f32,
+        turbulence_speed: f32,
+        detail: f32,
+        #[serde(default)]
+        live_color: bool,
+        seed: u64,
+        #[serde(default)]
+        backend: RenderBackend,
+    },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
         carrier_frame_directory: String,
@@ -718,6 +770,58 @@ mod tests {
         };
         assert_eq!(flow_source, FlowSource::Luminance);
         assert_eq!(structure_mix, 0.0);
+    }
+
+    #[test]
+    fn fluid_advect_task_serializes_render_settings() {
+        let task = RenderJobTask::FrameSequenceFluidAdvect {
+            source_frame_directory: "/tmp/source".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            frames: 48,
+            frame_rate: 24.0,
+            advect: 12.0,
+            turbulence_scale: 0.008,
+            turbulence_speed: 0.06,
+            detail: 0.1,
+            reinject: 0.05,
+            seed: 42,
+            backend: RenderBackend::Metal,
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize fluid task");
+        let decoded: RenderJobTask = serde_json::from_str(&json).expect("deserialize fluid task");
+
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn field_particles_task_without_backend_defaults_to_cpu() {
+        let json = r#"{
+            "type": "frame_sequence_field_particles",
+            "source_frame_directory": "/tmp/source",
+            "output_directory": "/tmp/out",
+            "frames": 48,
+            "frame_rate": 24.0,
+            "spacing": 8,
+            "particle_size": 8,
+            "advect": 6.0,
+            "turbulence_scale": 0.008,
+            "turbulence_speed": 0.06,
+            "detail": 0.1,
+            "seed": 42
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize field task");
+        let RenderJobTask::FrameSequenceFieldParticles {
+            backend,
+            live_color,
+            ..
+        } = task
+        else {
+            panic!("expected field-particles task");
+        };
+        assert_eq!(backend, RenderBackend::Cpu);
+        assert!(!live_color);
     }
 
     #[test]
