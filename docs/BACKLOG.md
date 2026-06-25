@@ -54,6 +54,7 @@ contracts live in the `*_MILESTONE.md` docs.
 - Add deterministic CLI feedback rendering and queued ProRes-ready feedback bundles.
 - Implement `advect_feedback.metal` and gate every Metal output frame against the CPU reference.
 - Add a temporal Lucas-Kanade optical-flow analysis and make it the feedback job's default flow source.
+- Add experimental real-bitstream datamosh keyframe-removal (`datamosh-bitstream --operation remove-keyframe`) on the existing pure-Rust AVI surgery path.
 
 ## Next
 
@@ -183,10 +184,12 @@ The core idea: decouple carrier *texture* from carrier *position*. Re-inject the
    backend, source provenance, and the relevant algorithm id, and persists
    failures back to the queue. Smoke tests prove queued output is byte-identical
    to the direct CLI render for all four CPU paths.
-2. Next: expose these four queued jobs in the SwiftUI render panel with compact
-   controls and the existing CPU/Metal selector, then add Swift bridge argument
-   tests. Use the same selected frame directories/output root as the existing
-   two-source, feedback, and granular queue workflows.
+2. Done: exposed these four queued jobs in the SwiftUI render panel with compact
+   controls and the existing CPU/Metal selector. The bridge now has typed queue
+   requests/argument builders for each command, plus Swift tests covering command
+   shape and invalid values. Source B is used as the carrier/material input for
+   the single-source procedural fluid, self-flow advection, and field-particles
+   jobs; the two-source job uses Source A motion over Source B dye.
 3. Next: decide whether `render-fluid-mosaic-sequence` deserves a queue task now
    or should wait for a narrower preset surface. It is CPU-only and has a much
    larger tuning API than the four compact fluid/advection jobs above.

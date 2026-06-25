@@ -7,7 +7,7 @@ pub mod extract;
 pub mod ffmpeg;
 pub mod probe;
 
-pub use avi::{count_p_frames, duplicate_p_frame};
+pub use avi::{count_p_frames, duplicate_p_frame, remove_leading_keyframe};
 pub use error::MediaError;
 pub use extract::{
     decode_avi_frames, encode_datamosh_avi, extract_audio_wav, extract_audio_wav_with_max_duration,

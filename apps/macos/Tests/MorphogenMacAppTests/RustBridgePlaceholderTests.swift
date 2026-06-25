@@ -124,6 +124,209 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertThrowsError(try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request))
   }
 
+  func testQueuedFluidAdvectSequenceArgumentsIncludeProceduralControls() throws {
+    let request = FluidAdvectSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/fluid", isDirectory: true),
+      frames: 36,
+      frameRate: 23.976,
+      advect: 12.0,
+      turbulenceScale: 0.008,
+      turbulenceSpeed: 0.06,
+      detail: 0.1,
+      reinject: 0.05,
+      seed: 42,
+      backend: .metal,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddFluidAdvectSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-fluid-advect-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/output-root/fluid"))
+    XCTAssertTrue(arguments.contains("--frames"))
+    XCTAssertTrue(arguments.contains("36"))
+    XCTAssertTrue(arguments.contains("--frame-rate"))
+    XCTAssertTrue(arguments.contains("23.976"))
+    XCTAssertTrue(arguments.contains("--advect"))
+    XCTAssertTrue(arguments.contains("12"))
+    XCTAssertTrue(arguments.contains("--turbulence-scale"))
+    XCTAssertTrue(arguments.contains("0.008"))
+    XCTAssertTrue(arguments.contains("--turbulence-speed"))
+    XCTAssertTrue(arguments.contains("0.06"))
+    XCTAssertTrue(arguments.contains("--detail"))
+    XCTAssertTrue(arguments.contains("0.1"))
+    XCTAssertTrue(arguments.contains("--reinject"))
+    XCTAssertTrue(arguments.contains("0.05"))
+    XCTAssertTrue(arguments.contains("--seed"))
+    XCTAssertTrue(arguments.contains("42"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+  }
+
+  func testQueuedFluidAdvectTwoSourceSequenceArgumentsIncludeSourcesAndBackend() throws {
+    let request = FluidAdvectTwoSourceSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-two-source-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/fluid-ab", isDirectory: true),
+      frames: 24,
+      frameRate: 24.0,
+      advect: 1.5,
+      reinject: 0.08,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddFluidAdvectTwoSourceSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-fluid-advect-two-source-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/output-root/fluid-ab"))
+    XCTAssertTrue(arguments.contains("--frames"))
+    XCTAssertTrue(arguments.contains("24"))
+    XCTAssertTrue(arguments.contains("--advect"))
+    XCTAssertTrue(arguments.contains("1.5"))
+    XCTAssertTrue(arguments.contains("--reinject"))
+    XCTAssertTrue(arguments.contains("0.08"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("cpu"))
+  }
+
+  func testQueuedOpticalFlowAdvectSequenceArgumentsUseSingleCarrierSource() throws {
+    let request = OpticalFlowAdvectSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/self-fluid-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/self-fluid", isDirectory: true),
+      frames: 12,
+      frameRate: 30.0,
+      advect: 0.75,
+      reinject: 0.12,
+      backend: .metal,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddOpticalFlowAdvectSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-optical-flow-advect-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/output-root/self-fluid"))
+    XCTAssertTrue(arguments.contains("--frame-rate"))
+    XCTAssertTrue(arguments.contains("30"))
+    XCTAssertTrue(arguments.contains("--advect"))
+    XCTAssertTrue(arguments.contains("0.75"))
+    XCTAssertTrue(arguments.contains("--reinject"))
+    XCTAssertTrue(arguments.contains("0.12"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
+  }
+
+  func testQueuedFieldParticlesSequenceArgumentsIncludeParticleControls() throws {
+    let request = FieldParticlesSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/particles-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/particles", isDirectory: true),
+      frames: 48,
+      frameRate: 60.0,
+      spacing: 8,
+      particleSize: 10,
+      advect: 6.0,
+      turbulenceScale: 0.012,
+      turbulenceSpeed: 0.04,
+      detail: 0.2,
+      liveColour: true,
+      seed: 9,
+      backend: .metal,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddFieldParticlesSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-field-particles-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/output-root/particles"))
+    XCTAssertTrue(arguments.contains("--spacing"))
+    XCTAssertTrue(arguments.contains("8"))
+    XCTAssertTrue(arguments.contains("--particle-size"))
+    XCTAssertTrue(arguments.contains("10"))
+    XCTAssertTrue(arguments.contains("--advect"))
+    XCTAssertTrue(arguments.contains("6"))
+    XCTAssertTrue(arguments.contains("--turbulence-scale"))
+    XCTAssertTrue(arguments.contains("0.012"))
+    XCTAssertTrue(arguments.contains("--turbulence-speed"))
+    XCTAssertTrue(arguments.contains("0.04"))
+    XCTAssertTrue(arguments.contains("--detail"))
+    XCTAssertTrue(arguments.contains("0.2"))
+    XCTAssertTrue(arguments.contains("--live-colour"))
+    XCTAssertTrue(arguments.contains("--seed"))
+    XCTAssertTrue(arguments.contains("9"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+  }
+
+  func testQueuedFluidAdvectionArgumentsRejectInvalidValues() {
+    let invalidFrames = FluidAdvectSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/fluid", isDirectory: true),
+      frames: 0,
+      frameRate: 24.0,
+      advect: 12.0,
+      turbulenceScale: 0.008,
+      turbulenceSpeed: 0.06,
+      detail: 0.1,
+      reinject: 0.05,
+      seed: 0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddFluidAdvectSequenceArguments(request: invalidFrames)
+    )
+
+    let invalidParticles = FieldParticlesSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/particles-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/particles", isDirectory: true),
+      frames: 12,
+      frameRate: 24.0,
+      spacing: 0,
+      particleSize: 8,
+      advect: 6.0,
+      turbulenceScale: 0.008,
+      turbulenceSpeed: 0.06,
+      detail: 0.1,
+      liveColour: false,
+      seed: 0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddFieldParticlesSequenceArguments(request: invalidParticles)
+    )
+  }
+
   func testQueuedGranularMosaicPoolSequenceArgumentsIncludeAudioControls() throws {
     let request = GranularMosaicPoolSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/granular-pool-queue.json"),

@@ -53,6 +53,17 @@ fn help_lists_metal_render_test_validation_command() {
 }
 
 #[test]
+fn datamosh_bitstream_help_lists_keyframe_removal_operation() {
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["datamosh-bitstream", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--operation"))
+        .stdout(predicate::str::contains("remove-keyframe"));
+}
+
+#[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_path = temp_dir.path().join("modulator.png");

@@ -128,6 +128,12 @@ struct RenderPanelView: View {
             .foregroundStyle(.secondary)
         }
         GridRow {
+          Label("Fluid / Advection", systemImage: "wind")
+          Text(state.fluidAdvectionSummary)
+            .lineLimit(3)
+            .foregroundStyle(.secondary)
+        }
+        GridRow {
           Label("Grain Pool", systemImage: "circle.grid.3x3")
           Text(state.granularPoolSummary)
             .lineLimit(3)
@@ -350,6 +356,112 @@ struct RenderPanelView: View {
               state.runFlowFeedbackSequenceRender()
             } label: {
               Label("Run Flow Feedback", systemImage: "arrow.triangle.2.circlepath")
+            }
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Fluid / Advection Queue")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Picker("Backend", selection: $state.fluidBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+
+            Stepper(value: $state.fluidSeed, in: 0...9999, step: 1) {
+              Text("Seed \(state.fluidSeed)")
+            }
+            .frame(width: 130, alignment: .leading)
+
+            Stepper(value: $state.fluidReinject, in: 0...1, step: 0.01) {
+              Text("Reinject \(state.fluidReinject, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.fluidMotionAdvect, in: 0...8, step: 0.25) {
+              Text("Flow Advect \(state.fluidMotionAdvect, specifier: "%.2f")")
+            }
+            .frame(width: 185, alignment: .leading)
+
+            Stepper(value: $state.fluidProceduralAdvect, in: 0...48, step: 1) {
+              Text("Procedural Advect \(state.fluidProceduralAdvect, specifier: "%.0f")")
+            }
+            .frame(width: 225, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.fluidTurbulenceScale, in: 0...0.05, step: 0.001) {
+              Text("Turb Scale \(state.fluidTurbulenceScale, specifier: "%.3f")")
+            }
+            .frame(width: 185, alignment: .leading)
+
+            Stepper(value: $state.fluidTurbulenceSpeed, in: 0...0.5, step: 0.01) {
+              Text("Turb Speed \(state.fluidTurbulenceSpeed, specifier: "%.2f")")
+            }
+            .frame(width: 185, alignment: .leading)
+
+            Stepper(value: $state.fluidDetail, in: 0...1, step: 0.05) {
+              Text("Detail \(state.fluidDetail, specifier: "%.2f")")
+            }
+            .frame(width: 140, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.fieldParticleSpacing, in: 1...64, step: 1) {
+              Text("Spacing \(state.fieldParticleSpacing)")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.fieldParticleSize, in: 1...64, step: 1) {
+              Text("Particle \(state.fieldParticleSize)")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.fieldParticleAdvect, in: 0...48, step: 1) {
+              Text("Particle Advect \(state.fieldParticleAdvect, specifier: "%.0f")")
+            }
+            .frame(width: 200, alignment: .leading)
+
+            Toggle("Live Colour", isOn: $state.fieldParticleLiveColour)
+              .toggleStyle(.checkbox)
+          }
+
+          Text(state.fluidAdvectionSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          HStack(spacing: 16) {
+            Button {
+              state.runProceduralFluidAdvectSequenceRender()
+            } label: {
+              Label("Run Procedural Fluid", systemImage: "wind")
+            }
+
+            Button {
+              state.runTwoSourceFluidAdvectSequenceRender()
+            } label: {
+              Label("Run A-to-B Fluid", systemImage: "arrow.triangle.merge")
+            }
+
+            Button {
+              state.runOpticalFlowAdvectSequenceRender()
+            } label: {
+              Label("Run Self-Flow", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+            }
+
+            Button {
+              state.runFieldParticlesSequenceRender()
+            } label: {
+              Label("Run Particles", systemImage: "sparkles")
             }
           }
         }

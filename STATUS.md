@@ -8,12 +8,25 @@ _Last updated: 2026-06-25_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **340 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **343 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **47 passing, 0 failing** (Swift shell + service tests).
+- `swift test`: **52 passing, 0 failing** (Swift shell + service tests).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — real bitstream keyframe removal.**
+  `datamosh-bitstream --operation remove-keyframe` removes the controlled MPEG-4
+  AVI substrate's leading keyframe so ffmpeg decodes from prediction data rather
+  than a clean I-frame. The pure-Rust surgery path is unit-tested on synthetic AVI
+  buffers and records `operation: remove_keyframe`, `deterministic: false`, ffmpeg
+  version, and algorithm id `datamosh_bitstream_remove_keyframe_experimental_v1`
+  in `datamosh_bitstream.json`. Verified on `av-synth/harp.mp4` at 12 fps: clean
+  transcode vs keyframe removal differs by about **54/255 mean RGB delta** across
+  the sampled early frames; representative comparison frame:
+  `/tmp/morphogen-datamosh-keyframe-20260625/keyframe-removal-frame120-comparison.png`.
+  Workspace 340 → 343 (+3 Rust). This stays outside queue/SwiftUI/parity under the
+  same non-deterministic bitstream carve-out as P-frame bloom.
 
 - **Fluid/advection family queue jobs.** The compact fluid effects now have
   persisted render-queue contracts and CLI add/run paths:
@@ -23,9 +36,11 @@ _Last updated: 2026-06-25_
   `frames/`, `manifest.json`, and `checkpoint.json` bundle, records timing,
   backend, source provenance, and algorithm id, and persists failures back to the
   queue. New smoke tests prove queued output is byte-identical to the direct CPU
-  render for all four paths. Workspace 336 → 340 (+4). Next: SwiftUI render-panel
-  exposure for these queue jobs; decide separately whether the larger CPU-only
-  `fluid_mosaic` surface belongs in the queue now or after presets.
+  render for all four paths. SwiftUI render-panel exposure is now wired locally:
+  compact controls dispatch all four queue jobs through the dev CLI bridge, update
+  the ProRes-ready bundle target, and have Swift bridge argument tests. Workspace
+  336 → 340 (+4 Rust), Swift tests 47 → 52 (+5). Decide separately whether the
+  larger CPU-only `fluid_mosaic` surface belongs in the queue now or after presets.
 
 - **Field-particles splat — parity-gated Metal port.** A `field_particles_splat` kernel
   rasterizes the CPU-computed particle carrier: each output pixel **gathers** the last
@@ -254,6 +269,17 @@ _Last updated: 2026-06-25_
   smear into macroblock glitches, blocky codec decay); frame-to-frame delta 5.982 →
   4.081 /255. Workspace 272 → 279. See [[datamosh-real-vs-simulated]],
   [[datamosh-bitstream-pframe-bloom]]. Contract: `docs/DATAMOSH_MILESTONE.md`.
+
+- **Controlled Datamosh — REAL bitstream keyframe removal (experimental,
+  non-deterministic CLI).** `datamosh-bitstream --operation remove-keyframe`
+  removes the controlled MPEG-4 AVI substrate's leading keyframe so ffmpeg decodes
+  from prediction data rather than a clean I-frame — the transition/void mosh
+  follow-up. It reuses the pure-Rust RIFF rebuild path, patches `movi`, `idx1`,
+  `avih.dwTotalFrames`, and video `strh.dwLength`, writes `operation:
+  remove_keyframe` plus algorithm id
+  `datamosh_bitstream_remove_keyframe_experimental_v1` in the sidecar, and stays
+  outside queue/SwiftUI/parity for the same codec-version carve-out as P-frame
+  bloom. Contract: `docs/DATAMOSH_MILESTONE.md`.
 
 - **Controlled Datamosh — per-block keep/drop pseudo-keyframes (full vertical
   slice).** The patchy "some macroblocks refresh, some rot" half of the aesthetic,
@@ -741,61 +767,35 @@ _Last updated: 2026-06-25_
 - (prior) Source A audio descriptors routed into granular-mosaic controls
   (RMS→variation, onset→rearrangement, centroid→grain-size).
 
-## In flight
+## Current direction
 
-On `main` (local commits, not yet pushed). The **Video Vocoder** MVP is now
-feature-complete end-to-end (CPU + CLI + parity-gated Metal for match mode + queue
-job + SwiftUI). Granular step 6b remains feature-complete. The vocoder's
-deferred items: gain-mode Metal port, a reusable Source-A luma-band histogram
-sidecar (currently recomputed per frame), spatial-frequency (multiband) routing,
-and the reverse/cross-clip look exploration. **Spectral Audio Cross-Synthesis**
-is now a feature-complete MVP vertical slice (CPU + CLI + queue + SwiftUI, gain +
-filter modes). Its deferred HQ tier is phase-vocoder cross-synthesis (needs a
-complex-STFT + inverse + Accelerate-FFT path first). **Audio-to-Video Descriptor
-Routing** (RMS→displacement) is now a feature-complete MVP vertical slice too
-(CPU + CLI + parity-gated Metal + queue + SwiftUI); its deferred items are
-spatially varying displacement fields (sine/radial/Source-A flow), other
-descriptor targets (centroid→hue, onset→cut), and sample-accurate descriptor
-curves (HQ tier). **Convolutional AV Blending** is now feature-complete across
-both MVP halves, the audio HQ tier (FFT method + Lanczos IR resampling), **and
-the HQ image/audio modes** — per-channel **colour kernels** (`--kernel-mode
-color`, parity-gated Metal) and per-channel **true-stereo IRs** (`--ir-mode
-per-channel`, CPU-only), each CPU + CLI + queue + SwiftUI. The image Metal kernel
-already handles large K (no cap; proved by a K=11 parity test). Its only remaining
-deferred items are a *tiled* large-K Metal kernel (perf only, not correctness) and
-separable image kernels. **Video-to-Audio Descriptor Routing** is now feature-complete across the MVP
-(luma → gain/pan) **and its HQ tier**: an optical-flow magnitude descriptor
-(`--descriptor flow`), a filter audio target (`--mode filter`, LP/HP), and
-time-resampled smooth descriptor curves (`--sampling smooth`) — each CPU + CLI +
-queue + SwiftUI. Its only remaining deferred items are an edge-density descriptor
-(near-free), a pitch/playback-rate target (bit-repro risk), depth (no pipeline),
-and phase-vocoder spectral processing (gated on a complex-STFT + inverse, shared
-with the cross-synth HQ tier). **Controlled Datamosh / Motion-Vector Reuse** is
-now a feature-complete MVP vertical slice too (CPU + CLI + parity-gated Metal +
-queue + SwiftUI) — recursive flow-reuse "bloom/melt" with a keyframe-interval
-knob. Its deferred items are the codec-*simulated* mosh tier (16×16 block grid,
-residual accumulation, pseudo-keyframes — visually closer, still deterministic),
-the real bitstream/FFglitch tier (needs an invariant carve-out — see
-[[datamosh-real-vs-simulated]]), a stateless motion-transfer mode, and disk
-checkpoint/resume. With this the EFFECTS_ROADMAP MVPs are all landed; the next
-work is HQ tiers / deferred follow-ons rather than a new unstarted effect.
+The EFFECTS_ROADMAP MVPs are landed. The active direction is making the
+strongest experimental render paths easier to run from the app and tightening
+visual verification for destructive looks. The fluid/advection SwiftUI exposure
+is implemented in the local worktree; commit/push is still pending unless a later
+session records otherwise.
+
+Controlled Datamosh / Motion-Vector Reuse is feature-complete for the
+deterministic render graph: recursive flow-reuse bloom, codec-simulated
+macroblocks, residual haze, per-block refresh, parity-gated Metal, queue, and
+SwiftUI are all landed. The real bitstream `datamosh-bitstream` path has P-frame
+bloom and leading-keyframe removal as experimental non-deterministic CLI
+carve-outs. Remaining datamosh work is narrow: motion-transfer, optional disk
+resume, and reusable flow sidecars.
 
 ## Candidate next steps
 
-From `docs/BACKLOG.md` "Next" and `docs/EFFECTS_ROADMAP.md`:
-
-1. **Granular step 6b remaining** — CPU core + CLI render path + pool sidecar +
-   queue task + SwiftUI exposure + Metal render port (`--backend metal`,
-   parity-gated) + Metal backend in queue/SwiftUI all landed. Deferred within 6b:
-   k>1 audio dims (add centroid), sliding-window pool scope, and cross-frame
-   scheduling (anti-repeat / temporal coherence).
-2. **Next roadmap effect** — Video Vocoder (luma-band gain routing MVP) or
-   Spectral Audio Cross-Synthesis (RMS/centroid filter path) are the natural
-   next vertical slices.
-3. **Deferred / low-priority** — Metal parity port for the multiscale
-   structure-preserving morph, then its queue/SwiftUI exposure. Per the manual
-   testing finding it's CPU-only and marginal on real footage; don't invest until
-   a use case shows it mattering (see `docs/BACKLOG.md` + [[flow-feedback-levers]]).
+1. **Datamosh real-bitstream follow-up.** Motion-transfer is the remaining large
+   bitstream step, but likely needs FFglitch-style packet/vector tooling rather
+   than the current pure-Rust AVI chunk surgery.
+2. **Visual regression/contact-sheet command.** Render representative harp/cello
+   presets and output a reviewable sheet so effect audits include pixels, not only
+   pass/fail text.
+3. **Curated destructive presets.** Add named presets such as Structured Melt,
+   Codec Bloom, Macroblock Rot, Void Mosh, Granular Collapse, and Fluid Smear.
+4. **Lower priority.** Multiscale structure-preserving morph Metal/queue/SwiftUI
+   exposure remains deferred because manual testing found it visually marginal on
+   real footage.
 
 ## Known truths to respect
 

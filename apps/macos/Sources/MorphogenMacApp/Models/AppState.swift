@@ -57,6 +57,19 @@ final class AppState: ObservableObject {
   @Published var feedbackResetEnabled = false
   @Published var feedbackResetAtFrame = 48
   @Published var feedbackSummary = "No temporal flow-feedback sequence rendered"
+  @Published var fluidProceduralAdvect = 12.0
+  @Published var fluidMotionAdvect = 1.0
+  @Published var fluidReinject = 0.08
+  @Published var fluidTurbulenceScale = 0.008
+  @Published var fluidTurbulenceSpeed = 0.06
+  @Published var fluidDetail = 0.1
+  @Published var fluidSeed = 0
+  @Published var fieldParticleSpacing = 8
+  @Published var fieldParticleSize = 8
+  @Published var fieldParticleAdvect = 6.0
+  @Published var fieldParticleLiveColour = true
+  @Published var fluidBackend: FeedbackRenderBackendOption = .metal
+  @Published var fluidAdvectionSummary = "No fluid/advection sequence rendered"
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -760,6 +773,170 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
           self.feedbackSummary = "Temporal flow-feedback render failed: \(error.localizedDescription)"
           self.statusMessage = "Temporal flow-feedback render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runProceduralFluidAdvectSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering procedural fluid advection."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering procedural fluid advection."
+      return
+    }
+
+    let request = FluidAdvectSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultFluidAdvectSequenceRenderQueueURL(),
+      sourceDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("fluid-advect", isDirectory: true),
+      frames: frameSequenceMaxFrames,
+      frameRate: proResFrameRate.framesPerSecond,
+      advect: fluidProceduralAdvect,
+      turbulenceScale: fluidTurbulenceScale,
+      turbulenceSpeed: fluidTurbulenceSpeed,
+      detail: fluidDetail,
+      reinject: fluidReinject,
+      seed: UInt64(max(0, fluidSeed)),
+      backend: fluidBackend,
+      projectURL: projectURL
+    )
+
+    runFluidAdvectionQueue(
+      label: "Procedural fluid",
+      requestDescription: "Queueing procedural fluid advection through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedFluidAdvectSequenceRender(request: request)
+    }
+  }
+
+  func runTwoSourceFluidAdvectSequenceRender() {
+    guard let modulatorURL = frameSequenceModulatorURL else {
+      statusMessage = "Select Source A frame directory before rendering two-source fluid advection."
+      return
+    }
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering two-source fluid advection."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering two-source fluid advection."
+      return
+    }
+
+    let request = FluidAdvectTwoSourceSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultFluidAdvectTwoSourceSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("fluid-advect-two-source", isDirectory: true),
+      frames: frameSequenceMaxFrames,
+      frameRate: proResFrameRate.framesPerSecond,
+      advect: fluidMotionAdvect,
+      reinject: fluidReinject,
+      backend: fluidBackend,
+      projectURL: projectURL
+    )
+
+    runFluidAdvectionQueue(
+      label: "A-to-B fluid",
+      requestDescription: "Queueing A-to-B fluid advection through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedFluidAdvectTwoSourceSequenceRender(request: request)
+    }
+  }
+
+  func runOpticalFlowAdvectSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering self-flow advection."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering self-flow advection."
+      return
+    }
+
+    let request = OpticalFlowAdvectSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultOpticalFlowAdvectSequenceRenderQueueURL(),
+      sourceDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("optical-flow-advect", isDirectory: true),
+      frames: frameSequenceMaxFrames,
+      frameRate: proResFrameRate.framesPerSecond,
+      advect: fluidMotionAdvect,
+      reinject: fluidReinject,
+      backend: fluidBackend,
+      projectURL: projectURL
+    )
+
+    runFluidAdvectionQueue(
+      label: "Self-flow advection",
+      requestDescription: "Queueing self-flow advection through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedOpticalFlowAdvectSequenceRender(request: request)
+    }
+  }
+
+  func runFieldParticlesSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering field particles."
+      return
+    }
+    guard let outputURL = frameSequenceOutputURL else {
+      statusMessage = "Choose a frame sequence output directory before rendering field particles."
+      return
+    }
+
+    let request = FieldParticlesSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultFieldParticlesSequenceRenderQueueURL(),
+      sourceDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("field-particles", isDirectory: true),
+      frames: frameSequenceMaxFrames,
+      frameRate: proResFrameRate.framesPerSecond,
+      spacing: fieldParticleSpacing,
+      particleSize: fieldParticleSize,
+      advect: fieldParticleAdvect,
+      turbulenceScale: fluidTurbulenceScale,
+      turbulenceSpeed: fluidTurbulenceSpeed,
+      detail: fluidDetail,
+      liveColour: fieldParticleLiveColour,
+      seed: UInt64(max(0, fluidSeed)),
+      backend: fluidBackend,
+      projectURL: projectURL
+    )
+
+    runFluidAdvectionQueue(
+      label: "Field particles",
+      requestDescription: "Queueing field particles through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedFieldParticlesSequenceRender(request: request)
+    }
+  }
+
+  private func runFluidAdvectionQueue(
+    label: String,
+    requestDescription: String,
+    run: @escaping () throws -> FluidAdvectionRenderQueueCommandResult
+  ) {
+    statusMessage = requestDescription
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try run()
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.fluidAdvectionSummary = "\(bundle.frameCount) \(label.lowercased()) frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued \(label.lowercased()) sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "\(label) render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.fluidAdvectionSummary = "\(label) render failed: \(error.localizedDescription)"
+          self.statusMessage = "\(label) render failed: \(error.localizedDescription)"
         }
       }
     }

@@ -323,10 +323,10 @@ pub(crate) enum Commands {
         max_frames: Option<usize>,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
-    /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, duplicates a
-    /// chosen P-frame's compressed chunk so its motion vectors re-bloom, then decodes
-    /// to a PNG sequence. Output is NOT bit-reproducible (depends on ffmpeg's codec);
-    /// this path lives outside the deterministic render graph by design.
+    /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
+    /// controlled compressed-stream surgery, then decodes to a PNG sequence. Output
+    /// is NOT bit-reproducible (depends on ffmpeg's codec); this path lives outside
+    /// the deterministic render graph by design.
     DatamoshBitstream {
         /// Input video (any ffmpeg-decodable container; provides the motion).
         input: PathBuf,
@@ -335,6 +335,10 @@ pub(crate) enum Commands {
         /// Frame rate to encode/decode at.
         #[arg(long, default_value_t = 24.0)]
         fps: f64,
+        /// Bitstream operation: duplicate a P-frame for bloom, or remove the leading
+        /// keyframe so the decoder starts from prediction data.
+        #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamOperation::PframeDuplicate)]
+        operation: CliDatamoshBitstreamOperation,
         /// Which P-frame to bloom (0-based among P-frames; 0 = the first P-frame).
         #[arg(long, default_value_t = 0)]
         p_frame_index: u32,
@@ -1426,6 +1430,13 @@ pub(crate) enum CliWindowFunction {
     Hann,
     Hamming,
     Rectangular,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliDatamoshBitstreamOperation {
+    #[default]
+    PframeDuplicate,
+    RemoveKeyframe,
 }
 
 impl From<CliWindowFunction> for WindowFunction {

@@ -110,6 +110,19 @@ displacement (the analogue of the audio-route fixture needing a loud modulator).
 A look without a number is unfalsifiable; a number without the pixels proves
 nothing.
 
+## Future Feature Verification Gate
+
+Every new datamosh feature must ship with:
+
+- deterministic unit and/or smoke coverage for the code path when it is inside the
+  render graph;
+- a clear invariant carve-out when it is real bitstream surgery and therefore
+  non-deterministic;
+- an off-vs-on render using representative moving footage, with the exact command
+  and `scripts/frame-delta.py` readout recorded in the handoff;
+- representative PNG frames or a contact sheet posted in the user-facing response
+  so the output can be visually verified before the feature is treated as done.
+
 ### Recursive-node Metal drift (known, accepted)
 
 Because this is a *recursive* node (Metal's output feeds its own next frame), the
@@ -280,7 +293,7 @@ smear only at the square's current position. Cross-delta grows **0 → 31.6/255*
 30 frames (frame 0 identical, both `B[0]`); the Metal refresh path renders (gate
 passes ⇒ Metal free).
 
-## Real bitstream mosh — P-frame "bloom" — LANDED (experimental, non-deterministic)
+## Real bitstream mosh — P-frame bloom + keyframe removal — LANDED (experimental, non-deterministic)
 
 The authentic codec-artifact tier, shipped as a **standalone experimental CLI**
 (`datamosh-bitstream`) inside an explicit invariant carve-out. Unlike the simulated
@@ -314,6 +327,14 @@ identity (off case); duplication grows the chunk count by N, rebuilds the index,
 updates the frame-count headers. Algorithm id
 `datamosh_bitstream_pframe_dup_experimental_v1`.
 
+The first follow-up operation is also landed: `datamosh-bitstream --operation
+remove-keyframe` removes the controlled substrate's leading keyframe so the
+decoder starts from prediction data. This is the transition/void mosh variant:
+frames decode from damaged reference state instead of a clean I-frame. The same
+carve-out applies; the pure RIFF surgery is deterministic and unit-tested, while
+the decoded look depends on the external ffmpeg codec. Algorithm id
+`datamosh_bitstream_remove_keyframe_experimental_v1`.
+
 **Verification (off-vs-on, look check not a determinism proof).** A 2s `testsrc2`
 clip, `--p-frame-index 5`, off (`--duplicate-count 0`, a plain transcode = 48 frames)
 vs on (`--duplicate-count 30` = 78 frames). Read frames: off is clean testsrc2; the
@@ -323,11 +344,11 @@ digits smear into macroblock glitches, blocky codec decay scatters across the fr
 frame-to-frame delta **5.982 → 4.081 /255** (repeated identical-motion frames change
 less per step than normal motion).
 
-## Deferred (not this slice)
+## Deferred
 
-- **Real bitstream mosh — further ops**: I-frame removal (transition/void mosh) and
-  motion-transfer (swap A's vectors into B — likely FFglitch). Same carve-out; the
-  P-frame bloom above is the first op landed. The richer FFglitch vocabulary
+- **Real bitstream mosh — further ops**: motion-transfer (swap A's vectors into B
+  — likely FFglitch). Same carve-out; P-frame bloom and leading-keyframe removal
+  are the pure-Rust AVI surgery ops landed so far. The richer FFglitch vocabulary
   (sort/shuffle/fluid) stays deferred (see `/memory/datamosh-real-vs-simulated.md`).
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.

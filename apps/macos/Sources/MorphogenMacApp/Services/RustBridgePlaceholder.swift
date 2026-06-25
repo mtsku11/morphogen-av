@@ -40,6 +40,30 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultFluidAdvectSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-fluid-advect-sequence-queue.json"
+    )
+  }
+
+  static func defaultFluidAdvectTwoSourceSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-fluid-advect-two-source-sequence-queue.json"
+    )
+  }
+
+  static func defaultOpticalFlowAdvectSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-optical-flow-advect-sequence-queue.json"
+    )
+  }
+
+  static func defaultFieldParticlesSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-field-particles-sequence-queue.json"
+    )
+  }
+
   static func defaultGranularMosaicPoolSequenceRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-granular-pool-sequence-queue.json"
@@ -180,6 +204,335 @@ enum RustBridgePlaceholder {
       bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
       commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
     )
+  }
+
+  static func runQueuedFluidAdvectSequenceRender(
+    request: FluidAdvectSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddFluidAdvectSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-fluid-advect-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func runQueuedFluidAdvectTwoSourceSequenceRender(
+    request: FluidAdvectTwoSourceSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddFluidAdvectTwoSourceSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-fluid-advect-two-source-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func runQueuedOpticalFlowAdvectSequenceRender(
+    request: OpticalFlowAdvectSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddOpticalFlowAdvectSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-optical-flow-advect-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func runQueuedFieldParticlesSequenceRender(
+    request: FieldParticlesSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddFieldParticlesSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-field-particles-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddFluidAdvectSequenceArguments(
+    request: FluidAdvectSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    try validateFluidNumbers([
+      ("advect", request.advect),
+      ("turbulence scale", request.turbulenceScale),
+      ("turbulence speed", request.turbulenceSpeed),
+      ("detail", request.detail),
+      ("reinject", request.reinject)
+    ])
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-fluid-advect-sequence",
+      request.queueURL.path,
+      request.sourceDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--advect",
+      cliNumber(request.advect),
+      "--turbulence-scale",
+      cliNumber(request.turbulenceScale),
+      "--turbulence-speed",
+      cliNumber(request.turbulenceSpeed),
+      "--detail",
+      cliNumber(request.detail),
+      "--reinject",
+      cliNumber(request.reinject),
+      "--seed",
+      String(request.seed),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func queueAddFluidAdvectTwoSourceSequenceArguments(
+    request: FluidAdvectTwoSourceSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    try validateFluidNumbers([
+      ("advect", request.advect),
+      ("reinject", request.reinject)
+    ])
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-fluid-advect-two-source-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--advect",
+      cliNumber(request.advect),
+      "--reinject",
+      cliNumber(request.reinject),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func queueAddOpticalFlowAdvectSequenceArguments(
+    request: OpticalFlowAdvectSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    try validateFluidNumbers([
+      ("advect", request.advect),
+      ("reinject", request.reinject)
+    ])
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-optical-flow-advect-sequence",
+      request.queueURL.path,
+      request.sourceDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--advect",
+      cliNumber(request.advect),
+      "--reinject",
+      cliNumber(request.reinject),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func queueAddFieldParticlesSequenceArguments(
+    request: FieldParticlesSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    guard request.spacing > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("particle spacing must be greater than zero")
+    }
+    guard request.particleSize > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("particle size must be greater than zero")
+    }
+    try validateFluidNumbers([
+      ("advect", request.advect),
+      ("turbulence scale", request.turbulenceScale),
+      ("turbulence speed", request.turbulenceSpeed),
+      ("detail", request.detail)
+    ])
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-field-particles-sequence",
+      request.queueURL.path,
+      request.sourceDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--spacing",
+      String(request.spacing),
+      "--particle-size",
+      String(request.particleSize),
+      "--advect",
+      cliNumber(request.advect),
+      "--turbulence-scale",
+      cliNumber(request.turbulenceScale),
+      "--turbulence-speed",
+      cliNumber(request.turbulenceSpeed),
+      "--detail",
+      cliNumber(request.detail),
+      "--seed",
+      String(request.seed),
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if request.liveColour {
+      arguments.append("--live-colour")
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
   }
 
   static func runQueuedGranularMosaicPoolSequenceRender(
@@ -1452,6 +1805,25 @@ enum RustBridgePlaceholder {
     String(format: "%.6g", locale: Locale(identifier: "en_US_POSIX"), value)
   }
 
+  private static func validateFluidSequenceFrames(_ frames: Int, frameRate: Double) throws {
+    guard frames > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame count must be greater than zero")
+    }
+    guard frameRate.isFinite && frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive and finite")
+    }
+  }
+
+  private static func validateFluidNumbers(_ values: [(String, Double)]) throws {
+    for (name, value) in values {
+      guard value.isFinite && value >= 0 else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "\(name) must be finite and greater than or equal to zero"
+        )
+      }
+    }
+  }
+
   private static func runCommand(
     arguments: [String],
     currentDirectoryURL: URL
@@ -1539,6 +1911,71 @@ struct FeedbackSequenceRenderQueueCommandRequest {
 }
 
 struct FeedbackSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct FluidAdvectSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let advect: Double
+  let turbulenceScale: Double
+  let turbulenceSpeed: Double
+  let detail: Double
+  let reinject: Double
+  let seed: UInt64
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct FluidAdvectTwoSourceSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let advect: Double
+  let reinject: Double
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct OpticalFlowAdvectSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let advect: Double
+  let reinject: Double
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct FieldParticlesSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let spacing: Int
+  let particleSize: Int
+  let advect: Double
+  let turbulenceScale: Double
+  let turbulenceSpeed: Double
+  let detail: Double
+  let liveColour: Bool
+  let seed: UInt64
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct FluidAdvectionRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

@@ -95,6 +95,14 @@ struct AviLayout {
     strh_length_pos: Option<usize>,
 }
 
+#[derive(Debug)]
+struct OutChunk {
+    fourcc: [u8; 4],
+    data_size: u32,
+    total_len: usize,
+    keyframe: bool,
+}
+
 fn parse(bytes: &[u8]) -> Result<AviLayout, MediaError> {
     if fourcc_at(bytes, 0)? != *FOURCC_RIFF {
         return Err(MediaError::MalformedAvi("missing RIFF header".to_string()));
@@ -307,12 +315,6 @@ pub fn duplicate_p_frame(
     let dup_bytes = &bytes[target.start..target.start + target.total_len];
 
     // Build the new movi chunk sequence (descriptors) and the raw movi data.
-    struct OutChunk {
-        fourcc: [u8; 4],
-        data_size: u32,
-        total_len: usize,
-        keyframe: bool,
-    }
     let mut out_chunks: Vec<OutChunk> = Vec::with_capacity(n + count as usize);
     let mut movi_data: Vec<u8> = Vec::new();
     for (i, chunk) in layout.chunks.iter().enumerate() {
@@ -337,10 +339,55 @@ pub fn duplicate_p_frame(
         }
     }
 
+    rebuild_avi(bytes, &layout, &out_chunks, &movi_data)
+}
+
+/// Remove the leading keyframe from the controlled P-frame-only MPEG-4 AVI
+/// substrate — the "void/transition mosh" operation.
+///
+/// The resulting AVI intentionally starts with prediction frames and may decode
+/// differently across ffmpeg builds. This is therefore only for the experimental
+/// bitstream path, never the deterministic render graph.
+pub fn remove_leading_keyframe(bytes: &[u8]) -> Result<Vec<u8>, MediaError> {
+    let layout = parse(bytes)?;
+    if layout.chunks.len() <= 1 {
+        return Err(MediaError::InvalidRequest(
+            "keyframe removal needs at least one P-frame after the leading keyframe".to_string(),
+        ));
+    }
+    let first = &layout.chunks[0];
+    if !first.keyframe {
+        return Err(MediaError::InvalidRequest(
+            "the first video chunk is not marked as a keyframe".to_string(),
+        ));
+    }
+
+    let mut out_chunks: Vec<OutChunk> = Vec::with_capacity(layout.chunks.len() - 1);
+    let mut movi_data: Vec<u8> = Vec::new();
+    for chunk in layout.chunks.iter().skip(1) {
+        let raw = &bytes[chunk.start..chunk.start + chunk.total_len];
+        movi_data.extend_from_slice(raw);
+        out_chunks.push(OutChunk {
+            fourcc: chunk.fourcc,
+            data_size: chunk.data_size,
+            total_len: chunk.total_len,
+            keyframe: chunk.keyframe,
+        });
+    }
+
+    rebuild_avi(bytes, &layout, &out_chunks, &movi_data)
+}
+
+fn rebuild_avi(
+    bytes: &[u8],
+    layout: &AviLayout,
+    out_chunks: &[OutChunk],
+    movi_data: &[u8],
+) -> Result<Vec<u8>, MediaError> {
     // Rebuild idx1, preserving the source's offset convention via idx1_base_offset.
     let mut idx1 = Vec::with_capacity(out_chunks.len() * IDX1_ENTRY_LEN);
     let mut rel: u32 = 0;
-    for chunk in &out_chunks {
+    for chunk in out_chunks {
         idx1.extend_from_slice(&chunk.fourcc);
         let flags = if chunk.keyframe { AVIIF_KEYFRAME } else { 0 };
         idx1.extend_from_slice(&flags.to_le_bytes());
@@ -351,7 +398,7 @@ pub fn duplicate_p_frame(
 
     // Prefix = everything before the movi list (hdrl + any JUNK padding), with the
     // frame-count headers patched to the new total.
-    let new_frame_count = (n + count as usize) as u32;
+    let new_frame_count = out_chunks.len() as u32;
     let mut out = bytes[..layout.movi_list_start].to_vec();
     write_u32(&mut out, layout.avih_total_frames_pos, new_frame_count)?;
     if let Some(pos) = layout.strh_length_pos {
@@ -363,7 +410,7 @@ pub fn duplicate_p_frame(
     out.extend_from_slice(FOURCC_LIST);
     out.extend_from_slice(&movi_size.to_le_bytes());
     out.extend_from_slice(FOURCC_MOVI);
-    out.extend_from_slice(&movi_data);
+    out.extend_from_slice(movi_data);
 
     // New idx1.
     out.extend_from_slice(FOURCC_IDX1);
@@ -518,6 +565,27 @@ mod tests {
     fn duplicate_rejects_out_of_range_index() {
         let avi = sample();
         let err = duplicate_p_frame(&avi, 9, 1).expect_err("should reject");
+        assert!(matches!(err, MediaError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn remove_leading_keyframe_drops_first_chunk_and_updates_headers() {
+        let avi = sample();
+        let out = remove_leading_keyframe(&avi).expect("remove keyframe");
+        let layout = parse(&out).expect("reparse");
+        assert_eq!(layout.chunks.len(), 3);
+        assert!(!layout.chunks[0].keyframe);
+        assert_eq!(layout.chunks[0].data_size, 4);
+        let raw = &out[layout.chunks[0].start..layout.chunks[0].start + 8 + 4];
+        assert_eq!(&raw[8..12], &[10, 11, 12, 13]);
+        assert_eq!(read_u32(&out, layout.avih_total_frames_pos).unwrap(), 3);
+        assert_eq!(read_u32(&out, layout.strh_length_pos.unwrap()).unwrap(), 3);
+    }
+
+    #[test]
+    fn remove_leading_keyframe_rejects_single_frame_avi() {
+        let avi = synthetic_avi(&[vec![1, 2, 3]]);
+        let err = remove_leading_keyframe(&avi).expect_err("should reject");
         assert!(matches!(err, MediaError::InvalidRequest(_)));
     }
 

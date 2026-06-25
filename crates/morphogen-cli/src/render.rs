@@ -667,11 +667,15 @@ pub(crate) struct DatamoshBitstreamRequest<'a> {
     pub(crate) input: &'a Path,
     pub(crate) output_dir: &'a Path,
     pub(crate) fps: f64,
+    pub(crate) operation: CliDatamoshBitstreamOperation,
     pub(crate) p_frame_index: u32,
     pub(crate) duplicate_count: u32,
 }
 
-const DATAMOSH_BITSTREAM_ALGORITHM: &str = "datamosh_bitstream_pframe_dup_experimental_v1";
+const DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM: &str =
+    "datamosh_bitstream_pframe_dup_experimental_v1";
+const DATAMOSH_BITSTREAM_REMOVE_KEYFRAME_ALGORITHM: &str =
+    "datamosh_bitstream_remove_keyframe_experimental_v1";
 
 #[derive(Serialize)]
 struct DatamoshBitstreamSidecar {
@@ -681,6 +685,7 @@ struct DatamoshBitstreamSidecar {
     input: String,
     fps: f64,
     codec: String,
+    operation: String,
     p_frame_index: u32,
     duplicate_count: u32,
     p_frames_available: u32,
@@ -689,11 +694,11 @@ struct DatamoshBitstreamSidecar {
 }
 
 /// EXPERIMENTAL, NON-DETERMINISTIC real bitstream datamosh. Encodes `input` to a
-/// P-frame-only AVI/MPEG-4 via external ffmpeg, duplicates a chosen P-frame's
-/// compressed chunk (`morphogen_media::duplicate_p_frame`) so its motion vectors
-/// re-bloom on redecode, then decodes the mangled stream to a PNG sequence. This
-/// path lives OUTSIDE the deterministic render graph by design — there is no parity
-/// gate and the output is not bit-reproducible (it depends on ffmpeg's codec).
+/// P-frame-only AVI/MPEG-4 via external ffmpeg, performs explicit compressed-stream
+/// surgery (`morphogen_media::duplicate_p_frame` or `remove_leading_keyframe`),
+/// then decodes the mangled stream to a PNG sequence. This path lives OUTSIDE the
+/// deterministic render graph by design — there is no parity gate and the output is
+/// not bit-reproducible (it depends on ffmpeg's codec).
 pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Result<(), CliError> {
     fs::create_dir_all(request.output_dir)?;
     let encoded = request.output_dir.join("encoded.avi");
@@ -702,20 +707,28 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
     morphogen_media::encode_datamosh_avi(request.input, &encoded, request.fps)?;
     let encoded_bytes = fs::read(&encoded)?;
     let p_frames_available = morphogen_media::count_p_frames(&encoded_bytes)?;
-    let moshed_bytes = morphogen_media::duplicate_p_frame(
-        &encoded_bytes,
-        request.p_frame_index,
-        request.duplicate_count,
-    )?;
+    let moshed_bytes = match request.operation {
+        CliDatamoshBitstreamOperation::PframeDuplicate => morphogen_media::duplicate_p_frame(
+            &encoded_bytes,
+            request.p_frame_index,
+            request.duplicate_count,
+        )?,
+        CliDatamoshBitstreamOperation::RemoveKeyframe => {
+            morphogen_media::remove_leading_keyframe(&encoded_bytes)?
+        }
+    };
     fs::write(&moshed, &moshed_bytes)?;
     morphogen_media::decode_avi_frames(&moshed, request.output_dir)?;
 
+    let algorithm = datamosh_bitstream_algorithm(request.operation);
+    let operation = datamosh_bitstream_operation_name(request.operation);
     let sidecar = DatamoshBitstreamSidecar {
-        algorithm: DATAMOSH_BITSTREAM_ALGORITHM.to_string(),
+        algorithm: algorithm.to_string(),
         deterministic: false,
         input: request.input.to_string_lossy().to_string(),
         fps: request.fps,
         codec: "mpeg4".to_string(),
+        operation: operation.to_string(),
         p_frame_index: request.p_frame_index,
         duplicate_count: request.duplicate_count,
         p_frames_available,
@@ -732,14 +745,41 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
     // a playable deliverable, so it is kept alongside the decoded frames.
     let _ = fs::remove_file(&encoded);
 
-    println!(
-        "datamosh-bitstream (EXPERIMENTAL, non-deterministic): bloomed P-frame {} x{} of {} P-frames -> {}",
-        request.p_frame_index,
-        request.duplicate_count,
-        p_frames_available,
-        request.output_dir.display()
-    );
+    match request.operation {
+        CliDatamoshBitstreamOperation::PframeDuplicate => {
+            println!(
+                "datamosh-bitstream (EXPERIMENTAL, non-deterministic): bloomed P-frame {} x{} of {} P-frames -> {}",
+                request.p_frame_index,
+                request.duplicate_count,
+                p_frames_available,
+                request.output_dir.display()
+            );
+        }
+        CliDatamoshBitstreamOperation::RemoveKeyframe => {
+            println!(
+                "datamosh-bitstream (EXPERIMENTAL, non-deterministic): removed leading keyframe from {} P-frame substrate -> {}",
+                p_frames_available,
+                request.output_dir.display()
+            );
+        }
+    }
     Ok(())
+}
+
+fn datamosh_bitstream_algorithm(operation: CliDatamoshBitstreamOperation) -> &'static str {
+    match operation {
+        CliDatamoshBitstreamOperation::PframeDuplicate => DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM,
+        CliDatamoshBitstreamOperation::RemoveKeyframe => {
+            DATAMOSH_BITSTREAM_REMOVE_KEYFRAME_ALGORITHM
+        }
+    }
+}
+
+fn datamosh_bitstream_operation_name(operation: CliDatamoshBitstreamOperation) -> &'static str {
+    match operation {
+        CliDatamoshBitstreamOperation::PframeDuplicate => "pframe_duplicate",
+        CliDatamoshBitstreamOperation::RemoveKeyframe => "remove_keyframe",
+    }
 }
 
 pub(crate) struct ConvolutionalBlendSequenceRequest<'a> {
