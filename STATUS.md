@@ -8,12 +8,26 @@ _Last updated: 2026-06-25_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **354 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **355 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **52 passing, 0 failing** (Swift shell + service tests).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Controlled Datamosh — vector-remix tier: queue + SwiftUI exposure (full vertical slice).**
+  The slice-1 CPU+CLI vector-remix now threads end-to-end. The schema mirror
+  `VectorRemixMode` was added to **core** (beside `RenderBackend`/`KernelMode`); the
+  persisted `frame_sequence_datamosh` job carries `vector_remix` (serde-default
+  `None`) + `remix_seed` (serde-default `0`), so pre-slice jobs keep their id.
+  `queue-add-datamosh-sequence` gained `--vector-remix`/`--remix-seed`; `queue-run`
+  maps core→render (free fn, orphan rule) and records both in the manifest. macOS
+  Render panel adds a Vector Remix picker + Remix Seed stepper (shown for Shuffle);
+  Swift bridge passes the flags. **Verified:** queue add→run with `--vector-remix
+  shuffle --remix-seed 42` byte-identical to the direct render, manifest carries the
+  `…vector_remix…` algorithm id + `vector_remix: "shuffle"` + `remix_seed: 42` (new
+  smoke test). Workspace 354 → **355** (+1 smoke), Swift **52** (bridge test
+  extended), clippy clean. `docs/DATAMOSH_MILESTONE.md` updated.
 
 - **Controlled Datamosh — vector-remix tier (FFglitch MV sort/shuffle, deterministic; slice 1 CPU + CLI).**
   The deterministic "family look" of FFglitch's motion-vector sort/shuffle, on the

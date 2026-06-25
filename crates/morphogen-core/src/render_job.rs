@@ -310,6 +310,15 @@ pub enum RenderJobTask {
         /// to `0` so legacy jobs keep their meaning.
         #[serde(default)]
         block_refresh_threshold: f32,
+        /// FFglitch-style motion-vector remix on the block-MV grid (needs
+        /// `block_size >= 2`). Defaults to [`VectorRemixMode::None`] so legacy jobs
+        /// keep the block/residual/refresh meaning.
+        #[serde(default)]
+        vector_remix: VectorRemixMode,
+        /// Seed for `vector_remix == Shuffle` (deterministic permutation). Defaults
+        /// to `0`.
+        #[serde(default)]
+        remix_seed: u64,
     },
     /// Convolutional AV blending (image kernel): each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved with
@@ -631,6 +640,22 @@ pub enum RenderBackend {
     Cpu,
     /// Render on the Metal compute backend, gated by a per-frame CPU parity check.
     Metal,
+}
+
+/// FFglitch-style motion-vector remix on the per-block MV grid (datamosh). The
+/// schema mirror of the render crate's remix enum; the CLI maps between them.
+/// Defaults to [`VectorRemixMode::None`] so jobs serialized before this field keep
+/// the block/residual/refresh meaning.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VectorRemixMode {
+    /// No remix — the block-quantized flow is used unchanged (off path).
+    #[default]
+    None,
+    /// Reassign block MVs by descending magnitude (motion pools coherently).
+    Sort,
+    /// Deterministic seeded permutation of block MVs (motion scrambles).
+    Shuffle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

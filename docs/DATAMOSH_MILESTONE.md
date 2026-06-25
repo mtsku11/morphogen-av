@@ -341,9 +341,14 @@ the parity-gated kernel and **Metal comes free again** (no new kernel).
   computes `effective` itself (precedence over residual; refresh can still composite).
 - **Continuity:** `--vector-remix none` ⇒ byte-identical to the block path;
   `block_size ≤ 1` ⇒ the bloom path (remix is a no-op without macroblocks).
-- **Scope:** slice 1 is CPU + CLI on `render-datamosh-sequence` (the proven inner
-  core). Queue/SwiftUI exposure is the follow-up (the queue caller passes
-  `VectorRemixMode::None`, so existing jobs keep their id).
+- **Scope:** now a full vertical slice — CPU + CLI + persisted queue job +
+  SwiftUI. The schema mirror `VectorRemixMode` lives in core (with `RenderBackend`/
+  `KernelMode`); the persisted `frame_sequence_datamosh` job carries `vector_remix`
+  (serde-default `None`) + `remix_seed` (serde-default `0`), so jobs serialized
+  before this slice keep their id. `queue-add-datamosh-sequence` gained
+  `--vector-remix`/`--remix-seed`; `queue-run` maps the core mode to the render enum
+  (a free fn, orphan rule) and records both in the manifest. The macOS Render panel
+  adds a Vector Remix picker + a Remix Seed stepper (shown for Shuffle).
 
 ### Acceptance criteria (vector remix)
 
@@ -456,10 +461,6 @@ guards this with an `avi_dimensions` equality check).
 
 ## Deferred
 
-- **Vector-remix — queue/SwiftUI exposure**: slice 1 is CPU + CLI; threading
-  `vector_remix`/`remix_seed` through the persisted `frame_sequence_datamosh` job +
-  queue-add/run + the Render panel is the follow-up slice (the queue caller currently
-  passes `VectorRemixMode::None`).
 - **Real bitstream MV remix (the *true* codec artifact)**: sort/shuffle/fluid applied
   to the actual MPEG-4 motion vectors (not the optical-flow approximation the
   deterministic vector-remix tier delivers) genuinely needs FFglitch-class

@@ -135,6 +135,8 @@ final class AppState: ObservableObject {
   @Published var datamoshResidualGain = 0.0
   @Published var datamoshResidualDecay = 0.9
   @Published var datamoshBlockRefreshThreshold = 0.0
+  @Published var datamoshVectorRemix: DatamoshVectorRemixOption = .none
+  @Published var datamoshRemixSeed = 0
   @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
   @Published var datamoshSummary = "No datamosh rendered"
   @Published var videoAudioRouteModulatorURL: URL?
@@ -1250,6 +1252,8 @@ final class AppState: ObservableObject {
       residualGain: datamoshResidualGain,
       residualDecay: datamoshResidualDecay,
       blockRefreshThreshold: datamoshBlockRefreshThreshold,
+      vectorRemix: datamoshVectorRemix,
+      remixSeed: datamoshRemixSeed,
       maxFrames: nil,
       backend: datamoshBackend,
       projectURL: projectURL
@@ -1740,6 +1744,25 @@ enum FeedbackRenderBackendOption: String, CaseIterable, Identifiable {
       return "cpu"
     case .metal:
       return "metal"
+    }
+  }
+}
+
+enum DatamoshVectorRemixOption: String, CaseIterable, Identifiable {
+  case none = "None"
+  case sort = "Sort (pool motion)"
+  case shuffle = "Shuffle (scramble)"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .none:
+      return "none"
+    case .sort:
+      return "sort"
+    case .shuffle:
+      return "shuffle"
     }
   }
 }

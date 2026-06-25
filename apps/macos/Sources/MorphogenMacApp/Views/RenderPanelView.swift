@@ -882,6 +882,24 @@ struct RenderPanelView: View {
             .help("Per-block keep/drop: macroblocks whose mean motion is below this snap back to the carrier (intra-block refresh) while busier blocks rot. 0 = no per-block refresh; needs Macroblock Size >= 2.")
           }
 
+          HStack(spacing: 16) {
+            Picker("Vector Remix", selection: $state.datamoshVectorRemix) {
+              ForEach(DatamoshVectorRemixOption.allCases) { mode in
+                Text(mode.rawValue).tag(mode)
+              }
+            }
+            .frame(width: 280)
+            .help("FFglitch-style motion-vector remix on the block-MV grid (needs Macroblock Size >= 2). Sort pools motion by magnitude; Shuffle permutes it by the seed. None = off.")
+
+            if state.datamoshVectorRemix == .shuffle {
+              Stepper(value: $state.datamoshRemixSeed, in: 0...9999, step: 1) {
+                Text("Remix Seed \(state.datamoshRemixSeed)")
+              }
+              .frame(width: 180, alignment: .leading)
+              .help("Deterministic permutation seed for Shuffle.")
+            }
+          }
+
           Picker("Backend", selection: $state.datamoshBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
               Text(backend.rawValue).tag(backend)

@@ -1332,6 +1332,14 @@ pub(crate) enum Commands {
         /// blocks rot. `0` = no per-block refresh; needs block-size >= 2.
         #[arg(long, default_value_t = 0.0)]
         block_refresh_threshold: f32,
+        /// FFglitch-style motion-vector remix on the block-MV grid (block-size 2 or
+        /// more): `sort` pools motion by descending magnitude, `shuffle` permutes by
+        /// `--remix-seed`. `none` = off.
+        #[arg(long, value_enum, default_value_t = CliVectorRemixMode::None)]
+        vector_remix: CliVectorRemixMode,
+        /// Seed for `--vector-remix shuffle` (deterministic permutation).
+        #[arg(long, default_value_t = 0)]
+        remix_seed: u64,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]
@@ -1794,6 +1802,18 @@ pub(crate) enum CliVectorRemixMode {
 }
 
 impl From<CliVectorRemixMode> for VectorRemixMode {
+    fn from(value: CliVectorRemixMode) -> Self {
+        match value {
+            CliVectorRemixMode::None => Self::None,
+            CliVectorRemixMode::Sort => Self::Sort,
+            CliVectorRemixMode::Shuffle => Self::Shuffle,
+        }
+    }
+}
+
+// The schema mirror in core (used by the persisted datamosh job). Allowed by the
+// orphan rule because the trait's type parameter (`CliVectorRemixMode`) is local.
+impl From<CliVectorRemixMode> for morphogen_core::VectorRemixMode {
     fn from(value: CliVectorRemixMode) -> Self {
         match value {
             CliVectorRemixMode::None => Self::None,

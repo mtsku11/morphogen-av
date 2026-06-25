@@ -25,7 +25,7 @@ pub use render_job::{
     IrMode, KernelMode, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance,
     RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
     RenderJobStatus, RenderJobTask, RenderQuality, RenderSettings, RenderTimingMetadata,
-    VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
+    VectorRemixMode, VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
     VideoAudioRouteSampling, VideoVocoderMode,
 };
 pub use render_queue::RenderQueue;
