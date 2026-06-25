@@ -123,6 +123,27 @@ Every new datamosh feature must ship with:
 - representative PNG frames or a contact sheet posted in the user-facing response
   so the output can be visually verified before the feature is treated as done.
 
+`scripts/datamosh-contact-sheet.py` is the standing tool for that last point. It
+renders the named destructive modes on the synthetic fixture and tiles sampled
+frames into one labeled review sheet (pure-stdlib PNG + a built-in 5×7 font, no
+deps), printing each deterministic mode's mean RGB cross-delta vs the PASSTHROUGH
+baseline alongside the pixels. The canonical mode set it covers:
+
+| Mode | Tier | Knobs |
+| --- | --- | --- |
+| PASSTHROUGH (baseline) | deterministic | `--keyframe-interval 1` (== Source B) |
+| CODEC BLOOM | deterministic | `--keyframe-interval 0 --amount 1.0` |
+| MACROBLOCK SLIDE | deterministic | `--keyframe-interval 0 --block-size 16` |
+| STRUCTURED MELT | deterministic | `+ --residual-gain 1.0 --residual-decay 0.9` |
+| MACROBLOCK ROT | deterministic | `+ --block-refresh-threshold 1.0` |
+| P-FRAME BLOOM | bitstream (`--video`) | `--operation pframe-duplicate --duplicate-count N` |
+| VOID MOSH | bitstream (`--video`) | `--operation remove-keyframe` |
+
+The deterministic rows are byte-reproducible (a true regression baseline); the
+bitstream rows need ffmpeg + a real clip and are flagged NON-DETERMINISTIC on the
+sheet (no stable baseline, per the carve-out below). Run:
+`scripts/datamosh-contact-sheet.py [out.png] [--video CLIP]`.
+
 ### Recursive-node Metal drift (known, accepted)
 
 Because this is a *recursive* node (Metal's output feeds its own next frame), the

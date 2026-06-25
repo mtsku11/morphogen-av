@@ -15,6 +15,25 @@ _Last updated: 2026-06-25_
 
 ## What just landed
 
+- **Datamosh visual-regression contact sheet (tooling).**
+  `scripts/datamosh-contact-sheet.py` renders every named destructive datamosh
+  mode and tiles sampled frames into one labeled review PNG so each mode has
+  pixels to inspect — the standing tool for the milestone's "post a contact sheet"
+  verification gate. Deterministic tiers (PASSTHROUGH baseline, Codec Bloom,
+  Macroblock Slide, Structured Melt, Macroblock Rot) run on the synthetic
+  `make-datamosh-fixture.py` fixture and are byte-reproducible; the bitstream tiers
+  (P-Frame Bloom, Void Mosh) are opt-in via `--video CLIP` (needs ffmpeg) and
+  flagged NON-DETERMINISTIC on the sheet. Pure-stdlib PNG decode/encode + a
+  built-in 5×7 font (no deps, like `frame-delta.py`); also prints each
+  deterministic mode's mean RGB cross-delta vs PASSTHROUGH. Verified: 5-mode sheet
+  (deterministic) + 7-mode sheet (with a testsrc2 clip) both Read — each mode's
+  look matches its documented behavior (bloom speckles, coherent macroblock slide,
+  streaky residual melt, self-erasing rot trail; bitstream codec decay / keyframe
+  voids). Cross-deltas over the 8-frame fixture: Codec Bloom 9.8, Macroblock Slide
+  23.5, Structured Melt 22.4, Macroblock Rot 12.5 /255. No render-graph change, so
+  workspace stays 343. Documented in `docs/DATAMOSH_MILESTONE.md`. **Next: option 1
+  — motion-transfer bitstream mosh (swap A's vectors into B; likely FFglitch-class).**
+
 - **Controlled Datamosh — real bitstream keyframe removal.**
   `datamosh-bitstream --operation remove-keyframe` removes the controlled MPEG-4
   AVI substrate's leading keyframe so ffmpeg decodes from prediction data rather

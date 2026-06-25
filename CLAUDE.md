@@ -57,6 +57,11 @@ The full CLI catalog and key-path map are in **[docs/REFERENCE.md](docs/REFERENC
   (the pool render's 0.25 default scatters them).
 - **`scripts/frame-delta.py`** — mean frame-to-frame change of a PNG sequence; the
   quantitative half of the off-vs-on knob check (pair it with Reading the frames).
+- **`scripts/datamosh-contact-sheet.py`** — visual-regression review sheet for the
+  datamosh destructive modes: renders each named mode (Codec Bloom, Macroblock
+  Slide, Structured Melt, Macroblock Rot — and, with `--video`, the bitstream
+  P-Frame Bloom / Void Mosh) on the synthetic fixture, tiles sampled frames into
+  one labeled PNG, and prints each deterministic mode's cross-delta vs PASSTHROUGH.
 - **`/parity`** (project-local skill, `scripts/parity-check.sh`) — prove a
   granular-pool render is path-independent: render the same job via the direct CLI
   and the queue add→run path, byte-compare every frame, show the persisted
