@@ -13,9 +13,9 @@ use morphogen_core::{
     VideoVocoderMode,
 };
 use morphogen_render::{
-    datamosh_algorithm, flow_displace_cpu, ConvolutionBlendSettings, FieldParticleSettings,
-    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
-    GranularMosaicSettings, StructureMode, VideoVocoderSettings, FIELD_PARTICLES_ALGORITHM,
+    flow_displace_cpu, CascadeTrailSettings, ConvolutionBlendSettings, FieldParticleSettings,
+    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings,
+    StructureMode, VideoVocoderSettings, CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM,
     FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
     RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
@@ -499,6 +499,69 @@ pub(crate) fn queue_add_field_particles_sequence(
     queue.save_json(queue_path)?;
     println!(
         "queued field-particles render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) struct QueueAddCascadeTrailsSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: CascadeTrailSettings,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_cascade_trails_sequence(
+    request: QueueAddCascadeTrailsSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddCascadeTrailsSequenceRequest {
+        queue_path,
+        source_dir,
+        output_root_dir,
+        settings,
+        frames,
+        frame_rate,
+        project_path,
+    } = request;
+    settings.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceCascadeTrails {
+            source_frame_directory: source_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            tile_size: settings.tile_size,
+            grid_spacing: settings.grid_spacing,
+            advect: settings.advect,
+            turbulence_scale: settings.turbulence_scale,
+            detail: settings.detail,
+            live_refresh: settings.live_refresh,
+            seed: settings.seed,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            source_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued cascade-trails render job {job_id} in {}",
         queue_path.display()
     );
     Ok(())
@@ -1503,6 +1566,93 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
     )
 }
 
+pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceCascadeTrails { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running cascade-trails jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceCascadeTrails {
+        source_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        tile_size,
+        grid_spacing,
+        advect,
+        turbulence_scale,
+        detail,
+        live_refresh,
+        seed,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a cascade-trails render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = CascadeTrailSettings {
+        tile_size,
+        grid_spacing,
+        advect,
+        turbulence_scale,
+        detail,
+        live_refresh,
+        seed,
+    };
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
+            source_dir: Path::new(&source_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames: frames as usize,
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_cascade_trails",
+            effect_key: "trail_cascade",
+            effect: serde_json::json!({
+                "algorithm": CASCADE_TRAIL_ALGORITHM,
+                "settings": settings,
+                "backend": "CPU"
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "cascade-trails",
+    )
+}
+
 pub(crate) fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError> {
     let mut queue = RenderQueue::load_json(queue_path)?;
     let job_index = queue
@@ -2428,12 +2578,7 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 "audio_sample_count": timing.audio_sample_count
             },
             "datamosh": {
-                "algorithm": datamosh_algorithm(
-                    resolved_settings.block_size,
-                    resolved_settings.residual_gain,
-                    resolved_settings.refresh_threshold,
-                    resolved_settings.vector_remix_mode(),
-                ),
+                "algorithm": datamosh_sequence_algorithm(&resolved_settings),
                 "preset": datamosh_preset_label(preset),
                 "keyframe_interval": resolved_settings.keyframe_interval,
                 "amount": resolved_settings.amount,
@@ -2443,6 +2588,8 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 "block_refresh_threshold": resolved_settings.refresh_threshold,
                 "vector_remix": resolved_settings.vector_remix,
                 "remix_seed": resolved_settings.remix_seed,
+                "scanline_smear": resolved_settings.scanline_smear,
+                "codec_engrave": resolved_settings.codec_engrave,
                 "flow_cache_directory": flow_cache_directory,
                 "backend": render_backend_label(backend)
             },
@@ -3339,6 +3486,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 "frame_sequence_optical_flow_advect"
             }
             RenderJobTask::FrameSequenceFieldParticles { .. } => "frame_sequence_field_particles",
+            RenderJobTask::FrameSequenceCascadeTrails { .. } => "frame_sequence_cascade_trails",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",
             RenderJobTask::FrameSequenceGranularMosaicPool { .. } => {
                 "frame_sequence_granular_mosaic_pool"

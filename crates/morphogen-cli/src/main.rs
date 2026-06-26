@@ -1,7 +1,8 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
+    CascadeTrailSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
+    FieldParticleSettings,
     FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
     GranularMosaicSettings, StructureMode, VideoVocoderSettings,
 };
@@ -499,6 +500,32 @@ fn run() -> Result<(), CliError> {
             backend: backend.into(),
         })
         .map(|_| ()),
+        Commands::RenderCascadeTrailsSequence {
+            source_dir,
+            output_dir,
+            frames,
+            tile_size,
+            grid_spacing,
+            advect,
+            turbulence_scale,
+            detail,
+            live_refresh,
+            seed,
+        } => render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
+            source_dir: &source_dir,
+            output_dir: &output_dir,
+            settings: CascadeTrailSettings {
+                tile_size,
+                grid_spacing,
+                advect,
+                turbulence_scale,
+                detail,
+                live_refresh,
+                seed,
+            },
+            frames,
+        })
+        .map(|_| ()),
         Commands::RenderFluidMosaicSequence {
             source_a_dir,
             source_b_dir,
@@ -988,6 +1015,37 @@ fn run() -> Result<(), CliError> {
             backend: backend.into(),
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddCascadeTrailsSequence {
+            queue_path,
+            source_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            tile_size,
+            grid_spacing,
+            advect,
+            turbulence_scale,
+            detail,
+            live_refresh,
+            seed,
+            project_path,
+        } => queue_add_cascade_trails_sequence(QueueAddCascadeTrailsSequenceRequest {
+            queue_path: &queue_path,
+            source_dir: &source_dir,
+            output_root_dir: &output_root_dir,
+            settings: CascadeTrailSettings {
+                tile_size,
+                grid_spacing,
+                advect,
+                turbulence_scale,
+                detail,
+                live_refresh,
+                seed,
+            },
+            frames,
+            frame_rate,
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueAddGranularMosaicSequence {
             queue_path,
             modulator_dir,
@@ -1308,6 +1366,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunFieldParticlesSequence { queue_path } => {
             queue_run_field_particles_sequence(&queue_path)
+        }
+        Commands::QueueRunCascadeTrailsSequence { queue_path } => {
+            queue_run_cascade_trails_sequence(&queue_path)
         }
         Commands::QueueRunGranularMosaicSequence { queue_path } => {
             queue_run_granular_mosaic_sequence(&queue_path)

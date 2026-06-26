@@ -13,37 +13,44 @@ use morphogen_core::{
     RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    advance_coagulation_field, advance_dispersion_field, advance_field_particles,
+    advance_cascade_trails, advance_coagulation_field, advance_dispersion_field,
+    advance_field_particles,
     advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu,
     analyze_luma_band_envelope_cpu, apply_history_smear, apply_tone_map_cpu, average_cell_flows,
     coagulation_field, composite_with_field, convolution_blend_color_cpu, convolution_blend_cpu,
-    datamosh_block_refresh_composite, datamosh_residual_flow, disperse_composite_cpu,
-    downsample_flow_to_cells, feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu,
-    flow_temporal_supersample_cpu, fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu,
+    datamosh_block_refresh_composite, datamosh_codec_engrave_frame_cpu, datamosh_residual_flow,
+    datamosh_scanline_smear_frame_cpu, disperse_composite_cpu, downsample_flow_to_cells,
+    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
+    fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu,
     granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
-    initialize_field_particles, initialize_fluid_mosaic, is_datamosh_keyframe,
+    initialize_cascade_trails, initialize_field_particles, initialize_fluid_mosaic,
+    is_datamosh_keyframe,
     luma_specification_tone_map, luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu,
     quantize_flow_to_blocks, read_flow_cache, read_flow_feedback_state,
     read_grain_color_descriptor_cache, read_grain_descriptor_cache,
     read_grain_pool_descriptor_cache, read_grain_selection_cache, refresh_field_particle_colors,
-    refresh_fluid_mosaic_colors, remix_block_vectors, render_field_particles, render_fluid_mosaic,
+    refresh_fluid_mosaic_colors, remix_block_vectors, render_cascade_trails,
+    render_field_particles, render_fluid_mosaic,
     reset_residual_in_refreshed_blocks, resort_fluid_mosaic_colors, select_grains_cpu,
     select_grains_from_pool_cpu, select_grains_multimodal_cpu, synthesize_turbulence_flow,
     uniform_displacement_field, video_vocoder_cpu, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, zero_flow, AntiRepeat,
-    CoagulationField, CoagulationFlowSource, CoagulationSettings, ConvolutionBlendSettings,
-    ConvolutionKernel, DispersionField, DispersionSettings, FieldParticleSettings,
-    FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor, GrainDescriptor,
-    GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, ParticleField,
-    PoolSelectionWindow, RmsDisplacementEnvelope, TemporalCoherence, VectorRemixMode,
-    VideoVocoderSettings, FLOW_VECTOR_CONVENTION, GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME,
-    GRAIN_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME,
-    GRAIN_SELECTION_CACHE_FILE_NAME, GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS,
-    MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    CoagulationField, CoagulationFlowSource, CoagulationSettings, CodecEngraveSettings,
+    CascadeTrailSettings, ConvolutionBlendSettings, ConvolutionKernel, DispersionField,
+    DispersionSettings,
+    FieldParticleSettings, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor,
+    GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32,
+    ParticleField, PoolSelectionWindow, RmsDisplacementEnvelope, ScanlineSmearSettings,
+    TemporalCoherence, VectorRemixMode, VideoVocoderSettings, DATAMOSH_CODEC_ENGRAVE_ALGORITHM,
+    DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
+    GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
+    GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
+    GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
+    POOLED_GRAIN_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -472,6 +479,10 @@ pub(crate) struct DatamoshSequenceSettings {
     pub(crate) vector_remix: String,
     pub(crate) remix_seed: u64,
     pub(crate) preset: DatamoshPreset,
+    #[serde(default)]
+    pub(crate) scanline_smear: bool,
+    #[serde(default)]
+    pub(crate) codec_engrave: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -703,7 +714,7 @@ pub(crate) fn render_datamosh_sequence(
                 // while busier blocks keep rotting. A pure CPU composite over the
                 // gated displace output, so Metal stays free; refreshed blocks also
                 // clear their residual accumulator (matching the keyframe reset).
-                if refresh_active {
+                let refreshed = if refresh_active {
                     let block_means = quantize_flow_to_blocks(&flow, settings.block_size)?;
                     let composed = datamosh_block_refresh_composite(
                         &advected,
@@ -721,6 +732,41 @@ pub(crate) fn render_datamosh_sequence(
                     composed
                 } else {
                     advected
+                };
+                let post_scanline = if settings.scanline_smear {
+                    let frame_index = u32::try_from(index).map_err(|_| {
+                        CliError::Message(
+                            "frame sequence contains more than u32::MAX frames".to_string(),
+                        )
+                    })?;
+                    datamosh_scanline_smear_frame_cpu(
+                        &refreshed,
+                        &effective,
+                        frame_index,
+                        if settings.codec_engrave {
+                            datamosh_codec_scanline_smear_settings(settings.remix_seed)
+                        } else {
+                            datamosh_scanline_smear_settings(settings.remix_seed)
+                        },
+                    )?
+                } else {
+                    refreshed
+                };
+                if settings.codec_engrave {
+                    let frame_index = u32::try_from(index).map_err(|_| {
+                        CliError::Message(
+                            "frame sequence contains more than u32::MAX frames".to_string(),
+                        )
+                    })?;
+                    datamosh_codec_engrave_frame_cpu(
+                        &post_scanline,
+                        &carrier,
+                        &effective,
+                        frame_index,
+                        datamosh_codec_engrave_settings(settings.remix_seed),
+                    )?
+                } else {
+                    post_scanline
                 }
             }
             // Frame zero or keyframe refresh: the carrier is the output verbatim,
@@ -810,7 +856,7 @@ pub(crate) fn render_datamosh_sequence(
     )?;
 
     println!(
-        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, vector-remix {:?} seed {}, {:?}) from {} moshing {} to {}",
+        "rendered datamosh sequence with {} frame(s) (keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, vector-remix {:?} seed {}, scanline-smear {}, codec-engrave {}, {:?}) from {} moshing {} to {}",
         frame_count,
         settings.keyframe_interval,
         settings.amount,
@@ -820,6 +866,8 @@ pub(crate) fn render_datamosh_sequence(
         settings.refresh_threshold,
         settings.vector_remix_mode(),
         settings.remix_seed,
+        settings.scanline_smear,
+        settings.codec_engrave,
         request.backend,
         request.modulator_dir.display(),
         request.carrier_dir.display(),
@@ -860,6 +908,8 @@ pub(crate) fn resolve_datamosh_settings(
             vector_remix: "none".to_string(),
             remix_seed: 0,
             preset: request.preset,
+            scanline_smear: false,
+            codec_engrave: false,
         },
         DatamoshPreset::StructuredMelt => DatamoshSequenceSettings {
             keyframe_interval: 0,
@@ -871,6 +921,8 @@ pub(crate) fn resolve_datamosh_settings(
             vector_remix: "none".to_string(),
             remix_seed: 0,
             preset: request.preset,
+            scanline_smear: false,
+            codec_engrave: false,
         },
         DatamoshPreset::MacroblockRot => DatamoshSequenceSettings {
             keyframe_interval: 0,
@@ -882,6 +934,8 @@ pub(crate) fn resolve_datamosh_settings(
             vector_remix: "none".to_string(),
             remix_seed: 0,
             preset: request.preset,
+            scanline_smear: false,
+            codec_engrave: false,
         },
         DatamoshPreset::VectorShuffle => DatamoshSequenceSettings {
             keyframe_interval: 0,
@@ -893,6 +947,34 @@ pub(crate) fn resolve_datamosh_settings(
             vector_remix: "shuffle".to_string(),
             remix_seed: request.remix_seed,
             preset: request.preset,
+            scanline_smear: false,
+            codec_engrave: false,
+        },
+        DatamoshPreset::ScanlineSmear => DatamoshSequenceSettings {
+            keyframe_interval: 0,
+            amount: 3.0,
+            block_size: 4,
+            residual_gain: 1.65,
+            residual_decay: 0.98,
+            refresh_threshold: 0.22,
+            vector_remix: "sort".to_string(),
+            remix_seed: request.remix_seed,
+            preset: request.preset,
+            scanline_smear: true,
+            codec_engrave: false,
+        },
+        DatamoshPreset::CodecEngrave => DatamoshSequenceSettings {
+            keyframe_interval: 0,
+            amount: 3.35,
+            block_size: 4,
+            residual_gain: 1.9,
+            residual_decay: 0.985,
+            refresh_threshold: 0.18,
+            vector_remix: "sort".to_string(),
+            remix_seed: request.remix_seed,
+            preset: request.preset,
+            scanline_smear: true,
+            codec_engrave: true,
         },
     }
 }
@@ -910,6 +992,37 @@ pub(crate) fn datamosh_custom_settings(
         vector_remix: vector_remix_name(request.vector_remix).to_string(),
         remix_seed: request.remix_seed,
         preset: request.preset,
+        scanline_smear: false,
+        codec_engrave: false,
+    }
+}
+
+pub(crate) fn datamosh_scanline_smear_settings(seed: u64) -> ScanlineSmearSettings {
+    ScanlineSmearSettings {
+        seed,
+        ..ScanlineSmearSettings::default()
+    }
+}
+
+pub(crate) fn datamosh_codec_scanline_smear_settings(seed: u64) -> ScanlineSmearSettings {
+    ScanlineSmearSettings {
+        line_height: 1,
+        max_shift: 78.0,
+        motion_gain: 15.0,
+        wave_amplitude: 7.0,
+        wave_frequency: 0.42,
+        smear_mix: 0.78,
+        structure_protect: 0.62,
+        chroma_burst_rate: 0.008,
+        chroma_burst_size: 22,
+        seed,
+    }
+}
+
+pub(crate) fn datamosh_codec_engrave_settings(seed: u64) -> CodecEngraveSettings {
+    CodecEngraveSettings {
+        seed,
+        ..CodecEngraveSettings::default()
     }
 }
 
@@ -928,10 +1041,12 @@ pub(crate) fn datamosh_preset_resolution_note(
         || explicit.residual_decay != resolved.residual_decay
         || explicit.refresh_threshold != resolved.refresh_threshold
         || explicit.vector_remix != resolved.vector_remix
-        || explicit.remix_seed != resolved.remix_seed;
+        || explicit.remix_seed != resolved.remix_seed
+        || explicit.scanline_smear != resolved.scanline_smear
+        || explicit.codec_engrave != resolved.codec_engrave;
     overridden.then(|| {
         format!(
-            "datamosh preset '{}' resolved to keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, vector-remix {} seed {}; explicit datamosh knobs are ignored unless the preset uses them. Use --preset custom for manual control.",
+            "datamosh preset '{}' resolved to keyframe-interval {}, amount {}, block-size {}, residual-gain {}, residual-decay {}, block-refresh-threshold {}, vector-remix {} seed {}, scanline-smear {}, codec-engrave {}; explicit datamosh knobs are ignored unless the preset uses them. Use --preset custom for manual control.",
             datamosh_preset_label(request.preset),
             resolved.keyframe_interval,
             resolved.amount,
@@ -940,7 +1055,9 @@ pub(crate) fn datamosh_preset_resolution_note(
             resolved.residual_decay,
             resolved.refresh_threshold,
             resolved.vector_remix,
-            resolved.remix_seed
+            resolved.remix_seed,
+            resolved.scanline_smear,
+            resolved.codec_engrave
         )
     })
 }
@@ -960,6 +1077,23 @@ pub(crate) fn datamosh_preset_label(preset: DatamoshPreset) -> &'static str {
         DatamoshPreset::StructuredMelt => "structured_melt",
         DatamoshPreset::MacroblockRot => "macroblock_rot",
         DatamoshPreset::VectorShuffle => "vector_shuffle",
+        DatamoshPreset::ScanlineSmear => "scanline_smear",
+        DatamoshPreset::CodecEngrave => "codec_engrave",
+    }
+}
+
+pub(crate) fn datamosh_sequence_algorithm(settings: &DatamoshSequenceSettings) -> &'static str {
+    if settings.codec_engrave {
+        DATAMOSH_CODEC_ENGRAVE_ALGORITHM
+    } else if settings.scanline_smear {
+        DATAMOSH_SCANLINE_SMEAR_ALGORITHM
+    } else {
+        morphogen_render::datamosh_algorithm(
+            settings.block_size,
+            settings.residual_gain,
+            settings.refresh_threshold,
+            settings.vector_remix_mode(),
+        )
     }
 }
 
@@ -1978,6 +2112,70 @@ pub(crate) fn render_field_particles_frame(
         RenderBackend::Cpu => Ok(render_field_particles(field, settings)?),
         RenderBackend::Metal => render_field_particles_frame_metal(field, settings),
     }
+}
+
+pub(crate) struct CascadeTrailsSequenceRequest<'a> {
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: CascadeTrailSettings,
+    pub(crate) frames: usize,
+}
+
+/// Render the persistent-trail vector-field cascade: a grid of source-image tiles is advected
+/// along the shared steady-vortex field and stamped every frame onto a never-cleared canvas, so
+/// the image smears into ribbons that trace the streamlines. The cascade state (tile positions +
+/// patches + the accumulator) is the stateful carrier, carried in memory. With `live_refresh`,
+/// each tile's patch is re-sampled from its origin cell in the current source frame. CPU-only.
+pub(crate) fn render_cascade_trails_sequence(
+    request: CascadeTrailsSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_frames = collect_image_frames(request.source_dir)?;
+    if source_frames.is_empty() {
+        return Err(CliError::Message(
+            "cascade trails requires at least one PNG frame in the source directory".to_string(),
+        ));
+    }
+
+    let seed_frame = load_image_f32(&source_frames[0])?;
+    fs::create_dir_all(request.output_dir)?;
+
+    let mut state = initialize_cascade_trails(&seed_frame, request.settings)?;
+    for index in 0..request.frames {
+        if index > 0 {
+            // Frames cycle if the render outlasts the clip, so a video plays through the trails.
+            let current = load_image_f32(&source_frames[index % source_frames.len()])?;
+            advance_cascade_trails(&mut state, &current, request.settings)?;
+        }
+        let rendered = render_cascade_trails(&state);
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    let (width, height) = state.dimensions();
+    println!(
+        "rendered cascade trails sequence with {} frame(s) ({} tiles, tile {}, spacing {}, advect {}) {}x{} from {} to {}",
+        request.frames,
+        state.tile_count(),
+        request.settings.tile_size,
+        request.settings.grid_spacing,
+        request.settings.advect,
+        width,
+        height,
+        request.source_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult {
+        frame_count: request.frames,
+    })
 }
 
 #[cfg(target_os = "macos")]

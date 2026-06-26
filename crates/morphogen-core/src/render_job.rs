@@ -146,6 +146,20 @@ pub enum RenderJobTask {
         #[serde(default)]
         backend: RenderBackend,
     },
+    FrameSequenceCascadeTrails {
+        source_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        tile_size: u32,
+        grid_spacing: u32,
+        advect: f32,
+        turbulence_scale: f32,
+        detail: f32,
+        #[serde(default)]
+        live_refresh: bool,
+        seed: u64,
+    },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
         carrier_frame_directory: String,
@@ -682,6 +696,10 @@ pub enum DatamoshPreset {
     MacroblockRot,
     /// Deterministic block-vector shuffle.
     VectorShuffle,
+    /// Horizontal scanline tearing plus sparse chroma/black codec debris.
+    ScanlineSmear,
+    /// Edge-aware internal hatching, chroma offsets, and block stepping.
+    CodecEngrave,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

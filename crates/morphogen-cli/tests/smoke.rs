@@ -2459,6 +2459,84 @@ fn fluid_advect_queue_jobs_match_direct_and_record_manifests() {
 }
 
 #[test]
+fn cascade_trails_queue_jobs_match_direct_and_record_manifests() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let direct = temp_dir.path().join("direct-cascade");
+    let direct_arg = direct.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-cascade-trails-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "3",
+            "--tile-size",
+            "8",
+            "--grid-spacing",
+            "16",
+            "--advect",
+            "2",
+            "--turbulence-scale",
+            "0.03",
+        ])
+        .assert()
+        .success();
+
+    let queue = temp_dir.path().join("cascade-queue.json");
+    let queue_arg = queue.to_string_lossy().to_string();
+    let output = temp_dir.path().join("cascade-output");
+    let output_arg = output.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-cascade-trails-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_arg.as_str(),
+            "--frames",
+            "3",
+            "--tile-size",
+            "8",
+            "--grid-spacing",
+            "16",
+            "--advect",
+            "2",
+            "--turbulence-scale",
+            "0.03",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "queued cascade-trails render job job-0001",
+        ));
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-cascade-trails-sequence", queue_arg.as_str()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered queued cascade-trails job job-0001",
+        ));
+
+    let bundle = output.join("job-0001");
+    assert_png_frames_identical(&direct, &bundle.join("frames"), 3);
+    let manifest = read_json(&bundle.join("manifest.json"));
+    assert_eq!(manifest["task"], "frame_sequence_cascade_trails");
+    assert_eq!(
+        manifest["trail_cascade"]["algorithm"],
+        "persistent_trail_vortex_cascade_cpu_v1"
+    );
+    assert_eq!(manifest["trail_cascade"]["backend"], "CPU");
+    assert_eq!(manifest["trail_cascade"]["settings"]["grid_spacing"], 16);
+    assert_eq!(manifest["trail_cascade"]["settings"]["live_refresh"], true);
+}
+
+#[test]
 fn optical_flow_advect_queue_jobs_match_direct_and_record_manifests() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");
@@ -3750,6 +3828,181 @@ fn queue_datamosh_vector_remix_path_records_remix_algorithm_and_matches_direct()
     assert_eq!(knobs["block_size"], 16);
     assert_eq!(knobs["vector_remix"], "shuffle");
     assert_eq!(knobs["remix_seed"], 42);
+}
+
+#[test]
+fn queue_datamosh_scanline_smear_records_algorithm_and_matches_direct() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    for dir in [&modulator_dir, &carrier_dir] {
+        for frame_name in ["frame_000001.png", "frame_000002.png"] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-datamosh-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+            "--preset",
+            "scanline-smear",
+            "--remix-seed",
+            "99",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-datamosh-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--preset",
+            "scanline-smear",
+            "--remix-seed",
+            "99",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-datamosh-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    for frame in ["frame_000000.png", "frame_000001.png"] {
+        let queued = output_root.join("job-0001/frames").join(frame);
+        let direct = direct_dir.join(frame);
+        assert_eq!(
+            fs::read(&queued).expect("read queued frame"),
+            fs::read(&direct).expect("read direct frame"),
+            "queue render must be byte-identical to the direct render ({frame})"
+        );
+    }
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["datamosh"];
+    assert_eq!(
+        knobs["algorithm"],
+        "flow_reuse_datamosh_scanline_smear_cpu_v1"
+    );
+    assert_eq!(knobs["preset"], "scanline_smear");
+    assert_eq!(knobs["scanline_smear"], true);
+    assert_eq!(knobs["vector_remix"], "sort");
+    assert_eq!(knobs["remix_seed"], 99);
+}
+
+#[test]
+fn queue_datamosh_codec_engrave_records_algorithm_and_matches_direct() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    for dir in [&modulator_dir, &carrier_dir] {
+        for frame_name in ["frame_000001.png", "frame_000002.png"] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-datamosh-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+            "--preset",
+            "codec-engrave",
+            "--remix-seed",
+            "123",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-datamosh-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--preset",
+            "codec-engrave",
+            "--remix-seed",
+            "123",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-datamosh-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    for frame in ["frame_000000.png", "frame_000001.png"] {
+        let queued = output_root.join("job-0001/frames").join(frame);
+        let direct = direct_dir.join(frame);
+        assert_eq!(
+            fs::read(&queued).expect("read queued frame"),
+            fs::read(&direct).expect("read direct frame"),
+            "queue render must be byte-identical to the direct render ({frame})"
+        );
+    }
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["datamosh"];
+    assert_eq!(
+        knobs["algorithm"],
+        "flow_reuse_datamosh_codec_engrave_cpu_v1"
+    );
+    assert_eq!(knobs["preset"], "codec_engrave");
+    assert_eq!(knobs["scanline_smear"], true);
+    assert_eq!(knobs["codec_engrave"], true);
+    assert_eq!(knobs["vector_remix"], "sort");
+    assert_eq!(knobs["remix_seed"], 123);
 }
 
 #[test]

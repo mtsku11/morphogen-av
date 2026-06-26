@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio_route;
+pub mod cascade_trails;
 pub mod coagulate;
 pub mod conv_blend;
 pub mod cpu_reference;
@@ -25,6 +26,10 @@ pub mod vortex_field;
 pub use audio_route::{
     uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
+pub use cascade_trails::{
+    advance_cascade_trails, initialize_cascade_trails, render_cascade_trails, CascadeTrailSettings,
+    CascadeTrailState, CASCADE_TRAIL_ALGORITHM,
+};
 pub use coagulate::{
     advance_coagulation_field, advect_coagulation_field, apply_history_smear, average_cell_flows,
     coagulated_blend_frame_cpu, coagulated_blend_temporal_frame_cpu, coagulation_field,
@@ -43,11 +48,14 @@ pub use cpu_reference::{
 };
 pub use datamosh::{
     block_motion_refreshes, datamosh_algorithm, datamosh_block_frame_cpu,
-    datamosh_block_refresh_composite, datamosh_bloom_frame_cpu, datamosh_refresh_frame_cpu,
-    datamosh_residual_flow, datamosh_residual_frame_cpu, is_datamosh_keyframe,
-    quantize_flow_to_blocks, remix_block_vectors, reset_residual_in_refreshed_blocks, zero_flow,
-    VectorRemixMode, DATAMOSH_BLOCK_ALGORITHM, DATAMOSH_BLOCK_REFRESH_ALGORITHM,
-    DATAMOSH_BLOCK_RESIDUAL_ALGORITHM, DATAMOSH_BLOOM_ALGORITHM, DATAMOSH_VECTOR_REMIX_ALGORITHM,
+    datamosh_block_refresh_composite, datamosh_bloom_frame_cpu, datamosh_codec_engrave_frame_cpu,
+    datamosh_refresh_frame_cpu, datamosh_residual_flow, datamosh_residual_frame_cpu,
+    datamosh_scanline_smear_frame_cpu, is_datamosh_keyframe, quantize_flow_to_blocks,
+    remix_block_vectors, reset_residual_in_refreshed_blocks, zero_flow, CodecEngraveSettings,
+    ScanlineSmearSettings, VectorRemixMode, DATAMOSH_BLOCK_ALGORITHM,
+    DATAMOSH_BLOCK_REFRESH_ALGORITHM, DATAMOSH_BLOCK_RESIDUAL_ALGORITHM, DATAMOSH_BLOOM_ALGORITHM,
+    DATAMOSH_CODEC_ENGRAVE_ALGORITHM, DATAMOSH_SCANLINE_SMEAR_ALGORITHM,
+    DATAMOSH_VECTOR_REMIX_ALGORITHM,
 };
 pub use disperse::{
     advance_dispersion_field, disperse_composite_cpu, DispersionField, DispersionSettings,

@@ -596,6 +596,41 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Render a persistent-trail vector-field cascade (experimental, deterministic; CPU-only):
+    /// a grid of source-image tiles is advected along the shared steady-vortex field and stamped
+    /// every frame onto a canvas that is never cleared, so the image smears into ribbons that
+    /// trace the streamlines. `--grid-spacing > --tile-size` gives sparse ribbons on black;
+    /// `== --tile-size` smears the whole image. `--advect 0` holds the static grid (the off case).
+    RenderCascadeTrailsSequence {
+        /// Source video frames (PNG sequence). The first frame seeds the tile grid; with
+        /// `--live-refresh` each current frame is re-sampled at the tile origins.
+        source_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        /// Edge length (pixels) of each stamped tile / source patch.
+        #[arg(long, default_value_t = 28)]
+        tile_size: u32,
+        /// Spacing (pixels) between tile homes. `> tile-size` = sparse ribbons; `=` = dense smear.
+        #[arg(long, default_value_t = 60)]
+        grid_spacing: u32,
+        /// Field strength per frame (pixels). 0 holds the static grid (no trails); higher = longer ribbons.
+        #[arg(long, default_value_t = 1.6)]
+        advect: f32,
+        /// Vortex scale (lattice cells per pixel). Smaller = larger coherent vortices.
+        #[arg(long, default_value_t = 0.008)]
+        turbulence_scale: f32,
+        /// Fine-detail octave weight relative to the steady big vortices (0 = pure vortices).
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
+        /// Re-sample each tile's patch from its origin cell in the current source frame every
+        /// frame, so a video plays through the trails (off = frozen seed patches).
+        #[arg(long, default_value_t = true)]
+        live_refresh: bool,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains
@@ -1144,6 +1179,31 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    QueueAddCascadeTrailsSequence {
+        queue_path: PathBuf,
+        source_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 28)]
+        tile_size: u32,
+        #[arg(long, default_value_t = 60)]
+        grid_spacing: u32,
+        #[arg(long, default_value_t = 1.6)]
+        advect: f32,
+        #[arg(long, default_value_t = 0.008)]
+        turbulence_scale: f32,
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
+        #[arg(long, default_value_t = true)]
+        live_refresh: bool,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,
@@ -1444,6 +1504,9 @@ pub(crate) enum Commands {
         queue_path: PathBuf,
     },
     QueueRunFieldParticlesSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunCascadeTrailsSequence {
         queue_path: PathBuf,
     },
     QueueRunGranularMosaicSequence {
@@ -1859,6 +1922,8 @@ pub(crate) enum CliDatamoshPreset {
     StructuredMelt,
     MacroblockRot,
     VectorShuffle,
+    ScanlineSmear,
+    CodecEngrave,
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -1899,6 +1964,8 @@ impl From<CliDatamoshPreset> for DatamoshPreset {
             CliDatamoshPreset::StructuredMelt => Self::StructuredMelt,
             CliDatamoshPreset::MacroblockRot => Self::MacroblockRot,
             CliDatamoshPreset::VectorShuffle => Self::VectorShuffle,
+            CliDatamoshPreset::ScanlineSmear => Self::ScanlineSmear,
+            CliDatamoshPreset::CodecEngrave => Self::CodecEngrave,
         }
     }
 }
