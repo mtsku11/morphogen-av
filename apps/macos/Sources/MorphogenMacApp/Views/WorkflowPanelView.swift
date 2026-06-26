@@ -291,6 +291,26 @@ struct WorkflowPanelView: View {
         }
         .frame(width: 170, alignment: .leading)
       }
+
+    case .trailCascade:
+      HStack(spacing: 16) {
+        Stepper(value: $state.cascadeTileSize, in: 4...256, step: 4) {
+          Text("Tile \(state.cascadeTileSize)px")
+        }
+        .frame(width: 150, alignment: .leading)
+
+        Stepper(value: $state.cascadeGridSpacing, in: 4...256, step: 4) {
+          Text("Spacing \(state.cascadeGridSpacing)px")
+        }
+        .frame(width: 165, alignment: .leading)
+        .help("> Tile = sparse ribbons on black; = Tile smears the whole image.")
+
+        Stepper(value: $state.cascadeAdvect, in: 0...8, step: 0.1) {
+          Text("Flow \(state.cascadeAdvect, specifier: "%.1f")")
+        }
+        .frame(width: 150, alignment: .leading)
+        .help("0 = static grid (no trails); higher = longer ribbons.")
+      }
     }
   }
 
@@ -478,6 +498,29 @@ struct WorkflowPanelView: View {
         .frame(width: 220)
         .disabled(state.vocoderMode == .gain)
       }
+
+    case .trailCascade:
+      HStack(spacing: 16) {
+        Stepper(value: $state.cascadeTurbulenceScale, in: 0.002...0.05, step: 0.001) {
+          Text("Vortex \(state.cascadeTurbulenceScale, specifier: "%.3f")")
+        }
+        .frame(width: 170, alignment: .leading)
+        .help("Field scale: smaller = larger, broader vortices.")
+
+        Stepper(value: $state.cascadeDetail, in: 0...1, step: 0.05) {
+          Text("Detail \(state.cascadeDetail, specifier: "%.2f")")
+        }
+        .frame(width: 150, alignment: .leading)
+
+        Stepper(value: $state.cascadeSeed, in: 0...9999, step: 1) {
+          Text("Seed \(state.cascadeSeed)")
+        }
+        .frame(width: 140, alignment: .leading)
+
+        Toggle("Live refresh", isOn: $state.cascadeLiveRefresh)
+          .toggleStyle(.checkbox)
+          .help("Re-sample each tile from the current frame so the video plays through the trails.")
+      }
     }
   }
 
@@ -626,8 +669,10 @@ struct WorkflowPanelView: View {
   /// Render a short, few-frame preview of the selected effect into a temp
   /// directory (no output directory required) and show the frames inline.
   private func runSelectedEffectPreview() {
-    let requiresModulator = !(selectedEffect == .fluidAdvection && fluidMode != .twoSource)
-    guard state.beginEffectPreview(requiresModulator: requiresModulator) else {
+    // Single-source effects (procedural/self/particle fluid, trail cascade) need only Source B.
+    let singleSource = selectedEffect == .trailCascade
+      || (selectedEffect == .fluidAdvection && fluidMode != .twoSource)
+    guard state.beginEffectPreview(requiresModulator: !singleSource) else {
       return
     }
     runSelectedEffect()
@@ -656,6 +701,8 @@ struct WorkflowPanelView: View {
       state.runDatamoshRender()
     case .videoVocoder:
       state.runVideoVocoderSequenceRender()
+    case .trailCascade:
+      state.runTrailCascadeSequenceRender()
     }
   }
 
@@ -862,6 +909,7 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
   case granularMosaic = "Granular Mosaic"
   case datamosh = "Datamosh"
   case videoVocoder = "Video Vocoder"
+  case trailCascade = "Trail Cascade"
 
   var id: String { rawValue }
 
@@ -879,6 +927,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "rectangle.stack.badge.play"
     case .videoVocoder:
       return "camera.filters"
+    case .trailCascade:
+      return "scribble.variable"
     }
   }
 
@@ -896,6 +946,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "Controlled flow reuse, macroblock motion, residual melt, and destructive presets."
     case .videoVocoder:
       return "A's tone structure remaps B's visual bands for video-vocoder style transfer."
+    case .trailCascade:
+      return "B's tiles flow along a faux-fluid field, stamping persistent trails into ribbons."
     }
   }
 
@@ -913,6 +965,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "A's temporal motion vectors are reused to drag, rot, and reshuffle B."
     case .videoVocoder:
       return "A's tonal distribution gates or matches B's visual tone bands."
+    case .trailCascade:
+      return "A steady vortex field carries B's tiles; a never-cleared canvas keeps their trails."
     }
   }
 
@@ -930,6 +984,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "Mosh B"
     case .videoVocoder:
       return "Vocoder B"
+    case .trailCascade:
+      return "Cascade B"
     }
   }
 
@@ -947,6 +1003,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "Datamosh"
     case .videoVocoder:
       return "Vocoder"
+    case .trailCascade:
+      return "Cascade"
     }
   }
 
@@ -973,6 +1031,9 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
     case .videoVocoder:
       analysisSignal.wrappedValue = .luminance
       modulationTarget.wrappedValue = .toneTransfer
+    case .trailCascade:
+      analysisSignal.wrappedValue = .opticalFlow
+      modulationTarget.wrappedValue = .feedback
     }
   }
 }

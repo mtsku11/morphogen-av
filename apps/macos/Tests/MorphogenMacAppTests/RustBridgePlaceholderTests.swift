@@ -336,6 +336,84 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("--project-path"))
   }
 
+  func testQueuedCascadeTrailsSequenceArgumentsIncludeCascadeControls() throws {
+    let request = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/cascade", isDirectory: true),
+      frames: 144,
+      frameRate: 24.0,
+      tileSize: 28,
+      gridSpacing: 60,
+      advect: 1.6,
+      turbulenceScale: 0.008,
+      detail: 0.1,
+      liveRefresh: true,
+      seed: 7,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-cascade-trails-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("--tile-size"))
+    XCTAssertTrue(arguments.contains("28"))
+    XCTAssertTrue(arguments.contains("--grid-spacing"))
+    XCTAssertTrue(arguments.contains("60"))
+    XCTAssertTrue(arguments.contains("--advect"))
+    XCTAssertTrue(arguments.contains("1.6"))
+    XCTAssertTrue(arguments.contains("--seed"))
+    XCTAssertTrue(arguments.contains("7"))
+    // Live refresh is on by default, so the disable flag must NOT be present.
+    XCTAssertFalse(arguments.contains("--no-live-refresh"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+
+    // Disabling live refresh appends the disable flag.
+    let frozen = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: request.queueURL,
+      sourceDirectoryURL: request.sourceDirectoryURL,
+      outputRootDirectoryURL: request.outputRootDirectoryURL,
+      frames: 144,
+      frameRate: 24.0,
+      tileSize: 28,
+      gridSpacing: 60,
+      advect: 1.6,
+      turbulenceScale: 0.008,
+      detail: 0.1,
+      liveRefresh: false,
+      seed: 7,
+      projectURL: nil
+    )
+    let frozenArguments =
+      try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: frozen)
+    XCTAssertTrue(frozenArguments.contains("--no-live-refresh"))
+  }
+
+  func testQueuedCascadeTrailsSequenceArgumentsRejectInvalidValues() {
+    let invalid = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/cascade", isDirectory: true),
+      frames: 12,
+      frameRate: 24.0,
+      tileSize: 0,
+      gridSpacing: 60,
+      advect: 1.6,
+      turbulenceScale: 0.008,
+      detail: 0.1,
+      liveRefresh: true,
+      seed: 0,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: invalid)
+    )
+  }
+
   func testQueuedFluidAdvectionArgumentsRejectInvalidValues() {
     let invalidFrames = FluidAdvectSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/fluid-queue.json"),

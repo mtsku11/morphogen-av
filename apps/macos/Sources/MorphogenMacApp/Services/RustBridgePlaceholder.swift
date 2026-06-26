@@ -64,6 +64,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultCascadeTrailsSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-cascade-trails-sequence-queue.json"
+    )
+  }
+
   static func defaultGranularMosaicPoolSequenceRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-granular-pool-sequence-queue.json"
@@ -377,6 +383,96 @@ enum RustBridgePlaceholder {
       bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
       commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
     )
+  }
+
+  static func runQueuedCascadeTrailsSequenceRender(
+    request: CascadeTrailsSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddCascadeTrailsSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-cascade-trails-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddCascadeTrailsSequenceArguments(
+    request: CascadeTrailsSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    guard request.tileSize > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("tile size must be greater than zero")
+    }
+    guard request.gridSpacing > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("grid spacing must be greater than zero")
+    }
+    try validateFluidNumbers([
+      ("advect", request.advect),
+      ("turbulence scale", request.turbulenceScale),
+      ("detail", request.detail)
+    ])
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-cascade-trails-sequence",
+      request.queueURL.path,
+      request.sourceDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--tile-size",
+      String(request.tileSize),
+      "--grid-spacing",
+      String(request.gridSpacing),
+      "--advect",
+      cliNumber(request.advect),
+      "--turbulence-scale",
+      cliNumber(request.turbulenceScale),
+      "--detail",
+      cliNumber(request.detail),
+      "--seed",
+      String(request.seed)
+    ]
+
+    if !request.liveRefresh {
+      arguments.append("--no-live-refresh")
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
   }
 
   static func queueAddFluidAdvectSequenceArguments(
@@ -2095,6 +2191,22 @@ struct FieldParticlesSequenceRenderQueueCommandRequest {
   let liveColour: Bool
   let seed: UInt64
   let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct CascadeTrailsSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let tileSize: Int
+  let gridSpacing: Int
+  let advect: Double
+  let turbulenceScale: Double
+  let detail: Double
+  let liveRefresh: Bool
+  let seed: UInt64
   let projectURL: URL?
 }
 

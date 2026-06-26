@@ -70,6 +70,14 @@ final class AppState: ObservableObject {
   @Published var fieldParticleLiveColour = true
   @Published var fluidBackend: FeedbackRenderBackendOption = .metal
   @Published var fluidAdvectionSummary = "No fluid/advection sequence rendered"
+  // Trail Cascade — tuned sparse-ribbon defaults (the one-click preset).
+  @Published var cascadeTileSize = 28
+  @Published var cascadeGridSpacing = 60
+  @Published var cascadeAdvect = 1.6
+  @Published var cascadeTurbulenceScale = 0.008
+  @Published var cascadeDetail = 0.1
+  @Published var cascadeLiveRefresh = true
+  @Published var cascadeSeed = 0
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -1056,6 +1064,40 @@ final class AppState: ObservableObject {
     }
   }
 
+  func runTrailCascadeSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering the trail cascade."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
+      statusMessage = "Choose a frame sequence output directory before rendering the trail cascade."
+      return
+    }
+
+    let request = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultCascadeTrailsSequenceRenderQueueURL(),
+      sourceDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("trail-cascade", isDirectory: true),
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
+      frameRate: proResFrameRate.framesPerSecond,
+      tileSize: cascadeTileSize,
+      gridSpacing: cascadeGridSpacing,
+      advect: cascadeAdvect,
+      turbulenceScale: cascadeTurbulenceScale,
+      detail: cascadeDetail,
+      liveRefresh: cascadeLiveRefresh,
+      seed: UInt64(max(0, cascadeSeed)),
+      projectURL: projectURL
+    )
+
+    runFluidAdvectionQueue(
+      label: "Trail cascade",
+      requestDescription: "Queueing trail cascade through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedCascadeTrailsSequenceRender(request: request)
+    }
+  }
+
   private func runFluidAdvectionQueue(
     label: String,
     requestDescription: String,
@@ -1930,6 +1972,8 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
   case structuredMelt = "Structured Melt"
   case macroblockRot = "Macroblock Rot"
   case vectorShuffle = "Vector Shuffle"
+  case scanlineSmear = "Scanline Smear"
+  case codecEngrave = "Codec Engrave"
 
   var id: String { rawValue }
 
@@ -1945,6 +1989,10 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
       return "macroblock-rot"
     case .vectorShuffle:
       return "vector-shuffle"
+    case .scanlineSmear:
+      return "scanline-smear"
+    case .codecEngrave:
+      return "codec-engrave"
     }
   }
 }
