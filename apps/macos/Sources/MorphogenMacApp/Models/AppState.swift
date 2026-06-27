@@ -33,7 +33,8 @@ final class AppState: ObservableObject {
   @Published var previewProbeSummary = "No preview frame decoded"
   @Published var frameSequenceModulatorPath = "No modulator frame directory selected"
   @Published var frameSequenceCarrierPath = "No carrier frame directory selected"
-  @Published var frameSequenceOutputPath = "No frame sequence output selected"
+  @Published var frameSequenceOutputPath =
+    "Default: \(RustBridgePlaceholder.defaultFrameSequenceOutputRootURL().path)"
   @Published var frameSequenceSummary = "No two-source frame sequence rendered"
   @Published var frameSequenceAmount = 16.0
   @Published var frameSequenceMaxFrames = 120
@@ -235,7 +236,12 @@ final class AppState: ObservableObject {
       sourceBPreviewImage = nil
     }
 
-    statusMessage = "\(role.rawValue) source selected: \(url.lastPathComponent)"
+    statusMessage = "\(role.rawValue) source selected: \(url.lastPathComponent) — extracting proxy…"
+
+    // Auto-extract the just-picked source so the render-input frame directory is
+    // populated without a manual "Extract Proxies" step. The manual button stays
+    // for re-extraction at different fps / frame-limit settings.
+    extractProxies(for: [(role, url)])
   }
 
   /// Begin a quick preview of the selected effect: the matching render method is
@@ -263,9 +269,20 @@ final class AppState: ObservableObject {
   }
 
   /// Output root a render should use: the preview temp directory while a preview
-  /// is active, otherwise the user's chosen directory.
+  /// is active, then the user's chosen directory, then a durable default under
+  /// ~/Movies so a render can run without an explicit "Choose Output" step.
   private func effectiveOutputRoot(_ chosen: URL?) -> URL? {
-    previewSession?.outputRootURL ?? chosen
+    if let session = previewSession {
+      return session.outputRootURL
+    }
+    if let chosen {
+      return chosen
+    }
+    let fallback = RustBridgePlaceholder.defaultFrameSequenceOutputRootURL()
+    try? FileManager.default.createDirectory(
+      at: fallback, withIntermediateDirectories: true
+    )
+    return fallback
   }
 
   private func effectiveMaxFrames(_ chosen: Int) -> Int {
@@ -735,6 +752,14 @@ final class AppState: ObservableObject {
       return
     }
 
+    extractProxies(for: selectedSources)
+  }
+
+  /// Extract PNG/WAV proxies and analysis caches for the given roles, populating
+  /// the render-input frame directories. Shared by the manual "Extract Proxies"
+  /// button (all selected sources) and the automatic extract on source pick (the
+  /// single newly chosen source).
+  private func extractProxies(for selectedSources: [(SourceRole, URL)]) {
     let outputRootURL = mediaProxyOutputURL
     let frameRate = mediaProxyFrameRate
     let maxFrames = mediaProxyMaxFrames

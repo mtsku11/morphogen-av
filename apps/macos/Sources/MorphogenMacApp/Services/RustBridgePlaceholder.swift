@@ -126,6 +126,16 @@ enum RustBridgePlaceholder {
     )
   }
 
+  /// Durable default location for full effect renders so a render can run without
+  /// the user first picking an output folder. Renders are deliverables, so this
+  /// lives under ~/Movies (or the home directory if Movies is unavailable),
+  /// never the temp directory the OS may reclaim.
+  static func defaultFrameSequenceOutputRootURL() -> URL {
+    let base = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+      ?? FileManager.default.homeDirectoryForCurrentUser
+    return base.appendingPathComponent("Morphogen Renders", isDirectory: true)
+  }
+
   static func defaultVideoAudioRouteRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-video-audio-route-queue.json"
