@@ -350,6 +350,12 @@ final class RustBridgePlaceholderTests: XCTestCase {
       detail: 0.1,
       liveRefresh: true,
       seed: 7,
+      field: "vortex",
+      riverDirection: 0,
+      riverSpeed: 0,
+      riverTurbulence: 0,
+      temporalTiles: false,
+      decay: 0,
       projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
     )
 
@@ -386,6 +392,12 @@ final class RustBridgePlaceholderTests: XCTestCase {
       detail: 0.1,
       liveRefresh: false,
       seed: 7,
+      field: "vortex",
+      riverDirection: 0,
+      riverSpeed: 0,
+      riverTurbulence: 0,
+      temporalTiles: false,
+      decay: 0,
       projectURL: nil
     )
     let frozenArguments =
@@ -407,6 +419,12 @@ final class RustBridgePlaceholderTests: XCTestCase {
       detail: 0.1,
       liveRefresh: true,
       seed: 0,
+      field: "vortex",
+      riverDirection: 0,
+      riverSpeed: 0,
+      riverTurbulence: 0,
+      temporalTiles: false,
+      decay: 0,
       projectURL: nil
     )
     XCTAssertThrowsError(
