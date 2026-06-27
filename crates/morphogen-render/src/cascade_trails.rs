@@ -68,6 +68,13 @@ pub enum CascadeFieldType {
     /// Pairs naturally with `temporal_tiles`: each tile carries a frozen temporal slice and
     /// paints it along its own 2-D Lissajous-like figure.
     Oscillate,
+    /// Tiles appear at a new random position on the canvas each frame — no drift, no home.
+    /// Only the square **outline** (border pixels) is stamped; the interior stays transparent.
+    /// Because the accumulator never clears, the canvas fills over time with a growing field
+    /// of scattered wireframe squares, each coloured from its source patch. `grid_spacing`
+    /// controls density (more tiles = denser field). `advect` is an on/off gate: `0` freezes
+    /// the initial random layout, any non-zero value re-randomises positions every frame.
+    SquarePop,
 }
 
 /// Settings for the persistent-trail vector-field cascade.
@@ -114,6 +121,12 @@ pub struct CascadeTrailSettings {
     /// captured once and held frozen forever.
     #[serde(default)]
     pub temporal_tiles: bool,
+    /// Fraction of accumulator brightness lost each frame before new tiles are stamped.
+    /// `0.0` (default) gives permanent trails. `0.08` fades a square to near-black in
+    /// ~25 frames (≈1 s at 24 fps) — useful with `SquarePop` to keep visual density
+    /// stable instead of filling the canvas solid.
+    #[serde(default)]
+    pub decay: f32,
 }
 
 fn default_river_speed() -> f32 {
@@ -139,6 +152,7 @@ impl Default for CascadeTrailSettings {
             river_speed: default_river_speed(),
             river_turbulence: default_river_turbulence(),
             temporal_tiles: false,
+            decay: 0.0,
         }
     }
 }
@@ -172,6 +186,11 @@ impl CascadeTrailSettings {
         if self.detail < 0.0 {
             return Err(RenderError::InvalidCoagulationSettings(
                 "detail must be non-negative".to_string(),
+            ));
+        }
+        if self.decay < 0.0 || self.decay >= 1.0 {
+            return Err(RenderError::InvalidCoagulationSettings(
+                "decay must be in [0, 1)".to_string(),
             ));
         }
         Ok(())
@@ -244,6 +263,28 @@ pub fn initialize_cascade_trails(
         gy += settings.grid_spacing;
     }
 
+    // SquarePop: scatter initial positions. When river_turbulence > 0, tiles jitter within
+    // ±turbulence px of their home cell; when turbulence == 0 they stay exactly at home.
+    // Full-canvas scatter (the original behaviour) requires turbulence >= canvas diagonal.
+    if settings.field == CascadeFieldType::SquarePop {
+        let max_x = width.saturating_sub(settings.tile_size) as f32;
+        let max_y = height.saturating_sub(settings.tile_size) as f32;
+        let radius = settings.river_turbulence;
+        for (pos, origin) in positions.iter_mut().zip(origins.iter()) {
+            let h0 = tile_hash(settings.seed, origin.x0, origin.y0);
+            let h1 = splitmix(h0);
+            if radius == 0.0 {
+                // No jitter: start exactly at the home grid position.
+                // (pos is already set to [gx, gy] from the grid loop above)
+            } else {
+                let ox = ((h0 & 0xFFFF) as f32 / 65535.0 * 2.0 - 1.0) * radius;
+                let oy = ((h1 & 0xFFFF) as f32 / 65535.0 * 2.0 - 1.0) * radius;
+                pos[0] = (origin.x0 as f32 + ox).clamp(0.0, max_x);
+                pos[1] = (origin.y0 as f32 + oy).clamp(0.0, max_y);
+            }
+        }
+    }
+
     let accumulator = ImageBufferF32::from_fn(width, height, |_, _| [0.0, 0.0, 0.0, 1.0])?;
     let mut state = CascadeTrailState {
         width,
@@ -254,7 +295,11 @@ pub fn initialize_cascade_trails(
         patches,
         accumulator,
     };
-    stamp_all(&mut state);
+    if settings.field == CascadeFieldType::SquarePop {
+        stamp_outlines(&mut state);
+    } else {
+        stamp_all(&mut state);
+    }
     Ok(state)
 }
 
@@ -368,35 +413,30 @@ pub fn advance_cascade_trails(
             }
             CascadeFieldType::CenterSplit => {
                 let cx = state.width as f32 / 2.0;
-                // Left side flows left, right side flows right — direction fixed by home position.
+                let amplitude = settings.river_turbulence;
+                let t = frame as f32;
+                // Position is computed directly from home + drift(frame) + oscillation(frame)
+                // rather than accumulated incrementally. This means the tile's actual position
+                // each frame is the oscillating drift path — the accumulator records every stamp
+                // so the root tiles visibly move in 2D before they drift far from home.
                 for (pos, origin) in state.positions.iter_mut().zip(state.origins.iter()) {
+                    let home_x = origin.x0 as f32;
+                    let home_y = origin.y0 as f32;
                     let home_cx = (origin.x0 as f32 + origin.x1 as f32) / 2.0;
                     let dir = if home_cx < cx { -1.0_f32 } else { 1.0_f32 };
-                    pos[0] += dir * settings.river_speed * settings.advect;
+                    let h0 = tile_hash(settings.seed, origin.x0, origin.y0);
+                    let h1 = splitmix(h0);
+                    let h2 = splitmix(h1);
+                    let h3 = splitmix(h2);
+                    let fx = 0.020 + (h0 & 0xFFFF) as f32 / 65535.0 * 0.060;
+                    let px = (h1 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                    let fy = 0.013 + (h2 & 0xFFFF) as f32 / 65535.0 * 0.040;
+                    let py = (h3 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                    pos[0] = home_x + dir * settings.river_speed * settings.advect * t
+                        + amplitude * (t * fx + px).sin();
+                    pos[1] = home_y + amplitude * (t * fy + py).sin();
                 }
-                // The home/root of each tile oscillates in both x AND y independently.
-                // This is applied at stamp time relative to the current drifted position so
-                // the ribbon's source point moves organically — the flow still goes left/right
-                // but the root it flows FROM bobs in 2D. x and y use incommensurate frequencies
-                // so the root traces a Lissajous figure rather than a straight wiggle.
-                let amplitude = settings.river_turbulence;
-                let offsets = state
-                    .origins
-                    .iter()
-                    .map(|origin| {
-                        let h0 = tile_hash(settings.seed, origin.x0, origin.y0);
-                        let h1 = splitmix(h0);
-                        let h2 = splitmix(h1);
-                        let h3 = splitmix(h2);
-                        let fx = 0.020 + (h0 & 0xFFFF) as f32 / 65535.0 * 0.060;
-                        let px = (h1 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
-                        let fy = 0.013 + (h2 & 0xFFFF) as f32 / 65535.0 * 0.040;
-                        let py = (h3 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
-                        let t = frame as f32;
-                        [amplitude * (t * fx + px).sin(), amplitude * (t * fy + py).sin()]
-                    })
-                    .collect();
-                Some(offsets)
+                None
             }
             CascadeFieldType::Oscillate => {
                 // Positions never drift — tiles stay rooted at home. Each tile oscillates
@@ -425,10 +465,46 @@ pub fn advance_cascade_trails(
                     .collect();
                 Some(offsets)
             }
+            CascadeFieldType::SquarePop => {
+                // Each tile appears at a new random position every frame. When river_turbulence
+                // > 0 the position is bounded within ±turbulence px of the tile's home cell —
+                // smaller turbulence keeps squares close to their grid origin (denser, more
+                // ordered look); larger turbulence spreads them further. turbulence == 0 holds
+                // all squares exactly at home (static grid of outlines, no popping).
+                let max_x = state.width.saturating_sub(state.tile_size) as f32;
+                let max_y = state.height.saturating_sub(state.tile_size) as f32;
+                let radius = settings.river_turbulence;
+                let frame_seed = settings.seed.wrapping_add((frame as u64).wrapping_mul(0x517CC1B727220A95));
+                for (pos, origin) in state.positions.iter_mut().zip(state.origins.iter()) {
+                    let h0 = tile_hash(frame_seed, origin.x0, origin.y0);
+                    let h1 = splitmix(h0);
+                    if radius == 0.0 {
+                        pos[0] = origin.x0 as f32;
+                        pos[1] = origin.y0 as f32;
+                    } else {
+                        let ox = ((h0 & 0xFFFF) as f32 / 65535.0 * 2.0 - 1.0) * radius;
+                        let oy = ((h1 & 0xFFFF) as f32 / 65535.0 * 2.0 - 1.0) * radius;
+                        pos[0] = (origin.x0 as f32 + ox).clamp(0.0, max_x);
+                        pos[1] = (origin.y0 as f32 + oy).clamp(0.0, max_y);
+                    }
+                }
+                None
+            }
         }
     } else {
         None
     };
+
+    // Decay: fade the accumulator toward black before stamping so old squares disappear
+    // as new ones appear. Alpha (channel 3) is left at 1.0 — only RGB fades.
+    if settings.decay > 0.0 {
+        let keep = 1.0 - settings.decay;
+        for px in &mut state.accumulator.pixels {
+            px[0] *= keep;
+            px[1] *= keep;
+            px[2] *= keep;
+        }
+    }
 
     // temporal_tiles: patches are frozen at temporal-assignment time — never refresh.
     if settings.live_refresh && !settings.temporal_tiles {
@@ -439,7 +515,13 @@ pub fn advance_cascade_trails(
     }
 
     match stamp_offsets {
-        None => stamp_all(state),
+        None => {
+            if settings.field == CascadeFieldType::SquarePop {
+                stamp_outlines(state);
+            } else {
+                stamp_all(state);
+            }
+        }
         Some(ref offsets) => stamp_with_offsets(state, offsets),
     }
     Ok(())
@@ -514,6 +596,49 @@ fn stamp_with_offsets(state: &mut CascadeTrailState, offsets: &[[f32; 2]]) {
             let py = (dy * ph / tile).clamp(0, ph - 1);
             let row = (y as usize) * (state.width as usize);
             for dx in 0..tile {
+                let x = left + dx;
+                if x < 0 || x >= width {
+                    continue;
+                }
+                let px = (dx * pw / tile).clamp(0, pw - 1);
+                let rgb = patch.pixels[(py * pw + px) as usize];
+                pixels[row + x as usize] = [rgb[0], rgb[1], rgb[2], 1.0];
+            }
+        }
+    }
+}
+
+/// Stamp only the **border pixels** (1-pixel outline) of each tile's patch — the interior is
+/// left untouched. Used by `SquarePop` to produce wireframe squares rather than filled blocks.
+/// The border pixels sample the source patch as normal so the outline carries image colour.
+fn stamp_outlines(state: &mut CascadeTrailState) {
+    let width = state.width as i64;
+    let height = state.height as i64;
+    let tile = state.tile_size as i64;
+    if tile < 2 {
+        return;
+    }
+    let pixels = &mut state.accumulator.pixels;
+    for (pos, patch) in state.positions.iter().zip(state.patches.iter()) {
+        let left = pos[0].round() as i64;
+        let top = pos[1].round() as i64;
+        let pw = patch.width as i64;
+        let ph = patch.height as i64;
+        if pw == 0 || ph == 0 {
+            continue;
+        }
+        for dy in 0..tile {
+            let y = top + dy;
+            if y < 0 || y >= height {
+                continue;
+            }
+            let py = (dy * ph / tile).clamp(0, ph - 1);
+            let row = (y as usize) * (state.width as usize);
+            for dx in 0..tile {
+                // Border only: skip interior pixels.
+                if dy != 0 && dy != tile - 1 && dx != 0 && dx != tile - 1 {
+                    continue;
+                }
                 let x = left + dx;
                 if x < 0 || x >= width {
                     continue;

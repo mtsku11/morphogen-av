@@ -82,6 +82,8 @@ final class AppState: ObservableObject {
   @Published var cascadeRiverDirection = 0.0
   @Published var cascadeRiverSpeed = 3.0
   @Published var cascadeRiverTurbulence = 0.8
+  @Published var cascadeTemporalTiles = false
+  @Published var cascadeDecay = 0.0
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -1132,6 +1134,8 @@ final class AppState: ObservableObject {
       riverDirection: cascadeRiverDirection,
       riverSpeed: cascadeRiverSpeed,
       riverTurbulence: cascadeRiverTurbulence,
+      temporalTiles: cascadeTemporalTiles,
+      decay: cascadeDecay,
       projectURL: projectURL
     )
 
@@ -2099,6 +2103,9 @@ enum CascadeFieldOption: String, CaseIterable, Identifiable {
   case vortex = "Vortex"
   case river = "River"
   case riverRoot = "River Root"
+  case centerSplit = "Centre Split"
+  case oscillate = "Oscillate"
+  case squarePop = "Square Pop"
 
   var id: String { rawValue }
 
@@ -2110,6 +2117,12 @@ enum CascadeFieldOption: String, CaseIterable, Identifiable {
       return "river"
     case .riverRoot:
       return "river-root"
+    case .centerSplit:
+      return "center-split"
+    case .oscillate:
+      return "oscillate"
+    case .squarePop:
+      return "square-pop"
     }
   }
 }

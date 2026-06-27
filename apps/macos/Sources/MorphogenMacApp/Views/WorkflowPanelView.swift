@@ -528,35 +528,51 @@ struct WorkflowPanelView: View {
 
     case .trailCascade:
       VStack(alignment: .leading, spacing: 10) {
+        // Row 1: always-visible knobs
         HStack(spacing: 16) {
-          Stepper(value: $state.cascadeTurbulenceScale, in: 0.002...0.05, step: 0.001) {
-            Text("Vortex \(state.cascadeTurbulenceScale, specifier: "%.3f")")
-          }
-          .frame(width: 170, alignment: .leading)
-          .help("Field scale: smaller = larger, broader vortices.")
+          if state.cascadeFieldType == .vortex {
+            Stepper(value: $state.cascadeTurbulenceScale, in: 0.002...0.05, step: 0.001) {
+              Text("Vortex \(state.cascadeTurbulenceScale, specifier: "%.3f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("Field scale: smaller = larger, broader vortices.")
 
-          Stepper(value: $state.cascadeDetail, in: 0...1, step: 0.05) {
-            Text("Detail \(state.cascadeDetail, specifier: "%.2f")")
+            Stepper(value: $state.cascadeDetail, in: 0...1, step: 0.05) {
+              Text("Detail \(state.cascadeDetail, specifier: "%.2f")")
+            }
+            .frame(width: 150, alignment: .leading)
           }
-          .frame(width: 150, alignment: .leading)
 
           Stepper(value: $state.cascadeSeed, in: 0...9999, step: 1) {
             Text("Seed \(state.cascadeSeed)")
           }
           .frame(width: 140, alignment: .leading)
 
-          Toggle("Live refresh", isOn: $state.cascadeLiveRefresh)
-            .toggleStyle(.checkbox)
-            .help("Re-sample each tile from the current frame so the video plays through the trails.")
+          Stepper(value: $state.cascadeDecay, in: 0...0.5, step: 0.01) {
+            Text("Decay \(state.cascadeDecay, specifier: "%.2f")")
+          }
+          .frame(width: 155, alignment: .leading)
+          .help("Fade rate per frame. 0 = permanent trails. ~0.08–0.2 = squares fade as new ones appear.")
+
+          if state.cascadeFieldType != .squarePop {
+            Toggle("Live refresh", isOn: $state.cascadeLiveRefresh)
+              .toggleStyle(.checkbox)
+              .help("Re-sample each tile from the current frame so video plays through the trails.")
+
+            Toggle("Temporal", isOn: $state.cascadeTemporalTiles)
+              .toggleStyle(.checkbox)
+              .help("Each tile carries a different moment of the clip — temporal slit-scan look.")
+          }
         }
 
+        // Row 2: field-specific knobs
         if state.cascadeFieldType == .river || state.cascadeFieldType == .riverRoot {
           HStack(spacing: 16) {
             Stepper(value: $state.cascadeRiverDirection, in: 0...360, step: 15) {
               Text("Dir \(state.cascadeRiverDirection, specifier: "%.0f")°")
             }
             .frame(width: 130, alignment: .leading)
-            .help("River flow direction: 0°=right, 90°=down, 180°=left, 270°=up.")
+            .help("Flow direction: 0°=right, 90°=down, 180°=left, 270°=up.")
 
             Stepper(value: $state.cascadeRiverSpeed, in: 0...20, step: 0.5) {
               Text("Speed \(state.cascadeRiverSpeed, specifier: "%.1f")")
@@ -564,11 +580,47 @@ struct WorkflowPanelView: View {
             .frame(width: 145, alignment: .leading)
             .help("Base flow speed in pixels per frame.")
 
-            Stepper(value: $state.cascadeRiverTurbulence, in: 0...5, step: 0.1) {
-              Text("Turbulence \(state.cascadeRiverTurbulence, specifier: "%.1f")")
+            Stepper(value: $state.cascadeRiverTurbulence, in: 0...100, step: 1) {
+              Text("Turbulence \(state.cascadeRiverTurbulence, specifier: "%.0f")")
             }
             .frame(width: 165, alignment: .leading)
-            .help("Per-tile jitter amplitude; 0 = perfectly uniform flow.")
+            .help("Per-tile lateral jitter amplitude (px); 0 = perfectly uniform flow.")
+          }
+        }
+
+        if state.cascadeFieldType == .centerSplit {
+          HStack(spacing: 16) {
+            Stepper(value: $state.cascadeRiverSpeed, in: 0...20, step: 0.5) {
+              Text("Speed \(state.cascadeRiverSpeed, specifier: "%.1f")")
+            }
+            .frame(width: 145, alignment: .leading)
+            .help("Outward flow speed — how fast tiles drift left/right from the centre.")
+
+            Stepper(value: $state.cascadeRiverTurbulence, in: 0...200, step: 2) {
+              Text("Oscillation \(state.cascadeRiverTurbulence, specifier: "%.0f")px")
+            }
+            .frame(width: 185, alignment: .leading)
+            .help("Root-tile oscillation amplitude in both x and y (px). Above grid spacing = roots visibly cross into neighbours.")
+          }
+        }
+
+        if state.cascadeFieldType == .oscillate {
+          HStack(spacing: 16) {
+            Stepper(value: $state.cascadeRiverTurbulence, in: 0...200, step: 2) {
+              Text("Amplitude \(state.cascadeRiverTurbulence, specifier: "%.0f")px")
+            }
+            .frame(width: 185, alignment: .leading)
+            .help("Per-tile oscillation radius in x and y. Above grid spacing = tiles paint into neighbours' territory.")
+          }
+        }
+
+        if state.cascadeFieldType == .squarePop {
+          HStack(spacing: 16) {
+            Stepper(value: $state.cascadeRiverTurbulence, in: 0...500, step: 10) {
+              Text("Scatter \(state.cascadeRiverTurbulence, specifier: "%.0f")px")
+            }
+            .frame(width: 175, alignment: .leading)
+            .help("Max distance squares can appear from their home cell. 0 = static grid of outlines.")
           }
         }
       }

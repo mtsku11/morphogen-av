@@ -650,6 +650,10 @@ pub(crate) enum Commands {
         /// drifting grid contains every moment of the video interweaving. Overrides live-refresh.
         #[arg(long, default_value_t = false)]
         temporal_tiles: bool,
+        /// Fraction of accumulator brightness lost each frame (0 = permanent trails, 0.08 =
+        /// fades to black in ~25 frames). Keeps SquarePop density stable instead of filling solid.
+        #[arg(long, default_value_t = 0.0)]
+        decay: f32,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
@@ -1233,6 +1237,8 @@ pub(crate) enum Commands {
         river_turbulence: f32,
         #[arg(long, default_value_t = false)]
         temporal_tiles: bool,
+        #[arg(long, default_value_t = 0.0)]
+        decay: f32,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -1635,6 +1641,7 @@ pub(crate) enum CliCascadeFieldType {
     RiverRoot,
     CenterSplit,
     Oscillate,
+    SquarePop,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

@@ -554,6 +554,7 @@ pub(crate) fn queue_add_cascade_trails_sequence(
             river_speed: settings.river_speed,
             river_turbulence: settings.river_turbulence,
             temporal_tiles: settings.temporal_tiles,
+            decay: settings.decay,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -1610,6 +1611,7 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         river_speed,
         river_turbulence,
         temporal_tiles,
+        decay,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1633,6 +1635,7 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         river_speed,
         river_turbulence,
         temporal_tiles,
+        decay,
     };
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
@@ -2670,6 +2673,7 @@ fn cascade_field_type_label(field: CascadeFieldType) -> String {
         CascadeFieldType::RiverRoot => "river-root".to_string(),
         CascadeFieldType::CenterSplit => "center-split".to_string(),
         CascadeFieldType::Oscillate => "oscillate".to_string(),
+        CascadeFieldType::SquarePop => "square-pop".to_string(),
     }
 }
 
@@ -2679,6 +2683,7 @@ fn parse_cascade_field_type(s: &str) -> CascadeFieldType {
         "river-root" => CascadeFieldType::RiverRoot,
         "center-split" => CascadeFieldType::CenterSplit,
         "oscillate" => CascadeFieldType::Oscillate,
+        "square-pop" => CascadeFieldType::SquarePop,
         _ => CascadeFieldType::Vortex,
     }
 }

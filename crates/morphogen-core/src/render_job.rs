@@ -181,6 +181,8 @@ pub enum RenderJobTask {
         river_turbulence: f32,
         #[serde(default)]
         temporal_tiles: bool,
+        #[serde(default)]
+        decay: f32,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,

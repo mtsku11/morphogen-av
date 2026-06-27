@@ -481,6 +481,13 @@ enum RustBridgePlaceholder {
     if !request.liveRefresh {
       arguments.append("--no-live-refresh")
     }
+    if request.temporalTiles {
+      arguments.append("--temporal-tiles")
+    }
+    if request.decay > 0 {
+      arguments.append("--decay")
+      arguments.append(cliNumber(request.decay))
+    }
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -2310,6 +2317,8 @@ struct CascadeTrailsSequenceRenderQueueCommandRequest {
   let riverDirection: Double
   let riverSpeed: Double
   let riverTurbulence: Double
+  let temporalTiles: Bool
+  let decay: Double
   let projectURL: URL?
 }
 
