@@ -61,6 +61,13 @@ pub enum CascadeFieldType {
     /// so each ribbon traces a sinusoidal wave outward from the centre line. The effect
     /// mirrors `RiverRoot` about the vertical axis — like two rivers parting from a divide.
     CenterSplit,
+    /// Tiles never drift — each oscillates in place around its home in both x and y with
+    /// unique per-tile frequencies and phases derived deterministically from the home position.
+    /// The persistent accumulator builds up the swept path so the cascade trail IS the
+    /// oscillation history. Amplitude is `river_turbulence` (pixels); `advect` scales it.
+    /// Pairs naturally with `temporal_tiles`: each tile carries a frozen temporal slice and
+    /// paints it along its own 2-D Lissajous-like figure.
+    Oscillate,
 }
 
 /// Settings for the persistent-trail vector-field cascade.
@@ -367,20 +374,53 @@ pub fn advance_cascade_trails(
                     let dir = if home_cx < cx { -1.0_f32 } else { 1.0_f32 };
                     pos[0] += dir * settings.river_speed * settings.advect;
                 }
-                // Vertical oscillation at stamp time only (flow_angle=0 ⇒ perp = Y axis).
+                // The home/root of each tile oscillates in both x AND y independently.
+                // This is applied at stamp time relative to the current drifted position so
+                // the ribbon's source point moves organically — the flow still goes left/right
+                // but the root it flows FROM bobs in 2D. x and y use incommensurate frequencies
+                // so the root traces a Lissajous figure rather than a straight wiggle.
+                let amplitude = settings.river_turbulence;
                 let offsets = state
                     .origins
                     .iter()
                     .map(|origin| {
-                        let (jx, jy) = river_jitter(
-                            settings.seed,
-                            origin.x0,
-                            origin.y0,
-                            settings.river_turbulence,
-                            0.0,
-                            frame,
-                        );
-                        [jx, jy]
+                        let h0 = tile_hash(settings.seed, origin.x0, origin.y0);
+                        let h1 = splitmix(h0);
+                        let h2 = splitmix(h1);
+                        let h3 = splitmix(h2);
+                        let fx = 0.020 + (h0 & 0xFFFF) as f32 / 65535.0 * 0.060;
+                        let px = (h1 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                        let fy = 0.013 + (h2 & 0xFFFF) as f32 / 65535.0 * 0.040;
+                        let py = (h3 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                        let t = frame as f32;
+                        [amplitude * (t * fx + px).sin(), amplitude * (t * fy + py).sin()]
+                    })
+                    .collect();
+                Some(offsets)
+            }
+            CascadeFieldType::Oscillate => {
+                // Positions never drift — tiles stay rooted at home. Each tile oscillates
+                // independently in both x and y using unique frequencies and phases from a
+                // deterministic hash of its home position. The accumulator records the swept
+                // path, so the trail IS the oscillation history rather than a flow ribbon.
+                let amplitude = settings.river_turbulence * settings.advect;
+                let offsets = state
+                    .origins
+                    .iter()
+                    .map(|origin| {
+                        let h0 = tile_hash(settings.seed, origin.x0, origin.y0);
+                        let h1 = splitmix(h0);
+                        let h2 = splitmix(h1);
+                        let h3 = splitmix(h2);
+                        // X: frequency in [0.020, 0.080] rad/frame
+                        let fx = 0.020 + (h0 & 0xFFFF) as f32 / 65535.0 * 0.060;
+                        let px = (h1 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                        // Y: frequency in [0.013, 0.053] rad/frame — different range keeps x/y
+                        // frequencies incommensurate so the figure-8 path never closes early.
+                        let fy = 0.013 + (h2 & 0xFFFF) as f32 / 65535.0 * 0.040;
+                        let py = (h3 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+                        let t = frame as f32;
+                        [amplitude * (t * fx + px).sin(), amplitude * (t * fy + py).sin()]
                     })
                     .collect();
                 Some(offsets)

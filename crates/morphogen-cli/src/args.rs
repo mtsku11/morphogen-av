@@ -1634,6 +1634,7 @@ pub(crate) enum CliCascadeFieldType {
     River,
     RiverRoot,
     CenterSplit,
+    Oscillate,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
