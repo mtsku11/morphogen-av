@@ -2098,6 +2098,7 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
 enum CascadeFieldOption: String, CaseIterable, Identifiable {
   case vortex = "Vortex"
   case river = "River"
+  case riverRoot = "River Root"
 
   var id: String { rawValue }
 
@@ -2107,6 +2108,8 @@ enum CascadeFieldOption: String, CaseIterable, Identifiable {
       return "vortex"
     case .river:
       return "river"
+    case .riverRoot:
+      return "river-root"
     }
   }
 }

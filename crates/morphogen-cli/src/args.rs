@@ -1625,6 +1625,7 @@ pub(crate) enum CliCascadeFieldType {
     #[default]
     Vortex,
     River,
+    RiverRoot,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

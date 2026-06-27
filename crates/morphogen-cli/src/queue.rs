@@ -2664,12 +2664,14 @@ fn cascade_field_type_label(field: CascadeFieldType) -> String {
     match field {
         CascadeFieldType::Vortex => "vortex".to_string(),
         CascadeFieldType::River => "river".to_string(),
+        CascadeFieldType::RiverRoot => "river-root".to_string(),
     }
 }
 
 fn parse_cascade_field_type(s: &str) -> CascadeFieldType {
     match s {
         "river" => CascadeFieldType::River,
+        "river-root" => CascadeFieldType::RiverRoot,
         _ => CascadeFieldType::Vortex,
     }
 }

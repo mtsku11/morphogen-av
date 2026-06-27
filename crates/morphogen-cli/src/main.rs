@@ -529,6 +529,7 @@ fn run() -> Result<(), CliError> {
                 field: match field {
                     args::CliCascadeFieldType::Vortex => CascadeFieldType::Vortex,
                     args::CliCascadeFieldType::River => CascadeFieldType::River,
+                    args::CliCascadeFieldType::RiverRoot => CascadeFieldType::RiverRoot,
                 },
                 river_direction,
                 river_speed,
@@ -1059,6 +1060,7 @@ fn run() -> Result<(), CliError> {
                 field: match field {
                     args::CliCascadeFieldType::Vortex => CascadeFieldType::Vortex,
                     args::CliCascadeFieldType::River => CascadeFieldType::River,
+                    args::CliCascadeFieldType::RiverRoot => CascadeFieldType::RiverRoot,
                 },
                 river_direction,
                 river_speed,

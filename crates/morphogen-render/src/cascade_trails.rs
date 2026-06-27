@@ -48,8 +48,14 @@ pub enum CascadeFieldType {
     /// Curl-noise steady vortex field (the original mode).
     #[default]
     Vortex,
-    /// Dominant uniform flow plus per-tile turbulence jitter — a "river" of tiles.
+    /// Dominant uniform flow plus per-tile oscillating turbulence on the tile's current
+    /// position — jitter compounds over time so trails curve and wander.
     River,
+    /// Dominant uniform flow with oscillation applied to the *stamp position* relative to
+    /// the tile's home. The drift is a straight flow; the oscillation is always centred on
+    /// the drift line, so each ribbon traces a clean sinusoidal wave. The "root" of every
+    /// ribbon bobs at its own rate — the look of kelp or river-grass in a current.
+    RiverRoot,
 }
 
 /// Settings for the persistent-trail vector-field cascade.
@@ -245,7 +251,10 @@ pub fn advance_cascade_trails(
 ) -> Result<(), RenderError> {
     settings.validate()?;
 
-    if settings.advect != 0.0 {
+    // Advance positions and optionally produce per-tile stamp offsets.  RiverRoot is the
+    // only mode that separates drift (accumulated on positions) from oscillation (applied
+    // only at stamp time), so it returns offsets; the other modes return None.
+    let stamp_offsets: Option<Vec<[f32; 2]>> = if settings.advect != 0.0 {
         match settings.field {
             CascadeFieldType::Vortex => {
                 for pos in &mut state.positions {
@@ -260,6 +269,7 @@ pub fn advance_cascade_trails(
                     pos[0] += vx * settings.advect;
                     pos[1] += vy * settings.advect;
                 }
+                None
             }
             CascadeFieldType::River => {
                 let angle = settings.river_direction.to_radians();
@@ -277,9 +287,40 @@ pub fn advance_cascade_trails(
                     pos[0] += (base_vx + jx) * settings.advect;
                     pos[1] += (base_vy + jy) * settings.advect;
                 }
+                None
+            }
+            CascadeFieldType::RiverRoot => {
+                let angle = settings.river_direction.to_radians();
+                let (sin_a, cos_a) = angle.sin_cos();
+                let base_vx = cos_a * settings.river_speed;
+                let base_vy = sin_a * settings.river_speed;
+                // Advance by pure steady flow — no oscillation accumulates in positions.
+                for pos in &mut state.positions {
+                    pos[0] += base_vx * settings.advect;
+                    pos[1] += base_vy * settings.advect;
+                }
+                // Oscillation is centred on the home, applied only at stamp time.
+                let offsets = state
+                    .origins
+                    .iter()
+                    .map(|origin| {
+                        let (jx, jy) = river_jitter(
+                            settings.seed,
+                            origin.x0,
+                            origin.y0,
+                            settings.river_turbulence,
+                            angle,
+                            frame,
+                        );
+                        [jx, jy]
+                    })
+                    .collect();
+                Some(offsets)
             }
         }
-    }
+    } else {
+        None
+    };
 
     if settings.live_refresh {
         for (patch, origin) in state.patches.iter_mut().zip(state.origins.iter()) {
@@ -288,7 +329,10 @@ pub fn advance_cascade_trails(
         }
     }
 
-    stamp_all(state);
+    match stamp_offsets {
+        None => stamp_all(state),
+        Some(ref offsets) => stamp_with_offsets(state, offsets),
+    }
     Ok(())
 }
 
@@ -318,6 +362,46 @@ fn stamp_all(state: &mut CascadeTrailState) {
             }
             // Nearest-sample the tile offset into the patch's own dimensions (edge cells may be
             // smaller than tile_size). Mirrors the fluid_mosaic carry_texture paint.
+            let py = (dy * ph / tile).clamp(0, ph - 1);
+            let row = (y as usize) * (state.width as usize);
+            for dx in 0..tile {
+                let x = left + dx;
+                if x < 0 || x >= width {
+                    continue;
+                }
+                let px = (dx * pw / tile).clamp(0, pw - 1);
+                let rgb = patch.pixels[(py * pw + px) as usize];
+                pixels[row + x as usize] = [rgb[0], rgb[1], rgb[2], 1.0];
+            }
+        }
+    }
+}
+
+/// Like `stamp_all` but each tile's position is shifted by its corresponding offset before
+/// stamping. Used by `RiverRoot` to separate drift (in `positions`) from oscillation.
+fn stamp_with_offsets(state: &mut CascadeTrailState, offsets: &[[f32; 2]]) {
+    let width = state.width as i64;
+    let height = state.height as i64;
+    let tile = state.tile_size as i64;
+    let pixels = &mut state.accumulator.pixels;
+    for ((pos, patch), offset) in state
+        .positions
+        .iter()
+        .zip(state.patches.iter())
+        .zip(offsets.iter())
+    {
+        let left = (pos[0] + offset[0]).round() as i64;
+        let top = (pos[1] + offset[1]).round() as i64;
+        let pw = patch.width as i64;
+        let ph = patch.height as i64;
+        if pw == 0 || ph == 0 {
+            continue;
+        }
+        for dy in 0..tile {
+            let y = top + dy;
+            if y < 0 || y >= height {
+                continue;
+            }
             let py = (dy * ph / tile).clamp(0, ph - 1);
             let row = (y as usize) * (state.width as usize);
             for dx in 0..tile {

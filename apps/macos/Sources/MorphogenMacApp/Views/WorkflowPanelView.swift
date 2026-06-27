@@ -550,7 +550,7 @@ struct WorkflowPanelView: View {
             .help("Re-sample each tile from the current frame so the video plays through the trails.")
         }
 
-        if state.cascadeFieldType == .river {
+        if state.cascadeFieldType == .river || state.cascadeFieldType == .riverRoot {
           HStack(spacing: 16) {
             Stepper(value: $state.cascadeRiverDirection, in: 0...360, step: 15) {
               Text("Dir \(state.cascadeRiverDirection, specifier: "%.0f")°")
