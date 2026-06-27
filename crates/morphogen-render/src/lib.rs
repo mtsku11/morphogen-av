@@ -110,9 +110,10 @@ pub use granular_mosaic::{
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
 pub use optical_flow::{
-    lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu, FlowConfidenceMap,
-    PyramidalLucasKanadeEstimate, LUCAS_KANADE_WINDOW_RADIUS, PYRAMIDAL_LUCAS_KANADE_MAX_LEVELS,
-    PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
+    lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu,
+    pyramidal_lucas_kanade_flow_with_refiner, refine_level_cpu, FlowConfidenceMap,
+    LucasKanadeLevelRefiner, PyramidalLucasKanadeEstimate, LUCAS_KANADE_WINDOW_RADIUS,
+    PYRAMIDAL_LUCAS_KANADE_MAX_LEVELS, PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
 };
 pub use sampler::sample_bilinear_clamped;
 pub use video_vocoder::{

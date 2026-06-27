@@ -1,11 +1,13 @@
 use metal::{
-    CompileOptions, Device, MTLCommandBufferStatus, MTLPixelFormat, MTLRegion, MTLResourceOptions,
-    MTLSize, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
+    CommandQueue, CompileOptions, ComputePipelineState, Device, MTLCommandBufferStatus,
+    MTLPixelFormat, MTLRegion, MTLResourceOptions, MTLSize, MTLStorageMode, MTLTextureType,
+    MTLTextureUsage, Texture, TextureDescriptor,
 };
 use morphogen_render::{
-    FieldParticleSettings, FlowFeedbackSettings, FlowField, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, GrainPool, GrainSelection, GranularMosaicSettings,
-    ImageBufferF32, ParticleField, StructureMode,
+    pyramidal_lucas_kanade_flow_with_refiner, FieldParticleSettings, FlowFeedbackSettings,
+    FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool, GrainSelection,
+    GranularMosaicSettings, ImageBufferF32, ParticleField, PyramidalLucasKanadeEstimate,
+    RenderError, StructureMode,
 };
 
 use crate::{
@@ -18,7 +20,8 @@ use crate::{
     FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME,
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
-    GRANULAR_MOSAIC_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
+    GRANULAR_MOSAIC_SHADER_SOURCE, LUCAS_KANADE_REFINE_KERNEL_NAME,
+    LUCAS_KANADE_REFINE_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -99,6 +102,13 @@ struct FieldParticlesSplatParams {
     height: u32,
     particle_count: u32,
     particle_size: u32,
+}
+
+#[repr(C)]
+struct LucasKanadeRefineParams {
+    width: u32,
+    height: u32,
+    radius: i32,
 }
 
 #[repr(C)]
@@ -984,6 +994,192 @@ pub fn field_particles_splat_metal(
     read_rgba_f32_texture(&output_texture, plan.width, plan.height)
 }
 
+/// Pyramidal Lucas-Kanade optical flow with the dense per-level refinement run on the
+/// GPU. The pyramid build, upsample, forward/backward consistency filter and output
+/// resample stay on the CPU (shared with `pyramidal_lucas_kanade_flow_cpu`), so the only
+/// GPU parity surface is the `lucas_kanade_refine` kernel. The device, library and
+/// pipeline are built once and reused across every level/iteration/direction.
+///
+/// The result is not byte-identical to the CPU reference (GPU float rounding differs), so
+/// the caller must gate it — the CLI validates frame 0 against the CPU within tolerance,
+/// then trusts the GPU for the remaining frames of a render.
+pub fn pyramidal_lucas_kanade_flow_metal(
+    previous: &ImageBufferF32,
+    current: &ImageBufferF32,
+    width: u32,
+    height: u32,
+    window_radius: i32,
+) -> Result<PyramidalLucasKanadeEstimate, MetalDispatchError> {
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(LUCAS_KANADE_REFINE_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(LUCAS_KANADE_REFINE_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+    let command_queue = device.new_command_queue();
+
+    pyramidal_lucas_kanade_flow_with_refiner(
+        previous,
+        current,
+        width,
+        height,
+        window_radius,
+        |level_previous: &[f32],
+         level_current: &[f32],
+         level_width: u32,
+         level_height: u32,
+         flow: &mut [[f32; 2]],
+         radius: i32,
+         iterations: usize| {
+            refine_level_metal(
+                &device,
+                &pipeline,
+                &command_queue,
+                level_previous,
+                level_current,
+                level_width,
+                level_height,
+                flow,
+                radius,
+                iterations,
+            )
+            .map_err(|error| RenderError::InvalidFlowField(error.to_string()))
+        },
+    )
+    .map_err(|error| MetalDispatchError::OpticalFlow(error.to_string()))
+}
+
+/// GPU implementation of a single pyramid-level refinement (all warp iterations). Mirrors
+/// `morphogen_render::refine_level_cpu`: the luminance levels are uploaded as R32Float
+/// textures, the flow is double-buffered between RG32Float textures (one iteration per
+/// command buffer so writes are visible to the next read), and the final flow and
+/// per-pixel confidence are read back.
+#[allow(clippy::too_many_arguments)]
+fn refine_level_metal(
+    device: &Device,
+    pipeline: &ComputePipelineState,
+    command_queue: &CommandQueue,
+    previous: &[f32],
+    current: &[f32],
+    width: u32,
+    height: u32,
+    flow: &mut [[f32; 2]],
+    radius: i32,
+    iterations: usize,
+) -> Result<Vec<f32>, MetalDispatchError> {
+    if width == 0 || height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?;
+    if previous.len() != expected || current.len() != expected || flow.len() != expected {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "lucas-kanade refine level expects {expected} samples per buffer"
+        )));
+    }
+
+    let plan = FlowDisplaceDispatchPlan::new(width, height, 0.0)?;
+
+    let previous_texture = new_texture(
+        device,
+        width,
+        height,
+        MTLPixelFormat::R32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let current_texture = new_texture(
+        device,
+        width,
+        height,
+        MTLPixelFormat::R32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    upload_r_f32_texture(&previous_texture, previous, width, height)?;
+    upload_r_f32_texture(&current_texture, current, width, height)?;
+
+    let mut flow_read = new_texture(
+        device,
+        width,
+        height,
+        MTLPixelFormat::RG32Float,
+        MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
+    );
+    let mut flow_write = new_texture(
+        device,
+        width,
+        height,
+        MTLPixelFormat::RG32Float,
+        MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
+    );
+    upload_rg_f32_texture_slice(&flow_read, flow, width, height)?;
+
+    let confidence_texture = new_texture(
+        device,
+        width,
+        height,
+        MTLPixelFormat::R32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+
+    let params = LucasKanadeRefineParams {
+        width,
+        height,
+        radius,
+    };
+
+    for _ in 0..iterations.max(1) {
+        let command_buffer = command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_texture(0, Some(&previous_texture));
+        encoder.set_texture(1, Some(&current_texture));
+        encoder.set_texture(2, Some(&flow_read));
+        encoder.set_texture(3, Some(&flow_write));
+        encoder.set_texture(4, Some(&confidence_texture));
+        encoder.set_bytes(
+            0,
+            std::mem::size_of::<LucasKanadeRefineParams>() as u64,
+            (&params as *const LucasKanadeRefineParams).cast(),
+        );
+        encoder.dispatch_thread_groups(
+            MTLSize::new(
+                plan.threadgroups_per_grid.width as u64,
+                plan.threadgroups_per_grid.height as u64,
+                plan.threadgroups_per_grid.depth as u64,
+            ),
+            MTLSize::new(
+                plan.threads_per_threadgroup.width as u64,
+                plan.threads_per_threadgroup.height as u64,
+                plan.threads_per_threadgroup.depth as u64,
+            ),
+        );
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let status = command_buffer.status();
+        if status != MTLCommandBufferStatus::Completed {
+            return Err(MetalDispatchError::CommandBufferFailed(format!(
+                "{status:?}"
+            )));
+        }
+
+        // The iteration just wrote `flow_write`; make it the read source for the next.
+        std::mem::swap(&mut flow_read, &mut flow_write);
+    }
+
+    let refined = read_rg_f32_texture(&flow_read, width, height)?;
+    flow.copy_from_slice(&refined);
+    read_r_f32_texture(&confidence_texture, width, height)
+}
+
 /// Descriptor-coagulated flow blend — composite stage on the GPU. Given Source A,
 /// Source B, and the CPU-built `cols × rows` ownership field, evaluates the same
 /// per-pixel block-jitter + bilinear field sample + dithered hard/soft edge blend +
@@ -1502,6 +1698,92 @@ fn upload_rg_f32_texture(texture: &Texture, flow: &FlowField) -> Result<(), Meta
     replace_texture_bytes(texture, flow.width, flow.height, 8, 0, &bytes)
 }
 
+fn upload_rg_f32_texture_slice(
+    texture: &Texture,
+    vectors: &[[f32; 2]],
+    width: u32,
+    height: u32,
+) -> Result<(), MetalDispatchError> {
+    let bytes = rg_f32_bytes(vectors)?;
+    replace_texture_bytes(texture, width, height, 8, 0, &bytes)
+}
+
+fn upload_r_f32_texture(
+    texture: &Texture,
+    values: &[f32],
+    width: u32,
+    height: u32,
+) -> Result<(), MetalDispatchError> {
+    let byte_len = values
+        .len()
+        .checked_mul(4)
+        .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?;
+    let mut bytes = Vec::with_capacity(byte_len);
+    for value in values {
+        bytes.extend_from_slice(&value.to_ne_bytes());
+    }
+    replace_texture_bytes(texture, width, height, 4, 0, &bytes)
+}
+
+fn read_rg_f32_texture(
+    texture: &Texture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<[f32; 2]>, MetalDispatchError> {
+    let bytes_per_row = checked_row_bytes(width, 8)?;
+    let image_stride = checked_image_bytes(height, bytes_per_row)?;
+    let mut bytes = vec![0; image_stride];
+    texture.get_bytes_in_slice(
+        bytes.as_mut_ptr().cast(),
+        bytes_per_row as u64,
+        image_stride as u64,
+        MTLRegion::new_2d(0, 0, width as u64, height as u64),
+        0,
+        0,
+    );
+
+    let mut vectors = Vec::with_capacity(
+        (width as usize)
+            .checked_mul(height as usize)
+            .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?,
+    );
+    for chunk in bytes.chunks_exact(8) {
+        vectors.push([
+            f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+            f32::from_ne_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
+        ]);
+    }
+    Ok(vectors)
+}
+
+fn read_r_f32_texture(
+    texture: &Texture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<f32>, MetalDispatchError> {
+    let bytes_per_row = checked_row_bytes(width, 4)?;
+    let image_stride = checked_image_bytes(height, bytes_per_row)?;
+    let mut bytes = vec![0; image_stride];
+    texture.get_bytes_in_slice(
+        bytes.as_mut_ptr().cast(),
+        bytes_per_row as u64,
+        image_stride as u64,
+        MTLRegion::new_2d(0, 0, width as u64, height as u64),
+        0,
+        0,
+    );
+
+    let mut values = Vec::with_capacity(
+        (width as usize)
+            .checked_mul(height as usize)
+            .ok_or(MetalDispatchError::TextureByteLengthTooLarge)?,
+    );
+    for chunk in bytes.chunks_exact(4) {
+        values.push(f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    Ok(values)
+}
+
 fn replace_texture_bytes(
     texture: &Texture,
     width: u32,
@@ -1730,6 +2012,67 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 0.000_01);
+    }
+
+    fn lk_textured_frame(width: u32, height: u32, shift_x: f32, shift_y: f32) -> ImageBufferF32 {
+        ImageBufferF32::from_fn(width, height, |x, y| {
+            let fx = x as f32 - shift_x;
+            let fy = y as f32 - shift_y;
+            let value = 0.5
+                + 0.2 * (0.31 * fx).sin()
+                + 0.2 * (0.37 * fy).sin()
+                + 0.1 * (0.23 * (fx + fy)).sin();
+            [value, value, value, 1.0]
+        })
+        .expect("valid frame")
+    }
+
+    #[test]
+    fn metal_pyramidal_lucas_kanade_matches_cpu_reference() {
+        let radius = morphogen_render::LUCAS_KANADE_WINDOW_RADIUS;
+        let previous = lk_textured_frame(64, 48, 0.0, 0.0);
+        let current = lk_textured_frame(64, 48, 6.0, 4.0);
+
+        let cpu = morphogen_render::pyramidal_lucas_kanade_flow_cpu(
+            &previous, &current, 64, 48, radius,
+        )
+        .expect("cpu flow");
+        let gpu = match pyramidal_lucas_kanade_flow_metal(&previous, &current, 64, 48, radius) {
+            Ok(estimate) => estimate,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal LK parity assertion because no Metal device is available");
+                return;
+            }
+            Err(error) => panic!("metal flow failed: {error}"),
+        };
+
+        let mut max_flow_diff = 0.0_f32;
+        for (g, c) in gpu.flow.vectors.iter().zip(cpu.flow.vectors.iter()) {
+            max_flow_diff = max_flow_diff.max((g[0] - c[0]).abs()).max((g[1] - c[1]).abs());
+        }
+        let mut max_conf_diff = 0.0_f32;
+        for (g, c) in gpu
+            .forward_confidence
+            .values
+            .iter()
+            .zip(cpu.forward_confidence.values.iter())
+        {
+            max_conf_diff = max_conf_diff.max((g - c).abs());
+        }
+
+        // GPU float rounding differs from the CPU reference, so this is a within-tolerance
+        // check (not byte parity). Flow is in pixel-displacement units; the project pixel
+        // epsilon is 1/255 ~= 0.0039, and the displacement agreement is far tighter than a
+        // pixel. The actual measured max difference prints below for ratcheting.
+        eprintln!("LK metal parity: max_flow_diff={max_flow_diff}, max_conf_diff={max_conf_diff}");
+        assert!(
+            max_flow_diff < 1.0 / 255.0,
+            "flow diverged by {max_flow_diff} (> 1/255)"
+        );
+        assert!(
+            max_conf_diff < 1.0 / 255.0,
+            "confidence diverged by {max_conf_diff} (> 1/255)"
+        );
     }
 
     #[test]

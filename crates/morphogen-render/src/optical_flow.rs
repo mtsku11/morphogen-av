@@ -80,6 +80,51 @@ pub fn pyramidal_lucas_kanade_flow_cpu(
     height: u32,
     window_radius: i32,
 ) -> Result<PyramidalLucasKanadeEstimate, RenderError> {
+    pyramidal_lucas_kanade_flow_with_refiner(
+        previous,
+        current,
+        width,
+        height,
+        window_radius,
+        refine_level_cpu,
+    )
+}
+
+/// Signature of the per-level Lucas-Kanade refinement step: given the previous
+/// and current pyramid level as flat luminance buffers (`width * height`, row
+/// major), the current `flow` estimate to refine in place, the window radius and
+/// the warp-iteration count, it returns the per-pixel structure confidence.
+///
+/// The refinement is the dense inner loop of the estimator and the only step a
+/// GPU backend needs to override; expressing it as a plain-slice callback keeps
+/// the pyramid build, upsample, forward/backward filter and resample steps shared
+/// (and bitwise identical) across backends while the parity surface stays a
+/// single kernel.
+pub trait LucasKanadeLevelRefiner:
+    Fn(&[f32], &[f32], u32, u32, &mut [[f32; 2]], i32, usize) -> Result<Vec<f32>, RenderError>
+{
+}
+
+impl<T> LucasKanadeLevelRefiner for T where
+    T: Fn(&[f32], &[f32], u32, u32, &mut [[f32; 2]], i32, usize) -> Result<Vec<f32>, RenderError>
+{
+}
+
+/// Backend-generic entry point for the pyramidal Lucas-Kanade estimator. The CPU
+/// reference is [`pyramidal_lucas_kanade_flow_cpu`] (this with [`refine_level_cpu`]);
+/// a Metal backend passes a refiner that dispatches the level-refine kernel while
+/// reusing every surrounding (cheap, exactly-parity) CPU step.
+pub fn pyramidal_lucas_kanade_flow_with_refiner<R>(
+    previous: &ImageBufferF32,
+    current: &ImageBufferF32,
+    width: u32,
+    height: u32,
+    window_radius: i32,
+    refiner: R,
+) -> Result<PyramidalLucasKanadeEstimate, RenderError>
+where
+    R: LucasKanadeLevelRefiner,
+{
     if previous.width != current.width || previous.height != current.height {
         return Err(RenderError::IncompatibleInputs(format!(
             "previous frame is {}x{}, current frame is {}x{}",
@@ -95,12 +140,14 @@ pub fn pyramidal_lucas_kanade_flow_cpu(
         &current_pyramid,
         radius,
         PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
+        &refiner,
     )?;
     let (backward, backward_structure) = estimate_forward_flow(
         &current_pyramid,
         &previous_pyramid,
         radius,
         PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
+        &refiner,
     )?;
 
     let source = current_pyramid.first().ok_or_else(|| {
@@ -219,12 +266,16 @@ fn build_luminance_pyramid(image: &ImageBufferF32) -> Vec<LuminanceImage> {
     pyramid
 }
 
-fn estimate_forward_flow(
+fn estimate_forward_flow<R>(
     previous_pyramid: &[LuminanceImage],
     current_pyramid: &[LuminanceImage],
     radius: i32,
     iterations: usize,
-) -> Result<(Vec<[f32; 2]>, Vec<f32>), RenderError> {
+    refiner: &R,
+) -> Result<(Vec<[f32; 2]>, Vec<f32>), RenderError>
+where
+    R: LucasKanadeLevelRefiner,
+{
     if previous_pyramid.len() != current_pyramid.len() || previous_pyramid.is_empty() {
         return Err(RenderError::IncompatibleInputs(
             "optical-flow pyramids must have matching nonzero levels".to_string(),
@@ -253,27 +304,43 @@ fn estimate_forward_flow(
                 current.height,
             )
         };
-        confidence = refine_level(previous, current, &mut flow, radius, iterations)?;
+        confidence = refiner(
+            &previous.values,
+            &current.values,
+            current.width,
+            current.height,
+            &mut flow,
+            radius,
+            iterations,
+        )?;
     }
 
     Ok((flow, confidence))
 }
 
-fn refine_level(
-    previous: &LuminanceImage,
-    current: &LuminanceImage,
+/// CPU reference implementation of the per-level Lucas-Kanade refinement. See
+/// [`LucasKanadeLevelRefiner`] for the contract; this is the refiner used by
+/// [`pyramidal_lucas_kanade_flow_cpu`] and the ground truth a GPU port is gated
+/// against.
+pub fn refine_level_cpu(
+    previous: &[f32],
+    current: &[f32],
+    level_width: u32,
+    level_height: u32,
     flow: &mut [[f32; 2]],
     radius: i32,
     iterations: usize,
 ) -> Result<Vec<f32>, RenderError> {
-    let expected = checked_pixel_count(current.width, current.height)?;
-    if flow.len() != expected {
+    let expected = checked_pixel_count(level_width, level_height)?;
+    if flow.len() != expected || previous.len() != expected || current.len() != expected {
         return Err(RenderError::InvalidFlowField(
             "pyramid flow level has incompatible dimensions".to_string(),
         ));
     }
 
-    let width = current.width as usize;
+    let level_width_u = level_width;
+    let level_height_u = level_height;
+    let width = level_width as usize;
     let mut confidence = vec![0.0; expected];
     // Each pixel's update reads only its own flow estimate plus the (immutable)
     // images, so the per-pixel work is independent within an iteration. Running
@@ -299,13 +366,46 @@ fn refine_level(
                         let previous_x = current_x - estimate[0];
                         let previous_y = current_y - estimate[1];
                         let ix = 0.5
-                            * (previous.sample(previous_x + 1.0, previous_y)
-                                - previous.sample(previous_x - 1.0, previous_y));
+                            * (sample_scalar_clamped(
+                                previous,
+                                level_width_u,
+                                level_height_u,
+                                previous_x + 1.0,
+                                previous_y,
+                            ) - sample_scalar_clamped(
+                                previous,
+                                level_width_u,
+                                level_height_u,
+                                previous_x - 1.0,
+                                previous_y,
+                            ));
                         let iy = 0.5
-                            * (previous.sample(previous_x, previous_y + 1.0)
-                                - previous.sample(previous_x, previous_y - 1.0));
-                        let it = current.sample(current_x, current_y)
-                            - previous.sample(previous_x, previous_y);
+                            * (sample_scalar_clamped(
+                                previous,
+                                level_width_u,
+                                level_height_u,
+                                previous_x,
+                                previous_y + 1.0,
+                            ) - sample_scalar_clamped(
+                                previous,
+                                level_width_u,
+                                level_height_u,
+                                previous_x,
+                                previous_y - 1.0,
+                            ));
+                        let it = sample_scalar_clamped(
+                            current,
+                            level_width_u,
+                            level_height_u,
+                            current_x,
+                            current_y,
+                        ) - sample_scalar_clamped(
+                            previous,
+                            level_width_u,
+                            level_height_u,
+                            previous_x,
+                            previous_y,
+                        );
 
                         sxx += ix * ix;
                         sxy += ix * iy;

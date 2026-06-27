@@ -28,6 +28,9 @@ pub const FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE: &str =
 pub const FIELD_PARTICLES_SPLAT_KERNEL_NAME: &str = "field_particles_splat";
 pub const FIELD_PARTICLES_SPLAT_SHADER_SOURCE: &str =
     include_str!("../shaders/field_particles_splat.metal");
+pub const LUCAS_KANADE_REFINE_KERNEL_NAME: &str = "lucas_kanade_refine";
+pub const LUCAS_KANADE_REFINE_SHADER_SOURCE: &str =
+    include_str!("../shaders/lucas_kanade_refine.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -142,6 +145,12 @@ pub enum MetalDispatchError {
         "field_particles_splat.metal does not contain the expected texture and buffer bindings"
     )]
     MissingFieldParticlesSplatBindingLayout,
+    #[error("lucas_kanade_refine.metal does not contain the expected kernel entry point")]
+    MissingLucasKanadeRefineKernelEntryPoint,
+    #[error("lucas_kanade_refine.metal does not contain the expected texture and buffer bindings")]
+    MissingLucasKanadeRefineBindingLayout,
+    #[error("optical-flow orchestration failed: {0}")]
+    OpticalFlow(String),
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -445,6 +454,27 @@ pub fn validate_field_particles_splat_shader_source() -> Result<(), MetalDispatc
     Ok(())
 }
 
+pub fn validate_lucas_kanade_refine_shader_source() -> Result<(), MetalDispatchError> {
+    if !LUCAS_KANADE_REFINE_SHADER_SOURCE.contains("kernel void lucas_kanade_refine") {
+        return Err(MetalDispatchError::MissingLucasKanadeRefineKernelEntryPoint);
+    }
+
+    for expected in [
+        "texture2d<float, access::read> previous [[texture(0)]]",
+        "texture2d<float, access::read> current [[texture(1)]]",
+        "texture2d<float, access::read> flowIn [[texture(2)]]",
+        "texture2d<float, access::write> flowOut [[texture(3)]]",
+        "texture2d<float, access::write> confidence [[texture(4)]]",
+        "constant LucasKanadeRefineParams& params [[buffer(0)]]",
+    ] {
+        if !LUCAS_KANADE_REFINE_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingLucasKanadeRefineBindingLayout);
+        }
+    }
+
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -554,5 +584,11 @@ mod tests {
     fn field_particles_splat_shader_has_expected_bindings() {
         validate_field_particles_splat_shader_source()
             .expect("field particles splat shader preflight");
+    }
+
+    #[test]
+    fn lucas_kanade_refine_shader_has_expected_bindings() {
+        validate_lucas_kanade_refine_shader_source()
+            .expect("lucas kanade refine shader preflight");
     }
 }
