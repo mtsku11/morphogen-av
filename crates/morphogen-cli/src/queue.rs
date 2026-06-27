@@ -553,6 +553,7 @@ pub(crate) fn queue_add_cascade_trails_sequence(
             river_direction: settings.river_direction,
             river_speed: settings.river_speed,
             river_turbulence: settings.river_turbulence,
+            temporal_tiles: settings.temporal_tiles,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -1608,6 +1609,7 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         river_direction,
         river_speed,
         river_turbulence,
+        temporal_tiles,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1630,6 +1632,7 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         river_direction,
         river_speed,
         river_turbulence,
+        temporal_tiles,
     };
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_cascade_trails_sequence(CascadeTrailsSequenceRequest {

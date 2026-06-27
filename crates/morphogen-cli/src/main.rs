@@ -515,6 +515,7 @@ fn run() -> Result<(), CliError> {
             river_direction,
             river_speed,
             river_turbulence,
+            temporal_tiles,
         } => render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -534,6 +535,7 @@ fn run() -> Result<(), CliError> {
                 river_direction,
                 river_speed,
                 river_turbulence,
+                temporal_tiles,
             },
             frames,
         })
@@ -1044,6 +1046,7 @@ fn run() -> Result<(), CliError> {
             river_direction,
             river_speed,
             river_turbulence,
+            temporal_tiles,
             project_path,
         } => queue_add_cascade_trails_sequence(QueueAddCascadeTrailsSequenceRequest {
             queue_path: &queue_path,
@@ -1065,6 +1068,7 @@ fn run() -> Result<(), CliError> {
                 river_direction,
                 river_speed,
                 river_turbulence,
+                temporal_tiles,
             },
             frames,
             frame_rate,

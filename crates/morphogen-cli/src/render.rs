@@ -13,7 +13,7 @@ use morphogen_core::{
     RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    advance_cascade_trails, advance_coagulation_field, advance_dispersion_field,
+    advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
     advance_field_particles,
     advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu,
@@ -2172,9 +2172,21 @@ pub(crate) fn render_cascade_trails_sequence(
     fs::create_dir_all(request.output_dir)?;
 
     let mut state = initialize_cascade_trails(&seed_frame, request.settings)?;
+
+    if request.settings.temporal_tiles {
+        // Load all frames upfront and spread them across tiles — each tile captures a distinct
+        // temporal slice of the clip and holds it frozen for the entire render.
+        let all_frames: Vec<_> = source_frames
+            .iter()
+            .map(|p| load_image_f32(p))
+            .collect::<Result<Vec<_>, _>>()?;
+        assign_temporal_patches(&mut state, &all_frames);
+    }
+
     for index in 0..request.frames {
         if index > 0 {
-            // Frames cycle if the render outlasts the clip, so a video plays through the trails.
+            // With temporal_tiles the patches are frozen — advance positions only (live_refresh
+            // is implicitly off).  Without it, live_refresh is controlled by the setting.
             let current = load_image_f32(&source_frames[index % source_frames.len()])?;
             advance_cascade_trails(&mut state, &current, request.settings, index as u32)?;
         }

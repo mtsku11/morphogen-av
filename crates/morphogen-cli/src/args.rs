@@ -645,6 +645,11 @@ pub(crate) enum Commands {
         /// similarly (spatially coherent noise); 0 = perfectly uniform flow.
         #[arg(long, default_value_t = 0.8)]
         river_turbulence: f32,
+        /// Each tile captures a distinct frame of the source clip at init and holds it frozen
+        /// forever (temporal slit-scan). Tiles are spread evenly across the clip by index so the
+        /// drifting grid contains every moment of the video interweaving. Overrides live-refresh.
+        #[arg(long, default_value_t = false)]
+        temporal_tiles: bool,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
@@ -1226,6 +1231,8 @@ pub(crate) enum Commands {
         river_speed: f32,
         #[arg(long, default_value_t = 0.8)]
         river_turbulence: f32,
+        #[arg(long, default_value_t = false)]
+        temporal_tiles: bool,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },

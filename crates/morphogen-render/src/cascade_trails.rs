@@ -95,6 +95,13 @@ pub struct CascadeTrailSettings {
     /// distant tiles diverge — like water turbulence.
     #[serde(default = "default_river_turbulence")]
     pub river_turbulence: f32,
+    /// When `true`, tiles are assigned distinct source frames at init rather than all sharing
+    /// the seed frame. Tile index is spread evenly across the clip so the grid becomes a
+    /// temporal slit-scan: different tiles carry different moments of the video and the drifting
+    /// rivers interweave them. `live_refresh` is ignored when this is active — patches are
+    /// captured once and held frozen forever.
+    #[serde(default)]
+    pub temporal_tiles: bool,
 }
 
 fn default_river_speed() -> f32 {
@@ -119,6 +126,7 @@ impl Default for CascadeTrailSettings {
             river_direction: 0.0,
             river_speed: default_river_speed(),
             river_turbulence: default_river_turbulence(),
+            temporal_tiles: false,
         }
     }
 }
@@ -238,6 +246,35 @@ pub fn initialize_cascade_trails(
     Ok(state)
 }
 
+/// Repaint each tile's patch from a different source frame, spreading all tiles evenly across
+/// the clip. Tile 0 gets frame 0, tile N−1 gets the last frame, intermediate tiles get
+/// proportionally intermediate frames. Call once after `initialize_cascade_trails` when
+/// `temporal_tiles` is enabled; patches stay frozen after this — do NOT call with `live_refresh`.
+pub fn assign_temporal_patches(
+    state: &mut CascadeTrailState,
+    frames: &[ImageBufferF32],
+) {
+    let n_tiles = state.patches.len();
+    let n_frames = frames.len();
+    if n_tiles == 0 || n_frames == 0 {
+        return;
+    }
+    for (i, (patch, origin)) in state
+        .patches
+        .iter_mut()
+        .zip(state.origins.iter())
+        .enumerate()
+    {
+        let frame_idx = (i * n_frames) / n_tiles;
+        let (_, fresh) =
+            sample_cell(&frames[frame_idx], origin.x0, origin.y0, origin.x1, origin.y1);
+        *patch = fresh;
+    }
+    // Re-stamp the accumulator with the newly assigned patches so frame 0 already shows the
+    // temporal spread rather than waiting until the first advance.
+    stamp_all(state);
+}
+
 /// Advance one frame: advect every tile along the steady field (`p ← p + v(p) · advect`), then
 /// — when `live_refresh` — re-sample each tile's patch from its origin cell in `current_source`,
 /// then stamp every tile onto the persistent accumulator (last-writer-wins, fixed index order).
@@ -322,7 +359,8 @@ pub fn advance_cascade_trails(
         None
     };
 
-    if settings.live_refresh {
+    // temporal_tiles: patches are frozen at temporal-assignment time — never refresh.
+    if settings.live_refresh && !settings.temporal_tiles {
         for (patch, origin) in state.patches.iter_mut().zip(state.origins.iter()) {
             let (_, fresh) = sample_cell(current_source, origin.x0, origin.y0, origin.x1, origin.y1);
             *patch = fresh;
