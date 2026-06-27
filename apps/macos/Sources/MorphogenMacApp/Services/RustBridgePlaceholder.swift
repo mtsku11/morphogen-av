@@ -155,6 +155,19 @@ enum RustBridgePlaceholder {
     )
   }
 
+  /// Stable, source-independent location for datamosh optical-flow sidecars. A
+  /// single shared directory is safe because the CLI validates each cached frame
+  /// against the modulator's checksum + dimensions and recomputes on mismatch, so
+  /// changing Source A invalidates stale entries automatically. Persisting it
+  /// across renders (rather than the CLI's per-job default) is what lets knob
+  /// tweaks reuse the flow.
+  static func defaultDatamoshFlowCacheRootURL() -> URL {
+    defaultMediaProxyRootURL().appendingPathComponent(
+      "datamosh-flow-cache",
+      isDirectory: true
+    )
+  }
+
   static func defaultQueuedTestRenderBundleURL() -> URL {
     defaultRenderQueueOutputRootURL().appendingPathComponent("job-0001", isDirectory: true)
   }
@@ -1424,6 +1437,10 @@ enum RustBridgePlaceholder {
       request.backend.cliValue
     ]
 
+    if let flowCacheDirectoryURL = request.flowCacheDirectoryURL {
+      arguments.append("--flow-cache-dir")
+      arguments.append(flowCacheDirectoryURL.path)
+    }
     if let maxFrames = request.maxFrames {
       arguments.append("--max-frames")
       arguments.append(String(maxFrames))
@@ -2497,6 +2514,11 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   let maxFrames: Int?
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  /// Stable directory for per-frame optical-flow sidecars. When set, re-renders
+  /// that change only datamosh knobs (block size, amount, preset — none affect
+  /// the flow) reuse the cached Lucas-Kanade flow instead of recomputing it, the
+  /// dominant per-frame cost. Defaulted nil so existing call sites are unchanged.
+  var flowCacheDirectoryURL: URL? = nil
 }
 
 struct DatamoshSequenceRenderQueueCommandResult {

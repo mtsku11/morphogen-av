@@ -904,7 +904,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
       remixSeed: 42,
       maxFrames: 48,
       backend: .metal,
-      projectURL: nil
+      projectURL: nil,
+      flowCacheDirectoryURL: URL(fileURLWithPath: "/tmp/datamosh-flow-cache", isDirectory: true)
     )
 
     let arguments = try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: request)
@@ -930,6 +931,31 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--remix-seed", in: arguments), "42")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
     XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
+    XCTAssertEqual(Self.value(after: "--flow-cache-dir", in: arguments), "/tmp/datamosh-flow-cache")
+  }
+
+  func testQueuedDatamoshArgumentsOmitFlowCacheWhenUnset() throws {
+    let request = DatamoshSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/datamosh-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      keyframeInterval: 0,
+      amount: 1.0,
+      blockSize: 1,
+      residualGain: 0,
+      residualDecay: 0.9,
+      blockRefreshThreshold: 0,
+      vectorRemix: .none,
+      preset: .custom,
+      remixSeed: 0,
+      maxFrames: nil,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: request)
+    XCTAssertFalse(arguments.contains("--flow-cache-dir"))
   }
 
   func testQueuedDatamoshArgumentsRejectInvalidAmount() {

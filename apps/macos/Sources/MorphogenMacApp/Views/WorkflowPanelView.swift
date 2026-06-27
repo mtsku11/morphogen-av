@@ -280,6 +280,10 @@ struct WorkflowPanelView: View {
         }
         .pickerStyle(.menu)
         .frame(width: 260)
+
+        Toggle("Reuse flow cache", isOn: $state.datamoshReuseFlowCache)
+          .toggleStyle(.checkbox)
+          .help("Cache Source A's optical flow and reuse it across renders. Changing datamosh knobs (block, amount, preset) then skips recomputing the flow — the slowest per-frame step. Turn off if Source A's content changes without re-extracting.")
       }
 
     case .videoVocoder:

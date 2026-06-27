@@ -154,6 +154,9 @@ final class AppState: ObservableObject {
   @Published var datamoshPreset: DatamoshPresetOption = .custom
   @Published var datamoshRemixSeed = 0
   @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
+  /// Reuse a shared optical-flow cache across datamosh renders so changing knobs
+  /// (which don't affect the flow) skips recomputing the dominant per-frame cost.
+  @Published var datamoshReuseFlowCache = true
   @Published var datamoshSummary = "No datamosh rendered"
   @Published var bitstreamInputVideoURL: URL?
   @Published var bitstreamCarrierVideoURL: URL?
@@ -1528,7 +1531,10 @@ final class AppState: ObservableObject {
       remixSeed: datamoshRemixSeed,
       maxFrames: effectiveOptionalMaxFrames(nil),
       backend: datamoshBackend,
-      projectURL: projectURL
+      projectURL: projectURL,
+      flowCacheDirectoryURL: datamoshReuseFlowCache
+        ? RustBridgePlaceholder.defaultDatamoshFlowCacheRootURL()
+        : nil
     )
 
     statusMessage = "Queueing datamosh render through morphogen-cli..."
