@@ -106,6 +106,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultBitstreamDatamoshRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-bitstream-datamosh-queue.json"
+    )
+  }
+
   static func defaultShowcasePreviewOutputURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-showcase-preview",
@@ -1405,6 +1411,91 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  static func queueAddBitstreamDatamoshArguments(
+    request: BitstreamDatamoshRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.fps > 0 && request.fps.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "fps must be positive and finite"
+      )
+    }
+    if request.operation == .motionTransfer && request.carrierVideoURL == nil {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "motion transfer requires a carrier video"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-datamosh-bitstream",
+      request.queueURL.path,
+      request.inputVideoURL.path,
+      request.outputRootDirectoryURL.path,
+      "--fps",
+      cliNumber(request.fps),
+      "--operation",
+      request.operation.cliValue,
+      "--p-frame-index",
+      String(request.pFrameIndex),
+      "--duplicate-count",
+      String(request.duplicateCount),
+      "--carrier-keyframes",
+      String(request.carrierKeyframes),
+      "--preset",
+      request.preset.cliValue
+    ]
+
+    if let carrierURL = request.carrierVideoURL {
+      arguments.append("--carrier-video")
+      arguments.append(carrierURL.path)
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedBitstreamDatamoshRender(
+    request: BitstreamDatamoshRenderQueueCommandRequest
+  ) throws -> BitstreamDatamoshRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddBitstreamDatamoshArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-datamosh-bitstream",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return BitstreamDatamoshRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
   static func runQueuedConvolutionalBlendSequenceRender(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> ConvolutionalBlendSequenceRenderQueueCommandResult {
@@ -2378,6 +2469,26 @@ struct DatamoshSequenceRenderQueueCommandRequest {
 }
 
 struct DatamoshSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct BitstreamDatamoshRenderQueueCommandRequest {
+  let queueURL: URL
+  let inputVideoURL: URL
+  let outputRootDirectoryURL: URL
+  let fps: Double
+  let operation: BitstreamOperationOption
+  let pFrameIndex: Int
+  let duplicateCount: Int
+  let carrierVideoURL: URL?
+  let carrierKeyframes: Int
+  let preset: BitstreamPresetOption
+  let projectURL: URL?
+}
+
+struct BitstreamDatamoshRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

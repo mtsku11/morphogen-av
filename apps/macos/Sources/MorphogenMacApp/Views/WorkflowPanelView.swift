@@ -311,6 +311,25 @@ struct WorkflowPanelView: View {
         .frame(width: 150, alignment: .leading)
         .help("0 = static grid (no trails); higher = longer ribbons.")
       }
+
+    case .bitstreamDatamosh:
+      HStack(spacing: 16) {
+        Picker("Operation", selection: $state.bitstreamOperation) {
+          ForEach(BitstreamOperationOption.allCases) { op in
+            Text(op.rawValue).tag(op)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 220)
+
+        Picker("Preset", selection: $state.bitstreamPreset) {
+          ForEach(BitstreamPresetOption.allCases) { preset in
+            Text(preset.rawValue).tag(preset)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 200)
+      }
     }
   }
 
@@ -521,6 +540,33 @@ struct WorkflowPanelView: View {
           .toggleStyle(.checkbox)
           .help("Re-sample each tile from the current frame so the video plays through the trails.")
       }
+
+    case .bitstreamDatamosh:
+      HStack(spacing: 16) {
+        Stepper(value: $state.bitstreamFps, in: 1...120, step: 1) {
+          Text("FPS \(state.bitstreamFps, specifier: "%.0f")")
+        }
+        .frame(width: 150, alignment: .leading)
+
+        if state.bitstreamOperation == .pframeDuplicate {
+          Stepper(value: $state.bitstreamPFrameIndex, in: 0...999, step: 1) {
+            Text("P-Frame \(state.bitstreamPFrameIndex)")
+          }
+          .frame(width: 160, alignment: .leading)
+
+          Stepper(value: $state.bitstreamDuplicateCount, in: 0...300, step: 1) {
+            Text("Copies \(state.bitstreamDuplicateCount)")
+          }
+          .frame(width: 160, alignment: .leading)
+        }
+
+        if state.bitstreamOperation == .motionTransfer {
+          Stepper(value: $state.bitstreamCarrierKeyframes, in: 1...60, step: 1) {
+            Text("Carrier Frames \(state.bitstreamCarrierKeyframes)")
+          }
+          .frame(width: 200, alignment: .leading)
+        }
+      }
     }
   }
 
@@ -699,6 +745,8 @@ struct WorkflowPanelView: View {
       state.runGranularMosaicPoolSequenceRender()
     case .datamosh:
       state.runDatamoshRender()
+    case .bitstreamDatamosh:
+      state.runBitstreamDatamoshRender()
     case .videoVocoder:
       state.runVideoVocoderSequenceRender()
     case .trailCascade:
@@ -908,6 +956,7 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
   case fluidAdvection = "Fluid Advection"
   case granularMosaic = "Granular Mosaic"
   case datamosh = "Datamosh"
+  case bitstreamDatamosh = "Bitstream Datamosh"
   case videoVocoder = "Video Vocoder"
   case trailCascade = "Trail Cascade"
 
@@ -925,6 +974,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "circle.grid.3x3.fill"
     case .datamosh:
       return "rectangle.stack.badge.play"
+    case .bitstreamDatamosh:
+      return "waveform.path.ecg"
     case .videoVocoder:
       return "camera.filters"
     case .trailCascade:
@@ -944,6 +995,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "A selects and rearranges B's temporal grain pool with optional audio weighting."
     case .datamosh:
       return "Controlled flow reuse, macroblock motion, residual melt, and destructive presets."
+    case .bitstreamDatamosh:
+      return "Real AVI bitstream surgery: P-frame bloom, void mosh, or motion transfer via ffmpeg."
     case .videoVocoder:
       return "A's tone structure remaps B's visual bands for video-vocoder style transfer."
     case .trailCascade:
@@ -963,6 +1016,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "A's visual and audio descriptors choose grains from B's temporal material pool."
     case .datamosh:
       return "A's temporal motion vectors are reused to drag, rot, and reshuffle B."
+    case .bitstreamDatamosh:
+      return "A's motion is spliced into the AVI bitstream; B's appearance is preserved."
     case .videoVocoder:
       return "A's tonal distribution gates or matches B's visual tone bands."
     case .trailCascade:
@@ -982,6 +1037,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "Grain B"
     case .datamosh:
       return "Mosh B"
+    case .bitstreamDatamosh:
+      return "Bitstream B"
     case .videoVocoder:
       return "Vocoder B"
     case .trailCascade:
@@ -1001,6 +1058,8 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       return "Mosaic"
     case .datamosh:
       return "Datamosh"
+    case .bitstreamDatamosh:
+      return "Bitstream"
     case .videoVocoder:
       return "Vocoder"
     case .trailCascade:
@@ -1026,6 +1085,9 @@ private enum WorkflowEffect: String, CaseIterable, Identifiable {
       analysisSignal.wrappedValue = .grainDescriptors
       modulationTarget.wrappedValue = .grainSelection
     case .datamosh:
+      analysisSignal.wrappedValue = .opticalFlow
+      modulationTarget.wrappedValue = .feedback
+    case .bitstreamDatamosh:
       analysisSignal.wrappedValue = .opticalFlow
       modulationTarget.wrappedValue = .feedback
     case .videoVocoder:

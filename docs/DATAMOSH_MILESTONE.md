@@ -394,8 +394,14 @@ recipes for destructive looks.
   command resumes from `next_frame_index`. The checkpoint rejects changed source
   provenance, settings, backend, job id, or unsafe relative state paths.
 - **Curated destructive presets.** `--preset custom|codec-bloom|structured-melt|
-  macroblock-rot|vector-shuffle` resolves to concrete deterministic settings
-  before rendering. `custom` preserves the explicit knobs. The persisted core job
+  macroblock-rot|vector-shuffle|scanline-smear|codec-engrave` resolves to concrete
+  deterministic settings before rendering. `custom` preserves the explicit knobs.
+  `scanline-smear` follows the block/vector mosh with a flow-driven horizontal
+  tear/debris pass: hard local edges reduce smear so the subject can survive while
+  flatter regions break into lateral bands, chroma dashes, white specks, and black
+  dropouts. `codec-engrave` layers on carrier-edge hatching, block stepping, RGB
+  edge offsets, and micro-contrast so the readable subject itself gains the dense
+  compressed surface detail visible in glitch stills. The persisted core job
   carries `DatamoshPreset` with `serde(default)`, queue manifests record the
   resolved settings, and SwiftUI exposes the preset picker beside Vector Remix.
 

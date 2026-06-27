@@ -148,6 +148,16 @@ final class AppState: ObservableObject {
   @Published var datamoshRemixSeed = 0
   @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
   @Published var datamoshSummary = "No datamosh rendered"
+  @Published var bitstreamInputVideoURL: URL?
+  @Published var bitstreamCarrierVideoURL: URL?
+  @Published var bitstreamOutputURL: URL?
+  @Published var bitstreamOperation: BitstreamOperationOption = .pframeDuplicate
+  @Published var bitstreamFps = 24.0
+  @Published var bitstreamPFrameIndex = 0
+  @Published var bitstreamDuplicateCount = 8
+  @Published var bitstreamCarrierKeyframes = 1
+  @Published var bitstreamPreset: BitstreamPresetOption = .custom
+  @Published var bitstreamSummary = "No bitstream datamosh rendered"
   @Published var showcaseSummary = "No showcase preview rendered"
   @Published var showcaseIntensity: ShowcaseIntensityOption = .destructive
   @Published var videoAudioRouteModulatorURL: URL?
@@ -628,6 +638,33 @@ final class AppState: ObservableObject {
 
     datamoshOutputURL = url
     statusMessage = "Datamosh output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseBitstreamInputVideo() {
+    guard let url = MediaFilePicker.chooseMediaFile(for: .modulator) else {
+      statusMessage = "Bitstream input video selection cancelled."
+      return
+    }
+    bitstreamInputVideoURL = url
+    statusMessage = "Bitstream input video selected: \(url.lastPathComponent)"
+  }
+
+  func chooseBitstreamCarrierVideo() {
+    guard let url = MediaFilePicker.chooseMediaFile(for: .carrier) else {
+      statusMessage = "Bitstream carrier video selection cancelled."
+      return
+    }
+    bitstreamCarrierVideoURL = url
+    statusMessage = "Bitstream carrier video selected: \(url.lastPathComponent)"
+  }
+
+  func chooseBitstreamOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Bitstream output selection cancelled."
+      return
+    }
+    bitstreamOutputURL = url
+    statusMessage = "Bitstream output selected: \(url.lastPathComponent)"
   }
 
   func chooseVideoAudioRouteModulatorDirectory() {
@@ -1471,6 +1508,59 @@ final class AppState: ObservableObject {
     }
   }
 
+  func runBitstreamDatamoshRender() {
+    guard let inputURL = bitstreamInputVideoURL else {
+      statusMessage = "Select an input video before rendering the bitstream datamosh."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(bitstreamOutputURL) else {
+      statusMessage = "Choose an output directory before rendering the bitstream datamosh."
+      return
+    }
+    if bitstreamOperation == .motionTransfer && bitstreamCarrierVideoURL == nil {
+      statusMessage = "Motion transfer requires a carrier video (Source B)."
+      return
+    }
+
+    let request = BitstreamDatamoshRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultBitstreamDatamoshRenderQueueURL(),
+      inputVideoURL: inputURL,
+      outputRootDirectoryURL: outputURL,
+      fps: bitstreamFps,
+      operation: bitstreamOperation,
+      pFrameIndex: bitstreamPFrameIndex,
+      duplicateCount: bitstreamDuplicateCount,
+      carrierVideoURL: bitstreamCarrierVideoURL,
+      carrierKeyframes: bitstreamCarrierKeyframes,
+      preset: bitstreamPreset,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing bitstream datamosh render..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedBitstreamDatamoshRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.bitstreamSummary = "\(bundle.frameCount) bitstream datamosh frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued bitstream datamosh ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Bitstream datamosh render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.bitstreamSummary = "Bitstream datamosh failed: \(error.localizedDescription)"
+          self.statusMessage = "Bitstream datamosh failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   func runVideoAudioRouteRender() {
     guard let modulatorURL = videoAudioRouteModulatorURL else {
       statusMessage = "Select a Source A frame directory before rendering the video→audio route."
@@ -1993,6 +2083,50 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
       return "scanline-smear"
     case .codecEngrave:
       return "codec-engrave"
+    }
+  }
+}
+
+enum BitstreamOperationOption: String, CaseIterable, Identifiable {
+  case pframeDuplicate = "P-Frame Bloom"
+  case removeKeyframe = "Void Mosh"
+  case motionTransfer = "Motion Transfer"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .pframeDuplicate:
+      return "pframe-duplicate"
+    case .removeKeyframe:
+      return "remove-keyframe"
+    case .motionTransfer:
+      return "motion-transfer"
+    }
+  }
+}
+
+enum BitstreamPresetOption: String, CaseIterable, Identifiable {
+  case custom = "Custom"
+  case bloom = "Bloom"
+  case heavyMelt = "Heavy Melt"
+  case voidMosh = "Void Mosh"
+  case motionGraft = "Motion Graft"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .custom:
+      return "custom"
+    case .bloom:
+      return "bloom"
+    case .heavyMelt:
+      return "heavy-melt"
+    case .voidMosh:
+      return "void-mosh"
+    case .motionGraft:
+      return "motion-graft"
     }
   }
 }

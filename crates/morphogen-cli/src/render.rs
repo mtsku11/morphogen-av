@@ -8,9 +8,9 @@ use morphogen_audio::{
     AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache,
 };
 use morphogen_core::{
-    AnalysisKind, DatamoshPreset, FlowSource, GrainSelectionMode, GranularAudioModulation,
-    KernelMode, RenderBackend, RenderJobAnalysisCacheProvenance, RenderJobProvenance,
-    RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
+    AnalysisKind, DatamoshBitstreamPreset, DatamoshPreset, FlowSource, GrainSelectionMode,
+    GranularAudioModulation, KernelMode, RenderBackend, RenderJobAnalysisCacheProvenance,
+    RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
     advance_cascade_trails, advance_coagulation_field, advance_dispersion_field,
@@ -952,11 +952,11 @@ pub(crate) fn resolve_datamosh_settings(
         },
         DatamoshPreset::ScanlineSmear => DatamoshSequenceSettings {
             keyframe_interval: 0,
-            amount: 3.0,
-            block_size: 4,
-            residual_gain: 1.65,
-            residual_decay: 0.98,
-            refresh_threshold: 0.22,
+            amount: 6.0,
+            block_size: 8,
+            residual_gain: 2.5,
+            residual_decay: 0.99,
+            refresh_threshold: 0.08,
             vector_remix: "sort".to_string(),
             remix_seed: request.remix_seed,
             preset: request.preset,
@@ -965,11 +965,11 @@ pub(crate) fn resolve_datamosh_settings(
         },
         DatamoshPreset::CodecEngrave => DatamoshSequenceSettings {
             keyframe_interval: 0,
-            amount: 3.35,
-            block_size: 4,
-            residual_gain: 1.9,
-            residual_decay: 0.985,
-            refresh_threshold: 0.18,
+            amount: 7.0,
+            block_size: 8,
+            residual_gain: 2.5,
+            residual_decay: 0.99,
+            refresh_threshold: 0.15,
             vector_remix: "sort".to_string(),
             remix_seed: request.remix_seed,
             preset: request.preset,
@@ -999,30 +999,45 @@ pub(crate) fn datamosh_custom_settings(
 
 pub(crate) fn datamosh_scanline_smear_settings(seed: u64) -> ScanlineSmearSettings {
     ScanlineSmearSettings {
+        line_height: 3,
+        max_shift: 360.0,
+        motion_gain: 140.0,
+        wave_amplitude: 80.0,
+        wave_frequency: 0.37,
+        smear_mix: 0.90,
+        structure_protect: 0.68,
+        chroma_burst_rate: 0.03,
+        chroma_burst_size: 18,
         seed,
-        ..ScanlineSmearSettings::default()
     }
 }
 
 pub(crate) fn datamosh_codec_scanline_smear_settings(seed: u64) -> ScanlineSmearSettings {
     ScanlineSmearSettings {
-        line_height: 1,
-        max_shift: 78.0,
-        motion_gain: 15.0,
-        wave_amplitude: 7.0,
-        wave_frequency: 0.42,
-        smear_mix: 0.78,
-        structure_protect: 0.62,
-        chroma_burst_rate: 0.008,
-        chroma_burst_size: 22,
+        line_height: 2,
+        max_shift: 400.0,
+        motion_gain: 160.0,
+        wave_amplitude: 90.0,
+        wave_frequency: 0.55,
+        smear_mix: 0.88,
+        structure_protect: 0.72,
+        chroma_burst_rate: 0.03,
+        chroma_burst_size: 18,
         seed,
     }
 }
 
 pub(crate) fn datamosh_codec_engrave_settings(seed: u64) -> CodecEngraveSettings {
     CodecEngraveSettings {
+        block_size: 4,
+        edge_gain: 14.0,
+        hatch_strength: 0.9,
+        hatch_frequency: 1.2,
+        chroma_offset: 3.5,
+        block_step: 0.35,
+        foreground_boost: 0.18,
+        micro_contrast: 1.3,
         seed,
-        ..CodecEngraveSettings::default()
     }
 }
 
@@ -1079,6 +1094,16 @@ pub(crate) fn datamosh_preset_label(preset: DatamoshPreset) -> &'static str {
         DatamoshPreset::VectorShuffle => "vector_shuffle",
         DatamoshPreset::ScanlineSmear => "scanline_smear",
         DatamoshPreset::CodecEngrave => "codec_engrave",
+    }
+}
+
+pub(crate) fn bitstream_preset_label(preset: DatamoshBitstreamPreset) -> &'static str {
+    match preset {
+        DatamoshBitstreamPreset::Custom => "custom",
+        DatamoshBitstreamPreset::Bloom => "bloom",
+        DatamoshBitstreamPreset::HeavyMelt => "heavy_melt",
+        DatamoshBitstreamPreset::VoidMosh => "void_mosh",
+        DatamoshBitstreamPreset::MotionGraft => "motion_graft",
     }
 }
 
@@ -1326,11 +1351,11 @@ pub(crate) struct DatamoshBitstreamRequest<'a> {
     pub(crate) carrier_keyframes: u32,
 }
 
-const DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM: &str =
+pub(crate) const DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM: &str =
     "datamosh_bitstream_pframe_dup_experimental_v1";
-const DATAMOSH_BITSTREAM_REMOVE_KEYFRAME_ALGORITHM: &str =
+pub(crate) const DATAMOSH_BITSTREAM_REMOVE_KEYFRAME_ALGORITHM: &str =
     "datamosh_bitstream_remove_keyframe_experimental_v1";
-const DATAMOSH_BITSTREAM_MOTION_TRANSFER_ALGORITHM: &str =
+pub(crate) const DATAMOSH_BITSTREAM_MOTION_TRANSFER_ALGORITHM: &str =
     "datamosh_bitstream_motion_transfer_experimental_v1";
 
 #[derive(Serialize)]
@@ -1479,7 +1504,7 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
     Ok(())
 }
 
-fn datamosh_bitstream_algorithm(operation: CliDatamoshBitstreamOperation) -> &'static str {
+pub(crate) fn datamosh_bitstream_algorithm(operation: CliDatamoshBitstreamOperation) -> &'static str {
     match operation {
         CliDatamoshBitstreamOperation::PframeDuplicate => DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM,
         CliDatamoshBitstreamOperation::RemoveKeyframe => {
@@ -1491,7 +1516,7 @@ fn datamosh_bitstream_algorithm(operation: CliDatamoshBitstreamOperation) -> &'s
     }
 }
 
-fn datamosh_bitstream_operation_name(operation: CliDatamoshBitstreamOperation) -> &'static str {
+pub(crate) fn datamosh_bitstream_operation_name(operation: CliDatamoshBitstreamOperation) -> &'static str {
     match operation {
         CliDatamoshBitstreamOperation::PframeDuplicate => "pframe_duplicate",
         CliDatamoshBitstreamOperation::RemoveKeyframe => "remove_keyframe",

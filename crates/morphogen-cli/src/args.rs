@@ -7,8 +7,9 @@ use morphogen_audio::{
     PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
 };
 use morphogen_core::{
-    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, DatamoshPreset,
-    FlowSource, GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole,
+    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow,
+    DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset, FlowSource,
+    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole,
     VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
     VideoAudioRouteSampling, VideoVocoderMode,
 };
@@ -624,10 +625,10 @@ pub(crate) enum Commands {
         /// Fine-detail octave weight relative to the steady big vortices (0 = pure vortices).
         #[arg(long, default_value_t = 0.1)]
         detail: f32,
-        /// Re-sample each tile's patch from its origin cell in the current source frame every
-        /// frame, so a video plays through the trails (off = frozen seed patches).
-        #[arg(long, default_value_t = true)]
-        live_refresh: bool,
+        /// Freeze tile patches at seed time. By default each tile re-samples its origin cell
+        /// from the current source frame every frame so a video plays through the trails.
+        #[arg(long)]
+        no_live_refresh: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
@@ -1197,8 +1198,10 @@ pub(crate) enum Commands {
         turbulence_scale: f32,
         #[arg(long, default_value_t = 0.1)]
         detail: f32,
-        #[arg(long, default_value_t = true)]
-        live_refresh: bool,
+        /// Freeze tile patches at seed time. By default each tile re-samples its origin cell
+        /// from the current source frame every frame so a video plays through the trails.
+        #[arg(long)]
+        no_live_refresh: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
         #[arg(long)]
@@ -1460,6 +1463,35 @@ pub(crate) enum Commands {
     QueueRunDatamoshSequence {
         queue_path: PathBuf,
     },
+    /// Queue a real bitstream datamosh job (AVI chunk surgery via ffmpeg).
+    /// Non-deterministic by design.
+    QueueAddDatamoshBitstream {
+        queue_path: PathBuf,
+        /// Input video (any ffmpeg-decodable container).
+        input_video: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 24.0)]
+        fps: f64,
+        #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamOperation::PframeDuplicate)]
+        operation: CliDatamoshBitstreamOperation,
+        #[arg(long, default_value_t = 0)]
+        p_frame_index: u32,
+        #[arg(long, default_value_t = 0)]
+        duplicate_count: u32,
+        /// motion-transfer only: the carrier (Source B) video.
+        #[arg(long)]
+        carrier_video: Option<PathBuf>,
+        #[arg(long, default_value_t = 1)]
+        carrier_keyframes: u32,
+        /// Named bitstream preset.
+        #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamPreset::Custom)]
+        preset: CliDatamoshBitstreamPreset,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueRunDatamoshBitstream {
+        queue_path: PathBuf,
+    },
     QueueAddConvolutionalBlendSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,
@@ -1579,6 +1611,38 @@ pub(crate) enum CliDatamoshBitstreamOperation {
     PframeDuplicate,
     RemoveKeyframe,
     MotionTransfer,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliDatamoshBitstreamPreset {
+    #[default]
+    Custom,
+    Bloom,
+    HeavyMelt,
+    VoidMosh,
+    MotionGraft,
+}
+
+impl From<CliDatamoshBitstreamOperation> for DatamoshBitstreamOperation {
+    fn from(value: CliDatamoshBitstreamOperation) -> Self {
+        match value {
+            CliDatamoshBitstreamOperation::PframeDuplicate => Self::PframeDuplicate,
+            CliDatamoshBitstreamOperation::RemoveKeyframe => Self::RemoveKeyframe,
+            CliDatamoshBitstreamOperation::MotionTransfer => Self::MotionTransfer,
+        }
+    }
+}
+
+impl From<CliDatamoshBitstreamPreset> for DatamoshBitstreamPreset {
+    fn from(value: CliDatamoshBitstreamPreset) -> Self {
+        match value {
+            CliDatamoshBitstreamPreset::Custom => Self::Custom,
+            CliDatamoshBitstreamPreset::Bloom => Self::Bloom,
+            CliDatamoshBitstreamPreset::HeavyMelt => Self::HeavyMelt,
+            CliDatamoshBitstreamPreset::VoidMosh => Self::VoidMosh,
+            CliDatamoshBitstreamPreset::MotionGraft => Self::MotionGraft,
+        }
+    }
 }
 
 impl From<CliWindowFunction> for WindowFunction {

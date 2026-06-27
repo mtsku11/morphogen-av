@@ -509,7 +509,7 @@ fn run() -> Result<(), CliError> {
             advect,
             turbulence_scale,
             detail,
-            live_refresh,
+            no_live_refresh,
             seed,
         } => render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
             source_dir: &source_dir,
@@ -520,7 +520,7 @@ fn run() -> Result<(), CliError> {
                 advect,
                 turbulence_scale,
                 detail,
-                live_refresh,
+                live_refresh: !no_live_refresh,
                 seed,
             },
             frames,
@@ -1026,7 +1026,7 @@ fn run() -> Result<(), CliError> {
             advect,
             turbulence_scale,
             detail,
-            live_refresh,
+            no_live_refresh,
             seed,
             project_path,
         } => queue_add_cascade_trails_sequence(QueueAddCascadeTrailsSequenceRequest {
@@ -1039,7 +1039,7 @@ fn run() -> Result<(), CliError> {
                 advect,
                 turbulence_scale,
                 detail,
-                live_refresh,
+                live_refresh: !no_live_refresh,
                 seed,
             },
             frames,
@@ -1317,6 +1317,34 @@ fn run() -> Result<(), CliError> {
         }),
         Commands::QueueRunDatamoshSequence { queue_path } => {
             queue_run_datamosh_sequence(&queue_path)
+        }
+        Commands::QueueAddDatamoshBitstream {
+            queue_path,
+            input_video,
+            output_root_dir,
+            fps,
+            operation,
+            p_frame_index,
+            duplicate_count,
+            carrier_video,
+            carrier_keyframes,
+            preset,
+            project_path,
+        } => queue_add_datamosh_bitstream(QueueAddDatamoshBitstreamRequest {
+            queue_path: &queue_path,
+            input_video: &input_video,
+            output_root_dir: &output_root_dir,
+            fps,
+            operation: operation.into(),
+            p_frame_index,
+            duplicate_count,
+            carrier_video: carrier_video.as_deref(),
+            carrier_keyframes,
+            preset: preset.into(),
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueRunDatamoshBitstream { queue_path } => {
+            queue_run_datamosh_bitstream(&queue_path)
         }
         Commands::QueueAddConvolutionalBlendSequence {
             queue_path,

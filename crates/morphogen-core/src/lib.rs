@@ -21,7 +21,8 @@ pub use node::{Node, NodeId, NodeKind, SignalType};
 pub use project::{Project, ProjectMetadata};
 pub use render_job::{
     video_audio_route_algorithm_id, ConvolutionMethod, CrossSynthFilterType, CrossSynthMode,
-    CrossSynthWindow, DatamoshPreset, ExportFormat, FlowSource, GrainSelectionMode,
+    CrossSynthWindow, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
+    ExportFormat, FlowSource, GrainSelectionMode,
     GranularAudioModulation, IrMode, KernelMode, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,

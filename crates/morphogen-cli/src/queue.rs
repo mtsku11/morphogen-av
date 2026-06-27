@@ -5,12 +5,12 @@ use std::{
 
 use morphogen_audio::{save_wav_f32, AudioBufferF32};
 use morphogen_core::{
-    AnalysisKind, DatamoshPreset, ExportFormat, FlowSource, GrainSelectionMode,
-    GranularAudioModulation, KernelMode, RenderBackend, RenderJob,
-    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
-    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
-    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode,
-    VideoVocoderMode,
+    AnalysisKind, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
+    ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, KernelMode,
+    RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
+    RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
+    RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
+    VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
     flow_displace_cpu, CascadeTrailSettings, ConvolutionBlendSettings, FieldParticleSettings,
@@ -2634,6 +2634,302 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
     }
 }
 
+pub(crate) struct QueueAddDatamoshBitstreamRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) input_video: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) fps: f64,
+    pub(crate) operation: DatamoshBitstreamOperation,
+    pub(crate) p_frame_index: u32,
+    pub(crate) duplicate_count: u32,
+    pub(crate) carrier_video: Option<&'a Path>,
+    pub(crate) carrier_keyframes: u32,
+    pub(crate) preset: DatamoshBitstreamPreset,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+fn cli_bitstream_operation(op: DatamoshBitstreamOperation) -> CliDatamoshBitstreamOperation {
+    match op {
+        DatamoshBitstreamOperation::PframeDuplicate => {
+            CliDatamoshBitstreamOperation::PframeDuplicate
+        }
+        DatamoshBitstreamOperation::RemoveKeyframe => {
+            CliDatamoshBitstreamOperation::RemoveKeyframe
+        }
+        DatamoshBitstreamOperation::MotionTransfer => {
+            CliDatamoshBitstreamOperation::MotionTransfer
+        }
+    }
+}
+
+pub(crate) fn queue_add_datamosh_bitstream(
+    request: QueueAddDatamoshBitstreamRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddDatamoshBitstreamRequest {
+        queue_path,
+        input_video,
+        output_root_dir,
+        fps,
+        mut operation,
+        mut p_frame_index,
+        mut duplicate_count,
+        carrier_video,
+        mut carrier_keyframes,
+        preset,
+        project_path,
+    } = request;
+
+    if !fps.is_finite() || fps <= 0.0 {
+        return Err(CliError::Message(
+            "fps must be finite and positive".to_string(),
+        ));
+    }
+
+    // Preset resolution: override operation + numeric knobs.
+    match preset {
+        DatamoshBitstreamPreset::Custom => {}
+        DatamoshBitstreamPreset::Bloom => {
+            operation = DatamoshBitstreamOperation::PframeDuplicate;
+            p_frame_index = 0;
+            duplicate_count = 8;
+        }
+        DatamoshBitstreamPreset::HeavyMelt => {
+            operation = DatamoshBitstreamOperation::PframeDuplicate;
+            p_frame_index = 0;
+            duplicate_count = 60;
+        }
+        DatamoshBitstreamPreset::VoidMosh => {
+            operation = DatamoshBitstreamOperation::RemoveKeyframe;
+        }
+        DatamoshBitstreamPreset::MotionGraft => {
+            operation = DatamoshBitstreamOperation::MotionTransfer;
+            carrier_keyframes = 1;
+        }
+    }
+
+    if operation == DatamoshBitstreamOperation::MotionTransfer && carrier_video.is_none() {
+        return Err(CliError::Message(
+            "motion-transfer requires --carrier-video (Source B whose appearance is kept)"
+                .to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    let mut sources = vec![RenderJobSourceProvenance {
+        source_id: "input-video".to_string(),
+        role: SourceRole::Modulator,
+        path: input_video.to_string_lossy().to_string(),
+    }];
+    if let Some(carrier) = carrier_video {
+        sources.push(RenderJobSourceProvenance {
+            source_id: "carrier-video".to_string(),
+            role: SourceRole::Carrier,
+            path: carrier.to_string_lossy().to_string(),
+        });
+    }
+    let provenance = RenderJobProvenance {
+        sources,
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|p| p.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: false,
+        },
+        task: RenderJobTask::DatamoshBitstream {
+            input_video: input_video.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            fps,
+            operation,
+            p_frame_index,
+            duplicate_count,
+            carrier_video: carrier_video.map(|p| p.to_string_lossy().to_string()),
+            carrier_keyframes,
+            preset,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued datamosh bitstream render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_datamosh_bitstream(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::DatamoshBitstream { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running datamosh bitstream jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::DatamoshBitstream {
+        input_video,
+        output_directory,
+        fps,
+        operation,
+        p_frame_index,
+        duplicate_count,
+        carrier_video,
+        carrier_keyframes,
+        preset,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a datamosh bitstream render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(&output_directory);
+    let frames_dir = output_dir.join("frames");
+    let provenance = queue.jobs[job_index].provenance.clone();
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let cli_operation = cli_bitstream_operation(operation);
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        datamosh_bitstream(DatamoshBitstreamRequest {
+            input: Path::new(&input_video),
+            output_dir: &frames_dir,
+            fps,
+            operation: cli_operation,
+            p_frame_index,
+            duplicate_count,
+            carrier: carrier_video.as_deref().map(Path::new),
+            carrier_keyframes,
+        })?;
+
+        // Count output frames written by the bitstream handler.
+        let mut frame_paths: Vec<String> = Vec::new();
+        if frames_dir.is_dir() {
+            for entry in fs::read_dir(&frames_dir)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("frame_") && name_str.ends_with(".png") {
+                    frame_paths.push(format!("frames/{name_str}"));
+                }
+            }
+        }
+        frame_paths.sort();
+        let frame_count = u32::try_from(frame_paths.len()).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate: fps,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: if fps > 0.0 {
+                frame_count as f64 / fps
+            } else {
+                0.0
+            },
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "datamosh_bitstream",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "datamosh_bitstream": {
+                "algorithm": datamosh_bitstream_algorithm(cli_operation),
+                "deterministic": false,
+                "operation": datamosh_bitstream_operation_name(cli_operation),
+                "p_frame_index": p_frame_index,
+                "duplicate_count": duplicate_count,
+                "carrier_keyframes": carrier_keyframes,
+                "fps": fps,
+                "codec": "mpeg4",
+                "ffmpeg_version": morphogen_media::ffmpeg_version().unwrap_or_default(),
+                "preset": bitstream_preset_label(preset),
+                "note": "Real bitstream datamosh: output is NOT bit-reproducible (depends on external ffmpeg MPEG-4 codec)."
+            },
+            "provenance": provenance,
+            "deterministic": false
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued datamosh bitstream job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("datamosh bitstream job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 pub(crate) struct QueueAddConvolutionalBlendSequenceRequest<'a> {
     pub(crate) queue_path: &'a Path,
     pub(crate) modulator_dir: &'a Path,
@@ -3496,6 +3792,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 "frame_sequence_audio_video_route"
             }
             RenderJobTask::FrameSequenceDatamosh { .. } => "frame_sequence_datamosh",
+            RenderJobTask::DatamoshBitstream { .. } => "datamosh_bitstream",
             RenderJobTask::FrameSequenceConvolutionBlend { .. } => {
                 "frame_sequence_convolution_blend"
             }

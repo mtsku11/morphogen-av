@@ -4,17 +4,45 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-25_
+_Last updated: 2026-06-26_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **356 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **365 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **52 passing, 0 failing** (Swift shell + service tests).
+- `swift test`: **54 passing, 0 failing** before the latest preset picker change;
+  the current run requires escalated SwiftPM module-cache writes and was rejected
+  by the approval system usage limit.
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Datamosh Codec Engrave preset.** Added `--preset codec-engrave` for the
+  denser subject-detail version of the glitch-art reference: block/vector
+  datamosh plus gentler scanline tearing, carrier-edge hatching, block stepping,
+  RGB edge offsets, and micro-contrast. It is available in CLI, queued datamosh
+  manifests, and the SwiftUI datamosh picker. Verified on `harp.mp4`
+  self-modulation; representative frame:
+  `/tmp/morphogen-harp-reference/codec-engrave-v3/frame_000035.png`, subject
+  crop: `/tmp/morphogen-harp-reference/codec-engrave-v3-frame35-subject-crop.png`,
+  contact strip: `/tmp/morphogen-harp-reference/codec-engrave-v3-strip.png`.
+  **Verified:** `cargo test --workspace` (365 passing), `cargo clippy
+  --workspace --all-targets -- -D warnings`, `cargo fmt --check`, `git diff
+  --check`, and direct harp render `render-datamosh-sequence --preset
+  codec-engrave`. `swift test` is pending for this exact change because the
+  required escalated module-cache write was rejected by the approval system.
+
+- **Datamosh Scanline Smear preset.** Added `--preset scanline-smear` for the
+  glitch-art postcard look: block/vector datamosh followed by deterministic
+  flow-driven horizontal tearing, edge-protected subject retention, and sparse
+  chroma/white/black codec debris. The preset is available in CLI, queued
+  datamosh manifests, and the SwiftUI datamosh preset picker. Verified on
+  `harp.mp4` self-modulation; inspection strip:
+  `/tmp/morphogen-harp-reference/scanline-smear-strip.png`. **Verified:**
+  `cargo test --workspace` (362 passing), `cargo clippy --workspace --all-targets
+  -- -D warnings`, `swift test` (54 passing), and direct harp render
+  `render-datamosh-sequence --preset scanline-smear`.
 
 - **Curated showcase preview path.** The CLI now has `render-showcase`, a
   product-facing short preview renderer for extracted Source A/B frame folders. It
