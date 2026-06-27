@@ -6,6 +6,8 @@ pub enum RenderError {
     InvalidImageBuffer(String),
     #[error("invalid flow field: {0}")]
     InvalidFlowField(String),
+    #[error("invalid datamosh settings: {0}")]
+    InvalidDatamoshSettings(String),
     #[error("invalid flow cache: {0}")]
     InvalidFlowCache(String),
     #[error("invalid flow feedback settings: {0}")]

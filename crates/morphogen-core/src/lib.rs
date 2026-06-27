@@ -21,12 +21,13 @@ pub use node::{Node, NodeId, NodeKind, SignalType};
 pub use project::{Project, ProjectMetadata};
 pub use render_job::{
     video_audio_route_algorithm_id, ConvolutionMethod, CrossSynthFilterType, CrossSynthMode,
-    CrossSynthWindow, ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation,
-    IrMode, KernelMode, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance,
-    RenderJobFailure, RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance,
-    RenderJobStatus, RenderJobTask, RenderQuality, RenderSettings, RenderTimingMetadata,
-    VectorRemixMode, VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
-    VideoAudioRouteSampling, VideoVocoderMode,
+    CrossSynthWindow, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
+    ExportFormat, FlowSource, GrainSelectionMode,
+    GranularAudioModulation, IrMode, KernelMode, RenderBackend, RenderJob,
+    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
+    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
+    RenderSettings, RenderTimingMetadata, VectorRemixMode, VideoAudioRouteDescriptor,
+    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 pub use render_queue::RenderQueue;
 pub use timeline::{FrameSampleRange, TimeRange, Timeline};

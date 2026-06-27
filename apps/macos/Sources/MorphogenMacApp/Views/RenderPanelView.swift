@@ -289,11 +289,11 @@ struct RenderPanelView: View {
             .pickerStyle(.segmented)
             .frame(width: 220)
 
-            Picker("Iterations", selection: $state.feedbackIterations) {
-              Text("1").tag(1)
+            LabeledContent("Feedback Passes") {
+              Text("1")
+                .foregroundStyle(.secondary)
             }
-            .pickerStyle(.menu)
-            .frame(width: 100)
+            .frame(width: 130)
 
             Picker("Output", selection: $state.feedbackOutputBitDepth) {
               ForEach(FeedbackOutputBitDepthOption.allCases) { bitDepth in
@@ -883,6 +883,14 @@ struct RenderPanelView: View {
           }
 
           HStack(spacing: 16) {
+            Picker("Preset", selection: $state.datamoshPreset) {
+              ForEach(DatamoshPresetOption.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+              }
+            }
+            .frame(width: 220)
+            .help("Curated destructive recipes override the detailed datamosh knobs at render time. Custom uses the controls below.")
+
             Picker("Vector Remix", selection: $state.datamoshVectorRemix) {
               ForEach(DatamoshVectorRemixOption.allCases) { mode in
                 Text(mode.rawValue).tag(mode)
@@ -917,6 +925,90 @@ struct RenderPanelView: View {
             state.runDatamoshRender()
           } label: {
             Label("Run Datamosh", systemImage: "slider.horizontal.3")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Bitstream Datamosh")
+            .font(.subheadline.weight(.semibold))
+            .help("Real AVI bitstream surgery: P-frame duplication, keyframe removal, or motion transfer via ffmpeg. Non-deterministic by design.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.chooseBitstreamInputVideo()
+            } label: {
+              Label("Input Video", systemImage: "film")
+            }
+            Button {
+              state.chooseBitstreamCarrierVideo()
+            } label: {
+              Label("Carrier Video", systemImage: "film")
+            }
+            .disabled(state.bitstreamOperation != .motionTransfer)
+            Button {
+              state.chooseBitstreamOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Picker("Operation", selection: $state.bitstreamOperation) {
+              ForEach(BitstreamOperationOption.allCases) { op in
+                Text(op.rawValue).tag(op)
+              }
+            }
+            .frame(width: 220)
+            .help("P-Frame Bloom duplicates a P-frame. Void Mosh removes the keyframe. Motion Transfer splices modulator motion onto carrier content.")
+
+            Picker("Preset", selection: $state.bitstreamPreset) {
+              ForEach(BitstreamPresetOption.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+              }
+            }
+            .frame(width: 200)
+            .help("Named presets override the operation and knobs. Custom uses the explicit controls.")
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.bitstreamFps, in: 1...120, step: 1) {
+              Text("FPS \(state.bitstreamFps, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            if state.bitstreamOperation == .pframeDuplicate {
+              Stepper(value: $state.bitstreamPFrameIndex, in: 0...999, step: 1) {
+                Text("P-Frame \(state.bitstreamPFrameIndex)")
+              }
+              .frame(width: 160, alignment: .leading)
+              .help("0-based P-frame index to bloom.")
+
+              Stepper(value: $state.bitstreamDuplicateCount, in: 0...300, step: 1) {
+                Text("Copies \(state.bitstreamDuplicateCount)")
+              }
+              .frame(width: 160, alignment: .leading)
+              .help("Extra copies of the target P-frame to insert.")
+            }
+
+            if state.bitstreamOperation == .motionTransfer {
+              Stepper(value: $state.bitstreamCarrierKeyframes, in: 1...60, step: 1) {
+                Text("Carrier Frames \(state.bitstreamCarrierKeyframes)")
+              }
+              .frame(width: 200, alignment: .leading)
+              .help("Leading carrier frames to keep before the modulator's motion takes over.")
+            }
+          }
+
+          Text(state.bitstreamSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runBitstreamDatamoshRender()
+          } label: {
+            Label("Run Bitstream Datamosh", systemImage: "waveform.path.ecg")
           }
         }
 

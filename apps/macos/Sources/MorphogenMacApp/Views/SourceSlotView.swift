@@ -75,6 +75,7 @@ struct SourceSlotView: View {
       }
     }
     .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
   }
 }

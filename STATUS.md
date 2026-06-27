@@ -4,16 +4,86 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-25_
+_Last updated: 2026-06-26_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **355 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **365 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **52 passing, 0 failing** (Swift shell + service tests).
+- `swift test`: **54 passing, 0 failing** before the latest preset picker change;
+  the current run requires escalated SwiftPM module-cache writes and was rejected
+  by the approval system usage limit.
+- `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Datamosh Codec Engrave preset.** Added `--preset codec-engrave` for the
+  denser subject-detail version of the glitch-art reference: block/vector
+  datamosh plus gentler scanline tearing, carrier-edge hatching, block stepping,
+  RGB edge offsets, and micro-contrast. It is available in CLI, queued datamosh
+  manifests, and the SwiftUI datamosh picker. Verified on `harp.mp4`
+  self-modulation; representative frame:
+  `/tmp/morphogen-harp-reference/codec-engrave-v3/frame_000035.png`, subject
+  crop: `/tmp/morphogen-harp-reference/codec-engrave-v3-frame35-subject-crop.png`,
+  contact strip: `/tmp/morphogen-harp-reference/codec-engrave-v3-strip.png`.
+  **Verified:** `cargo test --workspace` (365 passing), `cargo clippy
+  --workspace --all-targets -- -D warnings`, `cargo fmt --check`, `git diff
+  --check`, and direct harp render `render-datamosh-sequence --preset
+  codec-engrave`. `swift test` is pending for this exact change because the
+  required escalated module-cache write was rejected by the approval system.
+
+- **Datamosh Scanline Smear preset.** Added `--preset scanline-smear` for the
+  glitch-art postcard look: block/vector datamosh followed by deterministic
+  flow-driven horizontal tearing, edge-protected subject retention, and sparse
+  chroma/white/black codec debris. The preset is available in CLI, queued
+  datamosh manifests, and the SwiftUI datamosh preset picker. Verified on
+  `harp.mp4` self-modulation; inspection strip:
+  `/tmp/morphogen-harp-reference/scanline-smear-strip.png`. **Verified:**
+  `cargo test --workspace` (362 passing), `cargo clippy --workspace --all-targets
+  -- -D warnings`, `swift test` (54 passing), and direct harp render
+  `render-datamosh-sequence --preset scanline-smear`.
+
+- **Curated showcase preview path.** The CLI now has `render-showcase`, a
+  product-facing short preview renderer for extracted Source A/B frame folders. It
+  renders four A-modulates-B segments (flow displacement, flow feedback, temporal
+  granular mosaic, vector datamosh), writes named segment folders, a combined PNG
+  sequence, representative stills, `contact_sheet.png`, `showcase.json`, and an
+  optional H.264 `showcase.mp4` via external ffmpeg. The SwiftUI workflow exposes
+  the same path as a **Showcase Preview** action with Balanced/Destructive
+  intensity. The flow-feedback `--iterations` flag now rejects unsupported values
+  at CLI parse time, the advanced Swift panel shows the current fixed one-pass
+  contract instead of a fake menu, and datamosh presets print their resolved knob
+  set when they override manual values. **Verified:** `cargo test --workspace`
+  (358 passing), `cargo clippy --workspace --all-targets -- -D warnings`, a real
+  cello/harp `render-showcase` MP4/contact-sheet smoke, and `git diff --check`.
+  Swift build/test verification is pending because the approval system rejected
+  the required escalated SwiftPM module-cache write.
+
+- **SwiftUI workflow shell — source, route, effect, render.** The macOS app now
+  opens on a workflow-first surface instead of the dense render-parameter panel:
+  Source A/B cards sit at the top, then a guided flow handles proxy extraction,
+  modulation routing, effect-card selection, focused primary controls, output
+  selection, and render/export actions. The existing diagnostic render panel is
+  still available under an Advanced disclosure. Datamosh rendering now falls back
+  to the common extracted Source A/B frame directories and sequence output root,
+  so it works from the same workflow path as the other visual effects. **Verified:**
+  `swift build`, `swift test` (52 passing), and a short `swift run MorphogenMacApp`
+  launch check.
+
+- **Controlled Datamosh — reusable flow sidecars, disk resume, and curated presets.**
+  Direct `render-datamosh-sequence` now accepts `--flow-cache-dir`, writes/reuses
+  per-P-frame Source A temporal-flow sidecars, and records cache provenance. It also
+  writes `checkpoint.json` plus RGBA32F `state/datamosh_output_frame_*.rgba32f`
+  after every frame; `--stop-after-frame` proves a subsequent identical command can
+  resume byte-identically to an uninterrupted render. Residual-mode state persists
+  as flow-cache sidecars under `state/datamosh_residual_frame_*`. Core gained
+  `DatamoshPreset` (`custom`, `codec_bloom`, `structured_melt`, `macroblock_rot`,
+  `vector_shuffle`); CLI/queue/SwiftUI expose `--preset`, queue jobs default their
+  flow cache to `job-0001/cache/datamosh-flow`, and manifests record the resolved
+  destructive recipe. **Verified:** new smoke coverage for stop/resume equivalence,
+  flow-cache reuse/provenance, and preset resolution through queued vector-shuffle.
+  `docs/DATAMOSH_MILESTONE.md` and `docs/REFERENCE.md` updated.
 
 - **Controlled Datamosh — vector-remix tier: queue + SwiftUI exposure (full vertical slice).**
   The slice-1 CPU+CLI vector-remix now threads end-to-end. The schema mirror
@@ -69,8 +139,8 @@ _Last updated: 2026-06-25_
   structures bleed in); frame-delta 8.83/255 vs the plain carrier's 3.94 — Read-
   confirmed B's appearance + A's motion. +6 tests (5 avi splice/guard, 1 ffmpeg
   scaled-encode), workspace 343 → **349**, clippy clean. `docs/DATAMOSH_MILESTONE.md`
-  updated (Deferred → Landed). **Remaining datamosh deferrals: richer FFglitch vector
-  remix (genuinely FFglitch-class), reusable flow sidecars, disk resume, presets.**
+  updated (Deferred → Landed). **Remaining datamosh deferrals:** richer FFglitch vector
+  remix on true codec motion vectors and an optional stateless motion-transfer mode.
 
 - **Datamosh visual-regression contact sheet (tooling).**
   `scripts/datamosh-contact-sheet.py` renders every named destructive datamosh
@@ -853,22 +923,24 @@ session records otherwise.
 
 Controlled Datamosh / Motion-Vector Reuse is feature-complete for the
 deterministic render graph: recursive flow-reuse bloom, codec-simulated
-macroblocks, residual haze, per-block refresh, parity-gated Metal, queue, and
+macroblocks, residual haze, per-block refresh, vector remix, reusable Source A
+flow sidecars, disk resume, curated presets, parity-gated Metal, queue, and
 SwiftUI are all landed. The real bitstream `datamosh-bitstream` path has P-frame
-bloom and leading-keyframe removal as experimental non-deterministic CLI
-carve-outs. Remaining datamosh work is narrow: motion-transfer, optional disk
-resume, and reusable flow sidecars.
+bloom, leading-keyframe removal, and motion-transfer as experimental
+non-deterministic CLI carve-outs. Remaining datamosh work is intentionally narrow:
+true codec-motion-vector remix (FFglitch-class tooling or pure-Rust MPEG-4 MV
+inspection) and optional stateless motion-transfer if a user need appears.
 
 ## Candidate next steps
 
-1. **Datamosh real-bitstream follow-up.** Motion-transfer is the remaining large
-   bitstream step, but likely needs FFglitch-style packet/vector tooling rather
-   than the current pure-Rust AVI chunk surgery.
-2. **Visual regression/contact-sheet command.** Render representative harp/cello
-   presets and output a reviewable sheet so effect audits include pixels, not only
-   pass/fail text.
-3. **Curated destructive presets.** Add named presets such as Structured Melt,
-   Codec Bloom, Macroblock Rot, Void Mosh, Granular Collapse, and Fluid Smear.
+1. **Datamosh true-MV research spike.** Decide whether to integrate an external
+   FFglitch-class helper or inspect MPEG-4 motion vectors in Rust; keep it outside
+   the deterministic render graph until reproducibility is proven.
+2. **Visual regression/contact-sheet command hardening.** Promote the existing
+   script path into a stable CLI command only if destructive-look review becomes a
+   regular workflow.
+3. **Stateless motion-transfer variant.** Add `out[i] = warp(B[i], flowA[i])`
+   only if the recursive melt is too destructive for a specific use case.
 4. **Lower priority.** Multiscale structure-preserving morph Metal/queue/SwiftUI
    exposure remains deferred because manual testing found it visually marginal on
    real footage.

@@ -50,6 +50,57 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertThrowsError(try RustBridgePlaceholder.queueAddFrameSequenceArguments(request: request))
   }
 
+  func testShowcaseArgumentsIncludeCuratedPreviewOptions() throws {
+    let request = ShowcaseRenderCommandRequest(
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/showcase-preview", isDirectory: true),
+      intensity: .destructive,
+      framesPerEffect: 15,
+      frameRate: 12.0,
+      granularGrainSize: 48,
+      seed: 20260625,
+      backend: .cpu,
+      encodeMP4: true
+    )
+
+    let arguments = try RustBridgePlaceholder.renderShowcaseArguments(request: request)
+
+    XCTAssertEqual(arguments.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "render-showcase"])
+    XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("/tmp/showcase-preview"))
+    XCTAssertTrue(arguments.contains("--intensity"))
+    XCTAssertTrue(arguments.contains("destructive"))
+    XCTAssertTrue(arguments.contains("--frames-per-effect"))
+    XCTAssertTrue(arguments.contains("15"))
+    XCTAssertTrue(arguments.contains("--granular-grain-size"))
+    XCTAssertTrue(arguments.contains("48"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("cpu"))
+    XCTAssertFalse(arguments.contains("--no-mp4"))
+  }
+
+  func testShowcaseArgumentsCanSkipMP4() throws {
+    let request = ShowcaseRenderCommandRequest(
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/showcase-preview", isDirectory: true),
+      intensity: .balanced,
+      framesPerEffect: 2,
+      frameRate: 12.0,
+      granularGrainSize: 8,
+      seed: 1,
+      backend: .cpu,
+      encodeMP4: false
+    )
+
+    let arguments = try RustBridgePlaceholder.renderShowcaseArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--no-mp4"))
+    XCTAssertTrue(arguments.contains("balanced"))
+  }
+
   func testQueuedFeedbackSequenceArgumentsIncludeFlowControls() throws {
     let request = FeedbackSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),
@@ -283,6 +334,84 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("--backend"))
     XCTAssertTrue(arguments.contains("metal"))
     XCTAssertTrue(arguments.contains("--project-path"))
+  }
+
+  func testQueuedCascadeTrailsSequenceArgumentsIncludeCascadeControls() throws {
+    let request = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/cascade", isDirectory: true),
+      frames: 144,
+      frameRate: 24.0,
+      tileSize: 28,
+      gridSpacing: 60,
+      advect: 1.6,
+      turbulenceScale: 0.008,
+      detail: 0.1,
+      liveRefresh: true,
+      seed: 7,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-cascade-trails-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("--tile-size"))
+    XCTAssertTrue(arguments.contains("28"))
+    XCTAssertTrue(arguments.contains("--grid-spacing"))
+    XCTAssertTrue(arguments.contains("60"))
+    XCTAssertTrue(arguments.contains("--advect"))
+    XCTAssertTrue(arguments.contains("1.6"))
+    XCTAssertTrue(arguments.contains("--seed"))
+    XCTAssertTrue(arguments.contains("7"))
+    // Live refresh is on by default, so the disable flag must NOT be present.
+    XCTAssertFalse(arguments.contains("--no-live-refresh"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+
+    // Disabling live refresh appends the disable flag.
+    let frozen = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: request.queueURL,
+      sourceDirectoryURL: request.sourceDirectoryURL,
+      outputRootDirectoryURL: request.outputRootDirectoryURL,
+      frames: 144,
+      frameRate: 24.0,
+      tileSize: 28,
+      gridSpacing: 60,
+      advect: 1.6,
+      turbulenceScale: 0.008,
+      detail: 0.1,
+      liveRefresh: false,
+      seed: 7,
+      projectURL: nil
+    )
+    let frozenArguments =
+      try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: frozen)
+    XCTAssertTrue(frozenArguments.contains("--no-live-refresh"))
+  }
+
+  func testQueuedCascadeTrailsSequenceArgumentsRejectInvalidValues() {
+    let invalid = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/cascade", isDirectory: true),
+      frames: 12,
+      frameRate: 24.0,
+      tileSize: 0,
+      gridSpacing: 60,
+      advect: 1.6,
+      turbulenceScale: 0.008,
+      detail: 0.1,
+      liveRefresh: true,
+      seed: 0,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: invalid)
+    )
   }
 
   func testQueuedFluidAdvectionArgumentsRejectInvalidValues() {
@@ -753,6 +882,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.8,
       blockRefreshThreshold: 1.5,
       vectorRemix: .shuffle,
+      preset: .vectorShuffle,
       remixSeed: 42,
       maxFrames: 48,
       backend: .metal,
@@ -778,6 +908,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--residual-decay", in: arguments), "0.8")
     XCTAssertEqual(Self.value(after: "--block-refresh-threshold", in: arguments), "1.5")
     XCTAssertEqual(Self.value(after: "--vector-remix", in: arguments), "shuffle")
+    XCTAssertEqual(Self.value(after: "--preset", in: arguments), "vector-shuffle")
     XCTAssertEqual(Self.value(after: "--remix-seed", in: arguments), "42")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
     XCTAssertEqual(Self.value(after: "--max-frames", in: arguments), "48")
@@ -796,6 +927,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
@@ -820,6 +952,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
@@ -844,6 +977,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: 0,
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,
@@ -868,6 +1002,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
       residualDecay: 0.9,
       blockRefreshThreshold: -0.5, // negative refresh threshold
       vectorRemix: .none,
+      preset: .custom,
       remixSeed: 0,
       maxFrames: nil,
       backend: .cpu,

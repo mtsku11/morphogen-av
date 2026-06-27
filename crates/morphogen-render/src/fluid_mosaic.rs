@@ -739,8 +739,9 @@ impl TileAccumulator {
 
 /// Mean colour + original pixel patch of the in-bounds cell `[x0,x1)×[y0,y1)`. Shared
 /// by the initial seed and the live refresh so a refreshed tile matches a freshly seeded
-/// one byte-for-byte when the source frame is identical.
-fn sample_cell(
+/// one byte-for-byte when the source frame is identical. Also reused by
+/// [`crate::cascade_trails`] to carry source patches on its flowing tiles.
+pub(crate) fn sample_cell(
     source: &ImageBufferF32,
     x0: u32,
     y0: u32,

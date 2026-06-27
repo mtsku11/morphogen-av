@@ -14,10 +14,11 @@ Two tiers (see docs/DATAMOSH_MILESTONE.md):
     synthetic bouncing-square / stripe fixture (make-datamosh-fixture.py). They
     are byte-reproducible, so the sheet doubles as a regression baseline.
       - PASSTHROUGH      keyframe-interval 1 (== Source B; the reference row)
-      - CODEC BLOOM      full melt, smooth per-pixel bloom
+      - CODEC BLOOM      full melt, smooth per-pixel bloom (`--preset`)
       - MACROBLOCK SLIDE flow quantized to 16px blocks
-      - STRUCTURED MELT  blocks + residual-flow accumulation haze
-      - MACROBLOCK ROT   blocks + per-block keep/drop refresh (trail self-erases)
+      - STRUCTURED MELT  blocks + residual-flow accumulation haze (`--preset`)
+      - MACROBLOCK ROT   blocks + per-block keep/drop refresh (trail self-erases, `--preset`)
+      - VECTOR SHUFFLE   deterministic block-vector shuffle (`--preset`)
 
   * Bitstream modes (`datamosh-bitstream`) need ffmpeg + a real input video
     (`--video`). They mangle the compressed stream, so they are NON-deterministic
@@ -270,12 +271,11 @@ def cross_delta(seq_dir, base_dir):
 
 DET_MODES = [
     ("PASSTHROUGH", ["--keyframe-interval", "1"]),
-    ("CODEC BLOOM", ["--keyframe-interval", "0", "--amount", "1.0"]),
+    ("CODEC BLOOM", ["--preset", "codec-bloom"]),
     ("MACROBLOCK SLIDE", ["--keyframe-interval", "0", "--block-size", "16"]),
-    ("STRUCTURED MELT", ["--keyframe-interval", "0", "--block-size", "16",
-                         "--residual-gain", "1.0", "--residual-decay", "0.9"]),
-    ("MACROBLOCK ROT", ["--keyframe-interval", "0", "--block-size", "16",
-                        "--block-refresh-threshold", "1.0"]),
+    ("STRUCTURED MELT", ["--preset", "structured-melt"]),
+    ("MACROBLOCK ROT", ["--preset", "macroblock-rot"]),
+    ("VECTOR SHUFFLE", ["--preset", "vector-shuffle", "--remix-seed", "42"]),
 ]
 
 

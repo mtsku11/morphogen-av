@@ -7,9 +7,11 @@ use morphogen_audio::{
     PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
 };
 use morphogen_core::{
-    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow, FlowSource,
-    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole, VideoAudioRouteDescriptor,
-    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
+    ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow,
+    DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset, FlowSource,
+    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole,
+    VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
+    VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
     CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
@@ -325,10 +327,19 @@ pub(crate) enum Commands {
         /// Seed for `--vector-remix shuffle` (deterministic permutation).
         #[arg(long, default_value_t = 0)]
         remix_seed: u64,
+        /// Named deterministic destructive preset. `custom` keeps the explicit knobs.
+        #[arg(long, value_enum, default_value_t = CliDatamoshPreset::Custom)]
+        preset: CliDatamoshPreset,
+        /// Reuse/write per-frame temporal optical-flow sidecars.
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
+        /// Stop after writing one frame and a resumable float-state checkpoint.
+        #[arg(long)]
+        stop_after_frame: bool,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
     /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
@@ -585,6 +596,64 @@ pub(crate) enum Commands {
         /// first gather kernel; for a dense grid the CPU scatter is faster).
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+    },
+    /// Render a persistent-trail vector-field cascade (experimental, deterministic; CPU-only):
+    /// a grid of source-image tiles is advected along the shared steady-vortex field and stamped
+    /// every frame onto a canvas that is never cleared, so the image smears into ribbons that
+    /// trace the streamlines. `--grid-spacing > --tile-size` gives sparse ribbons on black;
+    /// `== --tile-size` smears the whole image. `--advect 0` holds the static grid (the off case).
+    RenderCascadeTrailsSequence {
+        /// Source video frames (PNG sequence). The first frame seeds the tile grid; with
+        /// `--live-refresh` each current frame is re-sampled at the tile origins.
+        source_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        /// Edge length (pixels) of each stamped tile / source patch.
+        #[arg(long, default_value_t = 28)]
+        tile_size: u32,
+        /// Spacing (pixels) between tile homes. `> tile-size` = sparse ribbons; `=` = dense smear.
+        #[arg(long, default_value_t = 60)]
+        grid_spacing: u32,
+        /// Field strength per frame (pixels). 0 holds the static grid (no trails); higher = longer ribbons.
+        #[arg(long, default_value_t = 1.6)]
+        advect: f32,
+        /// Vortex scale (lattice cells per pixel). Smaller = larger coherent vortices.
+        #[arg(long, default_value_t = 0.008)]
+        turbulence_scale: f32,
+        /// Fine-detail octave weight relative to the steady big vortices (0 = pure vortices).
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
+        /// Freeze tile patches at seed time. By default each tile re-samples its origin cell
+        /// from the current source frame every frame so a video plays through the trails.
+        #[arg(long)]
+        no_live_refresh: bool,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Velocity field type: "vortex" (curl-noise vortices, default) or "river" (uniform
+        /// flow + per-tile turbulence).
+        #[arg(long, value_enum, default_value_t = CliCascadeFieldType::Vortex)]
+        field: CliCascadeFieldType,
+        /// River mode: flow direction in degrees (0 = right, 90 = down, 180 = left, 270 = up).
+        #[arg(long, default_value_t = 0.0)]
+        river_direction: f32,
+        /// River mode: base flow speed in pixels per frame.
+        #[arg(long, default_value_t = 3.0)]
+        river_speed: f32,
+        /// River mode: per-tile turbulence jitter amplitude (pixels). Nearby tiles jitter
+        /// similarly (spatially coherent noise); 0 = perfectly uniform flow.
+        #[arg(long, default_value_t = 0.8)]
+        river_turbulence: f32,
+        /// Each tile captures a distinct frame of the source clip at init and holds it frozen
+        /// forever (temporal slit-scan). Tiles are spread evenly across the clip by index so the
+        /// drifting grid contains every moment of the video interweaving. Overrides live-refresh.
+        #[arg(long, default_value_t = false)]
+        temporal_tiles: bool,
+        /// Fraction of accumulator brightness lost each frame (0 = permanent trails, 0.08 =
+        /// fades to black in ~25 frames). Keeps SquarePop density stable instead of filling solid.
+        #[arg(long, default_value_t = 0.0)]
+        decay: f32,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
@@ -897,6 +966,40 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Render a short curated A-modulates-B preview bundle from extracted PNG
+    /// source directories. This is the user-facing "show me the character of the
+    /// patch" path: flow displacement, flow feedback, granular mosaic, and
+    /// controlled datamosh are rendered into named stills, a contact sheet, a
+    /// continuous PNG sequence, and optionally an H.264 MP4 via external ffmpeg.
+    RenderShowcase {
+        /// Source A video frames (PNG sequence); acts as the modulator.
+        modulator_dir: PathBuf,
+        /// Source B video frames (PNG sequence); acts as the carrier.
+        carrier_dir: PathBuf,
+        /// Output bundle directory.
+        output_dir: PathBuf,
+        /// How aggressively the curated settings should degrade the carrier.
+        #[arg(long, value_enum, default_value_t = CliShowcaseIntensity::Destructive)]
+        intensity: CliShowcaseIntensity,
+        /// Frames rendered for each effect segment.
+        #[arg(long, default_value_t = 15)]
+        frames_per_effect: usize,
+        /// Render-frame rate for the preview sequence and MP4.
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        /// Granular tile size for the mosaic segment. Larger is faster and blockier.
+        #[arg(long, default_value_t = 48)]
+        granular_grain_size: u32,
+        /// Seed shared by seeded showcase effects.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Render backend for parity-gated effects.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        /// Skip the optional H.264 MP4 encode and write only PNG outputs.
+        #[arg(long)]
+        no_mp4: bool,
+    },
     RenderFeedbackSequence {
         modulator_dir: PathBuf,
         carrier_dir: PathBuf,
@@ -909,7 +1012,7 @@ pub(crate) enum Commands {
         feedback_mix: f32,
         #[arg(long, default_value_t = 0.995)]
         decay: f32,
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, value_parser = parse_feedback_iterations)]
         iterations: u32,
         #[arg(long, default_value_t = 0.0)]
         structure_mix: f32,
@@ -988,7 +1091,7 @@ pub(crate) enum Commands {
         feedback_mix: f32,
         #[arg(long, default_value_t = 0.995)]
         decay: f32,
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, value_parser = parse_feedback_iterations)]
         iterations: u32,
         #[arg(long, default_value_t = 0.0)]
         structure_mix: f32,
@@ -1097,6 +1200,45 @@ pub(crate) enum Commands {
         seed: u64,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueAddCascadeTrailsSequence {
+        queue_path: PathBuf,
+        source_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 28)]
+        tile_size: u32,
+        #[arg(long, default_value_t = 60)]
+        grid_spacing: u32,
+        #[arg(long, default_value_t = 1.6)]
+        advect: f32,
+        #[arg(long, default_value_t = 0.008)]
+        turbulence_scale: f32,
+        #[arg(long, default_value_t = 0.1)]
+        detail: f32,
+        /// Freeze tile patches at seed time. By default each tile re-samples its origin cell
+        /// from the current source frame every frame so a video plays through the trails.
+        #[arg(long)]
+        no_live_refresh: bool,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long, value_enum, default_value_t = CliCascadeFieldType::Vortex)]
+        field: CliCascadeFieldType,
+        #[arg(long, default_value_t = 0.0)]
+        river_direction: f32,
+        #[arg(long, default_value_t = 3.0)]
+        river_speed: f32,
+        #[arg(long, default_value_t = 0.8)]
+        river_turbulence: f32,
+        #[arg(long, default_value_t = false)]
+        temporal_tiles: bool,
+        #[arg(long, default_value_t = 0.0)]
+        decay: f32,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -1340,6 +1482,12 @@ pub(crate) enum Commands {
         /// Seed for `--vector-remix shuffle` (deterministic permutation).
         #[arg(long, default_value_t = 0)]
         remix_seed: u64,
+        /// Named deterministic destructive preset. `custom` keeps the explicit knobs.
+        #[arg(long, value_enum, default_value_t = CliDatamoshPreset::Custom)]
+        preset: CliDatamoshPreset,
+        /// Reuse/write per-frame temporal optical-flow sidecars.
+        #[arg(long)]
+        flow_cache_dir: Option<PathBuf>,
         #[arg(long)]
         max_frames: Option<u32>,
         #[arg(long)]
@@ -1348,6 +1496,35 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
     },
     QueueRunDatamoshSequence {
+        queue_path: PathBuf,
+    },
+    /// Queue a real bitstream datamosh job (AVI chunk surgery via ffmpeg).
+    /// Non-deterministic by design.
+    QueueAddDatamoshBitstream {
+        queue_path: PathBuf,
+        /// Input video (any ffmpeg-decodable container).
+        input_video: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 24.0)]
+        fps: f64,
+        #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamOperation::PframeDuplicate)]
+        operation: CliDatamoshBitstreamOperation,
+        #[arg(long, default_value_t = 0)]
+        p_frame_index: u32,
+        #[arg(long, default_value_t = 0)]
+        duplicate_count: u32,
+        /// motion-transfer only: the carrier (Source B) video.
+        #[arg(long)]
+        carrier_video: Option<PathBuf>,
+        #[arg(long, default_value_t = 1)]
+        carrier_keyframes: u32,
+        /// Named bitstream preset.
+        #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamPreset::Custom)]
+        preset: CliDatamoshBitstreamPreset,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueRunDatamoshBitstream {
         queue_path: PathBuf,
     },
     QueueAddConvolutionalBlendSequence {
@@ -1394,6 +1571,9 @@ pub(crate) enum Commands {
         queue_path: PathBuf,
     },
     QueueRunFieldParticlesSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunCascadeTrailsSequence {
         queue_path: PathBuf,
     },
     QueueRunGranularMosaicSequence {
@@ -1453,6 +1633,17 @@ pub(crate) enum Commands {
     },
 }
 
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliCascadeFieldType {
+    #[default]
+    Vortex,
+    River,
+    RiverRoot,
+    CenterSplit,
+    Oscillate,
+    SquarePop,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum CliWindowFunction {
     Hann,
@@ -1466,6 +1657,38 @@ pub(crate) enum CliDatamoshBitstreamOperation {
     PframeDuplicate,
     RemoveKeyframe,
     MotionTransfer,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliDatamoshBitstreamPreset {
+    #[default]
+    Custom,
+    Bloom,
+    HeavyMelt,
+    VoidMosh,
+    MotionGraft,
+}
+
+impl From<CliDatamoshBitstreamOperation> for DatamoshBitstreamOperation {
+    fn from(value: CliDatamoshBitstreamOperation) -> Self {
+        match value {
+            CliDatamoshBitstreamOperation::PframeDuplicate => Self::PframeDuplicate,
+            CliDatamoshBitstreamOperation::RemoveKeyframe => Self::RemoveKeyframe,
+            CliDatamoshBitstreamOperation::MotionTransfer => Self::MotionTransfer,
+        }
+    }
+}
+
+impl From<CliDatamoshBitstreamPreset> for DatamoshBitstreamPreset {
+    fn from(value: CliDatamoshBitstreamPreset) -> Self {
+        match value {
+            CliDatamoshBitstreamPreset::Custom => Self::Custom,
+            CliDatamoshBitstreamPreset::Bloom => Self::Bloom,
+            CliDatamoshBitstreamPreset::HeavyMelt => Self::HeavyMelt,
+            CliDatamoshBitstreamPreset::VoidMosh => Self::VoidMosh,
+            CliDatamoshBitstreamPreset::MotionGraft => Self::MotionGraft,
+        }
+    }
 }
 
 impl From<CliWindowFunction> for WindowFunction {
@@ -1801,12 +2024,58 @@ pub(crate) enum CliVectorRemixMode {
     Shuffle,
 }
 
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliDatamoshPreset {
+    #[default]
+    Custom,
+    CodecBloom,
+    StructuredMelt,
+    MacroblockRot,
+    VectorShuffle,
+    ScanlineSmear,
+    CodecEngrave,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliShowcaseIntensity {
+    /// Clearer source relationship, moderate degradation.
+    Balanced,
+    /// Stronger beyond-recognition preview settings.
+    #[default]
+    Destructive,
+}
+
+fn parse_feedback_iterations(value: &str) -> Result<u32, String> {
+    let parsed = value
+        .parse::<u32>()
+        .map_err(|_| "iterations must be an integer".to_string())?;
+    if parsed == 1 {
+        Ok(parsed)
+    } else {
+        Err("the current flow-feedback renderer supports exactly one iteration; use feedback amount, mix, decay, and structure instead".to_string())
+    }
+}
+
 impl From<CliVectorRemixMode> for VectorRemixMode {
     fn from(value: CliVectorRemixMode) -> Self {
         match value {
             CliVectorRemixMode::None => Self::None,
             CliVectorRemixMode::Sort => Self::Sort,
             CliVectorRemixMode::Shuffle => Self::Shuffle,
+        }
+    }
+}
+
+impl From<CliDatamoshPreset> for DatamoshPreset {
+    fn from(value: CliDatamoshPreset) -> Self {
+        match value {
+            CliDatamoshPreset::Custom => Self::Custom,
+            CliDatamoshPreset::CodecBloom => Self::CodecBloom,
+            CliDatamoshPreset::StructuredMelt => Self::StructuredMelt,
+            CliDatamoshPreset::MacroblockRot => Self::MacroblockRot,
+            CliDatamoshPreset::VectorShuffle => Self::VectorShuffle,
+            CliDatamoshPreset::ScanlineSmear => Self::ScanlineSmear,
+            CliDatamoshPreset::CodecEngrave => Self::CodecEngrave,
         }
     }
 }

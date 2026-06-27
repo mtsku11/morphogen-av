@@ -5,18 +5,19 @@ use std::{
 
 use morphogen_audio::{save_wav_f32, AudioBufferF32};
 use morphogen_core::{
-    AnalysisKind, ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation,
-    KernelMode, RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
+    AnalysisKind, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
+    ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, KernelMode,
+    RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
     RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
     RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
     VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
-    datamosh_algorithm, flow_displace_cpu, ConvolutionBlendSettings, FieldParticleSettings,
-    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
-    GranularMosaicSettings, StructureMode, VideoVocoderSettings, FIELD_PARTICLES_ALGORITHM,
-    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
-    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+    flow_displace_cpu, CascadeFieldType, CascadeTrailSettings, ConvolutionBlendSettings,
+    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, GranularMosaicSettings, StructureMode, VideoVocoderSettings,
+    CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
+    FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
 use crate::args::*;
@@ -498,6 +499,75 @@ pub(crate) fn queue_add_field_particles_sequence(
     queue.save_json(queue_path)?;
     println!(
         "queued field-particles render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) struct QueueAddCascadeTrailsSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: CascadeTrailSettings,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_cascade_trails_sequence(
+    request: QueueAddCascadeTrailsSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddCascadeTrailsSequenceRequest {
+        queue_path,
+        source_dir,
+        output_root_dir,
+        settings,
+        frames,
+        frame_rate,
+        project_path,
+    } = request;
+    settings.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceCascadeTrails {
+            source_frame_directory: source_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            tile_size: settings.tile_size,
+            grid_spacing: settings.grid_spacing,
+            advect: settings.advect,
+            turbulence_scale: settings.turbulence_scale,
+            detail: settings.detail,
+            live_refresh: settings.live_refresh,
+            seed: settings.seed,
+            field: cascade_field_type_label(settings.field),
+            river_direction: settings.river_direction,
+            river_speed: settings.river_speed,
+            river_turbulence: settings.river_turbulence,
+            temporal_tiles: settings.temporal_tiles,
+            decay: settings.decay,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            source_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued cascade-trails render job {job_id} in {}",
         queue_path.display()
     );
     Ok(())
@@ -1502,6 +1572,105 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
     )
 }
 
+pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceCascadeTrails { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running cascade-trails jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceCascadeTrails {
+        source_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        tile_size,
+        grid_spacing,
+        advect,
+        turbulence_scale,
+        detail,
+        live_refresh,
+        seed,
+        field,
+        river_direction,
+        river_speed,
+        river_turbulence,
+        temporal_tiles,
+        decay,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a cascade-trails render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = CascadeTrailSettings {
+        tile_size,
+        grid_spacing,
+        advect,
+        turbulence_scale,
+        detail,
+        live_refresh,
+        seed,
+        field: parse_cascade_field_type(&field),
+        river_direction,
+        river_speed,
+        river_turbulence,
+        temporal_tiles,
+        decay,
+    };
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
+            source_dir: Path::new(&source_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames: frames as usize,
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_cascade_trails",
+            effect_key: "trail_cascade",
+            effect: serde_json::json!({
+                "algorithm": CASCADE_TRAIL_ALGORITHM,
+                "settings": settings,
+                "backend": "CPU"
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "cascade-trails",
+    )
+}
+
 pub(crate) fn queue_run_granular_mosaic_sequence(queue_path: &Path) -> Result<(), CliError> {
     let mut queue = RenderQueue::load_json(queue_path)?;
     let job_index = queue
@@ -2204,6 +2373,8 @@ pub(crate) struct QueueAddDatamoshSequenceRequest<'a> {
     pub(crate) refresh_threshold: f32,
     pub(crate) vector_remix: VectorRemixMode,
     pub(crate) remix_seed: u64,
+    pub(crate) preset: DatamoshPreset,
+    pub(crate) flow_cache_dir: Option<&'a Path>,
     pub(crate) max_frames: Option<u32>,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) backend: RenderBackend,
@@ -2217,15 +2388,6 @@ fn render_vector_remix(mode: VectorRemixMode) -> morphogen_render::VectorRemixMo
         VectorRemixMode::None => morphogen_render::VectorRemixMode::None,
         VectorRemixMode::Sort => morphogen_render::VectorRemixMode::Sort,
         VectorRemixMode::Shuffle => morphogen_render::VectorRemixMode::Shuffle,
-    }
-}
-
-/// Manifest label for the persisted vector-remix mode.
-fn vector_remix_label(mode: VectorRemixMode) -> &'static str {
-    match mode {
-        VectorRemixMode::None => "none",
-        VectorRemixMode::Sort => "sort",
-        VectorRemixMode::Shuffle => "shuffle",
     }
 }
 
@@ -2245,6 +2407,8 @@ pub(crate) fn queue_add_datamosh_sequence(
         refresh_threshold,
         vector_remix,
         remix_seed,
+        preset,
+        flow_cache_dir,
         max_frames,
         project_path,
         backend,
@@ -2282,21 +2446,11 @@ pub(crate) fn queue_add_datamosh_sequence(
     };
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
     let job_output_dir = output_root_dir.join(&job_id);
-    let provenance = RenderJobProvenance {
-        sources: vec![
-            RenderJobSourceProvenance {
-                source_id: "source-a-frames".to_string(),
-                role: SourceRole::Modulator,
-                path: modulator_dir.to_string_lossy().to_string(),
-            },
-            RenderJobSourceProvenance {
-                source_id: "source-b-frames".to_string(),
-                role: SourceRole::Carrier,
-                path: carrier_dir.to_string_lossy().to_string(),
-            },
-        ],
-        analysis_caches: Vec::new(),
-    };
+    let flow_cache_directory = flow_cache_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| job_output_dir.join("cache").join("datamosh-flow"));
+    let provenance =
+        datamosh_sequence_provenance(modulator_dir, carrier_dir, Some(&flow_cache_directory));
 
     queue.enqueue(RenderJob {
         id: job_id.clone(),
@@ -2326,6 +2480,8 @@ pub(crate) fn queue_add_datamosh_sequence(
             block_refresh_threshold: refresh_threshold,
             vector_remix,
             remix_seed,
+            preset,
+            flow_cache_directory: Some(flow_cache_directory.to_string_lossy().to_string()),
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -2373,6 +2529,8 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
         block_refresh_threshold,
         vector_remix,
         remix_seed,
+        preset,
+        flow_cache_directory,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2380,14 +2538,17 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
         ));
     };
     let output_dir = PathBuf::from(output_directory);
+    let flow_cache_path = flow_cache_directory.as_deref().map(PathBuf::from);
+    let provenance = queue.jobs[job_index].provenance.clone();
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
-        let render_result = render_datamosh_sequence(DatamoshSequenceRequest {
+        let render_request = DatamoshSequenceRequest {
             modulator_dir: Path::new(&modulator_frame_directory),
             carrier_dir: Path::new(&carrier_frame_directory),
             output_dir: &output_dir.join("frames"),
+            flow_cache_dir: flow_cache_path.as_deref(),
             keyframe_interval,
             amount,
             block_size,
@@ -2396,9 +2557,15 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             refresh_threshold: block_refresh_threshold,
             vector_remix: render_vector_remix(vector_remix),
             remix_seed,
+            preset,
             backend,
             max_frames: max_frames.map(|value| value as usize),
-        })?;
+            job_id: &job_id,
+            provenance: provenance.as_ref(),
+            stop_after_frame: false,
+        };
+        let resolved_settings = resolve_datamosh_settings(&render_request);
+        let render_result = render_datamosh_sequence(render_request)?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
         })?;
@@ -2429,23 +2596,22 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 "audio_sample_count": timing.audio_sample_count
             },
             "datamosh": {
-                "algorithm": datamosh_algorithm(
-                    block_size,
-                    residual_gain,
-                    block_refresh_threshold,
-                    render_vector_remix(vector_remix),
-                ),
-                "keyframe_interval": keyframe_interval,
-                "amount": amount,
-                "block_size": block_size,
-                "residual_gain": residual_gain,
-                "residual_decay": residual_decay,
-                "block_refresh_threshold": block_refresh_threshold,
-                "vector_remix": vector_remix_label(vector_remix),
-                "remix_seed": remix_seed,
+                "algorithm": datamosh_sequence_algorithm(&resolved_settings),
+                "preset": datamosh_preset_label(preset),
+                "keyframe_interval": resolved_settings.keyframe_interval,
+                "amount": resolved_settings.amount,
+                "block_size": resolved_settings.block_size,
+                "residual_gain": resolved_settings.residual_gain,
+                "residual_decay": resolved_settings.residual_decay,
+                "block_refresh_threshold": resolved_settings.refresh_threshold,
+                "vector_remix": resolved_settings.vector_remix,
+                "remix_seed": resolved_settings.remix_seed,
+                "scanline_smear": resolved_settings.scanline_smear,
+                "codec_engrave": resolved_settings.codec_engrave,
+                "flow_cache_directory": flow_cache_directory,
                 "backend": render_backend_label(backend)
             },
-            "provenance": queue.jobs[job_index].provenance,
+            "provenance": provenance,
             "deterministic": true
         });
         fs::write(
@@ -2481,6 +2647,324 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             });
             queue.save_json(queue_path)?;
             eprintln!("datamosh job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
+pub(crate) struct QueueAddDatamoshBitstreamRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) input_video: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) fps: f64,
+    pub(crate) operation: DatamoshBitstreamOperation,
+    pub(crate) p_frame_index: u32,
+    pub(crate) duplicate_count: u32,
+    pub(crate) carrier_video: Option<&'a Path>,
+    pub(crate) carrier_keyframes: u32,
+    pub(crate) preset: DatamoshBitstreamPreset,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+fn cascade_field_type_label(field: CascadeFieldType) -> String {
+    match field {
+        CascadeFieldType::Vortex => "vortex".to_string(),
+        CascadeFieldType::River => "river".to_string(),
+        CascadeFieldType::RiverRoot => "river-root".to_string(),
+        CascadeFieldType::CenterSplit => "center-split".to_string(),
+        CascadeFieldType::Oscillate => "oscillate".to_string(),
+        CascadeFieldType::SquarePop => "square-pop".to_string(),
+    }
+}
+
+fn parse_cascade_field_type(s: &str) -> CascadeFieldType {
+    match s {
+        "river" => CascadeFieldType::River,
+        "river-root" => CascadeFieldType::RiverRoot,
+        "center-split" => CascadeFieldType::CenterSplit,
+        "oscillate" => CascadeFieldType::Oscillate,
+        "square-pop" => CascadeFieldType::SquarePop,
+        _ => CascadeFieldType::Vortex,
+    }
+}
+
+fn cli_bitstream_operation(op: DatamoshBitstreamOperation) -> CliDatamoshBitstreamOperation {
+    match op {
+        DatamoshBitstreamOperation::PframeDuplicate => {
+            CliDatamoshBitstreamOperation::PframeDuplicate
+        }
+        DatamoshBitstreamOperation::RemoveKeyframe => {
+            CliDatamoshBitstreamOperation::RemoveKeyframe
+        }
+        DatamoshBitstreamOperation::MotionTransfer => {
+            CliDatamoshBitstreamOperation::MotionTransfer
+        }
+    }
+}
+
+pub(crate) fn queue_add_datamosh_bitstream(
+    request: QueueAddDatamoshBitstreamRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddDatamoshBitstreamRequest {
+        queue_path,
+        input_video,
+        output_root_dir,
+        fps,
+        mut operation,
+        mut p_frame_index,
+        mut duplicate_count,
+        carrier_video,
+        mut carrier_keyframes,
+        preset,
+        project_path,
+    } = request;
+
+    if !fps.is_finite() || fps <= 0.0 {
+        return Err(CliError::Message(
+            "fps must be finite and positive".to_string(),
+        ));
+    }
+
+    // Preset resolution: override operation + numeric knobs.
+    match preset {
+        DatamoshBitstreamPreset::Custom => {}
+        DatamoshBitstreamPreset::Bloom => {
+            operation = DatamoshBitstreamOperation::PframeDuplicate;
+            p_frame_index = 0;
+            duplicate_count = 8;
+        }
+        DatamoshBitstreamPreset::HeavyMelt => {
+            operation = DatamoshBitstreamOperation::PframeDuplicate;
+            p_frame_index = 0;
+            duplicate_count = 60;
+        }
+        DatamoshBitstreamPreset::VoidMosh => {
+            operation = DatamoshBitstreamOperation::RemoveKeyframe;
+        }
+        DatamoshBitstreamPreset::MotionGraft => {
+            operation = DatamoshBitstreamOperation::MotionTransfer;
+            carrier_keyframes = 1;
+        }
+    }
+
+    if operation == DatamoshBitstreamOperation::MotionTransfer && carrier_video.is_none() {
+        return Err(CliError::Message(
+            "motion-transfer requires --carrier-video (Source B whose appearance is kept)"
+                .to_string(),
+        ));
+    }
+
+    let mut queue = if queue_path.exists() {
+        RenderQueue::load_json(queue_path)?
+    } else {
+        RenderQueue::default()
+    };
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    let mut sources = vec![RenderJobSourceProvenance {
+        source_id: "input-video".to_string(),
+        role: SourceRole::Modulator,
+        path: input_video.to_string_lossy().to_string(),
+    }];
+    if let Some(carrier) = carrier_video {
+        sources.push(RenderJobSourceProvenance {
+            source_id: "carrier-video".to_string(),
+            role: SourceRole::Carrier,
+            path: carrier.to_string_lossy().to_string(),
+        });
+    }
+    let provenance = RenderJobProvenance {
+        sources,
+        analysis_caches: Vec::new(),
+    };
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|p| p.to_string_lossy().to_string()),
+        settings: RenderSettings {
+            width: 1920,
+            height: 1080,
+            quality: RenderQuality::HighQualityOffline,
+            export_format: ExportFormat::ImageSequence {
+                extension: "png".to_string(),
+                bit_depth: 8,
+            },
+            temporal_supersampling: 1,
+            deterministic: false,
+        },
+        task: RenderJobTask::DatamoshBitstream {
+            input_video: input_video.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            fps,
+            operation,
+            p_frame_index,
+            duplicate_count,
+            carrier_video: carrier_video.map(|p| p.to_string_lossy().to_string()),
+            carrier_keyframes,
+            preset,
+        },
+        provenance: Some(provenance),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued datamosh bitstream render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_datamosh_bitstream(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::DatamoshBitstream { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running datamosh bitstream jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::DatamoshBitstream {
+        input_video,
+        output_directory,
+        fps,
+        operation,
+        p_frame_index,
+        duplicate_count,
+        carrier_video,
+        carrier_keyframes,
+        preset,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a datamosh bitstream render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(&output_directory);
+    let frames_dir = output_dir.join("frames");
+    let provenance = queue.jobs[job_index].provenance.clone();
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let cli_operation = cli_bitstream_operation(operation);
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        datamosh_bitstream(DatamoshBitstreamRequest {
+            input: Path::new(&input_video),
+            output_dir: &frames_dir,
+            fps,
+            operation: cli_operation,
+            p_frame_index,
+            duplicate_count,
+            carrier: carrier_video.as_deref().map(Path::new),
+            carrier_keyframes,
+        })?;
+
+        // Count output frames written by the bitstream handler.
+        let mut frame_paths: Vec<String> = Vec::new();
+        if frames_dir.is_dir() {
+            for entry in fs::read_dir(&frames_dir)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("frame_") && name_str.ends_with(".png") {
+                    frame_paths.push(format!("frames/{name_str}"));
+                }
+            }
+        }
+        frame_paths.sort();
+        let frame_count = u32::try_from(frame_paths.len()).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate: fps,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: if fps > 0.0 {
+                frame_count as f64 / fps
+            } else {
+                0.0
+            },
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+
+        let manifest = serde_json::json!({
+            "job_id": job_id,
+            "status": "complete",
+            "task": "datamosh_bitstream",
+            "frames": frame_paths,
+            "audio_stems": [],
+            "timing": {
+                "frame_rate": timing.frame_rate,
+                "frame_count": timing.frame_count,
+                "start_seconds": timing.start_seconds,
+                "duration_seconds": timing.duration_seconds,
+                "sample_rate": timing.sample_rate,
+                "audio_sample_count": timing.audio_sample_count
+            },
+            "datamosh_bitstream": {
+                "algorithm": datamosh_bitstream_algorithm(cli_operation),
+                "deterministic": false,
+                "operation": datamosh_bitstream_operation_name(cli_operation),
+                "p_frame_index": p_frame_index,
+                "duplicate_count": duplicate_count,
+                "carrier_keyframes": carrier_keyframes,
+                "fps": fps,
+                "codec": "mpeg4",
+                "ffmpeg_version": morphogen_media::ffmpeg_version().unwrap_or_default(),
+                "preset": bitstream_preset_label(preset),
+                "note": "Real bitstream datamosh: output is NOT bit-reproducible (depends on external ffmpeg MPEG-4 codec)."
+            },
+            "provenance": provenance,
+            "deterministic": false
+        });
+        fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        write_frame_sequence_checkpoint(&job_id, &output_dir, &frame_paths, frame_count)?;
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued datamosh bitstream job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("datamosh bitstream job {job_id} failed: {error}");
             Err(error)
         }
     }
@@ -3338,6 +3822,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 "frame_sequence_optical_flow_advect"
             }
             RenderJobTask::FrameSequenceFieldParticles { .. } => "frame_sequence_field_particles",
+            RenderJobTask::FrameSequenceCascadeTrails { .. } => "frame_sequence_cascade_trails",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",
             RenderJobTask::FrameSequenceGranularMosaicPool { .. } => {
                 "frame_sequence_granular_mosaic_pool"
@@ -3347,6 +3832,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
                 "frame_sequence_audio_video_route"
             }
             RenderJobTask::FrameSequenceDatamosh { .. } => "frame_sequence_datamosh",
+            RenderJobTask::DatamoshBitstream { .. } => "datamosh_bitstream",
             RenderJobTask::FrameSequenceConvolutionBlend { .. } => {
                 "frame_sequence_convolution_blend"
             }

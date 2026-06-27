@@ -1,9 +1,10 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
-    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
-    GranularMosaicSettings, StructureMode, VideoVocoderSettings,
+    CascadeFieldType, CascadeTrailSettings, CoagulationSettings, ConvolutionBlendSettings,
+    DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, StructureMode,
+    VideoVocoderSettings,
 };
 
 mod args;
@@ -13,12 +14,14 @@ mod imaging;
 mod project;
 mod queue;
 mod render;
+mod showcase;
 use args::*;
 use audio::*;
 use error::CliError;
 use project::*;
 use queue::*;
 use render::*;
+use showcase::*;
 
 fn main() {
     if let Err(error) = run() {
@@ -296,12 +299,16 @@ fn run() -> Result<(), CliError> {
             block_refresh_threshold,
             vector_remix,
             remix_seed,
+            preset,
+            flow_cache_dir,
             backend,
             max_frames,
+            stop_after_frame,
         } => render_datamosh_sequence(DatamoshSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
             output_dir: &output_dir,
+            flow_cache_dir: flow_cache_dir.as_deref(),
             keyframe_interval,
             amount,
             block_size,
@@ -310,8 +317,12 @@ fn run() -> Result<(), CliError> {
             refresh_threshold: block_refresh_threshold,
             vector_remix: vector_remix.into(),
             remix_seed,
+            preset: preset.into(),
             backend: backend.into(),
             max_frames,
+            job_id: "direct-datamosh",
+            provenance: None,
+            stop_after_frame,
         })
         .map(|_| ()),
         Commands::DatamoshBitstream {
@@ -487,6 +498,51 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+        })
+        .map(|_| ()),
+        Commands::RenderCascadeTrailsSequence {
+            source_dir,
+            output_dir,
+            frames,
+            tile_size,
+            grid_spacing,
+            advect,
+            turbulence_scale,
+            detail,
+            no_live_refresh,
+            seed,
+            field,
+            river_direction,
+            river_speed,
+            river_turbulence,
+            temporal_tiles,
+            decay,
+        } => render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
+            source_dir: &source_dir,
+            output_dir: &output_dir,
+            settings: CascadeTrailSettings {
+                tile_size,
+                grid_spacing,
+                advect,
+                turbulence_scale,
+                detail,
+                live_refresh: !no_live_refresh,
+                seed,
+                field: match field {
+                    args::CliCascadeFieldType::Vortex => CascadeFieldType::Vortex,
+                    args::CliCascadeFieldType::River => CascadeFieldType::River,
+                    args::CliCascadeFieldType::RiverRoot => CascadeFieldType::RiverRoot,
+                    args::CliCascadeFieldType::CenterSplit => CascadeFieldType::CenterSplit,
+                    args::CliCascadeFieldType::Oscillate => CascadeFieldType::Oscillate,
+                    args::CliCascadeFieldType::SquarePop => CascadeFieldType::SquarePop,
+                },
+                river_direction,
+                river_speed,
+                river_turbulence,
+                temporal_tiles,
+                decay,
+            },
+            frames,
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {
@@ -713,6 +769,29 @@ fn run() -> Result<(), CliError> {
             },
         })
         .map(|_| ()),
+        Commands::RenderShowcase {
+            modulator_dir,
+            carrier_dir,
+            output_dir,
+            intensity,
+            frames_per_effect,
+            frame_rate,
+            granular_grain_size,
+            seed,
+            backend,
+            no_mp4,
+        } => render_showcase(ShowcaseRenderRequest {
+            modulator_dir: &modulator_dir,
+            carrier_dir: &carrier_dir,
+            output_dir: &output_dir,
+            intensity,
+            frames_per_effect,
+            frame_rate,
+            granular_grain_size,
+            seed,
+            backend: backend.into(),
+            encode_mp4: !no_mp4,
+        }),
         Commands::RenderFeedbackSequence {
             modulator_dir,
             carrier_dir,
@@ -953,6 +1032,56 @@ fn run() -> Result<(), CliError> {
             frames,
             frame_rate,
             backend: backend.into(),
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueAddCascadeTrailsSequence {
+            queue_path,
+            source_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            tile_size,
+            grid_spacing,
+            advect,
+            turbulence_scale,
+            detail,
+            no_live_refresh,
+            seed,
+            field,
+            river_direction,
+            river_speed,
+            river_turbulence,
+            temporal_tiles,
+            decay,
+            project_path,
+        } => queue_add_cascade_trails_sequence(QueueAddCascadeTrailsSequenceRequest {
+            queue_path: &queue_path,
+            source_dir: &source_dir,
+            output_root_dir: &output_root_dir,
+            settings: CascadeTrailSettings {
+                tile_size,
+                grid_spacing,
+                advect,
+                turbulence_scale,
+                detail,
+                live_refresh: !no_live_refresh,
+                seed,
+                field: match field {
+                    args::CliCascadeFieldType::Vortex => CascadeFieldType::Vortex,
+                    args::CliCascadeFieldType::River => CascadeFieldType::River,
+                    args::CliCascadeFieldType::RiverRoot => CascadeFieldType::RiverRoot,
+                    args::CliCascadeFieldType::CenterSplit => CascadeFieldType::CenterSplit,
+                    args::CliCascadeFieldType::Oscillate => CascadeFieldType::Oscillate,
+                    args::CliCascadeFieldType::SquarePop => CascadeFieldType::SquarePop,
+                },
+                river_direction,
+                river_speed,
+                river_turbulence,
+                temporal_tiles,
+                decay,
+            },
+            frames,
+            frame_rate,
             project_path: project_path.as_deref(),
         }),
         Commands::QueueAddGranularMosaicSequence {
@@ -1200,6 +1329,8 @@ fn run() -> Result<(), CliError> {
             block_refresh_threshold,
             vector_remix,
             remix_seed,
+            preset,
+            flow_cache_dir,
             max_frames,
             project_path,
             backend,
@@ -1216,12 +1347,42 @@ fn run() -> Result<(), CliError> {
             refresh_threshold: block_refresh_threshold,
             vector_remix: vector_remix.into(),
             remix_seed,
+            preset: preset.into(),
+            flow_cache_dir: flow_cache_dir.as_deref(),
             max_frames,
             project_path: project_path.as_deref(),
             backend: backend.into(),
         }),
         Commands::QueueRunDatamoshSequence { queue_path } => {
             queue_run_datamosh_sequence(&queue_path)
+        }
+        Commands::QueueAddDatamoshBitstream {
+            queue_path,
+            input_video,
+            output_root_dir,
+            fps,
+            operation,
+            p_frame_index,
+            duplicate_count,
+            carrier_video,
+            carrier_keyframes,
+            preset,
+            project_path,
+        } => queue_add_datamosh_bitstream(QueueAddDatamoshBitstreamRequest {
+            queue_path: &queue_path,
+            input_video: &input_video,
+            output_root_dir: &output_root_dir,
+            fps,
+            operation: operation.into(),
+            p_frame_index,
+            duplicate_count,
+            carrier_video: carrier_video.as_deref(),
+            carrier_keyframes,
+            preset: preset.into(),
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueRunDatamoshBitstream { queue_path } => {
+            queue_run_datamosh_bitstream(&queue_path)
         }
         Commands::QueueAddConvolutionalBlendSequence {
             queue_path,
@@ -1271,6 +1432,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunFieldParticlesSequence { queue_path } => {
             queue_run_field_particles_sequence(&queue_path)
+        }
+        Commands::QueueRunCascadeTrailsSequence { queue_path } => {
+            queue_run_cascade_trails_sequence(&queue_path)
         }
         Commands::QueueRunGranularMosaicSequence { queue_path } => {
             queue_run_granular_mosaic_sequence(&queue_path)

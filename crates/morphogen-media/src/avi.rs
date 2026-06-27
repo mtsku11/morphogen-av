@@ -420,7 +420,12 @@ pub fn transfer_motion(
         )));
     }
 
-    if !carrier_layout.chunks.first().map(|c| c.keyframe).unwrap_or(false) {
+    if !carrier_layout
+        .chunks
+        .first()
+        .map(|c| c.keyframe)
+        .unwrap_or(false)
+    {
         return Err(MediaError::InvalidRequest(
             "the carrier's first video chunk is not a keyframe seed".to_string(),
         ));
@@ -697,8 +702,12 @@ mod tests {
     fn transfer_motion_keeps_carrier_seed_then_modulator_pframes() {
         // Carrier: I-frame + 1 P-frame; modulator: I-frame + 3 P-frames.
         let carrier = synthetic_avi(&[vec![100, 101, 102], vec![110, 111]]);
-        let modulator =
-            synthetic_avi(&[vec![1, 2, 3, 4], vec![20, 21], vec![30, 31, 32], vec![40, 41]]);
+        let modulator = synthetic_avi(&[
+            vec![1, 2, 3, 4],
+            vec![20, 21],
+            vec![30, 31, 32],
+            vec![40, 41],
+        ]);
         let out = transfer_motion(&carrier, &modulator, 1).expect("transfer");
         let layout = parse(&out).expect("reparse");
 

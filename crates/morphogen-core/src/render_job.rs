@@ -53,6 +53,18 @@ pub struct RenderJobFailure {
     pub message: String,
 }
 
+fn default_carrier_keyframes() -> u32 {
+    1
+}
+
+fn default_river_speed() -> f32 {
+    3.0
+}
+
+fn default_river_turbulence() -> f32 {
+    0.8
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -145,6 +157,32 @@ pub enum RenderJobTask {
         seed: u64,
         #[serde(default)]
         backend: RenderBackend,
+    },
+    FrameSequenceCascadeTrails {
+        source_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        tile_size: u32,
+        grid_spacing: u32,
+        advect: f32,
+        turbulence_scale: f32,
+        detail: f32,
+        #[serde(default)]
+        live_refresh: bool,
+        seed: u64,
+        #[serde(default)]
+        field: String,
+        #[serde(default)]
+        river_direction: f32,
+        #[serde(default = "default_river_speed")]
+        river_speed: f32,
+        #[serde(default = "default_river_turbulence")]
+        river_turbulence: f32,
+        #[serde(default)]
+        temporal_tiles: bool,
+        #[serde(default)]
+        decay: f32,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
@@ -319,6 +357,44 @@ pub enum RenderJobTask {
         /// to `0`.
         #[serde(default)]
         remix_seed: u64,
+        /// Named destructive preset. `Custom` keeps the explicit knobs above.
+        /// Presets resolve to deterministic knob sets at render time.
+        #[serde(default)]
+        preset: DatamoshPreset,
+        /// Optional reusable temporal optical-flow cache root. Each P-frame stores
+        /// one `frame_XXXXXX/manifest.json` + `frame_000000.flowf32` sidecar.
+        #[serde(default)]
+        flow_cache_directory: Option<String>,
+    },
+    /// Real bitstream datamosh via AVI chunk surgery: ffmpeg encodes to MPEG-4,
+    /// pure-Rust RIFF surgery duplicates/removes/splices chunks, ffmpeg decodes to
+    /// PNG. Non-deterministic by design (depends on ffmpeg codec version).
+    DatamoshBitstream {
+        /// Input video file (any ffmpeg-decodable container). For pframe-duplicate /
+        /// remove-keyframe this is the clip to mosh; for motion-transfer it is the
+        /// MODULATOR (Source A, the motion donor).
+        input_video: String,
+        output_directory: String,
+        /// Frame rate to encode/decode at.
+        fps: f64,
+        /// Which bitstream operation to perform.
+        #[serde(default)]
+        operation: DatamoshBitstreamOperation,
+        /// Which P-frame to bloom (0-based among P-frames). Relevant for pframe-duplicate.
+        #[serde(default)]
+        p_frame_index: u32,
+        /// Extra copies of that P-frame to insert. Relevant for pframe-duplicate.
+        #[serde(default)]
+        duplicate_count: u32,
+        /// motion-transfer only: the CARRIER (Source B) video whose appearance is kept.
+        #[serde(default)]
+        carrier_video: Option<String>,
+        /// motion-transfer only: leading carrier frames kept before modulator motion.
+        #[serde(default = "default_carrier_keyframes")]
+        carrier_keyframes: u32,
+        /// Named bitstream preset. Custom keeps the explicit knobs above.
+        #[serde(default)]
+        preset: DatamoshBitstreamPreset,
     },
     /// Convolutional AV blending (image kernel): each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved with
@@ -656,6 +732,60 @@ pub enum VectorRemixMode {
     Sort,
     /// Deterministic seeded permutation of block MVs (motion scrambles).
     Shuffle,
+}
+
+/// Named deterministic datamosh presets for the flow-reuse path. Bitstream
+/// operations (P-frame bloom, void mosh, motion transfer) have their own queue
+/// job type [`DatamoshBitstream`](RenderJobTask::DatamoshBitstream) and preset
+/// enum [`DatamoshBitstreamPreset`].
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DatamoshPreset {
+    /// Use the explicit render knobs without modification.
+    #[default]
+    Custom,
+    /// Smooth recursive flow reuse: the foundational bloom/melt path.
+    CodecBloom,
+    /// Strong structured melt using block motion plus residual haze.
+    StructuredMelt,
+    /// Coarse macroblocks with residual haze and per-block refresh.
+    MacroblockRot,
+    /// Deterministic block-vector shuffle.
+    VectorShuffle,
+    /// Horizontal scanline tearing plus sparse chroma/black codec debris.
+    ScanlineSmear,
+    /// Edge-aware internal hatching, chroma offsets, and block stepping.
+    CodecEngrave,
+}
+
+/// Bitstream datamosh operation type — controls the AVI chunk surgery performed.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DatamoshBitstreamOperation {
+    /// Duplicate a P-frame N times so the decoder re-applies its motion (bloom).
+    #[default]
+    PframeDuplicate,
+    /// Remove the leading I-frame so the decoder starts from prediction data.
+    RemoveKeyframe,
+    /// Splice modulator (Source A) P-frame motion onto carrier (Source B) I-frame.
+    MotionTransfer,
+}
+
+/// Named bitstream datamosh presets — resolve to an operation + knob set at queue time.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DatamoshBitstreamPreset {
+    /// Use the explicit knobs without modification.
+    #[default]
+    Custom,
+    /// Gentle P-frame bloom: p_frame_index=0, duplicate_count=8.
+    Bloom,
+    /// Heavy P-frame melt: p_frame_index=0, duplicate_count=60.
+    HeavyMelt,
+    /// Remove the leading keyframe so the decoder hallucinates.
+    VoidMosh,
+    /// Motion transfer with 1 carrier keyframe (pure transfer).
+    MotionGraft,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1305,5 +1435,51 @@ mod tests {
             panic!("expected granular task");
         };
         assert_eq!(audio_modulation, None);
+    }
+
+    #[test]
+    fn datamosh_bitstream_task_roundtrips_and_defaults() {
+        let task = RenderJobTask::DatamoshBitstream {
+            input_video: "/tmp/input.mov".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            fps: 24.0,
+            operation: DatamoshBitstreamOperation::PframeDuplicate,
+            p_frame_index: 3,
+            duplicate_count: 12,
+            carrier_video: None,
+            carrier_keyframes: 1,
+            preset: DatamoshBitstreamPreset::Bloom,
+        };
+        let json = serde_json::to_string(&task).expect("serialize");
+        let roundtripped: RenderJobTask = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(task, roundtripped);
+
+        // Minimal JSON with only required fields — defaults fill the rest.
+        let minimal = r#"{
+            "type": "datamosh_bitstream",
+            "input_video": "/tmp/input.mov",
+            "output_directory": "/tmp/out",
+            "fps": 24.0
+        }"#;
+        let from_minimal: RenderJobTask =
+            serde_json::from_str(minimal).expect("deserialize minimal");
+        let RenderJobTask::DatamoshBitstream {
+            operation,
+            p_frame_index,
+            duplicate_count,
+            carrier_video,
+            carrier_keyframes,
+            preset,
+            ..
+        } = from_minimal
+        else {
+            panic!("expected DatamoshBitstream");
+        };
+        assert_eq!(operation, DatamoshBitstreamOperation::PframeDuplicate);
+        assert_eq!(p_frame_index, 0);
+        assert_eq!(duplicate_count, 0);
+        assert_eq!(carrier_video, None);
+        assert_eq!(carrier_keyframes, 1);
+        assert_eq!(preset, DatamoshBitstreamPreset::Custom);
     }
 }

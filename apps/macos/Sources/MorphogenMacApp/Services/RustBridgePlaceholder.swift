@@ -64,6 +64,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultCascadeTrailsSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-cascade-trails-sequence-queue.json"
+    )
+  }
+
   static func defaultGranularMosaicPoolSequenceRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-granular-pool-sequence-queue.json"
@@ -97,6 +103,26 @@ enum RustBridgePlaceholder {
   static func defaultDatamoshSequenceRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-datamosh-sequence-queue.json"
+    )
+  }
+
+  static func defaultBitstreamDatamoshRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-bitstream-datamosh-queue.json"
+    )
+  }
+
+  static func defaultShowcasePreviewOutputURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-showcase-preview",
+      isDirectory: true
+    )
+  }
+
+  static func defaultEffectPreviewOutputRootURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-effect-preview",
+      isDirectory: true
     )
   }
 
@@ -136,6 +162,29 @@ enum RustBridgePlaceholder {
       outputURL.path
     ]
     return try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
+  }
+
+  static func runShowcasePreview(
+    request: ShowcaseRenderCommandRequest
+  ) throws -> ShowcaseRenderCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    let result = try runCommand(
+      arguments: try renderShowcaseArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let mp4URL = request.encodeMP4
+      ? request.outputDirectoryURL.appendingPathComponent("showcase.mp4")
+      : nil
+    return ShowcaseRenderCommandResult(
+      outputDirectoryURL: request.outputDirectoryURL,
+      frameDirectoryURL: request.outputDirectoryURL.appendingPathComponent(
+        "frames",
+        isDirectory: true
+      ),
+      contactSheetURL: request.outputDirectoryURL.appendingPathComponent("contact_sheet.png"),
+      mp4URL: mp4URL,
+      commandSummary: result.summary
+    )
   }
 
   static func runQueuedFrameSequenceRender(
@@ -340,6 +389,111 @@ enum RustBridgePlaceholder {
       bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
       commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
     )
+  }
+
+  static func runQueuedCascadeTrailsSequenceRender(
+    request: CascadeTrailsSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddCascadeTrailsSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-cascade-trails-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddCascadeTrailsSequenceArguments(
+    request: CascadeTrailsSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    guard request.tileSize > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("tile size must be greater than zero")
+    }
+    guard request.gridSpacing > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("grid spacing must be greater than zero")
+    }
+    try validateFluidNumbers([
+      ("advect", request.advect),
+      ("turbulence scale", request.turbulenceScale),
+      ("detail", request.detail)
+    ])
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-cascade-trails-sequence",
+      request.queueURL.path,
+      request.sourceDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--tile-size",
+      String(request.tileSize),
+      "--grid-spacing",
+      String(request.gridSpacing),
+      "--advect",
+      cliNumber(request.advect),
+      "--turbulence-scale",
+      cliNumber(request.turbulenceScale),
+      "--detail",
+      cliNumber(request.detail),
+      "--seed",
+      String(request.seed),
+      "--field",
+      request.field,
+      "--river-direction",
+      cliNumber(request.riverDirection),
+      "--river-speed",
+      cliNumber(request.riverSpeed),
+      "--river-turbulence",
+      cliNumber(request.riverTurbulence)
+    ]
+
+    if !request.liveRefresh {
+      arguments.append("--no-live-refresh")
+    }
+    if request.temporalTiles {
+      arguments.append("--temporal-tiles")
+    }
+    if request.decay > 0 {
+      arguments.append("--decay")
+      arguments.append(cliNumber(request.decay))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
   }
 
   static func queueAddFluidAdvectSequenceArguments(
@@ -1252,6 +1406,8 @@ enum RustBridgePlaceholder {
       cliNumber(request.blockRefreshThreshold),
       "--vector-remix",
       request.vectorRemix.cliValue,
+      "--preset",
+      request.preset.cliValue,
       "--remix-seed",
       String(request.remixSeed),
       "--backend",
@@ -1268,6 +1424,91 @@ enum RustBridgePlaceholder {
     }
 
     return arguments
+  }
+
+  static func queueAddBitstreamDatamoshArguments(
+    request: BitstreamDatamoshRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.fps > 0 && request.fps.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "fps must be positive and finite"
+      )
+    }
+    if request.operation == .motionTransfer && request.carrierVideoURL == nil {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "motion transfer requires a carrier video"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-datamosh-bitstream",
+      request.queueURL.path,
+      request.inputVideoURL.path,
+      request.outputRootDirectoryURL.path,
+      "--fps",
+      cliNumber(request.fps),
+      "--operation",
+      request.operation.cliValue,
+      "--p-frame-index",
+      String(request.pFrameIndex),
+      "--duplicate-count",
+      String(request.duplicateCount),
+      "--carrier-keyframes",
+      String(request.carrierKeyframes),
+      "--preset",
+      request.preset.cliValue
+    ]
+
+    if let carrierURL = request.carrierVideoURL {
+      arguments.append("--carrier-video")
+      arguments.append(carrierURL.path)
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
+  static func runQueuedBitstreamDatamoshRender(
+    request: BitstreamDatamoshRenderQueueCommandRequest
+  ) throws -> BitstreamDatamoshRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddBitstreamDatamoshArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-datamosh-bitstream",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return BitstreamDatamoshRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
   }
 
   static func runQueuedConvolutionalBlendSequenceRender(
@@ -1503,6 +1744,60 @@ enum RustBridgePlaceholder {
       arguments.append(projectURL.path)
     }
 
+    return arguments
+  }
+
+  static func renderShowcaseArguments(
+    request: ShowcaseRenderCommandRequest
+  ) throws -> [String] {
+    guard request.framesPerEffect > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase frames per effect must be greater than zero"
+      )
+    }
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase frame rate must be a positive finite number"
+      )
+    }
+    guard request.granularGrainSize > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase granular grain size must be greater than zero"
+      )
+    }
+    guard request.seed >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "showcase seed must be greater than or equal to zero"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "render-showcase",
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputDirectoryURL.path,
+      "--intensity",
+      request.intensity.cliValue,
+      "--frames-per-effect",
+      String(request.framesPerEffect),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--granular-grain-size",
+      String(request.granularGrainSize),
+      "--seed",
+      String(request.seed),
+      "--backend",
+      request.backend.cliValue
+    ]
+    if !request.encodeMP4 {
+      arguments.append("--no-mp4")
+    }
     return arguments
   }
 
@@ -1925,6 +2220,27 @@ struct FeedbackSequenceRenderQueueCommandResult {
   let commandSummary: String
 }
 
+struct ShowcaseRenderCommandRequest {
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputDirectoryURL: URL
+  let intensity: ShowcaseIntensityOption
+  let framesPerEffect: Int
+  let frameRate: Double
+  let granularGrainSize: Int
+  let seed: Int
+  let backend: FeedbackRenderBackendOption
+  let encodeMP4: Bool
+}
+
+struct ShowcaseRenderCommandResult {
+  let outputDirectoryURL: URL
+  let frameDirectoryURL: URL
+  let contactSheetURL: URL
+  let mp4URL: URL?
+  let commandSummary: String
+}
+
 struct FluidAdvectSequenceRenderQueueCommandRequest {
   let queueURL: URL
   let sourceDirectoryURL: URL
@@ -1981,6 +2297,28 @@ struct FieldParticlesSequenceRenderQueueCommandRequest {
   let liveColour: Bool
   let seed: UInt64
   let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct CascadeTrailsSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let tileSize: Int
+  let gridSpacing: Int
+  let advect: Double
+  let turbulenceScale: Double
+  let detail: Double
+  let liveRefresh: Bool
+  let seed: UInt64
+  let field: String
+  let riverDirection: Double
+  let riverSpeed: Double
+  let riverTurbulence: Double
+  let temporalTiles: Bool
+  let decay: Double
   let projectURL: URL?
 }
 
@@ -2144,6 +2482,7 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   let residualDecay: Double
   let blockRefreshThreshold: Double
   let vectorRemix: DatamoshVectorRemixOption
+  let preset: DatamoshPresetOption
   let remixSeed: Int
   let maxFrames: Int?
   let backend: FeedbackRenderBackendOption
@@ -2151,6 +2490,26 @@ struct DatamoshSequenceRenderQueueCommandRequest {
 }
 
 struct DatamoshSequenceRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct BitstreamDatamoshRenderQueueCommandRequest {
+  let queueURL: URL
+  let inputVideoURL: URL
+  let outputRootDirectoryURL: URL
+  let fps: Double
+  let operation: BitstreamOperationOption
+  let pFrameIndex: Int
+  let duplicateCount: Int
+  let carrierVideoURL: URL?
+  let carrierKeyframes: Int
+  let preset: BitstreamPresetOption
+  let projectURL: URL?
+}
+
+struct BitstreamDatamoshRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String
