@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio_route;
+pub mod block_collage;
 pub mod cascade_trails;
 pub mod coagulate;
 pub mod conv_blend;
@@ -25,6 +26,9 @@ pub mod vortex_field;
 
 pub use audio_route::{
     uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+};
+pub use block_collage::{
+    render_block_collage_frame, BlockCollageSettings, BLOCK_COLLAGE_ALGORITHM,
 };
 pub use cascade_trails::{
     advance_cascade_trails, assign_temporal_patches, initialize_cascade_trails,

@@ -655,6 +655,36 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 0.0)]
         decay: f32,
     },
+    /// Render a hard binary tile collage (experimental, deterministic; CPU-only).
+    /// The canvas is divided into NxN blocks; each block independently shows Source A
+    /// or Source B based on a spatially-coherent value-noise ownership field.
+    /// No blending — hard pixel-perfect cuts at every tile boundary.
+    /// `--threshold 0` = all A (passthrough); `--threshold 1` = all B.
+    RenderBlockCollageSequence {
+        /// Source A video frames (PNG sequence) — the "base" image.
+        source_a_dir: PathBuf,
+        /// Source B video frames (PNG sequence) — the "intruder" tiles.
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render (capped to the paired source frame count).
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Block edge length in pixels. Larger = chunkier collage (reference ~96 px).
+        #[arg(long, default_value_t = 96)]
+        tile_size: u32,
+        /// Fraction of tiles showing Source B, in [0, 1]. 0 = all A; 0.5 = half each.
+        #[arg(long, default_value_t = 0.5)]
+        threshold: f32,
+        /// Noise frequency in tiles. Smaller = larger spatially-coherent clusters.
+        /// ~0.25 gives 4-tile blobs (reference look); ~1.0 ≈ checkerboard.
+        #[arg(long, default_value_t = 0.25)]
+        cluster_scale: f32,
+        /// Per-frame drift of the noise field. 0 = static ownership; ~0.05 = slow animation.
+        #[arg(long, default_value_t = 0.0)]
+        evolution_speed: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains
@@ -1574,6 +1604,32 @@ pub(crate) enum Commands {
         queue_path: PathBuf,
     },
     QueueRunCascadeTrailsSequence {
+        queue_path: PathBuf,
+    },
+    /// Persist a block-collage render job to the queue.
+    QueueAddBlockCollageSequence {
+        queue_path: PathBuf,
+        source_a_dir: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 96)]
+        tile_size: u32,
+        #[arg(long, default_value_t = 0.5)]
+        threshold: f32,
+        #[arg(long, default_value_t = 0.25)]
+        cluster_scale: f32,
+        #[arg(long, default_value_t = 0.0)]
+        evolution_speed: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueRunBlockCollageSequence {
         queue_path: PathBuf,
     },
     QueueRunGranularMosaicSequence {

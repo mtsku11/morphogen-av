@@ -13,11 +13,12 @@ use morphogen_core::{
     VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
-    flow_displace_cpu, CascadeFieldType, CascadeTrailSettings, ConvolutionBlendSettings,
-    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    flow_displace_cpu, BlockCollageSettings, CascadeFieldType, CascadeTrailSettings,
+    ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, GranularMosaicSettings, StructureMode, VideoVocoderSettings,
-    CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
-    FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+    BLOCK_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM,
+    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
 use crate::args::*;
@@ -1668,6 +1669,149 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         &output_dir,
         outcome,
         "cascade-trails",
+    )
+}
+
+pub(crate) struct QueueAddBlockCollageSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: BlockCollageSettings,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_block_collage_sequence(
+    request: QueueAddBlockCollageSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddBlockCollageSequenceRequest {
+        queue_path,
+        source_a_dir,
+        source_b_dir,
+        output_root_dir,
+        settings,
+        frames,
+        frame_rate,
+        project_path,
+    } = request;
+    settings.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|p| p.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceBlockCollage {
+            modulator_frame_directory: source_a_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: source_b_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            tile_size: settings.tile_size,
+            threshold: settings.threshold,
+            cluster_scale: settings.cluster_scale,
+            evolution_speed: settings.evolution_speed,
+            seed: settings.seed,
+        },
+        provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued block-collage render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_block_collage_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceBlockCollage { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message("render queue has no queued or running block-collage jobs".to_string())
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceBlockCollage {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        tile_size,
+        threshold,
+        cluster_scale,
+        evolution_speed,
+        seed,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a block-collage render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = BlockCollageSettings {
+        tile_size,
+        threshold,
+        cluster_scale,
+        evolution_speed,
+        seed,
+    };
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_block_collage_sequence(BlockCollageSequenceRequest {
+            source_a_dir: Path::new(&modulator_frame_directory),
+            source_b_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames,
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_block_collage",
+            effect_key: "block_collage",
+            effect: serde_json::json!({
+                "algorithm": BLOCK_COLLAGE_ALGORITHM,
+                "settings": settings,
+                "backend": "CPU"
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "block-collage",
     )
 }
 
@@ -3823,6 +3967,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             }
             RenderJobTask::FrameSequenceFieldParticles { .. } => "frame_sequence_field_particles",
             RenderJobTask::FrameSequenceCascadeTrails { .. } => "frame_sequence_cascade_trails",
+            RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",
             RenderJobTask::FrameSequenceGranularMosaicPool { .. } => {
                 "frame_sequence_granular_mosaic_pool"

@@ -14,6 +14,7 @@ use morphogen_core::{
 };
 use morphogen_render::{
     advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
+    render_block_collage_frame, BlockCollageSettings,
     advance_field_particles,
     advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu,
@@ -2213,6 +2214,63 @@ pub(crate) fn render_cascade_trails_sequence(
     Ok(FrameSequenceRenderResult {
         frame_count: request.frames,
     })
+}
+
+pub(crate) struct BlockCollageSequenceRequest<'a> {
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: BlockCollageSettings,
+    pub(crate) frames: u32,
+}
+
+pub(crate) fn render_block_collage_sequence(
+    request: BlockCollageSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_a_frames = collect_image_frames(request.source_a_dir)?;
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_a_frames.is_empty() || source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "block collage requires at least one PNG frame in each source directory".to_string(),
+        ));
+    }
+
+    let paired_count = source_a_frames.len().min(source_b_frames.len());
+    let frame_count = (request.frames as usize).min(paired_count);
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..frame_count {
+        let source_a = load_image_f32(&source_a_frames[index])?;
+        let source_b = load_image_f32(&source_b_frames[index])?;
+        let rendered = render_block_collage_frame(&source_a, &source_b, &request.settings, index as u32)?;
+        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+    }
+
+    if source_a_frames.len() != source_b_frames.len() {
+        println!(
+            "source frame counts differ: {} A, {} B; rendered common prefix",
+            source_a_frames.len(),
+            source_b_frames.len()
+        );
+    }
+    println!(
+        "rendered block collage sequence with {} frame(s) (tile {}, threshold {:.2}, cluster_scale {:.3}) from A:{} + B:{} to {}",
+        frame_count,
+        request.settings.tile_size,
+        request.settings.threshold,
+        request.settings.cluster_scale,
+        request.source_a_dir.display(),
+        request.source_b_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
 }
 
 #[cfg(target_os = "macos")]

@@ -24,6 +24,8 @@ pub enum RenderError {
     InvalidConvolutionSettings(String),
     #[error("invalid coagulation settings: {0}")]
     InvalidCoagulationSettings(String),
+    #[error("invalid block collage settings: {0}")]
+    InvalidBlockCollageSettings(String),
     #[error("render inputs are incompatible: {0}")]
     IncompatibleInputs(String),
     #[error("I/O error: {0}")]

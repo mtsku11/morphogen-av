@@ -11,6 +11,10 @@ pub(crate) fn load_image_f32(path: &Path) -> Result<ImageBufferF32, CliError> {
     ImageBufferF32::new(decoded.width(), decoded.height(), pixels).map_err(CliError::from)
 }
 
+pub(crate) fn load_rgba_image(path: &Path) -> Result<image::RgbaImage, CliError> {
+    Ok(ImageReader::open(path)?.decode()?.to_rgba8())
+}
+
 pub(crate) fn collect_image_frames(directory: &Path) -> Result<Vec<PathBuf>, CliError> {
     let mut frames = Vec::new();
     for entry in fs::read_dir(directory)? {

@@ -57,6 +57,18 @@ fn default_carrier_keyframes() -> u32 {
     1
 }
 
+fn default_block_collage_tile_size() -> u32 {
+    96
+}
+
+fn default_block_collage_threshold() -> f32 {
+    0.5
+}
+
+fn default_block_collage_cluster_scale() -> f32 {
+    0.25
+}
+
 fn default_river_speed() -> f32 {
     3.0
 }
@@ -183,6 +195,26 @@ pub enum RenderJobTask {
         temporal_tiles: bool,
         #[serde(default)]
         decay: f32,
+    },
+    /// Hard binary tile collage: each NxN block independently shows Source A or
+    /// Source B based on a spatially-coherent value-noise ownership field.
+    /// No blending — hard cuts at every tile boundary.
+    FrameSequenceBlockCollage {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        #[serde(default = "default_block_collage_tile_size")]
+        tile_size: u32,
+        #[serde(default = "default_block_collage_threshold")]
+        threshold: f32,
+        #[serde(default = "default_block_collage_cluster_scale")]
+        cluster_scale: f32,
+        #[serde(default)]
+        evolution_speed: f32,
+        #[serde(default)]
+        seed: u64,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,

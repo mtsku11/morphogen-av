@@ -1,10 +1,10 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CascadeFieldType, CascadeTrailSettings, CoagulationSettings, ConvolutionBlendSettings,
-    DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, StructureMode,
-    VideoVocoderSettings,
+    BlockCollageSettings, CascadeFieldType, CascadeTrailSettings, CoagulationSettings,
+    ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings, FlowFeedbackSettings,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings,
+    StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -541,6 +541,30 @@ fn run() -> Result<(), CliError> {
                 river_turbulence,
                 temporal_tiles,
                 decay,
+            },
+            frames,
+        })
+        .map(|_| ()),
+        Commands::RenderBlockCollageSequence {
+            source_a_dir,
+            source_b_dir,
+            output_dir,
+            frames,
+            tile_size,
+            threshold,
+            cluster_scale,
+            evolution_speed,
+            seed,
+        } => render_block_collage_sequence(BlockCollageSequenceRequest {
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: BlockCollageSettings {
+                tile_size,
+                threshold,
+                cluster_scale,
+                evolution_speed,
+                seed,
             },
             frames,
         })
@@ -1084,6 +1108,35 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddBlockCollageSequence {
+            queue_path,
+            source_a_dir,
+            source_b_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            tile_size,
+            threshold,
+            cluster_scale,
+            evolution_speed,
+            seed,
+            project_path,
+        } => queue_add_block_collage_sequence(QueueAddBlockCollageSequenceRequest {
+            queue_path: &queue_path,
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_root_dir: &output_root_dir,
+            settings: BlockCollageSettings {
+                tile_size,
+                threshold,
+                cluster_scale,
+                evolution_speed,
+                seed,
+            },
+            frames,
+            frame_rate,
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueAddGranularMosaicSequence {
             queue_path,
             modulator_dir,
@@ -1435,6 +1488,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunCascadeTrailsSequence { queue_path } => {
             queue_run_cascade_trails_sequence(&queue_path)
+        }
+        Commands::QueueRunBlockCollageSequence { queue_path } => {
+            queue_run_block_collage_sequence(&queue_path)
         }
         Commands::QueueRunGranularMosaicSequence { queue_path } => {
             queue_run_granular_mosaic_sequence(&queue_path)
