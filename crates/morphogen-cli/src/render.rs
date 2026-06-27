@@ -2176,7 +2176,7 @@ pub(crate) fn render_cascade_trails_sequence(
         if index > 0 {
             // Frames cycle if the render outlasts the clip, so a video plays through the trails.
             let current = load_image_f32(&source_frames[index % source_frames.len()])?;
-            advance_cascade_trails(&mut state, &current, request.settings)?;
+            advance_cascade_trails(&mut state, &current, request.settings, index as u32)?;
         }
         let rendered = render_cascade_trails(&state);
         save_png(

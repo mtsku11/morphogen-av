@@ -467,7 +467,15 @@ enum RustBridgePlaceholder {
       "--detail",
       cliNumber(request.detail),
       "--seed",
-      String(request.seed)
+      String(request.seed),
+      "--field",
+      request.field,
+      "--river-direction",
+      cliNumber(request.riverDirection),
+      "--river-speed",
+      cliNumber(request.riverSpeed),
+      "--river-turbulence",
+      cliNumber(request.riverTurbulence)
     ]
 
     if !request.liveRefresh {
@@ -2298,6 +2306,10 @@ struct CascadeTrailsSequenceRenderQueueCommandRequest {
   let detail: Double
   let liveRefresh: Bool
   let seed: UInt64
+  let field: String
+  let riverDirection: Double
+  let riverSpeed: Double
+  let riverTurbulence: Double
   let projectURL: URL?
 }
 

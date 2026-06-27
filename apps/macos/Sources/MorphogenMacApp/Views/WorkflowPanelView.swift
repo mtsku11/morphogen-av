@@ -294,6 +294,14 @@ struct WorkflowPanelView: View {
 
     case .trailCascade:
       HStack(spacing: 16) {
+        Picker("Field", selection: $state.cascadeFieldType) {
+          ForEach(CascadeFieldOption.allCases) { f in
+            Text(f.rawValue).tag(f)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 130)
+
         Stepper(value: $state.cascadeTileSize, in: 4...256, step: 4) {
           Text("Tile \(state.cascadeTileSize)px")
         }
@@ -519,26 +527,50 @@ struct WorkflowPanelView: View {
       }
 
     case .trailCascade:
-      HStack(spacing: 16) {
-        Stepper(value: $state.cascadeTurbulenceScale, in: 0.002...0.05, step: 0.001) {
-          Text("Vortex \(state.cascadeTurbulenceScale, specifier: "%.3f")")
-        }
-        .frame(width: 170, alignment: .leading)
-        .help("Field scale: smaller = larger, broader vortices.")
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 16) {
+          Stepper(value: $state.cascadeTurbulenceScale, in: 0.002...0.05, step: 0.001) {
+            Text("Vortex \(state.cascadeTurbulenceScale, specifier: "%.3f")")
+          }
+          .frame(width: 170, alignment: .leading)
+          .help("Field scale: smaller = larger, broader vortices.")
 
-        Stepper(value: $state.cascadeDetail, in: 0...1, step: 0.05) {
-          Text("Detail \(state.cascadeDetail, specifier: "%.2f")")
-        }
-        .frame(width: 150, alignment: .leading)
+          Stepper(value: $state.cascadeDetail, in: 0...1, step: 0.05) {
+            Text("Detail \(state.cascadeDetail, specifier: "%.2f")")
+          }
+          .frame(width: 150, alignment: .leading)
 
-        Stepper(value: $state.cascadeSeed, in: 0...9999, step: 1) {
-          Text("Seed \(state.cascadeSeed)")
-        }
-        .frame(width: 140, alignment: .leading)
+          Stepper(value: $state.cascadeSeed, in: 0...9999, step: 1) {
+            Text("Seed \(state.cascadeSeed)")
+          }
+          .frame(width: 140, alignment: .leading)
 
-        Toggle("Live refresh", isOn: $state.cascadeLiveRefresh)
-          .toggleStyle(.checkbox)
-          .help("Re-sample each tile from the current frame so the video plays through the trails.")
+          Toggle("Live refresh", isOn: $state.cascadeLiveRefresh)
+            .toggleStyle(.checkbox)
+            .help("Re-sample each tile from the current frame so the video plays through the trails.")
+        }
+
+        if state.cascadeFieldType == .river {
+          HStack(spacing: 16) {
+            Stepper(value: $state.cascadeRiverDirection, in: 0...360, step: 15) {
+              Text("Dir \(state.cascadeRiverDirection, specifier: "%.0f")°")
+            }
+            .frame(width: 130, alignment: .leading)
+            .help("River flow direction: 0°=right, 90°=down, 180°=left, 270°=up.")
+
+            Stepper(value: $state.cascadeRiverSpeed, in: 0...20, step: 0.5) {
+              Text("Speed \(state.cascadeRiverSpeed, specifier: "%.1f")")
+            }
+            .frame(width: 145, alignment: .leading)
+            .help("Base flow speed in pixels per frame.")
+
+            Stepper(value: $state.cascadeRiverTurbulence, in: 0...5, step: 0.1) {
+              Text("Turbulence \(state.cascadeRiverTurbulence, specifier: "%.1f")")
+            }
+            .frame(width: 165, alignment: .leading)
+            .help("Per-tile jitter amplitude; 0 = perfectly uniform flow.")
+          }
+        }
       }
 
     case .bitstreamDatamosh:

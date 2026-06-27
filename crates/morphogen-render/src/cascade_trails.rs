@@ -41,6 +41,17 @@ use crate::{ImageBufferF32, RenderError, TileOrigin, TilePatch};
 /// model, the grid layout, or the stamp/accumulation changes so stale caches invalidate.
 pub const CASCADE_TRAIL_ALGORITHM: &str = "persistent_trail_vortex_cascade_cpu_v1";
 
+/// Which velocity field drives tile advection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CascadeFieldType {
+    /// Curl-noise steady vortex field (the original mode).
+    #[default]
+    Vortex,
+    /// Dominant uniform flow plus per-tile turbulence jitter — a "river" of tiles.
+    River,
+}
+
 /// Settings for the persistent-trail vector-field cascade.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CascadeTrailSettings {
@@ -64,11 +75,32 @@ pub struct CascadeTrailSettings {
     pub live_refresh: bool,
     /// Seed for the deterministic field.
     pub seed: u64,
+    /// Which velocity field type to use.
+    #[serde(default)]
+    pub field: CascadeFieldType,
+    /// River mode: flow direction in degrees (0 = right, 90 = down, 180 = left, 270 = up).
+    #[serde(default)]
+    pub river_direction: f32,
+    /// River mode: base flow speed in pixels per frame.
+    #[serde(default = "default_river_speed")]
+    pub river_speed: f32,
+    /// River mode: per-tile turbulence amplitude (pixels). Each tile gets a deterministic
+    /// jitter offset derived from its home position, so nearby tiles drift similarly while
+    /// distant tiles diverge — like water turbulence.
+    #[serde(default = "default_river_turbulence")]
+    pub river_turbulence: f32,
+}
+
+fn default_river_speed() -> f32 {
+    3.0
+}
+
+fn default_river_turbulence() -> f32 {
+    0.8
 }
 
 impl Default for CascadeTrailSettings {
     fn default() -> Self {
-        // The tuned sparse-ribbon "preset" the macOS Trail Cascade card ships with.
         Self {
             tile_size: 28,
             grid_spacing: 60,
@@ -77,6 +109,10 @@ impl Default for CascadeTrailSettings {
             detail: 0.1,
             live_refresh: true,
             seed: 0,
+            field: CascadeFieldType::Vortex,
+            river_direction: 0.0,
+            river_speed: default_river_speed(),
+            river_turbulence: default_river_turbulence(),
         }
     }
 }
@@ -97,6 +133,9 @@ impl CascadeTrailSettings {
             ("advect", self.advect),
             ("turbulence_scale", self.turbulence_scale),
             ("detail", self.detail),
+            ("river_direction", self.river_direction),
+            ("river_speed", self.river_speed),
+            ("river_turbulence", self.river_turbulence),
         ] {
             if !value.is_finite() {
                 return Err(RenderError::InvalidCoagulationSettings(format!(
@@ -196,27 +235,49 @@ pub fn initialize_cascade_trails(
 /// Advance one frame: advect every tile along the steady field (`p ← p + v(p) · advect`), then
 /// — when `live_refresh` — re-sample each tile's patch from its origin cell in `current_source`,
 /// then stamp every tile onto the persistent accumulator (last-writer-wins, fixed index order).
+/// `frame` is the 1-based frame index (first call = frame 1) used by river mode to drive
+/// time-varying oscillation.
 pub fn advance_cascade_trails(
     state: &mut CascadeTrailState,
     current_source: &ImageBufferF32,
     settings: CascadeTrailSettings,
+    frame: u32,
 ) -> Result<(), RenderError> {
     settings.validate()?;
 
     if settings.advect != 0.0 {
-        // A fully steady field (`time = 0`): the big-vortex octave is fixed, so trails follow
-        // consistent streamlines instead of wobbling.
-        for pos in &mut state.positions {
-            let (vx, vy) = steady_vortex_velocity(
-                settings.seed,
-                pos[0],
-                pos[1],
-                0.0,
-                settings.turbulence_scale,
-                settings.detail,
-            );
-            pos[0] += vx * settings.advect;
-            pos[1] += vy * settings.advect;
+        match settings.field {
+            CascadeFieldType::Vortex => {
+                for pos in &mut state.positions {
+                    let (vx, vy) = steady_vortex_velocity(
+                        settings.seed,
+                        pos[0],
+                        pos[1],
+                        0.0,
+                        settings.turbulence_scale,
+                        settings.detail,
+                    );
+                    pos[0] += vx * settings.advect;
+                    pos[1] += vy * settings.advect;
+                }
+            }
+            CascadeFieldType::River => {
+                let angle = settings.river_direction.to_radians();
+                let base_vx = angle.cos() * settings.river_speed;
+                let base_vy = angle.sin() * settings.river_speed;
+                for (pos, origin) in state.positions.iter_mut().zip(state.origins.iter()) {
+                    let (jx, jy) = river_jitter(
+                        settings.seed,
+                        origin.x0,
+                        origin.y0,
+                        settings.river_turbulence,
+                        angle,
+                        frame,
+                    );
+                    pos[0] += (base_vx + jx) * settings.advect;
+                    pos[1] += (base_vy + jy) * settings.advect;
+                }
+            }
         }
     }
 
@@ -270,6 +331,63 @@ fn stamp_all(state: &mut CascadeTrailState) {
             }
         }
     }
+}
+
+/// Per-tile oscillating jitter for river mode. Each tile gets a unique oscillation frequency
+/// and phase derived deterministically from its home position, so tiles wiggle at different
+/// rates and are never in sync — the look of particles in a flowing river. The oscillation
+/// is primarily *perpendicular* to the flow (lateral wiggle) with a smaller along-flow
+/// component that makes each tile's speed vary slightly (particles bunch and spread).
+fn river_jitter(
+    seed: u64,
+    home_x: u32,
+    home_y: u32,
+    amplitude: f32,
+    flow_angle: f32,
+    frame: u32,
+) -> (f32, f32) {
+    if amplitude == 0.0 {
+        return (0.0, 0.0);
+    }
+    // Derive unique per-tile params via two rounds of splitmix-style hashing.
+    let h0 = tile_hash(seed, home_x, home_y);
+    let h1 = splitmix(h0);
+
+    // Oscillation frequency in radians/frame. Range [0.025, 0.09] gives periods of
+    // 70–250 frames (≈3–10 s at 24 fps) — slow enough to look like river undulation.
+    let freq = 0.025 + (h0 & 0xFFFF) as f32 / 65535.0 * 0.065;
+    // Phase offset [0, 2π] so tiles start at different points in their cycle.
+    let phase = (h1 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
+    // A second, incommensurate frequency (golden-ratio multiple) drives the along-flow
+    // speed variation so that component never locks to the perpendicular one.
+    let freq2 = freq * 1.618;
+
+    let t = frame as f32;
+    // Perpendicular (cross-flow) oscillation — the main lateral wiggle.
+    let perp = amplitude * (t * freq + phase).sin();
+    // Along-flow speed variation — smaller, creates the "bunching" of river particles.
+    let along = amplitude * 0.3 * (t * freq2 + phase * 0.7).sin();
+
+    // Perpendicular unit vector is 90° CCW from flow: (-sin θ, cos θ).
+    let (sin_a, cos_a) = flow_angle.sin_cos();
+    let jx = -sin_a * perp + cos_a * along;
+    let jy = cos_a * perp + sin_a * along;
+    (jx, jy)
+}
+
+/// Splitmix64-style hash — mixes a single u64.
+#[inline]
+fn splitmix(x: u64) -> u64 {
+    let x = x.wrapping_add(0x9E3779B97F4A7C15);
+    let x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    let x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x ^ (x >> 31)
+}
+
+/// Derive a u64 hash from the tile's home grid position and the global seed.
+#[inline]
+fn tile_hash(seed: u64, home_x: u32, home_y: u32) -> u64 {
+    splitmix(seed ^ ((home_x as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ (home_y as u64).wrapping_mul(0x6C62272E07BB0142)))
 }
 
 #[cfg(test)]
@@ -340,7 +458,7 @@ mod tests {
         let mut state = initialize_cascade_trails(&source, settings).unwrap();
         let frame0 = render_cascade_trails(&state);
         for _ in 0..5 {
-            advance_cascade_trails(&mut state, &source, settings).unwrap();
+            advance_cascade_trails(&mut state, &source, settings, 1).unwrap();
             let frame = render_cascade_trails(&state);
             assert_eq!(frame.pixels, frame0.pixels, "advect 0 must hold the frame");
         }
@@ -359,7 +477,7 @@ mod tests {
             let mut state = initialize_cascade_trails(&source, settings).unwrap();
             let mut frames = vec![render_cascade_trails(&state)];
             for _ in 0..6 {
-                advance_cascade_trails(&mut state, &source, settings).unwrap();
+                advance_cascade_trails(&mut state, &source, settings, 1).unwrap();
                 frames.push(render_cascade_trails(&state));
             }
             frames
@@ -386,7 +504,7 @@ mod tests {
         let mut prev = count_non_black(&render_cascade_trails(&state));
         let mut grew = false;
         for _ in 0..10 {
-            advance_cascade_trails(&mut state, &source, settings).unwrap();
+            advance_cascade_trails(&mut state, &source, settings, 1).unwrap();
             let now = count_non_black(&render_cascade_trails(&state));
             assert!(now >= prev, "accumulator must never lose painted pixels");
             grew |= now > prev;

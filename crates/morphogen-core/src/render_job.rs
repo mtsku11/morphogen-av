@@ -57,6 +57,14 @@ fn default_carrier_keyframes() -> u32 {
     1
 }
 
+fn default_river_speed() -> f32 {
+    3.0
+}
+
+fn default_river_turbulence() -> f32 {
+    0.8
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -163,6 +171,14 @@ pub enum RenderJobTask {
         #[serde(default)]
         live_refresh: bool,
         seed: u64,
+        #[serde(default)]
+        field: String,
+        #[serde(default)]
+        river_direction: f32,
+        #[serde(default = "default_river_speed")]
+        river_speed: f32,
+        #[serde(default = "default_river_turbulence")]
+        river_turbulence: f32,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,

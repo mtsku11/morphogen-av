@@ -27,8 +27,8 @@ pub use audio_route::{
     uniform_displacement_field, RmsDisplacementEnvelope, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 pub use cascade_trails::{
-    advance_cascade_trails, initialize_cascade_trails, render_cascade_trails, CascadeTrailSettings,
-    CascadeTrailState, CASCADE_TRAIL_ALGORITHM,
+    advance_cascade_trails, initialize_cascade_trails, render_cascade_trails, CascadeFieldType,
+    CascadeTrailSettings, CascadeTrailState, CASCADE_TRAIL_ALGORITHM,
 };
 pub use coagulate::{
     advance_coagulation_field, advect_coagulation_field, apply_history_smear, average_cell_flows,

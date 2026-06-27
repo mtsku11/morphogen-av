@@ -631,6 +631,20 @@ pub(crate) enum Commands {
         no_live_refresh: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Velocity field type: "vortex" (curl-noise vortices, default) or "river" (uniform
+        /// flow + per-tile turbulence).
+        #[arg(long, value_enum, default_value_t = CliCascadeFieldType::Vortex)]
+        field: CliCascadeFieldType,
+        /// River mode: flow direction in degrees (0 = right, 90 = down, 180 = left, 270 = up).
+        #[arg(long, default_value_t = 0.0)]
+        river_direction: f32,
+        /// River mode: base flow speed in pixels per frame.
+        #[arg(long, default_value_t = 3.0)]
+        river_speed: f32,
+        /// River mode: per-tile turbulence jitter amplitude (pixels). Nearby tiles jitter
+        /// similarly (spatially coherent noise); 0 = perfectly uniform flow.
+        #[arg(long, default_value_t = 0.8)]
+        river_turbulence: f32,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
@@ -1204,6 +1218,14 @@ pub(crate) enum Commands {
         no_live_refresh: bool,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        #[arg(long, value_enum, default_value_t = CliCascadeFieldType::Vortex)]
+        field: CliCascadeFieldType,
+        #[arg(long, default_value_t = 0.0)]
+        river_direction: f32,
+        #[arg(long, default_value_t = 3.0)]
+        river_speed: f32,
+        #[arg(long, default_value_t = 0.8)]
+        river_turbulence: f32,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -1596,6 +1618,13 @@ pub(crate) enum Commands {
         #[arg(long = "analysis-cache")]
         analysis_cache: Vec<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliCascadeFieldType {
+    #[default]
+    Vortex,
+    River,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

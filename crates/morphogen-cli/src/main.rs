@@ -1,10 +1,10 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    CascadeTrailSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
-    FieldParticleSettings,
-    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
-    GranularMosaicSettings, StructureMode, VideoVocoderSettings,
+    CascadeFieldType, CascadeTrailSettings, CoagulationSettings, ConvolutionBlendSettings,
+    DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, StructureMode,
+    VideoVocoderSettings,
 };
 
 mod args;
@@ -511,6 +511,10 @@ fn run() -> Result<(), CliError> {
             detail,
             no_live_refresh,
             seed,
+            field,
+            river_direction,
+            river_speed,
+            river_turbulence,
         } => render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -522,6 +526,13 @@ fn run() -> Result<(), CliError> {
                 detail,
                 live_refresh: !no_live_refresh,
                 seed,
+                field: match field {
+                    args::CliCascadeFieldType::Vortex => CascadeFieldType::Vortex,
+                    args::CliCascadeFieldType::River => CascadeFieldType::River,
+                },
+                river_direction,
+                river_speed,
+                river_turbulence,
             },
             frames,
         })
@@ -1028,6 +1039,10 @@ fn run() -> Result<(), CliError> {
             detail,
             no_live_refresh,
             seed,
+            field,
+            river_direction,
+            river_speed,
+            river_turbulence,
             project_path,
         } => queue_add_cascade_trails_sequence(QueueAddCascadeTrailsSequenceRequest {
             queue_path: &queue_path,
@@ -1041,6 +1056,13 @@ fn run() -> Result<(), CliError> {
                 detail,
                 live_refresh: !no_live_refresh,
                 seed,
+                field: match field {
+                    args::CliCascadeFieldType::Vortex => CascadeFieldType::Vortex,
+                    args::CliCascadeFieldType::River => CascadeFieldType::River,
+                },
+                river_direction,
+                river_speed,
+                river_turbulence,
             },
             frames,
             frame_rate,

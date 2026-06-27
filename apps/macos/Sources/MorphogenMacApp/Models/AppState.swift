@@ -78,6 +78,10 @@ final class AppState: ObservableObject {
   @Published var cascadeDetail = 0.1
   @Published var cascadeLiveRefresh = true
   @Published var cascadeSeed = 0
+  @Published var cascadeFieldType: CascadeFieldOption = .vortex
+  @Published var cascadeRiverDirection = 0.0
+  @Published var cascadeRiverSpeed = 3.0
+  @Published var cascadeRiverTurbulence = 0.8
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -1124,6 +1128,10 @@ final class AppState: ObservableObject {
       detail: cascadeDetail,
       liveRefresh: cascadeLiveRefresh,
       seed: UInt64(max(0, cascadeSeed)),
+      field: cascadeFieldType.cliValue,
+      riverDirection: cascadeRiverDirection,
+      riverSpeed: cascadeRiverSpeed,
+      riverTurbulence: cascadeRiverTurbulence,
       projectURL: projectURL
     )
 
@@ -2083,6 +2091,22 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
       return "scanline-smear"
     case .codecEngrave:
       return "codec-engrave"
+    }
+  }
+}
+
+enum CascadeFieldOption: String, CaseIterable, Identifiable {
+  case vortex = "Vortex"
+  case river = "River"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .vortex:
+      return "vortex"
+    case .river:
+      return "river"
     }
   }
 }

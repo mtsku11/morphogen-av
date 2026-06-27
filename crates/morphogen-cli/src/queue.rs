@@ -13,11 +13,11 @@ use morphogen_core::{
     VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
-    flow_displace_cpu, CascadeTrailSettings, ConvolutionBlendSettings, FieldParticleSettings,
-    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings,
-    StructureMode, VideoVocoderSettings, CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM,
-    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
-    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+    flow_displace_cpu, CascadeFieldType, CascadeTrailSettings, ConvolutionBlendSettings,
+    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, GranularMosaicSettings, StructureMode, VideoVocoderSettings,
+    CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
+    FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
 use crate::args::*;
@@ -549,6 +549,10 @@ pub(crate) fn queue_add_cascade_trails_sequence(
             detail: settings.detail,
             live_refresh: settings.live_refresh,
             seed: settings.seed,
+            field: cascade_field_type_label(settings.field),
+            river_direction: settings.river_direction,
+            river_speed: settings.river_speed,
+            river_turbulence: settings.river_turbulence,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -1600,6 +1604,10 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         detail,
         live_refresh,
         seed,
+        field,
+        river_direction,
+        river_speed,
+        river_turbulence,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1618,6 +1626,10 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         detail,
         live_refresh,
         seed,
+        field: parse_cascade_field_type(&field),
+        river_direction,
+        river_speed,
+        river_turbulence,
     };
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
@@ -2646,6 +2658,20 @@ pub(crate) struct QueueAddDatamoshBitstreamRequest<'a> {
     pub(crate) carrier_keyframes: u32,
     pub(crate) preset: DatamoshBitstreamPreset,
     pub(crate) project_path: Option<&'a Path>,
+}
+
+fn cascade_field_type_label(field: CascadeFieldType) -> String {
+    match field {
+        CascadeFieldType::Vortex => "vortex".to_string(),
+        CascadeFieldType::River => "river".to_string(),
+    }
+}
+
+fn parse_cascade_field_type(s: &str) -> CascadeFieldType {
+    match s {
+        "river" => CascadeFieldType::River,
+        _ => CascadeFieldType::Vortex,
+    }
 }
 
 fn cli_bitstream_operation(op: DatamoshBitstreamOperation) -> CliDatamoshBitstreamOperation {
