@@ -199,6 +199,14 @@ final class AppState: ObservableObject {
   @Published var previewSummary = "No preview rendered"
   @Published var isRenderingPreview = false
 
+  /// Number of proxy extractions currently in flight. Picking Source A then B
+  /// can run two concurrently, so this is a counter rather than a flag.
+  @Published private var extractingProxyCount = 0
+
+  /// True while any source proxy is still being extracted; the render controls
+  /// disable on this so a render can't fire before its inputs exist.
+  var isExtractingProxies: Bool { extractingProxyCount > 0 }
+
   private var sourceAURL: URL?
   private var sourceBURL: URL?
   private var projectURL: URL?
@@ -765,6 +773,7 @@ final class AppState: ObservableObject {
     let maxFrames = mediaProxyMaxFrames
     let selectedProjectURL = projectURL
     statusMessage = "Extracting PNG and WAV source proxies through morphogen-cli..."
+    extractingProxyCount += 1
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
@@ -823,11 +832,13 @@ final class AppState: ObservableObject {
           let projectText = selectedProjectURL == nil ? "" : " and recorded in the project"
           self.mediaProxySummary = "\(results.count) source proxy set(s) with RMS + STFT analysis caches at \(outputRootURL.path)\(projectText)"
           self.statusMessage = "Source proxy extraction and analysis caching complete\(projectText)."
+          self.extractingProxyCount -= 1
         }
       } catch {
         DispatchQueue.main.async {
           self.mediaProxySummary = "Media proxy extraction failed: \(error.localizedDescription)"
           self.statusMessage = "Media proxy extraction failed: \(error.localizedDescription)"
+          self.extractingProxyCount -= 1
         }
       }
     }

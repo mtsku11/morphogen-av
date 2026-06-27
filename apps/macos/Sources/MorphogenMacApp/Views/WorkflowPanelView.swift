@@ -56,6 +56,12 @@ struct WorkflowPanelView: View {
             Label("Extract Proxies", systemImage: "square.stack.3d.down.forward")
           }
           .buttonStyle(.borderedProminent)
+          .disabled(state.isExtractingProxies)
+
+          if state.isExtractingProxies {
+            ProgressView()
+              .controlSize(.small)
+          }
         }
 
         HStack(spacing: 16) {
@@ -706,6 +712,7 @@ struct WorkflowPanelView: View {
             Label("Showcase Preview", systemImage: "sparkles")
           }
           .buttonStyle(.bordered)
+          .disabled(state.isExtractingProxies)
 
           Button {
             runSelectedEffectPreview()
@@ -713,7 +720,7 @@ struct WorkflowPanelView: View {
             Label("Quick Preview", systemImage: "eye")
           }
           .buttonStyle(.bordered)
-          .disabled(state.isRenderingPreview)
+          .disabled(state.isRenderingPreview || state.isExtractingProxies)
 
           Button {
             runSelectedEffect()
@@ -721,11 +728,23 @@ struct WorkflowPanelView: View {
             Label("Render \(selectedEffect.shortActionLabel)", systemImage: selectedEffect.systemImage)
           }
           .buttonStyle(.borderedProminent)
+          .disabled(state.isExtractingProxies)
 
           Button {
             state.exportLastFrameSequenceProResMovie()
           } label: {
             Label("Export ProRes", systemImage: "film.badge.plus")
+          }
+          .disabled(state.isExtractingProxies)
+        }
+
+        if state.isExtractingProxies {
+          HStack(spacing: 8) {
+            ProgressView()
+              .controlSize(.small)
+            Text("Extracting source proxies — render available once decoding finishes.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
           }
         }
 
