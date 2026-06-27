@@ -56,6 +56,11 @@ pub enum CascadeFieldType {
     /// the drift line, so each ribbon traces a clean sinusoidal wave. The "root" of every
     /// ribbon bobs at its own rate — the look of kelp or river-grass in a current.
     RiverRoot,
+    /// Tiles to the left of the canvas centre drift left; tiles to the right drift right.
+    /// Oscillation is vertical (perpendicular to horizontal flow), applied at stamp time only
+    /// so each ribbon traces a sinusoidal wave outward from the centre line. The effect
+    /// mirrors `RiverRoot` about the vertical axis — like two rivers parting from a divide.
+    CenterSplit,
 }
 
 /// Settings for the persistent-trail vector-field cascade.
@@ -347,6 +352,32 @@ pub fn advance_cascade_trails(
                             origin.y0,
                             settings.river_turbulence,
                             angle,
+                            frame,
+                        );
+                        [jx, jy]
+                    })
+                    .collect();
+                Some(offsets)
+            }
+            CascadeFieldType::CenterSplit => {
+                let cx = state.width as f32 / 2.0;
+                // Left side flows left, right side flows right — direction fixed by home position.
+                for (pos, origin) in state.positions.iter_mut().zip(state.origins.iter()) {
+                    let home_cx = (origin.x0 as f32 + origin.x1 as f32) / 2.0;
+                    let dir = if home_cx < cx { -1.0_f32 } else { 1.0_f32 };
+                    pos[0] += dir * settings.river_speed * settings.advect;
+                }
+                // Vertical oscillation at stamp time only (flow_angle=0 ⇒ perp = Y axis).
+                let offsets = state
+                    .origins
+                    .iter()
+                    .map(|origin| {
+                        let (jx, jy) = river_jitter(
+                            settings.seed,
+                            origin.x0,
+                            origin.y0,
+                            settings.river_turbulence,
+                            0.0,
                             frame,
                         );
                         [jx, jy]
