@@ -377,4 +377,56 @@ mod tests {
         assert!((out.pixels[4][0] - 0.7).abs() < 1e-6);
         assert!((out.pixels[5][0] - 0.9).abs() < 1e-6);
     }
+
+    #[test]
+    fn sorts_col_axis_ascending() {
+        // 2-wide 4-tall. Col axis sorts each column top-to-bottom by luma.
+        // Col 0 lumas: [0.8, 0.2, 0.6, 0.4] → sorted: [0.2, 0.4, 0.6, 0.8]
+        // Col 1 lumas: [0.1, 0.9, 0.3, 0.7] → sorted: [0.1, 0.3, 0.7, 0.9]
+        let pixels: Vec<[f32; 4]> = vec![
+            [0.8, 0.8, 0.8, 1.0], [0.1, 0.1, 0.1, 1.0],
+            [0.2, 0.2, 0.2, 1.0], [0.9, 0.9, 0.9, 1.0],
+            [0.6, 0.6, 0.6, 1.0], [0.3, 0.3, 0.3, 1.0],
+            [0.4, 0.4, 0.4, 1.0], [0.7, 0.7, 0.7, 1.0],
+        ];
+        let src = ImageBufferF32::new(2, 4, pixels).unwrap();
+        let s = PixelSortSettings {
+            axis: SortAxis::Col,
+            threshold_low: 0.0,
+            threshold_high: 1.0,
+            ..Default::default()
+        };
+        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let col0: Vec<f32> = (0..4).map(|y| out.pixels[y * 2][0]).collect();
+        let col1: Vec<f32> = (0..4).map(|y| out.pixels[y * 2 + 1][0]).collect();
+        let expected0 = [0.2f32, 0.4, 0.6, 0.8];
+        let expected1 = [0.1f32, 0.3, 0.7, 0.9];
+        for i in 0..4 {
+            assert!((col0[i] - expected0[i]).abs() < 1e-6, "col0[{i}]");
+            assert!((col1[i] - expected1[i]).abs() < 1e-6, "col1[{i}]");
+        }
+    }
+
+    #[test]
+    fn sorts_red_channel_key() {
+        // 3 pixels with distinct R values; sorted by R ascending (key=Red).
+        // Pixels: R=[0.8,0.3,0.6], G=[0.1,0.9,0.5] → by R: R=0.3(G=0.9), R=0.6(G=0.5), R=0.8(G=0.1)
+        let pixels = vec![
+            [0.8f32, 0.1, 0.0, 1.0],
+            [0.3f32, 0.9, 0.0, 1.0],
+            [0.6f32, 0.5, 0.0, 1.0],
+        ];
+        let src = ImageBufferF32::new(3, 1, pixels).unwrap();
+        let s = PixelSortSettings {
+            key: SortKey::Red,
+            threshold_low: 0.0,
+            threshold_high: 1.0,
+            ..Default::default()
+        };
+        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        assert!((out.pixels[0][0] - 0.3).abs() < 1e-6, "px0.R=0.3");
+        assert!((out.pixels[0][1] - 0.9).abs() < 1e-6, "px0.G=0.9 follows its R");
+        assert!((out.pixels[1][0] - 0.6).abs() < 1e-6, "px1.R=0.6");
+        assert!((out.pixels[2][0] - 0.8).abs() < 1e-6, "px2.R=0.8");
+    }
 }

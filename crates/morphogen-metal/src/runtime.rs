@@ -3043,6 +3043,132 @@ mod tests {
     }
 
     #[test]
+    fn metal_pixel_sort_col_axis_matches_cpu() {
+        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis};
+
+        // Col axis: one threadgroup per column, sorts vertically. Use a wider-than-tall
+        // fixture so many col threadgroups are dispatched (the row tests focus on rows).
+        let fixture = ImageBufferF32::from_fn(64, 32, |x, y| {
+            let r = ((x * 11 + y * 7 + 5) % 256) as f32 / 255.0;
+            let g = ((x * 17 + y * 3 + 11) % 256) as f32 / 255.0;
+            let b = ((x * 5 + y * 13 + 23) % 256) as f32 / 255.0;
+            [r, g, b, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+        let settings = PixelSortSettings {
+            axis: SortAxis::Col,
+            threshold_low: 0.15,
+            threshold_high: 0.85,
+            ..Default::default()
+        };
+        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let gpu = match pixel_sort_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal pixel sort col-axis parity: no Metal device");
+                return;
+            }
+            Err(e) => panic!("metal pixel sort col-axis failed: {e}"),
+        };
+        assert_image_near(&gpu, &cpu, 0.0);
+    }
+
+    #[test]
+    fn metal_pixel_sort_descending_matches_cpu() {
+        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis, SortDirection};
+
+        let fixture = ImageBufferF32::from_fn(32, 16, |x, y| {
+            let v = ((x * 7 + y * 13 + 3) % 31 + 1) as f32 / 32.0;
+            [v, v, v, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+        let settings = PixelSortSettings {
+            axis: SortAxis::Row,
+            direction: SortDirection::Desc,
+            threshold_low: 0.1,
+            threshold_high: 0.9,
+            ..Default::default()
+        };
+        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let gpu = match pixel_sort_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal pixel sort descending parity: no Metal device");
+                return;
+            }
+            Err(e) => panic!("metal pixel sort descending failed: {e}"),
+        };
+        assert_image_near(&gpu, &cpu, 0.0);
+    }
+
+    #[test]
+    fn metal_pixel_sort_max_span_matches_cpu() {
+        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis};
+
+        let fixture = ImageBufferF32::from_fn(48, 16, |x, y| {
+            let v = ((x * 11 + y * 7 + 17) % 256) as f32 / 255.0;
+            [v, v, v, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+        let settings = PixelSortSettings {
+            axis: SortAxis::Row,
+            threshold_low: 0.0,
+            threshold_high: 1.0,
+            max_span: 8, // chunk every 8 px
+            ..Default::default()
+        };
+        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let gpu = match pixel_sort_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal pixel sort max_span parity: no Metal device");
+                return;
+            }
+            Err(e) => panic!("metal pixel sort max_span failed: {e}"),
+        };
+        assert_image_near(&gpu, &cpu, 0.0);
+    }
+
+    #[test]
+    fn metal_pixel_sort_hue_key_matches_cpu() {
+        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis, SortKey};
+
+        // Full-color fixture with varied hue so the hue sort key produces a real permutation.
+        let fixture = ImageBufferF32::from_fn(32, 16, |x, y| {
+            let r = ((x * 13 + y * 5 + 7) % 256) as f32 / 255.0;
+            let g = ((x * 7 + y * 17 + 13) % 256) as f32 / 255.0;
+            let b = ((x * 3 + y * 11 + 31) % 256) as f32 / 255.0;
+            [r, g, b, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+        let settings = PixelSortSettings {
+            axis: SortAxis::Row,
+            key: SortKey::Hue,
+            threshold_low: 0.0,
+            threshold_high: 1.0,
+            ..Default::default()
+        };
+        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let gpu = match pixel_sort_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal pixel sort hue key parity: no Metal device");
+                return;
+            }
+            Err(e) => panic!("metal pixel sort hue key failed: {e}"),
+        };
+        assert_image_near(&gpu, &cpu, 0.0);
+    }
+
+    #[test]
     fn metal_channel_shift_passthrough_matches_cpu() {
         use morphogen_render::{render_channel_shift_frame, ChannelShiftSettings};
 
