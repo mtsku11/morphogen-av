@@ -13,6 +13,15 @@ use crate::{ImageBufferF32, RenderError};
 
 pub const PALETTE_QUANTIZE_ALGORITHM: &str = "palette_quantize_posterize_cpu_v1";
 
+/// Built-in neon palette: magenta / orange / teal / black.
+/// Values are exact in f32 to guarantee CPU/GPU bit-equality.
+pub const NEON_PALETTE: [[f32; 3]; 4] = [
+    [1.0, 0.0, 1.0],   // magenta
+    [1.0, 0.5, 0.0],   // neon orange
+    [0.0, 0.75, 0.75], // teal
+    [0.0, 0.0, 0.0],   // black
+];
+
 /// Quantize mode.  Only `Posterize` is implemented in Slice 1.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,9 +56,9 @@ impl Default for PaletteQuantizeSettings {
 
 impl PaletteQuantizeSettings {
     fn validate(&self) -> Result<(), RenderError> {
-        if self.levels < 2 {
+        if matches!(self.mode, QuantizeMode::Posterize) && self.levels < 2 {
             return Err(RenderError::InvalidPaletteQuantizeSettings(
-                "levels must be >= 2".into(),
+                "levels must be >= 2 for posterize mode".into(),
             ));
         }
         Ok(())
@@ -60,8 +69,6 @@ impl PaletteQuantizeSettings {
     }
 }
 
-/// Render one posterize frame.  Only `Posterize` mode is implemented; other
-/// modes return an error until their slice lands.
 pub fn render_palette_quantize_frame(
     source_b: &ImageBufferF32,
     settings: &PaletteQuantizeSettings,
@@ -74,12 +81,35 @@ pub fn render_palette_quantize_frame(
 
     match settings.mode {
         QuantizeMode::Posterize => posterize(source_b, settings.levels),
-        QuantizeMode::Palette | QuantizeMode::Kmeans => Err(
-            RenderError::InvalidPaletteQuantizeSettings(
-                "only 'posterize' mode is implemented in Slice 1".into(),
-            ),
-        ),
+        QuantizeMode::Palette => palette_map(source_b),
+        QuantizeMode::Kmeans => Err(RenderError::InvalidPaletteQuantizeSettings(
+            "kmeans mode is not yet implemented (Slice 3)".into(),
+        )),
     }
+}
+
+fn palette_nearest(r: f32, g: f32, b: f32) -> [f32; 3] {
+    let mut best_dist = f32::MAX;
+    let mut best = 0;
+    for (i, c) in NEON_PALETTE.iter().enumerate() {
+        let dr = r - c[0];
+        let dg = g - c[1];
+        let db = b - c[2];
+        let d = dr * dr + dg * dg + db * db;
+        if d < best_dist {
+            best_dist = d;
+            best = i;
+        }
+    }
+    NEON_PALETTE[best]
+}
+
+fn palette_map(source_b: &ImageBufferF32) -> Result<ImageBufferF32, RenderError> {
+    ImageBufferF32::from_fn(source_b.width, source_b.height, |x, y| {
+        let px = source_b.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+        let out = palette_nearest(px[0], px[1], px[2]);
+        [out[0], out[1], out[2], px[3]]
+    })
 }
 
 fn posterize(source_b: &ImageBufferF32, levels: u32) -> Result<ImageBufferF32, RenderError> {
@@ -202,5 +232,41 @@ mod tests {
             levels: 1,
         };
         assert!(render_palette_quantize_frame(&src, &settings).is_err());
+    }
+
+    #[test]
+    fn palette_mode_maps_to_nearest_neon_colour() {
+        // Pure red (1,0,0): nearest is magenta (1,0,1) not orange (1,0.5,0)
+        // because dist-to-magenta = 1.0 < dist-to-orange = 0.25 ... wait
+        // dist_magenta(1,0,0) = (0)^2+(0)^2+(1)^2 = 1.0
+        // dist_orange(1,0,0)  = (0)^2+(0.5)^2+(0)^2 = 0.25
+        // so nearest is orange
+        let pixels = vec![
+            [1.0f32, 0.0, 0.0, 1.0], // near orange (1,0.5,0): d=0.25 < magenta d=1.0
+            [0.0, 0.0, 0.0, 0.5],    // black: exact match
+            [1.0, 0.0, 1.0, 1.0],    // magenta: exact match
+            [0.0, 1.0, 1.0, 0.0],    // nearest teal (0,0.75,0.75): d=0.0625*2=0.125
+        ];
+        let src = make_frame(pixels, 2, 2);
+        let settings = PaletteQuantizeSettings {
+            mode: QuantizeMode::Palette,
+            levels: 256, // ignored in palette mode
+        };
+        let out = render_palette_quantize_frame(&src, &settings).unwrap();
+
+        // (1,0,0) → orange (1,0.5,0)
+        let p = out.pixel(0, 0).unwrap();
+        assert_eq!([p[0], p[1], p[2]], [1.0, 0.5, 0.0], "red → orange");
+
+        // (0,0,0) → black (0,0,0)
+        let p = out.pixel(1, 0).unwrap();
+        assert_eq!([p[0], p[1], p[2]], [0.0, 0.0, 0.0], "black → black");
+
+        // (1,0,1) → magenta
+        let p = out.pixel(0, 1).unwrap();
+        assert_eq!([p[0], p[1], p[2]], [1.0, 0.0, 1.0], "magenta → magenta");
+
+        // alpha passes through
+        assert_eq!(out.pixel(1, 0).unwrap()[3], 0.5, "alpha passes through");
     }
 }

@@ -628,15 +628,18 @@ fn run() -> Result<(), CliError> {
             source_b_dir,
             output_dir,
             frames,
+            mode,
             levels,
+            backend,
         } => render_palette_quantize_sequence(PaletteQuantizeSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
             settings: PaletteQuantizeSettings {
-                mode: QuantizeMode::Posterize,
+                mode: mode.into(),
                 levels,
             },
             frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {

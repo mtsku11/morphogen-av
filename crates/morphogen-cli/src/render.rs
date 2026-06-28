@@ -16,7 +16,7 @@ use morphogen_render::{
     advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
     render_block_collage_frame, BlockCollageSettings,
     render_channel_shift_frame, ChannelShiftSettings,
-    render_palette_quantize_frame, PaletteQuantizeSettings,
+    render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
     render_pixel_sort_frame, PixelSortSettings,
     advance_field_particles,
     advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
@@ -5435,7 +5435,7 @@ pub(crate) fn render_channel_shift_frame_metal(
 }
 
 // ---------------------------------------------------------------------------
-// Palette Quantize — Slice 1 (posterize, CPU only)
+// Palette Quantize — Slice 2 (posterize + neon palette, CPU + Metal)
 // ---------------------------------------------------------------------------
 
 pub(crate) struct PaletteQuantizeSequenceRequest<'a> {
@@ -5443,6 +5443,7 @@ pub(crate) struct PaletteQuantizeSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: PaletteQuantizeSettings,
     pub(crate) frames: u32,
+    pub(crate) backend: RenderBackend,
 }
 
 pub(crate) fn render_palette_quantize_sequence(
@@ -5465,19 +5466,63 @@ pub(crate) fn render_palette_quantize_sequence(
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
+    let mode_label = match request.settings.mode {
+        QuantizeMode::Posterize => format!("posterize levels={}", request.settings.levels),
+        QuantizeMode::Palette => "neon-palette".to_string(),
+        QuantizeMode::Kmeans => "kmeans".to_string(),
+    };
+
     for index in 0..frame_count {
         let source_b = load_image_f32(&source_b_frames[index])?;
-        let rendered = render_palette_quantize_frame(&source_b, &request.settings)?;
+        let rendered = match request.backend {
+            RenderBackend::Cpu => render_palette_quantize_frame(&source_b, &request.settings)?,
+            RenderBackend::Metal => {
+                render_palette_quantize_frame_metal(&source_b, &request.settings)?
+            }
+        };
         save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
     }
 
     println!(
         "rendered palette quantize sequence with {} frame(s) \
-         (mode posterize, levels {}) from {} to {}",
+         (mode {}, backend {:?}) from {} to {}",
         frame_count,
-        request.settings.levels,
+        mode_label,
+        request.backend,
         request.source_b_dir.display(),
         request.output_dir.display(),
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_palette_quantize_frame_metal(
+    source_b: &ImageBufferF32,
+    settings: &PaletteQuantizeSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::palette_quantize_metal(source_b, settings)?;
+    let cpu = render_palette_quantize_frame(source_b, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU palette quantize outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal palette quantize diverged from CPU reference by {difference} \
+             (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_palette_quantize_frame_metal(
+    _source_b: &ImageBufferF32,
+    _settings: &PaletteQuantizeSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }

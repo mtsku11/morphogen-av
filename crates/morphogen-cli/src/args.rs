@@ -752,9 +752,9 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
-    /// Posterize Source B to a limited colour palette (Slice 1 — posterize mode,
-    /// CPU only). `--levels 256` returns B verbatim (off case, byte-identical).
-    /// Reference look: `--levels 4` gives bold flat-colour posterization.
+    /// Posterize or map Source B to a limited colour palette. `--mode posterize
+    /// --levels 256` returns B verbatim (off case, byte-identical).
+    /// `--mode palette` maps to the built-in neon set (magenta/orange/teal/black).
     RenderPaletteQuantizeSequence {
         /// Source B frames (PNG sequence).
         source_b_dir: PathBuf,
@@ -762,9 +762,15 @@ pub(crate) enum Commands {
         /// Number of output frames to render.
         #[arg(long, default_value_t = 120)]
         frames: u32,
-        /// Number of discrete steps per channel (2–256; 256 = identity passthrough).
+        /// Quantize mode: posterize (uniform steps) or palette (fixed neon colours).
+        #[arg(long, value_enum, default_value_t = CliQuantizeMode::Posterize)]
+        mode: CliQuantizeMode,
+        /// Discrete steps per channel for posterize mode (2–256; 256 = passthrough).
         #[arg(long, default_value_t = 256)]
         levels: u32,
+        /// Render backend. `metal` is gated against the CPU reference per frame.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
@@ -2367,6 +2373,22 @@ impl From<CliSortDirection> for morphogen_render::SortDirection {
         match v {
             CliSortDirection::Asc => Self::Asc,
             CliSortDirection::Desc => Self::Desc,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliQuantizeMode {
+    #[default]
+    Posterize,
+    Palette,
+}
+
+impl From<CliQuantizeMode> for morphogen_render::QuantizeMode {
+    fn from(v: CliQuantizeMode) -> Self {
+        match v {
+            CliQuantizeMode::Posterize => Self::Posterize,
+            CliQuantizeMode::Palette => Self::Palette,
         }
     }
 }

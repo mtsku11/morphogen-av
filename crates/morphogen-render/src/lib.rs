@@ -37,7 +37,7 @@ pub use channel_shift::{
     render_channel_shift_frame, ChannelShiftSettings, CHANNEL_SHIFT_ALGORITHM,
 };
 pub use palette_quantize::{
-    render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
+    render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode, NEON_PALETTE,
     PALETTE_QUANTIZE_ALGORITHM,
 };
 pub use pixel_sort::{

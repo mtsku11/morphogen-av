@@ -6,8 +6,9 @@ use metal::{
 use morphogen_render::{
     pyramidal_lucas_kanade_flow_with_refiner, ChannelShiftSettings, FieldParticleSettings,
     FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
-    GrainSelection, GranularMosaicSettings, ImageBufferF32, ParticleField, PixelSortSettings,
-    PyramidalLucasKanadeEstimate, RenderError, SortAxis, SortDirection, SortKey, StructureMode,
+    GrainSelection, GranularMosaicSettings, ImageBufferF32, PaletteQuantizeSettings, ParticleField,
+    PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError, SortAxis,
+    SortDirection, SortKey, StructureMode,
 };
 
 use crate::{
@@ -17,6 +18,7 @@ use crate::{
     CONVOLUTION_BLEND_COLOR_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
     CONVOLUTION_BLEND_SHADER_SOURCE, FIELD_PARTICLES_SPLAT_KERNEL_NAME,
     CHANNEL_SHIFT_KERNEL_NAME, CHANNEL_SHIFT_SHADER_SOURCE,
+    PALETTE_QUANTIZE_KERNEL_NAME, PALETTE_QUANTIZE_SHADER_SOURCE,
     FIELD_PARTICLES_SPLAT_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
     FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME,
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
@@ -135,6 +137,14 @@ struct ChannelShiftMetalParams {
     shift_g_y: f32,
     shift_b_x: f32,
     shift_b_y: f32,
+}
+
+#[repr(C)]
+struct PaletteQuantizeMetalParams {
+    width: u32,
+    height: u32,
+    mode: u32,   // 0 = posterize, 1 = neon palette
+    levels: u32, // posterize only; 0 when mode != 0
 }
 
 #[repr(C)]
@@ -2085,6 +2095,82 @@ pub fn channel_shift_metal(
     read_rgba_f32_texture(&output_texture, w, h)
 }
 
+pub fn palette_quantize_metal(
+    source_b: &ImageBufferF32,
+    settings: &PaletteQuantizeSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if source_b.width == 0 || source_b.height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+
+    let (mode, levels) = match settings.mode {
+        QuantizeMode::Posterize => (0u32, settings.levels),
+        QuantizeMode::Palette => (1u32, 0u32),
+        QuantizeMode::Kmeans => {
+            return Err(MetalDispatchError::UnsupportedOperation(
+                "kmeans palette mode is not yet supported on Metal".to_string(),
+            ))
+        }
+    };
+
+    let w = source_b.width;
+    let h = source_b.height;
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(PALETTE_QUANTIZE_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(PALETTE_QUANTIZE_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let source_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&source_texture, source_b)?;
+
+    let params = PaletteQuantizeMetalParams { width: w, height: h, mode, levels };
+
+    let tg_w = 16_u64.min(w as u64);
+    let tg_h = 16_u64.min(h as u64);
+    let grid_w = div_ceil(w, tg_w as u32) as u64;
+    let grid_h = div_ceil(h, tg_h as u32) as u64;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&source_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<PaletteQuantizeMetalParams>() as u64,
+        (&params as *const PaletteQuantizeMetalParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(grid_w, grid_h, 1),
+        MTLSize::new(tg_w, tg_h, 1),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+    }
+
+    read_rgba_f32_texture(&output_texture, w, h)
+}
+
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
@@ -3014,6 +3100,67 @@ mod tests {
             Err(e) => panic!("channel shift metal (offset) failed: {e}"),
         };
 
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_palette_quantize_posterize_matches_cpu() {
+        use morphogen_render::{render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode};
+
+        let fixture = ImageBufferF32::from_fn(32, 24, |x, y| {
+            let r = ((x * 7 + y * 3) % 17) as f32 / 17.0;
+            let g = ((x * 3 + y * 11) % 19) as f32 / 19.0;
+            let b = ((x * 5 + y * 7) % 23) as f32 / 23.0;
+            [r, g, b, 1.0]
+        })
+        .expect("fixture");
+
+        let settings = PaletteQuantizeSettings {
+            mode: QuantizeMode::Posterize,
+            levels: 8,
+        };
+        let cpu = render_palette_quantize_frame(&fixture, &settings).expect("cpu");
+        let gpu = match palette_quantize_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal palette quantize posterize: no Metal device");
+                return;
+            }
+            Err(e) => panic!("palette_quantize_metal (posterize) failed: {e}"),
+        };
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_palette_quantize_palette_matches_cpu() {
+        use morphogen_render::{render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode};
+
+        // Use pixels clearly within one Voronoi region to avoid FP tie-break risk.
+        // Each quadrant is assigned to a different palette entry.
+        let fixture = ImageBufferF32::from_fn(32, 32, |x, y| {
+            let (r, g, b) = match (x < 16, y < 16) {
+                (true, true)   => (0.95f32, 0.05, 0.95), // near magenta (1,0,1)
+                (false, true)  => (0.90f32, 0.45, 0.05), // near orange  (1,0.5,0)
+                (true, false)  => (0.05f32, 0.72, 0.72), // near teal    (0,0.75,0.75)
+                (false, false) => (0.05f32, 0.05, 0.05), // near black   (0,0,0)
+            };
+            [r, g, b, 1.0]
+        })
+        .expect("fixture");
+
+        let settings = PaletteQuantizeSettings {
+            mode: QuantizeMode::Palette,
+            levels: 256,
+        };
+        let cpu = render_palette_quantize_frame(&fixture, &settings).expect("cpu");
+        let gpu = match palette_quantize_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal palette quantize palette: no Metal device");
+                return;
+            }
+            Err(e) => panic!("palette_quantize_metal (palette) failed: {e}"),
+        };
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
     }
 
