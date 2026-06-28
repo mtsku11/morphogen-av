@@ -28,6 +28,8 @@ pub enum RenderError {
     InvalidBlockCollageSettings(String),
     #[error("invalid pixel sort settings: {0}")]
     InvalidPixelSortSettings(String),
+    #[error("invalid palette quantize settings: {0}")]
+    InvalidPaletteQuantizeSettings(String),
     #[error("render inputs are incompatible: {0}")]
     IncompatibleInputs(String),
     #[error("I/O error: {0}")]

@@ -752,6 +752,20 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Posterize Source B to a limited colour palette (Slice 1 — posterize mode,
+    /// CPU only). `--levels 256` returns B verbatim (off case, byte-identical).
+    /// Reference look: `--levels 4` gives bold flat-colour posterization.
+    RenderPaletteQuantizeSequence {
+        /// Source B frames (PNG sequence).
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Number of discrete steps per channel (2–256; 256 = identity passthrough).
+        #[arg(long, default_value_t = 256)]
+        levels: u32,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains

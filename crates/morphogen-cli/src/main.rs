@@ -4,7 +4,8 @@ use morphogen_render::{
     BlockCollageSettings, CascadeFieldType, CascadeTrailSettings, ChannelShiftSettings,
     CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
     FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
-    GranularMosaicSettings, PixelSortSettings, StructureMode, VideoVocoderSettings,
+    GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
+    StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -621,6 +622,21 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+        })
+        .map(|_| ()),
+        Commands::RenderPaletteQuantizeSequence {
+            source_b_dir,
+            output_dir,
+            frames,
+            levels,
+        } => render_palette_quantize_sequence(PaletteQuantizeSequenceRequest {
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: PaletteQuantizeSettings {
+                mode: QuantizeMode::Posterize,
+                levels,
+            },
+            frames,
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {

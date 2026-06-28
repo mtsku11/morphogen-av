@@ -3,6 +3,7 @@
 pub mod audio_route;
 pub mod block_collage;
 pub mod channel_shift;
+pub mod palette_quantize;
 pub mod pixel_sort;
 pub mod cascade_trails;
 pub mod coagulate;
@@ -34,6 +35,10 @@ pub use block_collage::{
 };
 pub use channel_shift::{
     render_channel_shift_frame, ChannelShiftSettings, CHANNEL_SHIFT_ALGORITHM,
+};
+pub use palette_quantize::{
+    render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
+    PALETTE_QUANTIZE_ALGORITHM,
 };
 pub use pixel_sort::{
     render_pixel_sort_frame, PixelSortSettings, SortAxis, SortDirection, SortKey,
