@@ -748,6 +748,9 @@ pub(crate) enum Commands {
         /// Vertical offset for the Blue channel (px).
         #[arg(long, default_value_t = 0.0)]
         shift_b_y: f32,
+        /// Render backend. `metal` is gated against the CPU reference per frame.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour

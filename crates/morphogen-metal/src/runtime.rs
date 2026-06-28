@@ -4,10 +4,10 @@ use metal::{
     MTLTextureUsage, Texture, TextureDescriptor,
 };
 use morphogen_render::{
-    pyramidal_lucas_kanade_flow_with_refiner, FieldParticleSettings, FlowFeedbackSettings,
-    FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool, GrainSelection,
-    GranularMosaicSettings, ImageBufferF32, ParticleField, PixelSortSettings, PyramidalLucasKanadeEstimate,
-    RenderError, SortAxis, SortDirection, SortKey, StructureMode,
+    pyramidal_lucas_kanade_flow_with_refiner, ChannelShiftSettings, FieldParticleSettings,
+    FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
+    GrainSelection, GranularMosaicSettings, ImageBufferF32, ParticleField, PixelSortSettings,
+    PyramidalLucasKanadeEstimate, RenderError, SortAxis, SortDirection, SortKey, StructureMode,
 };
 
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     COAGULATED_COMPOSITE_SHADER_SOURCE, CONVOLUTION_BLEND_COLOR_KERNEL_NAME,
     CONVOLUTION_BLEND_COLOR_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
     CONVOLUTION_BLEND_SHADER_SOURCE, FIELD_PARTICLES_SPLAT_KERNEL_NAME,
+    CHANNEL_SHIFT_KERNEL_NAME, CHANNEL_SHIFT_SHADER_SOURCE,
     FIELD_PARTICLES_SPLAT_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
     FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME,
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
@@ -122,6 +123,18 @@ struct PixelSortMetalParams {
     threshold_low: f32,
     threshold_high: f32,
     max_span: u32,
+}
+
+#[repr(C)]
+struct ChannelShiftMetalParams {
+    width: u32,
+    height: u32,
+    shift_r_x: f32,
+    shift_r_y: f32,
+    shift_g_x: f32,
+    shift_g_y: f32,
+    shift_b_x: f32,
+    shift_b_y: f32,
 }
 
 #[repr(C)]
@@ -1997,6 +2010,81 @@ pub fn pixel_sort_metal(
     read_rgba_f32_texture(&output_texture, w, h)
 }
 
+pub fn channel_shift_metal(
+    source_b: &ImageBufferF32,
+    settings: &ChannelShiftSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if source_b.width == 0 || source_b.height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+
+    let w = source_b.width;
+    let h = source_b.height;
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(CHANNEL_SHIFT_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(CHANNEL_SHIFT_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let source_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&source_texture, source_b)?;
+
+    let params = ChannelShiftMetalParams {
+        width: w,
+        height: h,
+        shift_r_x: settings.shift_r_x,
+        shift_r_y: settings.shift_r_y,
+        shift_g_x: settings.shift_g_x,
+        shift_g_y: settings.shift_g_y,
+        shift_b_x: settings.shift_b_x,
+        shift_b_y: settings.shift_b_y,
+    };
+
+    let tg_w = 16_u64.min(w as u64);
+    let tg_h = 16_u64.min(h as u64);
+    let grid_w = div_ceil(w, tg_w as u32) as u64;
+    let grid_h = div_ceil(h, tg_h as u32) as u64;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&source_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<ChannelShiftMetalParams>() as u64,
+        (&params as *const ChannelShiftMetalParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(grid_w, grid_h, 1),
+        MTLSize::new(tg_w, tg_h, 1),
+    );
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+    }
+
+    read_rgba_f32_texture(&output_texture, w, h)
+}
+
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
@@ -2866,6 +2954,67 @@ mod tests {
         // Pixel sort is a pure permutation: every output pixel is an unmodified input
         // pixel. CPU and GPU use the same IEEE 754 f32 sort key. Parity must be exact.
         assert_image_near(&gpu, &cpu, 0.0);
+    }
+
+    #[test]
+    fn metal_channel_shift_passthrough_matches_cpu() {
+        use morphogen_render::{render_channel_shift_frame, ChannelShiftSettings};
+
+        let fixture = ImageBufferF32::from_fn(32, 24, |x, y| {
+            let r = ((x * 7 + y * 3) % 17) as f32 / 17.0;
+            let g = ((x * 3 + y * 11) % 19) as f32 / 19.0;
+            let b = ((x * 5 + y * 7) % 23) as f32 / 23.0;
+            [r, g, b, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+        let settings = ChannelShiftSettings::default();
+
+        let cpu = render_channel_shift_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let gpu = match channel_shift_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal channel shift passthrough: no Metal device");
+                return;
+            }
+            Err(e) => panic!("channel shift metal (passthrough) failed: {e}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_channel_shift_offset_matches_cpu() {
+        use morphogen_render::{render_channel_shift_frame, ChannelShiftSettings};
+
+        // RGB fixture: distinct per-channel ramps so offset is detectable per-channel.
+        let fixture = ImageBufferF32::from_fn(64, 48, |x, y| {
+            let r = x as f32 / 63.0;
+            let g = y as f32 / 47.0;
+            let b = ((x + y) % 32) as f32 / 32.0;
+            [r, g, b, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+        let settings = ChannelShiftSettings {
+            shift_r_x: 6.0,
+            shift_b_x: -6.0,
+            ..Default::default()
+        };
+
+        let cpu = render_channel_shift_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let gpu = match channel_shift_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal channel shift offset: no Metal device");
+                return;
+            }
+            Err(e) => panic!("channel shift metal (offset) failed: {e}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
     }
 
     fn assert_image_near(actual: &ImageBufferF32, expected: &ImageBufferF32, epsilon: f32) {

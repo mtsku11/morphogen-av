@@ -5347,6 +5347,7 @@ pub(crate) struct ChannelShiftSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: ChannelShiftSettings,
     pub(crate) frames: u32,
+    pub(crate) backend: RenderBackend,
 }
 
 pub(crate) fn render_channel_shift_sequence(
@@ -5373,19 +5374,61 @@ pub(crate) fn render_channel_shift_sequence(
 
     for index in 0..frame_count {
         let source_b = load_image_f32(&source_b_frames[index])?;
-        let rendered = render_channel_shift_frame(&dummy_a, &source_b, &request.settings)?;
+        let rendered = match request.backend {
+            RenderBackend::Cpu => {
+                render_channel_shift_frame(&dummy_a, &source_b, &request.settings)?
+            }
+            RenderBackend::Metal => {
+                render_channel_shift_frame_metal(&source_b, &request.settings)?
+            }
+        };
         save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
     }
 
     println!(
         "rendered channel shift sequence with {} frame(s) \
-         (R:{:+.1},{:+.1} G:{:+.1},{:+.1} B:{:+.1},{:+.1} px) from {} to {}",
+         (R:{:+.1},{:+.1} G:{:+.1},{:+.1} B:{:+.1},{:+.1} px, backend {:?}) from {} to {}",
         frame_count,
         request.settings.shift_r_x, request.settings.shift_r_y,
         request.settings.shift_g_x, request.settings.shift_g_y,
         request.settings.shift_b_x, request.settings.shift_b_y,
+        request.backend,
         request.source_b_dir.display(),
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_channel_shift_frame_metal(
+    source_b: &ImageBufferF32,
+    settings: &ChannelShiftSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::channel_shift_metal(source_b, settings)?;
+    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]])
+        .map_err(|e| CliError::Message(e.to_string()))?;
+    let cpu = render_channel_shift_frame(&dummy_a, source_b, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU channel shift outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal channel shift diverged from CPU reference by {difference} \
+             (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_channel_shift_frame_metal(
+    _source_b: &ImageBufferF32,
+    _settings: &ChannelShiftSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }

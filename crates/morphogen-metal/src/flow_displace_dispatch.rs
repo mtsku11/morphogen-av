@@ -33,6 +33,8 @@ pub const LUCAS_KANADE_REFINE_SHADER_SOURCE: &str =
     include_str!("../shaders/lucas_kanade_refine.metal");
 pub const PIXEL_SORT_KERNEL_NAME: &str = "pixel_sort";
 pub const PIXEL_SORT_SHADER_SOURCE: &str = include_str!("../shaders/pixel_sort.metal");
+pub const CHANNEL_SHIFT_KERNEL_NAME: &str = "channel_shift";
+pub const CHANNEL_SHIFT_SHADER_SOURCE: &str = include_str!("../shaders/channel_shift.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -159,6 +161,10 @@ pub enum MetalDispatchError {
     MissingPixelSortBindingLayout,
     #[error("invalid pixel sort settings: {0}")]
     InvalidPixelSortSettings(String),
+    #[error("channel_shift.metal does not contain the expected kernel entry point")]
+    MissingChannelShiftKernelEntryPoint,
+    #[error("channel_shift.metal does not contain the expected texture and buffer bindings")]
+    MissingChannelShiftBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -499,6 +505,22 @@ pub fn validate_pixel_sort_shader_source() -> Result<(), MetalDispatchError> {
     Ok(())
 }
 
+pub fn validate_channel_shift_shader_source() -> Result<(), MetalDispatchError> {
+    if !CHANNEL_SHIFT_SHADER_SOURCE.contains("kernel void channel_shift") {
+        return Err(MetalDispatchError::MissingChannelShiftKernelEntryPoint);
+    }
+    for expected in [
+        "texture2d<float, access::sample> source_b [[texture(0)]]",
+        "texture2d<float, access::write>  output   [[texture(1)]]",
+        "constant ChannelShiftParams&     params   [[buffer(0)]]",
+    ] {
+        if !CHANNEL_SHIFT_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingChannelShiftBindingLayout);
+        }
+    }
+    Ok(())
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -614,5 +636,10 @@ mod tests {
     fn lucas_kanade_refine_shader_has_expected_bindings() {
         validate_lucas_kanade_refine_shader_source()
             .expect("lucas kanade refine shader preflight");
+    }
+
+    #[test]
+    fn channel_shift_shader_has_expected_bindings() {
+        validate_channel_shift_shader_source().expect("channel shift shader preflight");
     }
 }

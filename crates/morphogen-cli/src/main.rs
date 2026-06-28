@@ -607,6 +607,7 @@ fn run() -> Result<(), CliError> {
             shift_g_y,
             shift_b_x,
             shift_b_y,
+            backend,
         } => render_channel_shift_sequence(ChannelShiftSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -619,6 +620,7 @@ fn run() -> Result<(), CliError> {
                 shift_b_y,
             },
             frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {
