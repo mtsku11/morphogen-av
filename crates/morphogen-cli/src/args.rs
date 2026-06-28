@@ -716,7 +716,16 @@ pub(crate) enum Commands {
         /// Maximum streak length in pixels; 0 = unbounded.
         #[arg(long, default_value_t = 0)]
         max_span: u32,
+        /// What drives the per-pixel sortability mask.
+        /// `self` = B's own sort key (single-source classic).
+        /// `a-luma` / `a-edge` / `a-flow` = cross-synth: A defines where sorting happens.
+        #[arg(long, value_enum, default_value_t = CliMaskSource::SelfMask)]
+        mask_source: CliMaskSource,
+        /// Lucas-Kanade window radius for a-flow mask mode.
+        #[arg(long, default_value_t = 4)]
+        flow_radius: i32,
         /// Compute backend. CPU is ground truth; Metal runs parity-gated per-frame.
+        /// Cross-synth mask modes are CPU-only regardless of this flag.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
@@ -2384,6 +2393,31 @@ impl From<CliSortDirection> for morphogen_render::SortDirection {
         match v {
             CliSortDirection::Asc => Self::Asc,
             CliSortDirection::Desc => Self::Desc,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliMaskSource {
+    /// Single-source classic: B's own sort-key determines sortable spans.
+    #[default]
+    #[value(name = "self")]
+    SelfMask,
+    /// A's luma (resampled to B's grid) gates sortable spans.
+    ALuma,
+    /// Sobel magnitude of A's luma — sorts between edges, leaves edges crisp.
+    AEdge,
+    /// Optical-flow magnitude between consecutive A frames — moving regions sort.
+    AFlow,
+}
+
+impl From<CliMaskSource> for morphogen_render::MaskSource {
+    fn from(v: CliMaskSource) -> Self {
+        match v {
+            CliMaskSource::SelfMask => Self::SelfMask,
+            CliMaskSource::ALuma => Self::ALuma,
+            CliMaskSource::AEdge => Self::AEdge,
+            CliMaskSource::AFlow => Self::AFlow,
         }
     }
 }

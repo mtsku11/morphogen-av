@@ -4241,8 +4241,7 @@ fn pixel_sort_metal_parity_real_footage() {
         ..Default::default()
     };
 
-    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0_f32; 4]]).unwrap();
-    let cpu = render_pixel_sort_frame(&dummy_a, &source, &settings).expect("cpu");
+    let cpu = render_pixel_sort_frame(&source, &settings, &[]).expect("cpu");
     let gpu = morphogen_metal::pixel_sort_metal(&source, &settings).expect("gpu");
 
     let mut worst_diff = 0.0_f32;

@@ -42,8 +42,9 @@ pub use palette_quantize::{
     PALETTE_QUANTIZE_ALGORITHM,
 };
 pub use pixel_sort::{
-    render_pixel_sort_frame, PixelSortSettings, SortAxis, SortDirection, SortKey,
-    PIXEL_SORT_ALGORITHM,
+    compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask, render_pixel_sort_frame,
+    MaskSource, PixelSortSettings, SortAxis, SortDirection, SortKey, PIXEL_SORT_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
 };
 pub use cascade_trails::{
     advance_cascade_trails, assign_temporal_patches, initialize_cascade_trails,

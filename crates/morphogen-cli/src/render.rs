@@ -17,7 +17,8 @@ use morphogen_render::{
     render_block_collage_frame, BlockCollageSettings,
     compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
     render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
-    render_pixel_sort_frame, PixelSortSettings,
+    compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask,
+    render_pixel_sort_frame, MaskSource, PixelSortSettings, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
     advance_field_particles,
     advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu,
@@ -2405,6 +2406,8 @@ pub(crate) struct PixelSortSequenceRequest<'a> {
     pub(crate) settings: PixelSortSettings,
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
+    /// LK window radius for a-flow mask mode.
+    pub(crate) flow_radius: i32,
 }
 
 pub(crate) fn render_pixel_sort_sequence(
@@ -2417,6 +2420,13 @@ pub(crate) fn render_pixel_sort_sequence(
         ));
     }
 
+    let mask_source = request.settings.mask_source;
+    if mask_source != MaskSource::SelfMask && request.backend == RenderBackend::Metal {
+        return Err(CliError::Message(
+            "cross-synth mask modes (a-luma, a-edge, a-flow) are CPU-only; use --backend cpu".to_string(),
+        ));
+    }
+
     let source_a_frames = collect_image_frames(request.source_a_dir)?;
     let source_b_frames = collect_image_frames(request.source_b_dir)?;
     if source_b_frames.is_empty() {
@@ -2424,39 +2434,85 @@ pub(crate) fn render_pixel_sort_sequence(
             "pixel sort requires at least one PNG frame in the source B directory".to_string(),
         ));
     }
+    if mask_source.needs_source_a() && source_a_frames.is_empty() {
+        return Err(CliError::Message(format!(
+            "mask-source {:?} requires source A frames; source-a-dir has no PNG files",
+            mask_source
+        )));
+    }
 
     let b_count = source_b_frames.len();
     let frame_count = (request.frames as usize).min(b_count);
     fs::create_dir_all(request.output_dir)?;
 
+    let mut prev_a: Option<ImageBufferF32> = None;
+    let mut metal_flow_validated = false;
+
     for index in 0..frame_count {
-        let a_idx = if source_a_frames.is_empty() {
-            index % b_count
-        } else {
-            index % source_a_frames.len()
-        };
-        let source_a = if source_a_frames.is_empty() {
-            load_image_f32(&source_b_frames[index])?
-        } else {
-            load_image_f32(&source_a_frames[a_idx])?
-        };
         let source_b = load_image_f32(&source_b_frames[index])?;
+        let bw = source_b.width;
+        let bh = source_b.height;
+
+        // Compute the per-pixel mask for cross-synth modes.
+        let a_mask: Vec<f32> = match mask_source {
+            MaskSource::SelfMask => vec![],
+            MaskSource::ALuma | MaskSource::AEdge => {
+                let a_idx = index % source_a_frames.len();
+                let source_a = load_image_f32(&source_a_frames[a_idx])?;
+                match mask_source {
+                    MaskSource::ALuma => compute_a_luma_mask(&source_a, bw, bh),
+                    _ => compute_a_edge_mask(&source_a, bw, bh),
+                }
+            }
+            MaskSource::AFlow => {
+                let a_idx = index % source_a_frames.len();
+                let source_a = load_image_f32(&source_a_frames[a_idx])?;
+                if let Some(pa) = &prev_a {
+                    let flow = compute_optical_flow_backend(
+                        pa,
+                        &source_a,
+                        source_a.width,
+                        source_a.height,
+                        request.flow_radius,
+                        RenderBackend::Cpu,
+                        &mut metal_flow_validated,
+                    )?;
+                    let mask = compute_a_flow_mask(&flow, bw, bh);
+                    prev_a = Some(source_a);
+                    mask
+                } else {
+                    // Frame 0: no prev → zero magnitudes → nothing sortable (passthrough)
+                    prev_a = Some(source_a);
+                    vec![0.0f32; (bw * bh) as usize]
+                }
+            }
+        };
+
+        // For non-flow modes update prev_a is not needed; for ALuma/AEdge prev_a stays None.
         let rendered = match request.backend {
-            RenderBackend::Cpu => render_pixel_sort_frame(&source_a, &source_b, &request.settings)?,
+            RenderBackend::Cpu => render_pixel_sort_frame(&source_b, &request.settings, &a_mask)?,
             RenderBackend::Metal => render_pixel_sort_frame_metal(&source_b, &request.settings)?,
         };
         save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
     }
 
+    let algo = if mask_source == MaskSource::SelfMask {
+        "self"
+    } else {
+        PIXEL_SORT_CROSS_SYNTH_ALGORITHM
+    };
     println!(
         "rendered pixel sort sequence with {} frame(s) \
-         (axis {:?}, key {:?}, threshold [{:.2},{:.2}], max_span {}, backend {:?}) from B:{} to {}",
+         (axis {:?}, key {:?}, mask {:?}, threshold [{:.2},{:.2}], max_span {}, algo {}, backend {:?}) \
+         from B:{} to {}",
         frame_count,
         request.settings.axis,
         request.settings.key,
+        mask_source,
         request.settings.threshold_low,
         request.settings.threshold_high,
         request.settings.max_span,
+        algo,
         request.backend,
         request.source_b_dir.display(),
         request.output_dir.display()
@@ -2470,9 +2526,7 @@ pub(crate) fn render_pixel_sort_frame_metal(
     settings: &PixelSortSettings,
 ) -> Result<ImageBufferF32, CliError> {
     let gpu = morphogen_metal::pixel_sort_metal(source, settings)?;
-    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]])
-        .map_err(|e| CliError::Message(e.to_string()))?;
-    let cpu = render_pixel_sort_frame(&dummy_a, source, settings)?;
+    let cpu = render_pixel_sort_frame(source, settings, &[])?;
     let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
         CliError::Message(
             "Metal and CPU pixel sort outputs have mismatched dimensions; cannot verify parity"

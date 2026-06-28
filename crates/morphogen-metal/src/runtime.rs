@@ -2947,7 +2947,6 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
 
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
@@ -2956,7 +2955,7 @@ mod tests {
             ..Default::default()
         };
 
-        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu render");
+        let cpu = render_pixel_sort_frame(&fixture, &settings, &[]).expect("cpu render");
         let gpu = match pixel_sort_metal(&fixture, &settings) {
             Ok(image) => image,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -2984,7 +2983,6 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).unwrap();
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
             threshold_low: 0.20,
@@ -2992,7 +2990,7 @@ mod tests {
             ..Default::default()
         };
 
-        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let cpu = render_pixel_sort_frame(&fixture, &settings, &[]).expect("cpu");
         let gpu = match pixel_sort_metal(&fixture, &settings) {
             Ok(img) => img,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -3018,7 +3016,6 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
 
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
@@ -3027,7 +3024,7 @@ mod tests {
             ..Default::default()
         };
 
-        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu render");
+        let cpu = render_pixel_sort_frame(&fixture, &settings, &[]).expect("cpu render");
         let gpu = match pixel_sort_metal(&fixture, &settings) {
             Ok(image) => image,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -3056,14 +3053,13 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
         let settings = PixelSortSettings {
             axis: SortAxis::Col,
             threshold_low: 0.15,
             threshold_high: 0.85,
             ..Default::default()
         };
-        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let cpu = render_pixel_sort_frame(&fixture, &settings, &[]).expect("cpu");
         let gpu = match pixel_sort_metal(&fixture, &settings) {
             Ok(img) => img,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -3085,7 +3081,6 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
             direction: SortDirection::Desc,
@@ -3093,7 +3088,7 @@ mod tests {
             threshold_high: 0.9,
             ..Default::default()
         };
-        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let cpu = render_pixel_sort_frame(&fixture, &settings, &[]).expect("cpu");
         let gpu = match pixel_sort_metal(&fixture, &settings) {
             Ok(img) => img,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -3115,7 +3110,6 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
             threshold_low: 0.0,
@@ -3123,7 +3117,7 @@ mod tests {
             max_span: 8, // chunk every 8 px
             ..Default::default()
         };
-        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let cpu = render_pixel_sort_frame(&fixture, &settings, &[]).expect("cpu");
         let gpu = match pixel_sort_metal(&fixture, &settings) {
             Ok(img) => img,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -3148,7 +3142,6 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
             key: SortKey::Hue,
@@ -3156,7 +3149,7 @@ mod tests {
             threshold_high: 1.0,
             ..Default::default()
         };
-        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let cpu = render_pixel_sort_frame(&fixture, &settings, &[]).expect("cpu");
         let gpu = match pixel_sort_metal(&fixture, &settings) {
             Ok(img) => img,
             Err(MetalDispatchError::DeviceUnavailable) => {

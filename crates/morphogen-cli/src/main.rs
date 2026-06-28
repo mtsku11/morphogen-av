@@ -581,6 +581,8 @@ fn run() -> Result<(), CliError> {
             threshold_low,
             threshold_high,
             max_span,
+            mask_source,
+            flow_radius,
             backend,
         } => render_pixel_sort_sequence(PixelSortSequenceRequest {
             source_a_dir: &source_a_dir,
@@ -593,9 +595,11 @@ fn run() -> Result<(), CliError> {
                 threshold_low,
                 threshold_high,
                 max_span,
+                mask_source: mask_source.into(),
             },
             frames,
             backend: backend.into(),
+            flow_radius,
         })
         .map(|_| ()),
         Commands::RenderChannelShiftSequence {

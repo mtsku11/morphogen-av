@@ -11,10 +11,44 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ImageBufferF32, RenderError};
+use crate::{sampler::sample_bilinear_clamped, FlowField, ImageBufferF32, RenderError};
 
-/// Algorithm identifier — bump when the sorting logic or key computation changes.
+/// Algorithm identifier for single-source (self-mask) mode.
 pub const PIXEL_SORT_ALGORITHM: &str = "pixel_sort_threshold_span_v1";
+/// Algorithm identifier for cross-synth mask modes (a-luma, a-edge, a-flow).
+pub const PIXEL_SORT_CROSS_SYNTH_ALGORITHM: &str = "pixel_sort_cross_synth_mask_v1";
+
+/// What drives the span-detection mask (determines which pixels are sortable).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaskSource {
+    /// Self mask: B's own sort-key value determines sortability (single-source classic).
+    #[serde(rename = "self")]
+    SelfMask,
+    /// A's Rec.709 luma (resampled to B's grid) determines sortability.
+    ALuma,
+    /// Sobel magnitude of A's luma (resampled to B's grid) — sorts between edges, not across them.
+    AEdge,
+    /// Optical-flow magnitude between consecutive A frames (peak-normalised) — moving regions sort.
+    AFlow,
+}
+
+impl Default for MaskSource {
+    fn default() -> Self {
+        MaskSource::SelfMask
+    }
+}
+
+impl MaskSource {
+    /// Returns true when A frames are needed (to compute the mask).
+    pub fn needs_source_a(self) -> bool {
+        !matches!(self, MaskSource::SelfMask)
+    }
+    /// Returns true when two consecutive A frames are needed (optical flow).
+    pub fn needs_flow(self) -> bool {
+        matches!(self, MaskSource::AFlow)
+    }
+}
 
 /// Which component of a pixel drives the sort order.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,7 +96,7 @@ impl Default for SortAxis {
     }
 }
 
-/// Knobs for the pixel-sort renderer (Slice 1: single-source, CPU reference).
+/// Knobs for the pixel-sort renderer.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct PixelSortSettings {
     /// Sort direction: `Row` for horizontal streaks, `Col` for vertical.
@@ -78,6 +112,10 @@ pub struct PixelSortSettings {
     /// Maximum streak length in pixels; `0` = unbounded. Spans longer than this are
     /// sorted in `max_span`-pixel chunks.
     pub max_span: u32,
+    /// What drives the per-pixel sortability mask. `SelfMask` = B's own sort key (classic);
+    /// `ALuma`/`AEdge`/`AFlow` = cross-synth (caller pre-computes and passes `a_mask`).
+    #[serde(default)]
+    pub mask_source: MaskSource,
 }
 
 impl Default for PixelSortSettings {
@@ -89,6 +127,7 @@ impl Default for PixelSortSettings {
             threshold_low: 0.25,
             threshold_high: 0.80,
             max_span: 0,
+            mask_source: MaskSource::SelfMask,
         }
     }
 }
@@ -148,6 +187,79 @@ fn saturation(r: f32, g: f32, b: f32) -> f32 {
     (max - min) / max
 }
 
+// ─── Cross-synth mask helpers ─────────────────────────────────────────────────
+
+/// Resample A's Rec.709 luma onto B's pixel grid (bilinear).  Returns one
+/// value per B pixel in row-major order, range [0, 1].
+pub fn compute_a_luma_mask(source_a: &ImageBufferF32, b_width: u32, b_height: u32) -> Vec<f32> {
+    let aw = source_a.width as f32;
+    let ah = source_a.height as f32;
+    let bw = b_width as f32;
+    let bh = b_height as f32;
+    (0..b_height)
+        .flat_map(|y| {
+            let ay = (y as f32 + 0.5) * ah / bh - 0.5;
+            (0..b_width).map(move |x| {
+                let ax = (x as f32 + 0.5) * aw / bw - 0.5;
+                let px = sample_bilinear_clamped(source_a, ax, ay);
+                luma(px[0], px[1], px[2])
+            })
+        })
+        .collect()
+}
+
+/// Resample A's luma to B's grid then apply a 3×3 Sobel edge detector.
+/// Output magnitude in [0, 1] (divided by 4√2, the maximum Sobel response for [0,1] inputs).
+pub fn compute_a_edge_mask(source_a: &ImageBufferF32, b_width: u32, b_height: u32) -> Vec<f32> {
+    let lumas = compute_a_luma_mask(source_a, b_width, b_height);
+    let w = b_width as usize;
+    let h = b_height as usize;
+    let norm = 4.0 * std::f32::consts::SQRT_2;
+    let mut out = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let s = |dy: i32, dx: i32| {
+                let sy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
+                let sx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
+                lumas[sy * w + sx]
+            };
+            let gx = -s(-1, -1) + s(-1, 1) - 2.0 * s(0, -1) + 2.0 * s(0, 1)
+                - s(1, -1) + s(1, 1);
+            let gy = -s(-1, -1) - 2.0 * s(-1, 0) - s(-1, 1)
+                + s(1, -1) + 2.0 * s(1, 0) + s(1, 1);
+            out.push(((gx * gx + gy * gy).sqrt() / norm).min(1.0));
+        }
+    }
+    out
+}
+
+/// Compute per-pixel flow magnitude from a FlowField, resampled (nearest) to B's
+/// dimensions and peak-normalised to [0, 1].  A static frame → all zeros → nothing sortable.
+pub fn compute_a_flow_mask(flow: &FlowField, b_width: u32, b_height: u32) -> Vec<f32> {
+    let fw = flow.width as usize;
+    let fh = flow.height as usize;
+    let raw: Vec<f32> = flow.vectors.iter().map(|v| v[0].hypot(v[1])).collect();
+    let max_mag = raw.iter().cloned().fold(0.0_f32, f32::max).max(1.0);
+    let normed: Vec<f32> = raw.iter().map(|&m| m / max_mag).collect();
+    if flow.width == b_width && flow.height == b_height {
+        return normed;
+    }
+    // Nearest-neighbour resample to B's dimensions.
+    let bw = b_width as f32;
+    let bh = b_height as f32;
+    let mut out = Vec::with_capacity((b_width * b_height) as usize);
+    for y in 0..b_height as usize {
+        let fy = ((y as f32 + 0.5) * fh as f32 / bh - 0.5)
+            .clamp(0.0, fh as f32 - 1.0) as usize;
+        for x in 0..b_width as usize {
+            let fx = ((x as f32 + 0.5) * fw as f32 / bw - 0.5)
+                .clamp(0.0, fw as f32 - 1.0) as usize;
+            out.push(normed[fy * fw + fx]);
+        }
+    }
+    out
+}
+
 fn pixel_sort_key(px: [f32; 4], key: SortKey) -> f32 {
     let [r, g, b, _] = px;
     match key {
@@ -177,6 +289,8 @@ fn sort_span(span: &mut [[f32; 4]], key: SortKey, direction: SortDirection) {
 }
 
 /// Walk one scan-line (row or column slice), find maximal sortable spans, and sort them.
+/// `a_mask`: if non-empty, per-position mask values for span detection (cross-synth modes);
+/// if empty, B's own sort key is used for both masking and sorting (self mode).
 fn sort_line(
     line: &mut [[f32; 4]],
     key: SortKey,
@@ -184,21 +298,21 @@ fn sort_line(
     high: f32,
     direction: SortDirection,
     max_span: usize,
+    a_mask: &[f32],
 ) {
     let n = line.len();
     let mut i = 0;
     while i < n {
-        let k = pixel_sort_key(line[i], key);
-        if k < low || k > high {
+        let mv = if a_mask.is_empty() { pixel_sort_key(line[i], key) } else { a_mask[i] };
+        if mv < low || mv > high {
             i += 1;
             continue;
         }
-        // Find the end of the maximal contiguous sortable span.
         let span_start = i;
-        while i < n && {
-            let k2 = pixel_sort_key(line[i], key);
-            k2 >= low && k2 <= high
-        } {
+        i += 1;
+        while i < n {
+            let mv2 = if a_mask.is_empty() { pixel_sort_key(line[i], key) } else { a_mask[i] };
+            if mv2 < low || mv2 > high { break; }
             i += 1;
         }
         let span = &mut line[span_start..i];
@@ -214,15 +328,17 @@ fn sort_line(
 
 // ─── Frame renderer ───────────────────────────────────────────────────────────
 
-/// Render one frame of the pixel-sort effect on `source`.
+/// Render one frame of the pixel-sort effect on `source_b`.
 ///
-/// In Slice 1 this is single-source (mask is derived from `source` itself).
-/// The caller passes Source A separately so the driver can pass it through to
-/// future cross-synth slices without a breaking API change; it is unused here.
+/// `a_mask`: pre-computed per-pixel mask values in row-major order (one f32 per B pixel).
+/// - Empty (`&[]`) → **self mode**: B's own sort key determines sortability.
+/// - Non-empty → **cross-synth mode**: `a_mask[y*w+x]` is tested against [low, high]
+///   for span detection; spans are still sorted by B's sort key.
+///   Use `compute_a_luma_mask` / `compute_a_edge_mask` / `compute_a_flow_mask` to build it.
 pub fn render_pixel_sort_frame(
-    _source_a: &ImageBufferF32,
     source_b: &ImageBufferF32,
     settings: &PixelSortSettings,
+    a_mask: &[f32],
 ) -> Result<ImageBufferF32, RenderError> {
     settings.validate()?;
 
@@ -245,7 +361,12 @@ pub fn render_pixel_sort_frame(
         SortAxis::Row => {
             for y in 0..h as usize {
                 let row = &mut pixels[y * w as usize..(y + 1) * w as usize];
-                sort_line(row, key, low, high, direction, max_span);
+                let mask_row: &[f32] = if a_mask.is_empty() {
+                    &[]
+                } else {
+                    &a_mask[y * w as usize..(y + 1) * w as usize]
+                };
+                sort_line(row, key, low, high, direction, max_span, mask_row);
             }
         }
         SortAxis::Col => {
@@ -253,7 +374,14 @@ pub fn render_pixel_sort_frame(
                 let mut col: Vec<[f32; 4]> = (0..h as usize)
                     .map(|y| pixels[y * w as usize + x])
                     .collect();
-                sort_line(&mut col, key, low, high, direction, max_span);
+                let col_mask: Vec<f32> = if a_mask.is_empty() {
+                    vec![]
+                } else {
+                    (0..h as usize)
+                        .map(|y| a_mask[y * w as usize + x])
+                        .collect()
+                };
+                sort_line(&mut col, key, low, high, direction, max_span, &col_mask);
                 for y in 0..h as usize {
                     pixels[y * w as usize + x] = col[y];
                 }
@@ -276,10 +404,6 @@ mod tests {
         ImageBufferF32::new(lumas.len() as u32, 1, pixels).unwrap()
     }
 
-    fn dummy_a() -> ImageBufferF32 {
-        ImageBufferF32::new(1, 1, vec![[0.0; 4]]).unwrap()
-    }
-
     #[test]
     fn empty_mask_is_byte_identical_passthrough() {
         let src = row_image(&[0.8, 0.2, 0.5, 0.1, 0.9]);
@@ -288,7 +412,7 @@ mod tests {
             threshold_high: 0.1, // low > high → empty mask
             ..Default::default()
         };
-        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         assert_eq!(out.pixels, src.pixels, "empty mask must return B verbatim");
     }
 
@@ -302,7 +426,7 @@ mod tests {
             threshold_high: 1.0,
             ..Default::default()
         };
-        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         let mut expected = lumas.to_vec();
         expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
         for (i, px) in out.pixels.iter().enumerate() {
@@ -327,7 +451,7 @@ mod tests {
             threshold_high: 0.6,
             ..Default::default()
         };
-        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         // Unsortable pixels stay in place.
         assert!((out.pixels[0][0] - 0.1).abs() < 1e-6, "pixel 0 unchanged");
         assert!((out.pixels[3][0] - 0.9).abs() < 1e-6, "pixel 3 unchanged");
@@ -349,7 +473,7 @@ mod tests {
             direction: SortDirection::Desc,
             ..Default::default()
         };
-        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         // Descending: 0.8, 0.5, 0.2.
         assert!((out.pixels[0][0] - 0.8).abs() < 1e-6);
         assert!((out.pixels[1][0] - 0.5).abs() < 1e-6);
@@ -367,7 +491,7 @@ mod tests {
             max_span: 3,
             ..Default::default()
         };
-        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         // Chunk 0: [0.6, 0.1, 0.4] → [0.1, 0.4, 0.6]
         assert!((out.pixels[0][0] - 0.1).abs() < 1e-6);
         assert!((out.pixels[1][0] - 0.4).abs() < 1e-6);
@@ -396,7 +520,7 @@ mod tests {
             threshold_high: 1.0,
             ..Default::default()
         };
-        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         let col0: Vec<f32> = (0..4).map(|y| out.pixels[y * 2][0]).collect();
         let col1: Vec<f32> = (0..4).map(|y| out.pixels[y * 2 + 1][0]).collect();
         let expected0 = [0.2f32, 0.4, 0.6, 0.8];
@@ -423,10 +547,63 @@ mod tests {
             threshold_high: 1.0,
             ..Default::default()
         };
-        let out = render_pixel_sort_frame(&dummy_a(), &src, &s).unwrap();
+        let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         assert!((out.pixels[0][0] - 0.3).abs() < 1e-6, "px0.R=0.3");
         assert!((out.pixels[0][1] - 0.9).abs() < 1e-6, "px0.G=0.9 follows its R");
         assert!((out.pixels[1][0] - 0.6).abs() < 1e-6, "px1.R=0.6");
         assert!((out.pixels[2][0] - 0.8).abs() < 1e-6, "px2.R=0.8");
+    }
+
+    #[test]
+    fn a_luma_mask_sorts_by_a_not_b() {
+        // 3 B pixels (greyscale): lumas [0.8, 0.2, 0.5]
+        // A mask values override span detection: [0.3, 0.3, 0.3] → all sortable
+        // Threshold [0.25, 0.75]: all sortable via a_mask, sorted by B's luma asc → [0.2,0.5,0.8]
+        let b_pixels: Vec<[f32; 4]> = vec![[0.8, 0.8, 0.8, 1.0], [0.2, 0.2, 0.2, 1.0], [0.5, 0.5, 0.5, 1.0]];
+        let src = ImageBufferF32::new(3, 1, b_pixels).unwrap();
+        let s = PixelSortSettings {
+            threshold_low: 0.25,
+            threshold_high: 0.75,
+            ..Default::default()
+        };
+        // Without a_mask: only luma=0.5 is in [0.25,0.75]; 0.8 and 0.2 are outside → no sort.
+        let out_self = render_pixel_sort_frame(&src, &s, &[]).unwrap();
+        assert!((out_self.pixels[0][0] - 0.8).abs() < 1e-6, "self: 0.8 unsortable");
+        // With a_mask=[0.4,0.4,0.4]: all three in [0.25,0.75] → all sort by B's luma.
+        let a_mask = vec![0.4f32, 0.4, 0.4];
+        let out_cross = render_pixel_sort_frame(&src, &s, &a_mask).unwrap();
+        assert!((out_cross.pixels[0][0] - 0.2).abs() < 1e-6, "cross: 0.2 first");
+        assert!((out_cross.pixels[1][0] - 0.5).abs() < 1e-6, "cross: 0.5 second");
+        assert!((out_cross.pixels[2][0] - 0.8).abs() < 1e-6, "cross: 0.8 third");
+    }
+
+    #[test]
+    fn a_luma_mask_helper_produces_b_sized_output() {
+        // A is 2×2, B is 4×2; luma mask should return 4*2=8 values.
+        let a_pixels: Vec<[f32; 4]> = vec![[0.0; 4]; 4];
+        let a = ImageBufferF32::new(2, 2, a_pixels).unwrap();
+        let mask = compute_a_luma_mask(&a, 4, 2);
+        assert_eq!(mask.len(), 8, "mask length = b_width * b_height");
+    }
+
+    #[test]
+    fn a_edge_mask_zero_on_uniform_image() {
+        // Uniform A → all lumas equal → Sobel magnitude = 0 → no sorting.
+        let a_pixels: Vec<[f32; 4]> = vec![[0.5, 0.5, 0.5, 1.0]; 9];
+        let a = ImageBufferF32::new(3, 3, a_pixels).unwrap();
+        let mask = compute_a_edge_mask(&a, 3, 3);
+        for &m in &mask {
+            assert!(m.abs() < 1e-5, "uniform → edge = 0, got {m}");
+        }
+    }
+
+    #[test]
+    fn a_flow_mask_zero_flow_is_zero() {
+        // Zero flow field → mask all zeros → peak-normalised by floor 1 → all 0.
+        let flow = FlowField::new(3, 1, vec![[0.0, 0.0]; 3]).unwrap();
+        let mask = compute_a_flow_mask(&flow, 3, 1);
+        for &m in &mask {
+            assert!(m.abs() < 1e-5, "zero flow → mask = 0, got {m}");
+        }
     }
 }
