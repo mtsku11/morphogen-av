@@ -611,6 +611,8 @@ pub(crate) fn render_datamosh_sequence(
     let mut latest_residual_path: Option<String> = None;
     let mut reused_optical_flow_cache_count = 0usize;
     let mut generated_optical_flow_cache_count = 0usize;
+    let mut metal_flow_validated = false;
+    let flow_cache_algorithm = optical_flow_cache_algorithm(request.backend);
     for index in start_frame..frame_count {
         let carrier = load_image_f32(&carrier_frames[index])?;
         let modulator = load_image_f32(&modulator_frames[index])?;
@@ -635,7 +637,7 @@ pub(crate) fn render_datamosh_sequence(
                         .map(|directory| {
                             read_cached_temporal_flow(
                                 directory,
-                                OPTICAL_FLOW_ALGORITHM,
+                                flow_cache_algorithm,
                                 &contract.modulator.checksum,
                                 carrier.width,
                                 carrier.height,
@@ -647,14 +649,15 @@ pub(crate) fn render_datamosh_sequence(
                         (flow, false, true)
                     } else {
                         (
-                            pyramidal_lucas_kanade_flow_cpu(
+                            compute_datamosh_optical_flow(
                                 previous_modulator,
                                 &modulator,
                                 carrier.width,
                                 carrier.height,
                                 LUCAS_KANADE_WINDOW_RADIUS,
-                            )?
-                            .flow,
+                                request.backend,
+                                &mut metal_flow_validated,
+                            )?,
                             cache_directory.is_some(),
                             false,
                         )
@@ -666,7 +669,7 @@ pub(crate) fn render_datamosh_sequence(
                         write_flow_cache_with_source_fingerprint(
                             frame_cache_dir,
                             &flow,
-                            OPTICAL_FLOW_ALGORITHM,
+                            flow_cache_algorithm,
                             Some(&contract.modulator.checksum),
                         )?;
                     }
@@ -1289,6 +1292,124 @@ pub(crate) fn datamosh_state_path_from_checkpoint(
         ));
     }
     Ok(output_dir.join(relative_path))
+}
+
+/// The flow-cache algorithm id used for datamosh optical flow, segregated by backend.
+/// The GPU and CPU estimators agree within tolerance but not bit-for-bit, and the
+/// determinism contract treats the backend as a setting — so a Metal-produced cache is
+/// never reused by a CPU render (or vice versa); toggling the backend recomputes.
+pub(crate) const OPTICAL_FLOW_METAL_ALGORITHM: &str = "pyramidal_lucas_kanade_metal_v1";
+
+/// Validate-then-trust parity epsilon for the Metal optical-flow backend, in output
+/// pixels of displacement. The CPU reference is ground truth; on a representative
+/// textured-translation fixture the Metal refinement diverges by ~7e-5 px, so this
+/// 0.01 px gate cleanly separates correct GPU flow (sub-pixel rounding) from a broken
+/// kernel (which diverges by whole pixels) while tolerating real-footage float rounding.
+pub(crate) const OPTICAL_FLOW_METAL_PARITY_EPSILON: f32 = 0.01;
+
+pub(crate) fn optical_flow_cache_algorithm(backend: RenderBackend) -> &'static str {
+    match backend {
+        RenderBackend::Cpu => OPTICAL_FLOW_ALGORITHM,
+        RenderBackend::Metal => OPTICAL_FLOW_METAL_ALGORITHM,
+    }
+}
+
+/// Compute datamosh optical flow on the selected backend. The CPU backend runs the
+/// reference estimator directly. The Metal backend runs the GPU refinement, but the
+/// first time it computes a frame in a render it also runs the CPU reference and gates
+/// the result — validate-then-trust. Once frame parity is confirmed (`metal_validated`)
+/// the GPU is trusted for the rest of the sequence, so the expensive CPU flow runs at
+/// most once per render instead of every frame.
+fn compute_datamosh_optical_flow(
+    previous_modulator: &ImageBufferF32,
+    modulator: &ImageBufferF32,
+    width: u32,
+    height: u32,
+    radius: i32,
+    backend: RenderBackend,
+    metal_validated: &mut bool,
+) -> Result<FlowField, CliError> {
+    match backend {
+        RenderBackend::Cpu => Ok(pyramidal_lucas_kanade_flow_cpu(
+            previous_modulator,
+            modulator,
+            width,
+            height,
+            radius,
+        )?
+        .flow),
+        RenderBackend::Metal => compute_datamosh_optical_flow_metal(
+            previous_modulator,
+            modulator,
+            width,
+            height,
+            radius,
+            metal_validated,
+        ),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn compute_datamosh_optical_flow_metal(
+    previous_modulator: &ImageBufferF32,
+    modulator: &ImageBufferF32,
+    width: u32,
+    height: u32,
+    radius: i32,
+    metal_validated: &mut bool,
+) -> Result<FlowField, CliError> {
+    let gpu = morphogen_metal::pyramidal_lucas_kanade_flow_metal(
+        previous_modulator,
+        modulator,
+        width,
+        height,
+        radius,
+    )?;
+    if !*metal_validated {
+        let cpu =
+            pyramidal_lucas_kanade_flow_cpu(previous_modulator, modulator, width, height, radius)?;
+        let difference = max_flow_vector_difference(&gpu.flow, &cpu.flow).ok_or_else(|| {
+            CliError::Message(
+                "Metal and CPU optical-flow fields have mismatched dimensions; cannot verify parity"
+                    .to_string(),
+            )
+        })?;
+        if difference > OPTICAL_FLOW_METAL_PARITY_EPSILON {
+            return Err(CliError::Message(format!(
+                "Metal optical flow diverged from the CPU reference by {difference} px (tolerance {OPTICAL_FLOW_METAL_PARITY_EPSILON}) on the first validated frame"
+            )));
+        }
+        *metal_validated = true;
+        eprintln!(
+            "validated Metal optical flow against the CPU reference (max flow difference {difference} px); trusting the GPU for the remaining frames"
+        );
+    }
+    Ok(gpu.flow)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn compute_datamosh_optical_flow_metal(
+    _previous_modulator: &ImageBufferF32,
+    _modulator: &ImageBufferF32,
+    _width: u32,
+    _height: u32,
+    _radius: i32,
+    _metal_validated: &mut bool,
+) -> Result<FlowField, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+fn max_flow_vector_difference(a: &FlowField, b: &FlowField) -> Option<f32> {
+    if a.width != b.width || a.height != b.height || a.vectors.len() != b.vectors.len() {
+        return None;
+    }
+    let mut max = 0.0_f32;
+    for (va, vb) in a.vectors.iter().zip(b.vectors.iter()) {
+        max = max.max((va[0] - vb[0]).abs()).max((va[1] - vb[1]).abs());
+    }
+    Some(max)
 }
 
 /// The advection ("P-frame") step of datamosh: displace `previous_output` by
