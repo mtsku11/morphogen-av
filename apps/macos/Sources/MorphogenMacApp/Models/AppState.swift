@@ -5,6 +5,22 @@ import Foundation
 import Metal
 
 final class AppState: ObservableObject {
+  // Persist render-backend choices across launches so a selected backend (e.g. Metal)
+  // stays "sticky"; first launch falls back to the per-effect default.
+  private static func stickyBackend(
+    _ key: String,
+    default fallback: FeedbackRenderBackendOption
+  ) -> FeedbackRenderBackendOption {
+    guard let raw = UserDefaults.standard.string(forKey: key),
+      let value = FeedbackRenderBackendOption(rawValue: raw)
+    else { return fallback }
+    return value
+  }
+
+  private static func persistBackend(_ key: String, _ value: FeedbackRenderBackendOption) {
+    UserDefaults.standard.set(value.rawValue, forKey: key)
+  }
+
   @Published var sourceAPath = "No modulator selected"
   @Published var sourceBPath = "No carrier selected"
   @Published var sourceAProbeSummary = "Probe not run"
@@ -53,7 +69,9 @@ final class AppState: ObservableObject {
   @Published var feedbackOutputBitDepth: FeedbackOutputBitDepthOption = .png16
   @Published var feedbackTemporalSupersampling = 1
   @Published var feedbackFlowSource: FeedbackFlowSourceOption = .opticalFlow
-  @Published var feedbackBackend: FeedbackRenderBackendOption = .metal
+  @Published var feedbackBackend = AppState.stickyBackend("backend.feedback", default: .metal) {
+    didSet { AppState.persistBackend("backend.feedback", feedbackBackend) }
+  }
   @Published var feedbackWritesFlowCache = true
   @Published var feedbackResetEnabled = false
   @Published var feedbackResetAtFrame = 48
@@ -69,7 +87,9 @@ final class AppState: ObservableObject {
   @Published var fieldParticleSize = 8
   @Published var fieldParticleAdvect = 6.0
   @Published var fieldParticleLiveColour = true
-  @Published var fluidBackend: FeedbackRenderBackendOption = .metal
+  @Published var fluidBackend = AppState.stickyBackend("backend.fluid", default: .metal) {
+    didSet { AppState.persistBackend("backend.fluid", fluidBackend) }
+  }
   @Published var fluidAdvectionSummary = "No fluid/advection sequence rendered"
   // Trail Cascade — tuned sparse-ribbon defaults (the one-click preset).
   @Published var cascadeTileSize = 28
@@ -99,12 +119,18 @@ final class AppState: ObservableObject {
   @Published var granularPoolCoherenceWeight = 0.0
   @Published var granularPoolCoherenceReach = 8
   @Published var granularPoolSpatialCoherenceWeight = 0.0
-  @Published var granularPoolBackend: FeedbackRenderBackendOption = .cpu
+  @Published var granularPoolBackend = AppState.stickyBackend(
+    "backend.granularPool", default: .cpu
+  ) {
+    didSet { AppState.persistBackend("backend.granularPool", granularPoolBackend) }
+  }
   @Published var granularPoolSummary = "No temporal grain pool sequence rendered"
   @Published var vocoderMode: VideoVocoderModeOption = .match
   @Published var vocoderBands = 8
   @Published var vocoderAmount = 1.0
-  @Published var vocoderBackend: FeedbackRenderBackendOption = .cpu
+  @Published var vocoderBackend = AppState.stickyBackend("backend.vocoder", default: .cpu) {
+    didSet { AppState.persistBackend("backend.vocoder", vocoderBackend) }
+  }
   @Published var vocoderSummary = "No video vocoder sequence rendered"
 
   @Published var crossSynthModulatorURL: URL?
@@ -139,7 +165,9 @@ final class AppState: ObservableObject {
   @Published var audioRouteRmsWindow = 2048
   @Published var audioRouteRmsHop = 512
   @Published var audioRouteFrameRate = 30.0
-  @Published var audioRouteBackend: FeedbackRenderBackendOption = .cpu
+  @Published var audioRouteBackend = AppState.stickyBackend("backend.audioRoute", default: .cpu) {
+    didSet { AppState.persistBackend("backend.audioRoute", audioRouteBackend) }
+  }
   @Published var audioRouteSummary = "No audio→video route rendered"
   @Published var datamoshModulatorURL: URL?
   @Published var datamoshCarrierURL: URL?
@@ -153,7 +181,9 @@ final class AppState: ObservableObject {
   @Published var datamoshVectorRemix: DatamoshVectorRemixOption = .none
   @Published var datamoshPreset: DatamoshPresetOption = .custom
   @Published var datamoshRemixSeed = 0
-  @Published var datamoshBackend: FeedbackRenderBackendOption = .cpu
+  @Published var datamoshBackend = AppState.stickyBackend("backend.datamosh", default: .cpu) {
+    didSet { AppState.persistBackend("backend.datamosh", datamoshBackend) }
+  }
   /// Reuse a shared optical-flow cache across datamosh renders so changing knobs
   /// (which don't affect the flow) skips recomputing the dominant per-frame cost.
   @Published var datamoshReuseFlowCache = true
@@ -187,7 +217,9 @@ final class AppState: ObservableObject {
   @Published var convBlendKernelSize = 3
   @Published var convBlendAmount = 1.0
   @Published var convBlendColorMode = false
-  @Published var convBlendBackend: FeedbackRenderBackendOption = .cpu
+  @Published var convBlendBackend = AppState.stickyBackend("backend.convBlend", default: .cpu) {
+    didSet { AppState.persistBackend("backend.convBlend", convBlendBackend) }
+  }
   @Published var convBlendSummary = "No convolutional blend rendered"
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
