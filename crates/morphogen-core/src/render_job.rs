@@ -61,6 +61,14 @@ fn default_block_collage_tile_size() -> u32 {
     96
 }
 
+fn default_pixel_sort_threshold_low() -> f32 {
+    0.25
+}
+
+fn default_pixel_sort_threshold_high() -> f32 {
+    0.80
+}
+
 fn default_block_collage_threshold() -> f32 {
     0.5
 }
@@ -215,6 +223,37 @@ pub enum RenderJobTask {
         evolution_speed: f32,
         #[serde(default)]
         seed: u64,
+    },
+    /// Threshold-bounded pixel sort. Source B's pixels are sorted within contiguous
+    /// runs where the sortability mask (B's own key or a cross-synth A-derived mask)
+    /// falls in [`threshold_low`, `threshold_high`].
+    FrameSequencePixelSort {
+        modulator_frame_directory: String,
+        carrier_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        #[serde(default)]
+        axis: PixelSortAxis,
+        #[serde(default)]
+        key: PixelSortKey,
+        #[serde(default)]
+        direction: PixelSortDirection,
+        #[serde(default = "default_pixel_sort_threshold_low")]
+        threshold_low: f32,
+        #[serde(default = "default_pixel_sort_threshold_high")]
+        threshold_high: f32,
+        /// Maximum streak length in pixels; 0 = unbounded.
+        #[serde(default)]
+        max_span: u32,
+        #[serde(default)]
+        mask_source: PixelSortMaskSource,
+        /// Lucas-Kanade window radius for the `a-flow` mask mode.
+        #[serde(default)]
+        flow_radius: i32,
+        /// Render backend. Metal is self-mask only; cross-synth modes are CPU-only.
+        #[serde(default)]
+        backend: RenderBackend,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
@@ -764,6 +803,50 @@ pub enum VectorRemixMode {
     Sort,
     /// Deterministic seeded permutation of block MVs (motion scrambles).
     Shuffle,
+}
+
+/// Sort direction along the sort axis.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelSortAxis {
+    #[default]
+    Row,
+    Col,
+}
+
+/// Component used to rank pixels within a sortable span.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelSortKey {
+    #[default]
+    Luma,
+    Hue,
+    Sat,
+    Red,
+    Green,
+    Blue,
+}
+
+/// Whether pixels are sorted low→high or high→low within each span.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelSortDirection {
+    #[default]
+    Asc,
+    Desc,
+}
+
+/// What drives the per-pixel sortability mask.
+/// Mirrors [`morphogen_render::MaskSource`] for queue-job serialisation.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelSortMaskSource {
+    #[default]
+    #[serde(rename = "self")]
+    SelfMask,
+    ALuma,
+    AEdge,
+    AFlow,
 }
 
 /// Named deterministic datamosh presets for the flow-reuse path. Bitstream

@@ -9,9 +9,9 @@ use morphogen_audio::{
 use morphogen_core::{
     ConvolutionMethod, CrossSynthFilterType, CrossSynthMode, CrossSynthWindow,
     DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset, FlowSource,
-    GrainSelectionMode, IrMode, KernelMode, RenderBackend, SourceRole,
-    VideoAudioRouteDescriptor, VideoAudioRouteFilterType, VideoAudioRouteMode,
-    VideoAudioRouteSampling, VideoVocoderMode,
+    GrainSelectionMode, IrMode, KernelMode, PixelSortAxis, PixelSortDirection, PixelSortKey,
+    PixelSortMaskSource, RenderBackend, SourceRole, VideoAudioRouteDescriptor,
+    VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
     CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
@@ -1739,6 +1739,39 @@ pub(crate) enum Commands {
     QueueRunBlockCollageSequence {
         queue_path: PathBuf,
     },
+    QueueAddPixelSortSequence {
+        queue_path: PathBuf,
+        source_a_dir: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, value_enum, default_value_t = CliSortAxis::Row)]
+        axis: CliSortAxis,
+        #[arg(long, value_enum, default_value_t = CliSortKey::Luma)]
+        key: CliSortKey,
+        #[arg(long, value_enum, default_value_t = CliSortDirection::Asc)]
+        direction: CliSortDirection,
+        #[arg(long, default_value_t = 0.25)]
+        threshold_low: f32,
+        #[arg(long, default_value_t = 0.80)]
+        threshold_high: f32,
+        #[arg(long, default_value_t = 0)]
+        max_span: u32,
+        #[arg(long, value_enum, default_value_t = CliMaskSource::SelfMask)]
+        mask_source: CliMaskSource,
+        #[arg(long, default_value_t = 4)]
+        flow_radius: i32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
+    QueueRunPixelSortSequence {
+        queue_path: PathBuf,
+    },
     QueueRunGranularMosaicSequence {
         queue_path: PathBuf,
     },
@@ -2412,6 +2445,48 @@ pub(crate) enum CliMaskSource {
 }
 
 impl From<CliMaskSource> for morphogen_render::MaskSource {
+    fn from(v: CliMaskSource) -> Self {
+        match v {
+            CliMaskSource::SelfMask => Self::SelfMask,
+            CliMaskSource::ALuma => Self::ALuma,
+            CliMaskSource::AEdge => Self::AEdge,
+            CliMaskSource::AFlow => Self::AFlow,
+        }
+    }
+}
+
+impl From<CliSortAxis> for PixelSortAxis {
+    fn from(v: CliSortAxis) -> Self {
+        match v {
+            CliSortAxis::Row => Self::Row,
+            CliSortAxis::Col => Self::Col,
+        }
+    }
+}
+
+impl From<CliSortKey> for PixelSortKey {
+    fn from(v: CliSortKey) -> Self {
+        match v {
+            CliSortKey::Luma => Self::Luma,
+            CliSortKey::Hue => Self::Hue,
+            CliSortKey::Sat => Self::Sat,
+            CliSortKey::Red => Self::Red,
+            CliSortKey::Green => Self::Green,
+            CliSortKey::Blue => Self::Blue,
+        }
+    }
+}
+
+impl From<CliSortDirection> for PixelSortDirection {
+    fn from(v: CliSortDirection) -> Self {
+        match v {
+            CliSortDirection::Asc => Self::Asc,
+            CliSortDirection::Desc => Self::Desc,
+        }
+    }
+}
+
+impl From<CliMaskSource> for PixelSortMaskSource {
     fn from(v: CliMaskSource) -> Self {
         match v {
             CliMaskSource::SelfMask => Self::SelfMask,

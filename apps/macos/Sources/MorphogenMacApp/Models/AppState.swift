@@ -221,6 +221,24 @@ final class AppState: ObservableObject {
     didSet { AppState.persistBackend("backend.convBlend", convBlendBackend) }
   }
   @Published var convBlendSummary = "No convolutional blend rendered"
+
+  // Pixel sort
+  @Published var pixelSortModulatorURL: URL?
+  @Published var pixelSortCarrierURL: URL?
+  @Published var pixelSortOutputURL: URL?
+  @Published var pixelSortAxis = PixelSortAxisOption.row
+  @Published var pixelSortKey = PixelSortKeyOption.luma
+  @Published var pixelSortDirection = PixelSortDirectionOption.asc
+  @Published var pixelSortThresholdLow = 0.25
+  @Published var pixelSortThresholdHigh = 0.80
+  @Published var pixelSortMaxSpan = 0
+  @Published var pixelSortMaskSource = PixelSortMaskSourceOption.selfMask
+  @Published var pixelSortFlowRadius = 4
+  @Published var pixelSortBackend = AppState.stickyBackend("backend.pixelSort", default: .cpu) {
+    didSet { AppState.persistBackend("backend.pixelSort", pixelSortBackend) }
+  }
+  @Published var pixelSortSummary = "No pixel sort rendered"
+
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
   @Published var mediaProxyFrameRate = 12.0
@@ -1777,6 +1795,88 @@ final class AppState: ObservableObject {
     }
   }
 
+  func choosePixelSortModulatorDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source A Frames",
+      message: "Select the modulator PNG frames that drive the sortability mask."
+    ) else {
+      statusMessage = "Source A frame selection cancelled."
+      return
+    }
+    pixelSortModulatorURL = url
+    statusMessage = "Pixel sort Source A frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func choosePixelSortCarrierDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Source B Frames",
+      message: "Select the carrier PNG frames whose pixels are sorted."
+    ) else {
+      statusMessage = "Source B frame selection cancelled."
+      return
+    }
+    pixelSortCarrierURL = url
+    statusMessage = "Pixel sort Source B frame directory selected: \(url.lastPathComponent)"
+  }
+
+  func choosePixelSortOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Pixel sort output selection cancelled."
+      return
+    }
+    pixelSortOutputURL = url
+    statusMessage = "Pixel sort output selected: \(url.lastPathComponent)"
+  }
+
+  func runPixelSortRender() {
+    guard let modulatorURL = pixelSortModulatorURL else {
+      statusMessage = "Select a Source A frame directory before rendering pixel sort."
+      return
+    }
+    guard let carrierURL = pixelSortCarrierURL else {
+      statusMessage = "Select a Source B frame directory before rendering pixel sort."
+      return
+    }
+    guard let outputURL = pixelSortOutputURL else {
+      statusMessage = "Choose an output directory before rendering pixel sort."
+      return
+    }
+
+    let request = PixelSortSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultPixelSortSequenceRenderQueueURL(),
+      modulatorDirectoryURL: modulatorURL,
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL,
+      axis: pixelSortAxis,
+      key: pixelSortKey,
+      direction: pixelSortDirection,
+      thresholdLow: pixelSortThresholdLow,
+      thresholdHigh: pixelSortThresholdHigh,
+      maxSpan: pixelSortMaxSpan,
+      maskSource: pixelSortMaskSource,
+      flowRadius: pixelSortFlowRadius,
+      backend: pixelSortBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing pixel sort render through morphogen-cli..."
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedPixelSortSequenceRender(request: request)
+        DispatchQueue.main.async {
+          self.pixelSortSummary = "Pixel sort bundle at \(result.bundleURL.path)"
+          self.statusMessage = "Pixel sort render complete: \(result.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.pixelSortSummary = "Pixel sort render failed: \(error.localizedDescription)"
+          self.statusMessage = "Pixel sort render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   func applyFeedbackPreset(_ preset: FeedbackPresetOption) {
     guard let settings = preset.settings else {
       return
@@ -2528,6 +2628,74 @@ enum ProResFrameRateOption: String, CaseIterable, Identifiable {
     }
     return allCases.first { option in
       abs(option.framesPerSecond - frameRate) < 0.0005
+    }
+  }
+}
+
+enum PixelSortAxisOption: String, CaseIterable, Identifiable {
+  case row = "Row"
+  case col = "Col"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .row: return "row"
+    case .col: return "col"
+    }
+  }
+}
+
+enum PixelSortKeyOption: String, CaseIterable, Identifiable {
+  case luma = "Luma"
+  case hue = "Hue"
+  case sat = "Sat"
+  case red = "Red"
+  case green = "Green"
+  case blue = "Blue"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .luma: return "luma"
+    case .hue: return "hue"
+    case .sat: return "sat"
+    case .red: return "red"
+    case .green: return "green"
+    case .blue: return "blue"
+    }
+  }
+}
+
+enum PixelSortDirectionOption: String, CaseIterable, Identifiable {
+  case asc = "Asc"
+  case desc = "Desc"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .asc: return "asc"
+    case .desc: return "desc"
+    }
+  }
+}
+
+enum PixelSortMaskSourceOption: String, CaseIterable, Identifiable {
+  case selfMask = "Self (B drives mask)"
+  case aLuma = "A Luma"
+  case aEdge = "A Edge"
+  case aFlow = "A Flow"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .selfMask: return "self"
+    case .aLuma: return "a-luma"
+    case .aEdge: return "a-edge"
+    case .aFlow: return "a-flow"
     }
   }
 }

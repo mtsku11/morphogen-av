@@ -4,7 +4,7 @@ use morphogen_render::{
     BlockCollageSettings, CascadeFieldType, CascadeTrailSettings, ChannelShiftSettings,
     CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
     FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
-    GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
+    GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
     StructureMode, VideoVocoderSettings,
 };
 
@@ -1574,6 +1574,44 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunBlockCollageSequence { queue_path } => {
             queue_run_block_collage_sequence(&queue_path)
+        }
+        Commands::QueueAddPixelSortSequence {
+            queue_path,
+            source_a_dir,
+            source_b_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            axis,
+            key,
+            direction,
+            threshold_low,
+            threshold_high,
+            max_span,
+            mask_source,
+            flow_radius,
+            backend,
+            project_path,
+        } => queue_add_pixel_sort_sequence(QueueAddPixelSortSequenceRequest {
+            queue_path: &queue_path,
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_root_dir: &output_root_dir,
+            axis: axis.into(),
+            key: key.into(),
+            direction: direction.into(),
+            threshold_low,
+            threshold_high,
+            max_span,
+            mask_source: mask_source.into(),
+            flow_radius,
+            backend: backend.into(),
+            frames,
+            frame_rate,
+            project_path: project_path.as_deref(),
+        }),
+        Commands::QueueRunPixelSortSequence { queue_path } => {
+            queue_run_pixel_sort_sequence(&queue_path)
         }
         Commands::QueueRunGranularMosaicSequence { queue_path } => {
             queue_run_granular_mosaic_sequence(&queue_path)

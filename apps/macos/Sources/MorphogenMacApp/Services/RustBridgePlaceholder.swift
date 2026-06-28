@@ -148,6 +148,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultPixelSortSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-pixel-sort-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -1572,6 +1578,87 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func runQueuedPixelSortSequenceRender(
+    request: PixelSortSequenceRenderQueueCommandRequest
+  ) throws -> PixelSortSequenceRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddPixelSortSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-pixel-sort-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return PixelSortSequenceRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddPixelSortSequenceArguments(
+    request: PixelSortSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-pixel-sort-sequence",
+      request.queueURL.path,
+      request.modulatorDirectoryURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--axis",
+      request.axis.cliValue,
+      "--key",
+      request.key.cliValue,
+      "--direction",
+      request.direction.cliValue,
+      "--threshold-low",
+      cliNumber(request.thresholdLow),
+      "--threshold-high",
+      cliNumber(request.thresholdHigh),
+      "--mask-source",
+      request.maskSource.cliValue,
+      "--backend",
+      request.backend.cliValue
+    ]
+
+    if request.maxSpan > 0 {
+      arguments.append("--max-span")
+      arguments.append(String(request.maxSpan))
+    }
+    if request.maskSource == .aFlow {
+      arguments.append("--flow-radius")
+      arguments.append(String(request.flowRadius))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+
+    return arguments
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -2542,6 +2629,29 @@ struct BitstreamDatamoshRenderQueueCommandRequest {
 }
 
 struct BitstreamDatamoshRenderQueueCommandResult {
+  let queueURL: URL
+  let bundleURL: URL
+  let commandSummary: String
+}
+
+struct PixelSortSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let modulatorDirectoryURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let axis: PixelSortAxisOption
+  let key: PixelSortKeyOption
+  let direction: PixelSortDirectionOption
+  let thresholdLow: Double
+  let thresholdHigh: Double
+  let maxSpan: Int
+  let maskSource: PixelSortMaskSourceOption
+  let flowRadius: Int
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+}
+
+struct PixelSortSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String

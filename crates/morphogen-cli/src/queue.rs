@@ -7,18 +7,19 @@ use morphogen_audio::{save_wav_f32, AudioBufferF32};
 use morphogen_core::{
     AnalysisKind, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
     ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, KernelMode,
-    RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
-    RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
-    RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
-    VectorRemixMode, VideoVocoderMode,
+    PixelSortAxis, PixelSortDirection, PixelSortKey, PixelSortMaskSource, RenderBackend, RenderJob,
+    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
+    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
+    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
     flow_displace_cpu, BlockCollageSettings, CascadeFieldType, CascadeTrailSettings,
     ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, GranularMosaicSettings, StructureMode, VideoVocoderSettings,
+    FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource, PixelSortSettings,
+    SortAxis, SortDirection, SortKey, StructureMode, VideoVocoderSettings,
     BLOCK_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM,
-    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, POOLED_GRAIN_ALGORITHM,
-    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PIXEL_SORT_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
 use crate::args::*;
@@ -3968,6 +3969,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceFieldParticles { .. } => "frame_sequence_field_particles",
             RenderJobTask::FrameSequenceCascadeTrails { .. } => "frame_sequence_cascade_trails",
             RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
+            RenderJobTask::FrameSequencePixelSort { .. } => "frame_sequence_pixel_sort",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",
             RenderJobTask::FrameSequenceGranularMosaicPool { .. } => {
                 "frame_sequence_granular_mosaic_pool"
@@ -4028,4 +4030,216 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
         );
     }
     Ok(())
+}
+
+// --- Core↔render enum bridges for pixel sort ---
+
+fn render_pixel_sort_axis(axis: PixelSortAxis) -> SortAxis {
+    match axis {
+        PixelSortAxis::Row => SortAxis::Row,
+        PixelSortAxis::Col => SortAxis::Col,
+    }
+}
+
+fn render_pixel_sort_key(key: PixelSortKey) -> SortKey {
+    match key {
+        PixelSortKey::Luma => SortKey::Luma,
+        PixelSortKey::Hue => SortKey::Hue,
+        PixelSortKey::Sat => SortKey::Sat,
+        PixelSortKey::Red => SortKey::Red,
+        PixelSortKey::Green => SortKey::Green,
+        PixelSortKey::Blue => SortKey::Blue,
+    }
+}
+
+fn render_pixel_sort_direction(dir: PixelSortDirection) -> SortDirection {
+    match dir {
+        PixelSortDirection::Asc => SortDirection::Asc,
+        PixelSortDirection::Desc => SortDirection::Desc,
+    }
+}
+
+fn render_pixel_sort_mask_source(ms: PixelSortMaskSource) -> MaskSource {
+    match ms {
+        PixelSortMaskSource::SelfMask => MaskSource::SelfMask,
+        PixelSortMaskSource::ALuma => MaskSource::ALuma,
+        PixelSortMaskSource::AEdge => MaskSource::AEdge,
+        PixelSortMaskSource::AFlow => MaskSource::AFlow,
+    }
+}
+
+pub(crate) struct QueueAddPixelSortSequenceRequest<'a> {
+    pub(crate) queue_path: &'a std::path::Path,
+    pub(crate) source_a_dir: &'a std::path::Path,
+    pub(crate) source_b_dir: &'a std::path::Path,
+    pub(crate) output_root_dir: &'a std::path::Path,
+    pub(crate) axis: PixelSortAxis,
+    pub(crate) key: PixelSortKey,
+    pub(crate) direction: PixelSortDirection,
+    pub(crate) threshold_low: f32,
+    pub(crate) threshold_high: f32,
+    pub(crate) max_span: u32,
+    pub(crate) mask_source: PixelSortMaskSource,
+    pub(crate) flow_radius: i32,
+    pub(crate) backend: RenderBackend,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) project_path: Option<&'a std::path::Path>,
+}
+
+pub(crate) fn queue_add_pixel_sort_sequence(
+    request: QueueAddPixelSortSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddPixelSortSequenceRequest {
+        queue_path,
+        source_a_dir,
+        source_b_dir,
+        output_root_dir,
+        axis,
+        key,
+        direction,
+        threshold_low,
+        threshold_high,
+        max_span,
+        mask_source,
+        flow_radius,
+        backend,
+        frames,
+        frame_rate,
+        project_path,
+    } = request;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|p| p.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequencePixelSort {
+            modulator_frame_directory: source_a_dir.to_string_lossy().to_string(),
+            carrier_frame_directory: source_b_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            axis,
+            key,
+            direction,
+            threshold_low,
+            threshold_high,
+            max_span,
+            mask_source,
+            flow_radius,
+            backend,
+        },
+        provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued pixel-sort render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequencePixelSort { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message("render queue has no queued or running pixel-sort jobs".to_string())
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequencePixelSort {
+        modulator_frame_directory,
+        carrier_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        axis,
+        key,
+        direction,
+        threshold_low,
+        threshold_high,
+        max_span,
+        mask_source,
+        flow_radius,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a pixel-sort render".to_string(),
+        ));
+    };
+    let output_dir = std::path::PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = PixelSortSettings {
+        axis: render_pixel_sort_axis(axis),
+        key: render_pixel_sort_key(key),
+        direction: render_pixel_sort_direction(direction),
+        threshold_low,
+        threshold_high,
+        max_span,
+        mask_source: render_pixel_sort_mask_source(mask_source),
+    };
+    let algorithm = match mask_source {
+        PixelSortMaskSource::SelfMask => PIXEL_SORT_ALGORITHM,
+        _ => PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
+    };
+    let backend_label = format!("{backend:?}");
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_pixel_sort_sequence(PixelSortSequenceRequest {
+            source_a_dir: std::path::Path::new(&modulator_frame_directory),
+            source_b_dir: std::path::Path::new(&carrier_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames,
+            backend,
+            flow_radius,
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_pixel_sort",
+            effect_key: "pixel_sort",
+            effect: serde_json::json!({
+                "algorithm": algorithm,
+                "settings": settings,
+                "backend": backend_label,
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "pixel-sort",
+    )
 }

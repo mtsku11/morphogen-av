@@ -1162,6 +1162,114 @@ struct RenderPanelView: View {
           }
         }
 
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Pixel Sort")
+            .font(.subheadline.weight(.semibold))
+            .help("Threshold-bounded pixel sorting. A drives the sortability mask in cross-synth modes; B provides the sorted content.")
+
+          HStack(spacing: 16) {
+            Button {
+              state.choosePixelSortModulatorDirectory()
+            } label: {
+              Label("Source A Frames", systemImage: "photo.on.rectangle")
+            }
+            Button {
+              state.choosePixelSortCarrierDirectory()
+            } label: {
+              Label("Source B Frames", systemImage: "photo.on.rectangle.angled")
+            }
+            Button {
+              state.choosePixelSortOutputDirectory()
+            } label: {
+              Label("Output Dir", systemImage: "folder")
+            }
+          }
+
+          HStack(spacing: 16) {
+            Picker("Axis", selection: $state.pixelSortAxis) {
+              ForEach(PixelSortAxisOption.allCases) { opt in
+                Text(opt.rawValue).tag(opt)
+              }
+            }
+            .frame(width: 130)
+            .help("Row = horizontal streaks, Col = vertical.")
+
+            Picker("Key", selection: $state.pixelSortKey) {
+              ForEach(PixelSortKeyOption.allCases) { opt in
+                Text(opt.rawValue).tag(opt)
+              }
+            }
+            .frame(width: 130)
+            .help("Sort key used to order pixels within each span.")
+
+            Picker("Dir", selection: $state.pixelSortDirection) {
+              ForEach(PixelSortDirectionOption.allCases) { opt in
+                Text(opt.rawValue).tag(opt)
+              }
+            }
+            .frame(width: 100)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.pixelSortThresholdLow, in: 0...1, step: 0.05) {
+              Text("Low \(state.pixelSortThresholdLow, specifier: "%.2f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Lower bound of sortable key range [0, 1].")
+
+            Stepper(value: $state.pixelSortThresholdHigh, in: 0...1, step: 0.05) {
+              Text("High \(state.pixelSortThresholdHigh, specifier: "%.2f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Upper bound of sortable key range [0, 1].")
+
+            Stepper(value: $state.pixelSortMaxSpan, in: 0...2048, step: 16) {
+              Text(state.pixelSortMaxSpan == 0
+                ? "Span: unlimited"
+                : "Span \(state.pixelSortMaxSpan)px")
+            }
+            .frame(width: 180, alignment: .leading)
+            .help("Maximum streak length in pixels; 0 = unbounded.")
+          }
+
+          Picker("Mask Source", selection: $state.pixelSortMaskSource) {
+            ForEach(PixelSortMaskSourceOption.allCases) { opt in
+              Text(opt.rawValue).tag(opt)
+            }
+          }
+          .pickerStyle(.segmented)
+          .help("Self = B masks itself (classic). A Luma/Edge/Flow = cross-synth: A defines where sorting happens.")
+
+          if state.pixelSortMaskSource == .aFlow {
+            Stepper(value: $state.pixelSortFlowRadius, in: 1...8, step: 1) {
+              Text("Flow Radius \(state.pixelSortFlowRadius)")
+            }
+            .frame(width: 180, alignment: .leading)
+            .help("Lucas-Kanade window half-radius for A-flow mask.")
+          }
+
+          Picker("Backend", selection: $state.pixelSortBackend) {
+            ForEach(FeedbackRenderBackendOption.allCases) { backend in
+              Text(backend.rawValue).tag(backend)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 200)
+          .help("Metal is self-mask only and gated per-frame against CPU. Cross-synth modes are CPU-only.")
+
+          Text(state.pixelSortSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runPixelSortRender()
+          } label: {
+            Label("Run Pixel Sort", systemImage: "arrow.left.arrow.right")
+          }
+        }
+
         HStack {
           Button {
             state.checkProResExportPlan()
