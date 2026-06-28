@@ -1,10 +1,10 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    BlockCollageSettings, CascadeFieldType, CascadeTrailSettings, CoagulationSettings,
-    ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings, FlowFeedbackSettings,
-    FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings,
-    PixelSortSettings, StructureMode, VideoVocoderSettings,
+    BlockCollageSettings, CascadeFieldType, CascadeTrailSettings, ChannelShiftSettings,
+    CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
+    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
+    GranularMosaicSettings, PixelSortSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -595,6 +595,30 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+        })
+        .map(|_| ()),
+        Commands::RenderChannelShiftSequence {
+            source_b_dir,
+            output_dir,
+            frames,
+            shift_r_x,
+            shift_r_y,
+            shift_g_x,
+            shift_g_y,
+            shift_b_x,
+            shift_b_y,
+        } => render_channel_shift_sequence(ChannelShiftSequenceRequest {
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: ChannelShiftSettings {
+                shift_r_x,
+                shift_r_y,
+                shift_g_x,
+                shift_g_y,
+                shift_b_x,
+                shift_b_y,
+            },
+            frames,
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {

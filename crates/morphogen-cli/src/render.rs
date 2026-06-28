@@ -15,6 +15,7 @@ use morphogen_core::{
 use morphogen_render::{
     advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
     render_block_collage_frame, BlockCollageSettings,
+    render_channel_shift_frame, ChannelShiftSettings,
     render_pixel_sort_frame, PixelSortSettings,
     advance_field_particles,
     advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
@@ -5337,4 +5338,54 @@ mod tests {
         assert_eq!(first.rearrangement, 0.2);
         assert_eq!(second.rearrangement, 0.6);
     }
+}
+
+// ─── Channel Shift ────────────────────────────────────────────────────────────
+
+pub(crate) struct ChannelShiftSequenceRequest<'a> {
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: ChannelShiftSettings,
+    pub(crate) frames: u32,
+}
+
+pub(crate) fn render_channel_shift_sequence(
+    request: ChannelShiftSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "channel shift requires at least one PNG frame in the source B directory".to_string(),
+        ));
+    }
+
+    let frame_count = (request.frames as usize).min(source_b_frames.len());
+    fs::create_dir_all(request.output_dir)?;
+
+    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]])
+        .map_err(|e| CliError::Message(e.to_string()))?;
+
+    for index in 0..frame_count {
+        let source_b = load_image_f32(&source_b_frames[index])?;
+        let rendered = render_channel_shift_frame(&dummy_a, &source_b, &request.settings)?;
+        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+    }
+
+    println!(
+        "rendered channel shift sequence with {} frame(s) \
+         (R:{:+.1},{:+.1} G:{:+.1},{:+.1} B:{:+.1},{:+.1} px) from {} to {}",
+        frame_count,
+        request.settings.shift_r_x, request.settings.shift_r_y,
+        request.settings.shift_g_x, request.settings.shift_g_y,
+        request.settings.shift_b_x, request.settings.shift_b_y,
+        request.source_b_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
 }

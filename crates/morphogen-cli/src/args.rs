@@ -720,6 +720,35 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
+    /// Render a channel-shift (RGB-split / chromatic aberration) sequence. Each
+    /// colour channel is sampled from B at an independently offset position. Alpha
+    /// passes through unshifted. `--shift-*-x/y 0` (all defaults) returns B verbatim.
+    RenderChannelShiftSequence {
+        /// Source B frames (PNG sequence) — the material being shifted.
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Horizontal offset for the Red channel (px; positive → sample from left).
+        #[arg(long, default_value_t = 0.0)]
+        shift_r_x: f32,
+        /// Vertical offset for the Red channel (px).
+        #[arg(long, default_value_t = 0.0)]
+        shift_r_y: f32,
+        /// Horizontal offset for the Green channel (px).
+        #[arg(long, default_value_t = 0.0)]
+        shift_g_x: f32,
+        /// Vertical offset for the Green channel (px).
+        #[arg(long, default_value_t = 0.0)]
+        shift_g_y: f32,
+        /// Horizontal offset for the Blue channel (px).
+        #[arg(long, default_value_t = 0.0)]
+        shift_b_x: f32,
+        /// Vertical offset for the Blue channel (px).
+        #[arg(long, default_value_t = 0.0)]
+        shift_b_y: f32,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains
