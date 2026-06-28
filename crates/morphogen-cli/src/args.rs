@@ -685,6 +685,38 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+    /// Render a pixel-sort effect — per-line threshold-bounded span sorting (CPU, deterministic).
+    /// Within each row or column, contiguous runs of pixels whose sort key falls in
+    /// `[threshold-low, threshold-high]` are sorted independently; outside-mask pixels stay.
+    /// **Off case:** set `--threshold-low` > `--threshold-high` → empty mask → B passthrough.
+    RenderPixelSortSequence {
+        /// Source A frames (PNG sequence; unused in single-source mode, accepted for CLI uniformity).
+        source_a_dir: PathBuf,
+        /// Source B frames (PNG sequence) — the material to sort.
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Sort direction: `row` for horizontal streaks, `col` for vertical.
+        #[arg(long, value_enum, default_value_t = CliSortAxis::Row)]
+        axis: CliSortAxis,
+        /// Component used to order pixels within each span.
+        #[arg(long, value_enum, default_value_t = CliSortKey::Luma)]
+        key: CliSortKey,
+        /// Sort order within each span: `asc` (low→high) or `desc` (high→low).
+        #[arg(long, value_enum, default_value_t = CliSortDirection::Asc)]
+        direction: CliSortDirection,
+        /// Lower bound of sortable key range [0, 1]. Pixels with key below this are left in place.
+        #[arg(long, default_value_t = 0.25)]
+        threshold_low: f32,
+        /// Upper bound of sortable key range [0, 1]. Set above `--threshold-low` to enable sorting.
+        #[arg(long, default_value_t = 0.80)]
+        threshold_high: f32,
+        /// Maximum streak length in pixels; 0 = unbounded.
+        #[arg(long, default_value_t = 0)]
+        max_span: u32,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains
@@ -2230,6 +2262,62 @@ impl From<CliStructureMode> for StructureMode {
         match value {
             CliStructureMode::SingleScale => Self::SingleScale,
             CliStructureMode::Multiscale => Self::Multiscale,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliSortAxis {
+    #[default]
+    Row,
+    Col,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliSortKey {
+    #[default]
+    Luma,
+    Hue,
+    Sat,
+    Red,
+    Green,
+    Blue,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliSortDirection {
+    #[default]
+    Asc,
+    Desc,
+}
+
+impl From<CliSortAxis> for morphogen_render::SortAxis {
+    fn from(v: CliSortAxis) -> Self {
+        match v {
+            CliSortAxis::Row => Self::Row,
+            CliSortAxis::Col => Self::Col,
+        }
+    }
+}
+
+impl From<CliSortKey> for morphogen_render::SortKey {
+    fn from(v: CliSortKey) -> Self {
+        match v {
+            CliSortKey::Luma => Self::Luma,
+            CliSortKey::Hue => Self::Hue,
+            CliSortKey::Sat => Self::Sat,
+            CliSortKey::Red => Self::Red,
+            CliSortKey::Green => Self::Green,
+            CliSortKey::Blue => Self::Blue,
+        }
+    }
+}
+
+impl From<CliSortDirection> for morphogen_render::SortDirection {
+    fn from(v: CliSortDirection) -> Self {
+        match v {
+            CliSortDirection::Asc => Self::Asc,
+            CliSortDirection::Desc => Self::Desc,
         }
     }
 }

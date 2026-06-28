@@ -15,6 +15,7 @@ use morphogen_core::{
 use morphogen_render::{
     advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
     render_block_collage_frame, BlockCollageSettings,
+    render_pixel_sort_frame, PixelSortSettings,
     advance_field_particles,
     advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu,
@@ -2389,6 +2390,67 @@ pub(crate) fn render_block_collage_sequence(
         request.settings.threshold,
         request.settings.cluster_scale,
         request.source_a_dir.display(),
+        request.source_b_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct PixelSortSequenceRequest<'a> {
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: PixelSortSettings,
+    pub(crate) frames: u32,
+}
+
+pub(crate) fn render_pixel_sort_sequence(
+    request: PixelSortSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_a_frames = collect_image_frames(request.source_a_dir)?;
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "pixel sort requires at least one PNG frame in the source B directory".to_string(),
+        ));
+    }
+
+    let b_count = source_b_frames.len();
+    let frame_count = (request.frames as usize).min(b_count);
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..frame_count {
+        let a_idx = if source_a_frames.is_empty() {
+            index % b_count
+        } else {
+            index % source_a_frames.len()
+        };
+        let source_a = if source_a_frames.is_empty() {
+            load_image_f32(&source_b_frames[index])?
+        } else {
+            load_image_f32(&source_a_frames[a_idx])?
+        };
+        let source_b = load_image_f32(&source_b_frames[index])?;
+        let rendered = render_pixel_sort_frame(&source_a, &source_b, &request.settings)?;
+        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+    }
+
+    println!(
+        "rendered pixel sort sequence with {} frame(s) \
+         (axis {:?}, key {:?}, threshold [{:.2},{:.2}], max_span {}) from B:{} to {}",
+        frame_count,
+        request.settings.axis,
+        request.settings.key,
+        request.settings.threshold_low,
+        request.settings.threshold_high,
+        request.settings.max_span,
         request.source_b_dir.display(),
         request.output_dir.display()
     );

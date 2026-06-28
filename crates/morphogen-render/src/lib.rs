@@ -2,6 +2,7 @@
 
 pub mod audio_route;
 pub mod block_collage;
+pub mod pixel_sort;
 pub mod cascade_trails;
 pub mod coagulate;
 pub mod conv_blend;
@@ -29,6 +30,10 @@ pub use audio_route::{
 };
 pub use block_collage::{
     render_block_collage_frame, BlockCollageSettings, BLOCK_COLLAGE_ALGORITHM,
+};
+pub use pixel_sort::{
+    render_pixel_sort_frame, PixelSortSettings, SortAxis, SortDirection, SortKey,
+    PIXEL_SORT_ALGORITHM,
 };
 pub use cascade_trails::{
     advance_cascade_trails, assign_temporal_patches, initialize_cascade_trails,

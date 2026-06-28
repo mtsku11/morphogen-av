@@ -4,7 +4,7 @@ use morphogen_render::{
     BlockCollageSettings, CascadeFieldType, CascadeTrailSettings, CoagulationSettings,
     ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings, FlowFeedbackSettings,
     FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings,
-    StructureMode, VideoVocoderSettings,
+    PixelSortSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -565,6 +565,32 @@ fn run() -> Result<(), CliError> {
                 cluster_scale,
                 evolution_speed,
                 seed,
+            },
+            frames,
+        })
+        .map(|_| ()),
+        Commands::RenderPixelSortSequence {
+            source_a_dir,
+            source_b_dir,
+            output_dir,
+            frames,
+            axis,
+            key,
+            direction,
+            threshold_low,
+            threshold_high,
+            max_span,
+        } => render_pixel_sort_sequence(PixelSortSequenceRequest {
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: PixelSortSettings {
+                axis: axis.into(),
+                key: key.into(),
+                direction: direction.into(),
+                threshold_low,
+                threshold_high,
+                max_span,
             },
             frames,
         })
