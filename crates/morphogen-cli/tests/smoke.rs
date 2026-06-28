@@ -4219,3 +4219,48 @@ fn write_test_wav_at(path: &Path, sample_rate: u32, samples: &[f32]) {
     }
     writer.finalize().expect("finalize wav");
 }
+
+#[test]
+fn pixel_sort_metal_parity_real_footage() {
+    use image::ImageReader;
+    use morphogen_render::{render_pixel_sort_frame, ImageBufferF32, PixelSortSettings, SortAxis};
+
+    let path = "../../renders/cello2-frames/frame_000009.png";
+    if !std::path::Path::new(path).exists() {
+        eprintln!("skipping: {path} not found");
+        return;
+    }
+    let decoded = ImageReader::open(path).unwrap().decode().unwrap().to_rgba32f();
+    let pixels: Vec<[f32; 4]> = decoded.pixels().map(|p| p.0).collect();
+    let source = ImageBufferF32::new(decoded.width(), decoded.height(), pixels).unwrap();
+
+    let settings = PixelSortSettings {
+        axis: SortAxis::Row,
+        threshold_low: 0.20,
+        threshold_high: 0.85,
+        ..Default::default()
+    };
+
+    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0_f32; 4]]).unwrap();
+    let cpu = render_pixel_sort_frame(&dummy_a, &source, &settings).expect("cpu");
+    let gpu = morphogen_metal::pixel_sort_metal(&source, &settings).expect("gpu");
+
+    let mut worst_diff = 0.0_f32;
+    let mut worst_pos = (0u32, 0u32);
+    let mut worst_gpu = [0.0_f32; 4];
+    let mut worst_cpu = [0.0_f32; 4];
+    for (i, (g_px, c_px)) in gpu.pixels.iter().zip(cpu.pixels.iter()).enumerate() {
+        let diff = g_px.iter().zip(c_px.iter()).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        if diff > worst_diff {
+            worst_diff = diff;
+            worst_pos = (i as u32 % source.width, i as u32 / source.width);
+            worst_gpu = *g_px;
+            worst_cpu = *c_px;
+        }
+    }
+    assert_eq!(
+        worst_diff, 0.0,
+        "Metal pixel sort diverged from CPU at ({},{}): gpu={:?} cpu={:?} diff={}",
+        worst_pos.0, worst_pos.1, worst_gpu, worst_cpu, worst_diff
+    );
+}

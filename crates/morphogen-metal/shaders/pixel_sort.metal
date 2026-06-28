@@ -20,7 +20,8 @@ struct PixelSortParams {
 // ─── Sort-key helpers — mirror pixel_sort.rs exactly (same constants, same order) ──
 
 static float ps_luma(float r, float g, float b) {
-    return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    // Explicit fma() matches Rust's mul_add order → bit-identical sort keys on CPU and GPU.
+    return fma(0.2126f, r, fma(0.7152f, g, 0.0722f * b));
 }
 
 // HSV hue in [0, 1]; returns 0 for achromatic pixels.

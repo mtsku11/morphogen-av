@@ -2760,6 +2760,78 @@ mod tests {
     }
 
     #[test]
+    fn metal_pixel_sort_matches_cpu_reference_rgb_360wide() {
+        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis};
+
+        // Full-color fixture matching the cello2 footage size (360×640) with varied channels.
+        // Uses the same 8-bit/255 value range as PNG-decoded footage.
+        let fixture = ImageBufferF32::from_fn(360, 640, |x, y| {
+            let r = ((x * 7 + y * 3 + 13) % 256) as f32 / 255.0;
+            let g = ((x * 11 + y * 17 + 7) % 256) as f32 / 255.0;
+            let b = ((x * 5 + y * 23 + 29) % 256) as f32 / 255.0;
+            [r, g, b, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+
+        let settings = PixelSortSettings {
+            axis: SortAxis::Row,
+            threshold_low: 0.20,
+            threshold_high: 0.85,
+            ..Default::default()
+        };
+
+        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu render");
+        let gpu = match pixel_sort_metal(&fixture, &settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal pixel sort parity (rgb 360-wide): no Metal device");
+                return;
+            }
+            Err(error) => panic!("metal pixel sort (rgb 360-wide) failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 0.0);
+    }
+
+    #[test]
+    fn metal_pixel_sort_real_cello_frame() {
+        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis};
+
+        // Greyscale fixture matching cello2 footage: r=g=b, values from v/255 (same as
+        // image 0.25.x to_rgba32f() on an 8-bit PNG — no gamma correction applied).
+        let w = 360u32;
+        let h = 640u32;
+        let fixture = ImageBufferF32::from_fn(w, h, |x, y| {
+            let v_u8 = ((x * 83 + y * 17 + 41) % 256) as u8;
+            let v = v_u8 as f32 / 255.0;
+            [v, v, v, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).unwrap();
+        let settings = PixelSortSettings {
+            axis: SortAxis::Row,
+            threshold_low: 0.20,
+            threshold_high: 0.85,
+            ..Default::default()
+        };
+
+        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let gpu = match pixel_sort_metal(&fixture, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping: no Metal device");
+                return;
+            }
+            Err(e) => panic!("gpu failed: {e}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 0.0);
+    }
+
+    #[test]
     fn metal_pixel_sort_matches_cpu_reference() {
         use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis};
 

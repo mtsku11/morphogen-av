@@ -112,8 +112,12 @@ impl PixelSortSettings {
 // ─── Sort-key helpers ─────────────────────────────────────────────────────────
 
 /// Rec.709 luma from linear RGB.
+///
+/// Uses explicit FMA (`mul_add`) to match Metal's `fma()` builtin — both reduce the
+/// three multiply-add steps to two roundings in the same order, giving bit-identical
+/// sort keys on CPU and GPU without requiring fast_math on either side.
 fn luma(r: f32, g: f32, b: f32) -> f32 {
-    0.2126 * r + 0.7152 * g + 0.0722 * b
+    (0.2126_f32).mul_add(r, (0.7152_f32).mul_add(g, 0.0722_f32 * b))
 }
 
 /// HSV hue in [0, 1]. Returns 0 for achromatic pixels.
