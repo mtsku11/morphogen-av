@@ -580,6 +580,7 @@ fn run() -> Result<(), CliError> {
             threshold_low,
             threshold_high,
             max_span,
+            backend,
         } => render_pixel_sort_sequence(PixelSortSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -593,6 +594,7 @@ fn run() -> Result<(), CliError> {
                 max_span,
             },
             frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {

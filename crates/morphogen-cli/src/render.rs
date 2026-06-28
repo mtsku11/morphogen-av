@@ -2402,6 +2402,7 @@ pub(crate) struct PixelSortSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: PixelSortSettings,
     pub(crate) frames: u32,
+    pub(crate) backend: RenderBackend,
 }
 
 pub(crate) fn render_pixel_sort_sequence(
@@ -2438,23 +2439,60 @@ pub(crate) fn render_pixel_sort_sequence(
             load_image_f32(&source_a_frames[a_idx])?
         };
         let source_b = load_image_f32(&source_b_frames[index])?;
-        let rendered = render_pixel_sort_frame(&source_a, &source_b, &request.settings)?;
+        let rendered = match request.backend {
+            RenderBackend::Cpu => render_pixel_sort_frame(&source_a, &source_b, &request.settings)?,
+            RenderBackend::Metal => render_pixel_sort_frame_metal(&source_b, &request.settings)?,
+        };
         save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
     }
 
     println!(
         "rendered pixel sort sequence with {} frame(s) \
-         (axis {:?}, key {:?}, threshold [{:.2},{:.2}], max_span {}) from B:{} to {}",
+         (axis {:?}, key {:?}, threshold [{:.2},{:.2}], max_span {}, backend {:?}) from B:{} to {}",
         frame_count,
         request.settings.axis,
         request.settings.key,
         request.settings.threshold_low,
         request.settings.threshold_high,
         request.settings.max_span,
+        request.backend,
         request.source_b_dir.display(),
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_pixel_sort_frame_metal(
+    source: &ImageBufferF32,
+    settings: &PixelSortSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::pixel_sort_metal(source, settings)?;
+    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]])
+        .map_err(|e| CliError::Message(e.to_string()))?;
+    let cpu = render_pixel_sort_frame(&dummy_a, source, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU pixel sort outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal pixel sort diverged from CPU reference by {difference} (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_pixel_sort_frame_metal(
+    _source: &ImageBufferF32,
+    _settings: &PixelSortSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 #[cfg(target_os = "macos")]

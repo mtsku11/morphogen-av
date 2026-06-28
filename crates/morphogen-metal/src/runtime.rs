@@ -6,8 +6,8 @@ use metal::{
 use morphogen_render::{
     pyramidal_lucas_kanade_flow_with_refiner, FieldParticleSettings, FlowFeedbackSettings,
     FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool, GrainSelection,
-    GranularMosaicSettings, ImageBufferF32, ParticleField, PyramidalLucasKanadeEstimate,
-    RenderError, StructureMode,
+    GranularMosaicSettings, ImageBufferF32, ParticleField, PixelSortSettings, PyramidalLucasKanadeEstimate,
+    RenderError, SortAxis, SortDirection, SortKey, StructureMode,
 };
 
 use crate::{
@@ -21,7 +21,8 @@ use crate::{
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
     GRANULAR_MOSAIC_SHADER_SOURCE, LUCAS_KANADE_REFINE_KERNEL_NAME,
-    LUCAS_KANADE_REFINE_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
+    LUCAS_KANADE_REFINE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
+    VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -109,6 +110,18 @@ struct LucasKanadeRefineParams {
     width: u32,
     height: u32,
     radius: i32,
+}
+
+#[repr(C)]
+struct PixelSortMetalParams {
+    width: u32,
+    height: u32,
+    axis: u32,
+    key: u32,
+    direction: u32,
+    threshold_low: f32,
+    threshold_high: f32,
+    max_span: u32,
 }
 
 #[repr(C)]
@@ -1884,6 +1897,106 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
 
+/// Pixel-sort effect on the GPU. Mirrors `render_pixel_sort_frame` exactly.
+/// One threadgroup per line (row or column); all threads cooperate on load/store;
+/// thread 0 runs the stable insertion sort. The CPU parity gate in the CLI driver
+/// runs every frame before writing output (standard stateless per-frame gate).
+pub fn pixel_sort_metal(
+    source: &ImageBufferF32,
+    settings: &PixelSortSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if source.width == 0 || source.height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+
+    let w = source.width;
+    let h = source.height;
+
+    let axis_u32: u32 = match settings.axis {
+        SortAxis::Row => 0,
+        SortAxis::Col => 1,
+    };
+    let key_u32: u32 = match settings.key {
+        SortKey::Luma  => 0,
+        SortKey::Hue   => 1,
+        SortKey::Sat   => 2,
+        SortKey::Red   => 3,
+        SortKey::Green => 4,
+        SortKey::Blue  => 5,
+    };
+    let dir_u32: u32 = match settings.direction {
+        SortDirection::Asc  => 0,
+        SortDirection::Desc => 1,
+    };
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(PIXEL_SORT_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(PIXEL_SORT_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let source_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&source_texture, source)?;
+
+    let params = PixelSortMetalParams {
+        width: w,
+        height: h,
+        axis: axis_u32,
+        key: key_u32,
+        direction: dir_u32,
+        threshold_low: settings.threshold_low,
+        threshold_high: settings.threshold_high,
+        max_span: settings.max_span,
+    };
+
+    // One threadgroup per line; threads share load/store. Thread count = min(line_len, 64).
+    let (threadgroups, threads_per_tg) = match settings.axis {
+        SortAxis::Row => (
+            MTLSize::new(1, h as u64, 1),
+            MTLSize::new(64_u64.min(w as u64), 1, 1),
+        ),
+        SortAxis::Col => (
+            MTLSize::new(w as u64, 1, 1),
+            MTLSize::new(64_u64.min(h as u64), 1, 1),
+        ),
+    };
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&source_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<PixelSortMetalParams>() as u64,
+        (&params as *const PixelSortMetalParams).cast(),
+    );
+    encoder.dispatch_thread_groups(threadgroups, threads_per_tg);
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+    }
+
+    read_rgba_f32_texture(&output_texture, w, h)
+}
+
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
@@ -2644,6 +2757,43 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 0.000_001);
+    }
+
+    #[test]
+    fn metal_pixel_sort_matches_cpu_reference() {
+        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis};
+
+        // Textured fixture: unique lumas per pixel so no ties, all distinct keys.
+        // Row width=32 and height=16 → well within PS_MAX_LINE=1024.
+        let fixture = ImageBufferF32::from_fn(32, 16, |x, y| {
+            // Interleave x and y to ensure variation along both axes.
+            let v = ((x * 7 + y * 13) % 31 + 1) as f32 / 32.0;
+            [v, v, v, 1.0]
+        })
+        .expect("fixture");
+
+        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
+
+        let settings = PixelSortSettings {
+            axis: SortAxis::Row,
+            threshold_low: 0.2,
+            threshold_high: 0.8,
+            ..Default::default()
+        };
+
+        let cpu = render_pixel_sort_frame(&dummy_a, &fixture, &settings).expect("cpu render");
+        let gpu = match pixel_sort_metal(&fixture, &settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal pixel sort parity assertion: no Metal device");
+                return;
+            }
+            Err(error) => panic!("metal pixel sort failed: {error}"),
+        };
+
+        // Pixel sort is a pure permutation: every output pixel is an unmodified input
+        // pixel. CPU and GPU use the same IEEE 754 f32 sort key. Parity must be exact.
+        assert_image_near(&gpu, &cpu, 0.0);
     }
 
     fn assert_image_near(actual: &ImageBufferF32, expected: &ImageBufferF32, epsilon: f32) {

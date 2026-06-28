@@ -31,6 +31,8 @@ pub const FIELD_PARTICLES_SPLAT_SHADER_SOURCE: &str =
 pub const LUCAS_KANADE_REFINE_KERNEL_NAME: &str = "lucas_kanade_refine";
 pub const LUCAS_KANADE_REFINE_SHADER_SOURCE: &str =
     include_str!("../shaders/lucas_kanade_refine.metal");
+pub const PIXEL_SORT_KERNEL_NAME: &str = "pixel_sort";
+pub const PIXEL_SORT_SHADER_SOURCE: &str = include_str!("../shaders/pixel_sort.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -151,6 +153,12 @@ pub enum MetalDispatchError {
     MissingLucasKanadeRefineBindingLayout,
     #[error("optical-flow orchestration failed: {0}")]
     OpticalFlow(String),
+    #[error("pixel_sort.metal does not contain the expected kernel entry point")]
+    MissingPixelSortKernelEntryPoint,
+    #[error("pixel_sort.metal does not contain the expected texture and buffer bindings")]
+    MissingPixelSortBindingLayout,
+    #[error("invalid pixel sort settings: {0}")]
+    InvalidPixelSortSettings(String),
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -472,6 +480,22 @@ pub fn validate_lucas_kanade_refine_shader_source() -> Result<(), MetalDispatchE
         }
     }
 
+    Ok(())
+}
+
+pub fn validate_pixel_sort_shader_source() -> Result<(), MetalDispatchError> {
+    if !PIXEL_SORT_SHADER_SOURCE.contains("kernel void pixel_sort") {
+        return Err(MetalDispatchError::MissingPixelSortKernelEntryPoint);
+    }
+    for expected in [
+        "texture2d<float, access::read>  source [[texture(0)]]",
+        "texture2d<float, access::write> output [[texture(1)]]",
+        "constant PixelSortParams&       params [[buffer(0)]]",
+    ] {
+        if !PIXEL_SORT_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingPixelSortBindingLayout);
+        }
+    }
     Ok(())
 }
 

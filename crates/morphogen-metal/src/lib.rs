@@ -14,7 +14,8 @@ pub use flow_displace_dispatch::{
     validate_field_particles_splat_shader_source, validate_flow_displace_shader_source,
     validate_fluid_advect_shader_source, validate_fluid_advect_two_source_shader_source,
     validate_granular_mosaic_pool_shader_source, validate_granular_mosaic_shader_source,
-    validate_lucas_kanade_refine_shader_source, validate_video_vocoder_shader_source,
+    validate_lucas_kanade_refine_shader_source, validate_pixel_sort_shader_source,
+    validate_video_vocoder_shader_source,
     FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError, TextureRole,
     ThreadgroupSize, ADVECT_FEEDBACK_KERNEL_NAME,
     ADVECT_FEEDBACK_SHADER_SOURCE, COAGULATED_COMPOSITE_KERNEL_NAME,
@@ -26,7 +27,8 @@ pub use flow_displace_dispatch::{
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
     GRANULAR_MOSAIC_SHADER_SOURCE, LUCAS_KANADE_REFINE_KERNEL_NAME,
-    LUCAS_KANADE_REFINE_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
+    LUCAS_KANADE_REFINE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
+    VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 pub use pipeline_placeholder::MetalPipelinePlan;
 #[cfg(target_os = "macos")]
@@ -34,6 +36,6 @@ pub use runtime::{
     coagulated_composite_metal, convolution_blend_color_metal, convolution_blend_metal,
     field_particles_splat_metal, flow_displace_metal, flow_feedback_metal, fluid_advect_metal,
     fluid_advect_two_source_metal, granular_mosaic_metal, granular_mosaic_pool_metal,
-    pyramidal_lucas_kanade_flow_metal, video_vocoder_match_metal,
+    pixel_sort_metal, pyramidal_lucas_kanade_flow_metal, video_vocoder_match_metal,
 };
 pub use texture_placeholder::MetalTexturePlan;

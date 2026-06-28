@@ -716,6 +716,9 @@ pub(crate) enum Commands {
         /// Maximum streak length in pixels; 0 = unbounded.
         #[arg(long, default_value_t = 0)]
         max_span: u32,
+        /// Compute backend. CPU is ground truth; Metal runs parity-gated per-frame.
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
