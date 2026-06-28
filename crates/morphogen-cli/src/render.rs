@@ -649,7 +649,7 @@ pub(crate) fn render_datamosh_sequence(
                         (flow, false, true)
                     } else {
                         (
-                            compute_datamosh_optical_flow(
+                            compute_optical_flow_backend(
                                 previous_modulator,
                                 &modulator,
                                 carrier.width,
@@ -1314,13 +1314,14 @@ pub(crate) fn optical_flow_cache_algorithm(backend: RenderBackend) -> &'static s
     }
 }
 
-/// Compute datamosh optical flow on the selected backend. The CPU backend runs the
-/// reference estimator directly. The Metal backend runs the GPU refinement, but the
-/// first time it computes a frame in a render it also runs the CPU reference and gates
-/// the result — validate-then-trust. Once frame parity is confirmed (`metal_validated`)
-/// the GPU is trusted for the rest of the sequence, so the expensive CPU flow runs at
-/// most once per render instead of every frame.
-fn compute_datamosh_optical_flow(
+/// Compute temporal optical flow on the selected backend (shared by the datamosh and
+/// flow-feedback sequences). The CPU backend runs the reference estimator directly. The
+/// Metal backend runs the GPU refinement, but the first time it computes a frame in a
+/// render it also runs the CPU reference and gates the result — validate-then-trust.
+/// Once frame parity is confirmed (`metal_validated`) the GPU is trusted for the rest of
+/// the sequence, so the expensive CPU flow runs at most once per render instead of every
+/// frame.
+fn compute_optical_flow_backend(
     previous_modulator: &ImageBufferF32,
     modulator: &ImageBufferF32,
     width: u32,
@@ -1338,7 +1339,7 @@ fn compute_datamosh_optical_flow(
             radius,
         )?
         .flow),
-        RenderBackend::Metal => compute_datamosh_optical_flow_metal(
+        RenderBackend::Metal => compute_optical_flow_metal(
             previous_modulator,
             modulator,
             width,
@@ -1350,7 +1351,7 @@ fn compute_datamosh_optical_flow(
 }
 
 #[cfg(target_os = "macos")]
-fn compute_datamosh_optical_flow_metal(
+fn compute_optical_flow_metal(
     previous_modulator: &ImageBufferF32,
     modulator: &ImageBufferF32,
     width: u32,
@@ -1388,7 +1389,7 @@ fn compute_datamosh_optical_flow_metal(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn compute_datamosh_optical_flow_metal(
+fn compute_optical_flow_metal(
     _previous_modulator: &ImageBufferF32,
     _modulator: &ImageBufferF32,
     _width: u32,
@@ -4495,6 +4496,14 @@ pub(crate) fn render_feedback_sequence(
         load_feedback_resume_state(output_dir, job_id, &contract, &provenance, frame_count_u32)?;
     let mut reused_optical_flow_cache_count = 0usize;
     let mut generated_optical_flow_cache_count = 0usize;
+    let mut metal_flow_validated = false;
+    // The flow cache is segregated by backend for the optical-flow source so a
+    // GPU-produced cache is never reused by a CPU render (the two agree within
+    // tolerance, not bit-for-bit). Luminance flow is CPU-only and keeps its id.
+    let flow_cache_algorithm: &str = match flow_source {
+        FlowSource::OpticalFlow => optical_flow_cache_algorithm(backend),
+        FlowSource::Luminance => flow_algorithm,
+    };
     for index in start_frame..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
@@ -4522,7 +4531,7 @@ pub(crate) fn render_feedback_sequence(
                         .map(|directory| {
                             read_cached_temporal_flow(
                                 directory,
-                                flow_algorithm,
+                                flow_cache_algorithm,
                                 &contract.modulator.checksum,
                                 carrier.width,
                                 carrier.height,
@@ -4535,14 +4544,15 @@ pub(crate) fn render_feedback_sequence(
                     } else {
                         let previous_modulator = load_image_f32(&modulator_frames[index - 1])?;
                         (
-                            pyramidal_lucas_kanade_flow_cpu(
+                            compute_optical_flow_backend(
                                 &previous_modulator,
                                 &modulator,
                                 carrier.width,
                                 carrier.height,
                                 LUCAS_KANADE_WINDOW_RADIUS,
-                            )?
-                            .flow,
+                                backend,
+                                &mut metal_flow_validated,
+                            )?,
                             cache_directory.is_some(),
                             false,
                         )
@@ -4574,7 +4584,7 @@ pub(crate) fn render_feedback_sequence(
                     write_flow_cache_with_source_fingerprint(
                         frame_cache_dir,
                         &flow,
-                        flow_algorithm,
+                        flow_cache_algorithm,
                         Some(&contract.modulator.checksum),
                     )?;
                 }
