@@ -3054,10 +3054,9 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
         let settings = ChannelShiftSettings::default();
 
-        let cpu = render_channel_shift_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let cpu = render_channel_shift_frame(&fixture, &settings, &[]).expect("cpu");
         let gpu = match channel_shift_metal(&fixture, &settings) {
             Ok(img) => img,
             Err(MetalDispatchError::DeviceUnavailable) => {
@@ -3083,14 +3082,13 @@ mod tests {
         })
         .expect("fixture");
 
-        let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]]).expect("dummy a");
         let settings = ChannelShiftSettings {
             shift_r_x: 6.0,
             shift_b_x: -6.0,
             ..Default::default()
         };
 
-        let cpu = render_channel_shift_frame(&dummy_a, &fixture, &settings).expect("cpu");
+        let cpu = render_channel_shift_frame(&fixture, &settings, &[]).expect("cpu");
         let gpu = match channel_shift_metal(&fixture, &settings) {
             Ok(img) => img,
             Err(MetalDispatchError::DeviceUnavailable) => {

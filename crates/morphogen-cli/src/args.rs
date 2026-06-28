@@ -748,7 +748,18 @@ pub(crate) enum Commands {
         /// Vertical offset for the Blue channel (px).
         #[arg(long, default_value_t = 0.0)]
         shift_b_y: f32,
-        /// Render backend. `metal` is gated against the CPU reference per frame.
+        /// Source A frames (PNG sequence). Required when --flow-gain is non-zero.
+        #[arg(long)]
+        source_a_dir: Option<PathBuf>,
+        /// A-flow gain: per-row X shift added to every channel = mean X optical-flow
+        /// at that row × gain. `0` disables flow-driven mode (default, off case).
+        #[arg(long, default_value_t = 0.0)]
+        flow_gain: f32,
+        /// Lucas-Kanade window radius for optical-flow in A-flow mode.
+        #[arg(long, default_value_t = 4)]
+        radius: i32,
+        /// Render backend. `metal` is gated against the CPU reference per frame
+        /// (constant-offset mode only; A-flow mode is CPU-only).
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },

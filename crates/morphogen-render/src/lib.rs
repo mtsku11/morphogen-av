@@ -34,7 +34,8 @@ pub use block_collage::{
     render_block_collage_frame, BlockCollageSettings, BLOCK_COLLAGE_ALGORITHM,
 };
 pub use channel_shift::{
-    render_channel_shift_frame, ChannelShiftSettings, CHANNEL_SHIFT_ALGORITHM,
+    compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
+    CHANNEL_SHIFT_ALGORITHM, CHANNEL_SHIFT_FLOW_ALGORITHM,
 };
 pub use palette_quantize::{
     render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode, NEON_PALETTE,

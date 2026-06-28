@@ -608,6 +608,9 @@ fn run() -> Result<(), CliError> {
             shift_g_y,
             shift_b_x,
             shift_b_y,
+            source_a_dir,
+            flow_gain,
+            radius,
             backend,
         } => render_channel_shift_sequence(ChannelShiftSequenceRequest {
             source_b_dir: &source_b_dir,
@@ -622,6 +625,9 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+            source_a_dir: source_a_dir.as_deref(),
+            flow_gain,
+            radius,
         })
         .map(|_| ()),
         Commands::RenderPaletteQuantizeSequence {

@@ -15,7 +15,7 @@ use morphogen_core::{
 use morphogen_render::{
     advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
     render_block_collage_frame, BlockCollageSettings,
-    render_channel_shift_frame, ChannelShiftSettings,
+    compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
     render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
     render_pixel_sort_frame, PixelSortSettings,
     advance_field_particles,
@@ -5349,6 +5349,12 @@ pub(crate) struct ChannelShiftSequenceRequest<'a> {
     pub(crate) settings: ChannelShiftSettings,
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
+    /// Source A frames for A-flow-driven per-row shift (Slice 3). None = constant-offset only.
+    pub(crate) source_a_dir: Option<&'a Path>,
+    /// Per-row shift gain: row_shift_x[y] = mean_x_flow[y] × flow_gain. 0 = off.
+    pub(crate) flow_gain: f32,
+    /// Lucas-Kanade window radius for optical-flow in A-flow mode.
+    pub(crate) radius: i32,
 }
 
 pub(crate) fn render_channel_shift_sequence(
@@ -5360,6 +5366,19 @@ pub(crate) fn render_channel_shift_sequence(
         ));
     }
 
+    let flow_active = request.flow_gain != 0.0;
+
+    if flow_active && request.source_a_dir.is_none() {
+        return Err(CliError::Message(
+            "A-flow-driven mode requires --source-a-dir".to_string(),
+        ));
+    }
+    if flow_active && request.backend == RenderBackend::Metal {
+        return Err(CliError::Message(
+            "A-flow-driven channel shift is CPU-only; use --backend cpu".to_string(),
+        ));
+    }
+
     let source_b_frames = collect_image_frames(request.source_b_dir)?;
     if source_b_frames.is_empty() {
         return Err(CliError::Message(
@@ -5367,32 +5386,67 @@ pub(crate) fn render_channel_shift_sequence(
         ));
     }
 
+    let source_a_frames: Option<Vec<_>> = request
+        .source_a_dir
+        .map(collect_image_frames)
+        .transpose()?;
+
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
-    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]])
-        .map_err(|e| CliError::Message(e.to_string()))?;
+    let mut prev_a: Option<ImageBufferF32> = None;
+    let mut metal_flow_validated = false;
 
     for index in 0..frame_count {
         let source_b = load_image_f32(&source_b_frames[index])?;
-        let rendered = match request.backend {
-            RenderBackend::Cpu => {
-                render_channel_shift_frame(&dummy_a, &source_b, &request.settings)?
-            }
-            RenderBackend::Metal => {
-                render_channel_shift_frame_metal(&source_b, &request.settings)?
-            }
+
+        let per_row_shifts: Vec<f32> = if flow_active {
+            let a_frames = source_a_frames.as_ref().unwrap();
+            let a_idx = index.min(a_frames.len().saturating_sub(1));
+            let source_a = load_image_f32(&a_frames[a_idx])?;
+            let shifts = if let Some(ref previous_a) = prev_a {
+                let flow = compute_optical_flow_backend(
+                    previous_a,
+                    &source_a,
+                    source_b.width,
+                    source_b.height,
+                    request.radius,
+                    request.backend,
+                    &mut metal_flow_validated,
+                )?;
+                compute_per_row_shifts(&flow, request.flow_gain)
+            } else {
+                // Frame 0: no previous frame → zero per-row shifts.
+                vec![0.0f32; source_b.height as usize]
+            };
+            prev_a = Some(source_a);
+            shifts
+        } else {
+            vec![]
+        };
+
+        let rendered = if !flow_active && request.backend == RenderBackend::Metal {
+            render_channel_shift_frame_metal(&source_b, &request.settings)?
+        } else {
+            render_channel_shift_frame(&source_b, &request.settings, &per_row_shifts)?
         };
         save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
     }
 
+    let mode_label = if flow_active {
+        format!("flow-driven gain {:.2}", request.flow_gain)
+    } else {
+        format!(
+            "R:{:+.1},{:+.1} G:{:+.1},{:+.1} B:{:+.1},{:+.1} px",
+            request.settings.shift_r_x, request.settings.shift_r_y,
+            request.settings.shift_g_x, request.settings.shift_g_y,
+            request.settings.shift_b_x, request.settings.shift_b_y,
+        )
+    };
     println!(
-        "rendered channel shift sequence with {} frame(s) \
-         (R:{:+.1},{:+.1} G:{:+.1},{:+.1} B:{:+.1},{:+.1} px, backend {:?}) from {} to {}",
+        "rendered channel shift sequence with {} frame(s) ({}, backend {:?}) from {} to {}",
         frame_count,
-        request.settings.shift_r_x, request.settings.shift_r_y,
-        request.settings.shift_g_x, request.settings.shift_g_y,
-        request.settings.shift_b_x, request.settings.shift_b_y,
+        mode_label,
         request.backend,
         request.source_b_dir.display(),
         request.output_dir.display()
@@ -5406,9 +5460,7 @@ pub(crate) fn render_channel_shift_frame_metal(
     settings: &ChannelShiftSettings,
 ) -> Result<ImageBufferF32, CliError> {
     let gpu = morphogen_metal::channel_shift_metal(source_b, settings)?;
-    let dummy_a = ImageBufferF32::new(1, 1, vec![[0.0; 4]])
-        .map_err(|e| CliError::Message(e.to_string()))?;
-    let cpu = render_channel_shift_frame(&dummy_a, source_b, settings)?;
+    let cpu = render_channel_shift_frame(source_b, settings, &[])?;
     let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
         CliError::Message(
             "Metal and CPU channel shift outputs have mismatched dimensions; cannot verify parity"
