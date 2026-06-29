@@ -2344,6 +2344,7 @@ pub(crate) fn render_cascade_trails_sequence(
 }
 
 pub(crate) struct CascadeCollageSequenceRequest<'a> {
+    pub(crate) source_dir: Option<&'a Path>,
     pub(crate) output_dir: &'a Path,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -2360,32 +2361,68 @@ pub(crate) fn render_cascade_collage_sequence(
             "frames must be greater than zero".to_string(),
         ));
     }
-    if request.width == 0 || request.height == 0 {
-        return Err(CliError::Message(
-            "width and height must be greater than zero".to_string(),
-        ));
-    }
     fs::create_dir_all(request.output_dir)?;
 
-    for index in 0..request.frames {
-        let rendered =
-            render_cascade_collage_frame(request.width, request.height, &request.settings, index)?;
-        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
-    }
+    let frame_count = if let Some(src_dir) = request.source_dir {
+        // texture mode: tiles carry crops of the source video (texture + colour)
+        let source_frames = collect_image_frames(src_dir)?;
+        if source_frames.is_empty() {
+            return Err(CliError::Message(
+                "cascade collage source directory contains no PNG frames".to_string(),
+            ));
+        }
+        let count = (request.frames as usize).min(source_frames.len());
+        for index in 0..count {
+            let source = load_image_f32(&source_frames[index])?;
+            let rendered = render_cascade_collage_frame(
+                source.width,
+                source.height,
+                Some(&source),
+                &request.settings,
+                index as u32,
+            )?;
+            save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+        }
+        println!(
+            "rendered cascade collage sequence with {} frame(s) (texture from {}, scrib_amp_scale {:.2}, morph_rate {:.3}) to {}",
+            count,
+            src_dir.display(),
+            request.settings.scrib_amp_scale,
+            request.settings.morph_rate,
+            request.output_dir.display()
+        );
+        count
+    } else {
+        // palette mode: source-less procedural generator
+        if request.width == 0 || request.height == 0 {
+            return Err(CliError::Message(
+                "width and height must be greater than zero".to_string(),
+            ));
+        }
+        for index in 0..request.frames {
+            let rendered = render_cascade_collage_frame(
+                request.width,
+                request.height,
+                None,
+                &request.settings,
+                index,
+            )?;
+            save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+        }
+        println!(
+            "rendered cascade collage sequence with {} frame(s) ({}x{} palette, scrib_amp_scale {:.2}, morph_rate {:.3}, frame_hue_rate {:.3}) to {}",
+            request.frames,
+            request.width,
+            request.height,
+            request.settings.scrib_amp_scale,
+            request.settings.morph_rate,
+            request.settings.frame_hue_rate,
+            request.output_dir.display()
+        );
+        request.frames as usize
+    };
 
-    println!(
-        "rendered cascade collage sequence with {} frame(s) ({}x{}, scrib_amp_scale {:.2}, morph_rate {:.3}, frame_hue_rate {:.3}) to {}",
-        request.frames,
-        request.width,
-        request.height,
-        request.settings.scrib_amp_scale,
-        request.settings.morph_rate,
-        request.settings.frame_hue_rate,
-        request.output_dir.display()
-    );
-    Ok(FrameSequenceRenderResult {
-        frame_count: request.frames as usize,
-    })
+    Ok(FrameSequenceRenderResult { frame_count })
 }
 
 pub(crate) struct BlockCollageSequenceRequest<'a> {

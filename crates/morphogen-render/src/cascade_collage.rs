@@ -25,7 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ImageBufferF32, RenderError};
+use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 /// Algorithm identifier — bump when the rasterizer, scribble formulation, morph, or
 /// colour model changes so stale caches/checkpoints invalidate.
@@ -313,16 +313,53 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
     }
 }
 
+/// RGB in [0,1] → HSV (h in turns, s/v in [0,1]).
+fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let v = max;
+    let s = if max <= 0.0 { 0.0 } else { d / max };
+    let h = if d <= 0.0 {
+        0.0
+    } else if max == r {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h / 6.0, s, v)
+}
+
+/// Rotate an RGB colour's hue by `shift` turns, preserving saturation/value.
+fn hue_rotate(r: f32, g: f32, b: f32, shift: f32) -> (f32, f32, f32) {
+    let (h, s, v) = rgb_to_hsv(r, g, b);
+    hsv_to_rgb((h + shift).rem_euclid(1.0), s, v)
+}
+
 // ─── Frame renderer ─────────────────────────────────────────────────────────────
 
-/// Render one frame of the scribbled-edge tile cascade at the given dimensions.
+/// Render one frame of the scribbled-edge tile cascade.
+///
+/// When `source` is `Some`, each tile carries a **crop of the source** centred on
+/// its home position (texture + colour come from the video); output dimensions match
+/// the source. When `source` is `None`, tiles are flat HSV palette colours and the
+/// output is `width × height` (the source-less generator).
 pub fn render_cascade_collage_frame(
     width: u32,
     height: u32,
+    source: Option<&ImageBufferF32>,
     settings: &CascadeCollageSettings,
     frame: u32,
 ) -> Result<ImageBufferF32, RenderError> {
     settings.validate()?;
+    let (out_w, out_h) = match source {
+        Some(s) => (s.width, s.height),
+        None => (width, height),
+    };
+    let width = out_w;
+    let height = out_h;
     let w = width as usize;
     let h = height as usize;
     let bg = [
@@ -357,14 +394,17 @@ pub fn render_cascade_collage_frame(
             let oy = cy + shape.dy * sf;
             let phase = sf * 0.30 + ff * settings.morph_rate;
             let grow = shape.edge_grow * hh * (sf * 0.05 + ff * settings.morph_rate).sin();
-            let hue = shape.base_hue
-                + shape.hue_spread * (sf / denom)
-                + settings.frame_hue_rate * ff;
             let osc = 0.5 + 0.5 * (sf * 0.6 + ff * settings.morph_rate).sin();
             let sh = 1.0 - settings.bright_osc + settings.bright_osc * osc;
-            let v_eff = (shape.val * sh).clamp(0.0, 1.0);
-            let (r, g, b) = hsv_to_rgb(hue.rem_euclid(1.0), shape.sat, v_eff);
-            let col = [r, g, b, 1.0];
+            // hue drift across the cascade (+ optional per-frame rotation), in turns
+            let hue_shift = shape.hue_spread * (sf / denom) + settings.frame_hue_rate * ff;
+            // palette-mode flat colour (used only when there is no source texture)
+            let palette_col = {
+                let hue = (shape.base_hue + hue_shift).rem_euclid(1.0);
+                let v_eff = (shape.val * sh).clamp(0.0, 1.0);
+                let (r, g, b) = hsv_to_rgb(hue, shape.sat, v_eff);
+                [r, g, b, 1.0]
+            };
 
             let maxr = hw.max(hh) + amp.abs() + 4.0;
             let y0 = (oy - maxr).floor().max(0.0) as i64;
@@ -410,7 +450,26 @@ pub fn render_cascade_collage_frame(
                         }
                     };
                     if inside {
-                        pixels[row + x as usize] = col;
+                        let color = match source {
+                            // texture mode: carry the source crop centred on the tile's
+                            // home (cx + u = x - dx*step), optionally hue-rotated + shaded.
+                            Some(src) => {
+                                let s = sample_bilinear_clamped(src, cx + u, cy + v);
+                                let (r, g, b) = if hue_shift != 0.0 {
+                                    hue_rotate(s[0], s[1], s[2], hue_shift)
+                                } else {
+                                    (s[0], s[1], s[2])
+                                };
+                                [
+                                    (r * sh).clamp(0.0, 1.0),
+                                    (g * sh).clamp(0.0, 1.0),
+                                    (b * sh).clamp(0.0, 1.0),
+                                    1.0,
+                                ]
+                            }
+                            None => palette_col,
+                        };
+                        pixels[row + x as usize] = color;
                     }
                 }
             }
@@ -424,18 +483,22 @@ pub fn render_cascade_collage_frame(
 mod tests {
     use super::*;
 
+    fn solid(w: u32, h: u32, c: [f32; 4]) -> ImageBufferF32 {
+        ImageBufferF32::from_fn(w, h, |_, _| c).unwrap()
+    }
+
     #[test]
     fn same_inputs_are_byte_identical() {
         let s = CascadeCollageSettings::default();
-        let a = render_cascade_collage_frame(180, 240, &s, 3).unwrap();
-        let b = render_cascade_collage_frame(180, 240, &s, 3).unwrap();
+        let a = render_cascade_collage_frame(180, 240, None, &s, 3).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, &s, 3).unwrap();
         assert_eq!(a, b, "A1: identical (settings, frame) must be byte-identical");
     }
 
     #[test]
     fn default_composition_leaves_no_background() {
         let s = CascadeCollageSettings::default();
-        let out = render_cascade_collage_frame(180, 240, &s, 0).unwrap();
+        let out = render_cascade_collage_frame(180, 240, None, &s, 0).unwrap();
         let bg = [s.background[0], s.background[1], s.background[2], 1.0];
         let gaps = out.pixels.iter().filter(|p| **p == bg).count();
         assert_eq!(gaps, 0, "A2: default composition must fully cover (no gaps)");
@@ -448,8 +511,8 @@ mod tests {
             frame_hue_rate: 0.0,
             ..Default::default()
         };
-        let f0 = render_cascade_collage_frame(160, 200, &s, 0).unwrap();
-        let f9 = render_cascade_collage_frame(160, 200, &s, 9).unwrap();
+        let f0 = render_cascade_collage_frame(160, 200, None, &s, 0).unwrap();
+        let f9 = render_cascade_collage_frame(160, 200, None, &s, 9).unwrap();
         assert_eq!(f0, f9, "A3: no per-frame drift ⇒ frames identical to frame 0");
     }
 
@@ -460,10 +523,40 @@ mod tests {
             scrib_amp_scale: 0.0,
             ..Default::default()
         };
-        let a = render_cascade_collage_frame(180, 240, &on, 0).unwrap();
-        let b = render_cascade_collage_frame(180, 240, &off, 0).unwrap();
+        let a = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(d > 0.0, "A4: straight-edge (off) must differ from scribbled (on)");
+    }
+
+    #[test]
+    fn texture_mode_uses_source_colour() {
+        // Solid source + no hue rotation + no brightness oscillation ⇒ every covered
+        // pixel is exactly the source colour (tiles carry source texture/colour).
+        let src = solid(180, 240, [0.2, 0.6, 0.9, 1.0]);
+        let s = CascadeCollageSettings {
+            frame_hue_rate: 0.0,
+            bright_osc: 0.0,
+            shapes: vec![CascadeShape {
+                hue_spread: 0.0,
+                ..CascadeCollageSettings::default().shapes[0]
+            }],
+            ..Default::default()
+        };
+        let out = render_cascade_collage_frame(0, 0, Some(&src), &s, 0).unwrap();
+        assert_eq!(out.width, 180, "texture mode output matches source dims");
+        // a covered pixel near the tile centre must equal the source colour
+        let p = out.pixel(54, 72).unwrap();
+        assert_eq!(p, [0.2, 0.6, 0.9, 1.0], "covered pixel carries source colour");
+    }
+
+    #[test]
+    fn texture_mode_is_deterministic() {
+        let src = solid(160, 200, [0.5, 0.25, 0.75, 1.0]);
+        let s = CascadeCollageSettings::default();
+        let a = render_cascade_collage_frame(0, 0, Some(&src), &s, 2).unwrap();
+        let b = render_cascade_collage_frame(0, 0, Some(&src), &s, 2).unwrap();
+        assert_eq!(a, b, "texture mode must be byte-identical for identical inputs");
     }
 
     #[test]

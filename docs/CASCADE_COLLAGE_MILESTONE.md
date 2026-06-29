@@ -115,22 +115,27 @@ cascading outward toward its corner with its scribbled edge facing centre.
 
 ## Build Order (slices)
 
-1. **CPU reference + tests** (this slice) — `cascade_collage.rs`, lib export, error
-   variant, A1–A3 tests.
-2. **CLI readout** — `render-cascade-collage-sequence` (source-less generator:
-   `--width --height --frames` + knobs) so off-vs-on (A4) and morph drift (A5) can
-   be Read. Ship + review.
-3. **Metal kernel** — rasterize + `vnoise1` scribble in MSL (splitmix64 precedent),
-   parity-gated per frame (A8). The per-stamp rasterize is parity-friendly
-   (no cross-frame state, last-writer = highest step index → gather by max covering
-   step, mirroring `field_particles_splat`).
-4. **Queue + SwiftUI** — `RenderJobTask` variant, queue add/run, sticky backend
+1. **CPU reference + tests** (DONE) — `cascade_collage.rs`, lib export, error
+   variant, A1–A4 tests.
+2. **CLI readout** (DONE) — `render-cascade-collage-sequence` (source-less
+   generator: `--width --height --frames` + knobs) so off-vs-on (A4) and morph drift
+   (A5) can be Read.
+3. **Source texture** (DONE) — tiles carry a **source-video crop** centred on each
+   shape's home position (texture + colour from the video), re-sampled per frame so
+   the video plays through. `render_cascade_collage_frame` takes `source:
+   Option<&ImageBufferF32>`; `--source-dir` enables it (output = source dims). Palette
+   stays the no-source fallback. Optional `hue_spread`/`frame_hue_rate` rotate the
+   sampled hue; `bright_osc` shades. Verified: solid-source covered pixel == source
+   colour; 0 background; determinism (texture tests).
+4. **Metal kernel** (NEXT) — rasterize + `vnoise1` scribble in MSL (splitmix64
+   precedent) + source sampling, parity-gated per frame (A8). The per-stamp rasterize
+   is parity-friendly (no cross-frame state, last-writer = highest step index →
+   gather by max covering step, mirroring `field_particles_splat`).
+5. **Queue + SwiftUI** — `RenderJobTask` variant, queue add/run, sticky backend
    picker.
-5. **A→B cross-synth seam** — swap the per-shape palette for a **Source B** sampler
-   (tile colour from B at the shape's origin cell), then optionally drive
-   `morph_rate`/`scrib_amp` from **Source A** analysis (luma/flow). This turns the
-   generator into a true A-modulates-B effect — deferred until the look is proven so
-   footage colour doesn't erode the flat solid faces.
+6. **A→B morph drive** — drive `morph_rate`/`scrib_amp` from **Source A** analysis
+   (luma/flow) so A modulates B's cascade. (Single-source B texture is slice 3; this
+   adds the A side.)
 
 ---
 

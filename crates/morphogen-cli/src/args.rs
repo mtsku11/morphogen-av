@@ -692,10 +692,15 @@ pub(crate) enum Commands {
     /// `--morph-rate 0 --frame-hue-rate 0` makes all frames identical.
     RenderCascadeCollageSequence {
         output_dir: PathBuf,
-        /// Output width in pixels.
+        /// Source video frames (PNG sequence) whose texture + colour fill the tiles.
+        /// When given, output dimensions match the source and `--width`/`--height` are
+        /// ignored; when omitted, tiles use the flat HSV palette at `--width`×`--height`.
+        #[arg(long)]
+        source_dir: Option<PathBuf>,
+        /// Output width in pixels (palette mode only; ignored when `--source-dir` is set).
         #[arg(long, default_value_t = 360)]
         width: u32,
-        /// Output height in pixels.
+        /// Output height in pixels (palette mode only; ignored when `--source-dir` is set).
         #[arg(long, default_value_t = 480)]
         height: u32,
         /// Number of output frames to render.

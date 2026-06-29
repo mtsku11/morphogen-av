@@ -573,6 +573,7 @@ fn run() -> Result<(), CliError> {
         .map(|_| ()),
         Commands::RenderCascadeCollageSequence {
             output_dir,
+            source_dir,
             width,
             height,
             frames,
@@ -582,6 +583,7 @@ fn run() -> Result<(), CliError> {
             bright_osc,
             seed,
         } => render_cascade_collage_sequence(CascadeCollageSequenceRequest {
+            source_dir: source_dir.as_deref(),
             output_dir: &output_dir,
             width,
             height,
