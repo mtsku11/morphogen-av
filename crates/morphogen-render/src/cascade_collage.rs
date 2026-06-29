@@ -29,7 +29,7 @@ use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 /// Algorithm identifier — bump when the rasterizer, scribble formulation, morph, or
 /// colour model changes so stale caches/checkpoints invalidate.
-pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v3";
+pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v4";
 
 /// Tile geometry: a plain rectangle (4 straight edges) or an L (outer box minus a
 /// notched corner = 6 straight edges).
@@ -125,6 +125,13 @@ pub struct CascadeCollageSettings {
     /// Saturation and value of the neon edge colour (0..1) — high ⇒ glowing lines.
     pub edge_sat: f32,
     pub edge_val: f32,
+    /// Blend the tile FACE toward its hue, in [0, 1]. The face keeps the footage's
+    /// luma/texture but is colorized toward `base_hue` (+ per-step `hue_spread`), so a
+    /// block reads as e.g. "blue" with each cascade copy a different blue. `0` ⇒ pure
+    /// footage colour (off); `1` ⇒ fully colorized duotone.
+    pub face_strength: f32,
+    /// Saturation of the colorized face (0..1).
+    pub face_sat: f32,
     /// Deterministic seed for the scribble noise.
     pub seed: u64,
 }
@@ -159,7 +166,7 @@ impl Default for CascadeCollageSettings {
                     val: 0.80,
                     edge_hue: 0.90, // magenta edges
                     scrib_amp: 12.0,
-                    hue_spread: 0.05,
+                    hue_spread: 0.10,
                     edge_grow: 0.06,
                 },
                 // orange — TR, rect, LEFT edge (toward centre) scribbled, cascade up-right
@@ -184,7 +191,7 @@ impl Default for CascadeCollageSettings {
                     val: 0.93,
                     edge_hue: 0.07, // orange edges
                     scrib_amp: 11.0,
-                    hue_spread: 0.05,
+                    hue_spread: 0.10,
                     edge_grow: 0.06,
                 },
                 // teal — BL, rect, RIGHT edge (toward centre) scribbled, cascade down-left
@@ -209,7 +216,7 @@ impl Default for CascadeCollageSettings {
                     val: 0.66,
                     edge_hue: 0.50, // cyan edges
                     scrib_amp: 12.0,
-                    hue_spread: 0.05,
+                    hue_spread: 0.10,
                     edge_grow: 0.06,
                 },
                 // purple — BR, L, notch toward centre (TL), cascade down-right
@@ -234,7 +241,7 @@ impl Default for CascadeCollageSettings {
                     val: 0.66,
                     edge_hue: 0.92, // magenta/pink edges
                     scrib_amp: 11.0,
-                    hue_spread: 0.05,
+                    hue_spread: 0.10,
                     edge_grow: 0.06,
                 },
             ],
@@ -246,6 +253,8 @@ impl Default for CascadeCollageSettings {
             edge_strength: 0.85,
             edge_sat: 1.0,
             edge_val: 1.0,
+            face_strength: 0.55,
+            face_sat: 0.85,
             seed: 71,
         }
     }
@@ -448,6 +457,10 @@ pub fn render_cascade_collage_frame(
             );
             let ew = settings.edge_width.max(0.0);
             let estr = settings.edge_strength;
+            // face colorize: per-step hue (base + cascade ramp) → in-block hue variation
+            let face_hue = (shape.base_hue + hue_shift).rem_euclid(1.0);
+            let fstr = settings.face_strength;
+            let fsat = settings.face_sat;
 
             let maxr = hw.max(hh) + amp.abs() + 4.0;
             let y0 = (oy - maxr).floor().max(0.0) as i64;
@@ -512,12 +525,25 @@ pub fn render_cascade_collage_frame(
                                 } else {
                                     (s[0], s[1], s[2])
                                 };
-                                [
+                                let foot = [
                                     (r * sh).clamp(0.0, 1.0),
                                     (g * sh).clamp(0.0, 1.0),
                                     (b * sh).clamp(0.0, 1.0),
-                                    1.0,
-                                ]
+                                ];
+                                // colorize toward the tile hue, keeping the footage luma
+                                if fstr > 0.0 {
+                                    let luma =
+                                        0.2126 * foot[0] + 0.7152 * foot[1] + 0.0722 * foot[2];
+                                    let (cr, cg, cb) = hsv_to_rgb(face_hue, fsat, luma);
+                                    [
+                                        lerp(foot[0], cr, fstr),
+                                        lerp(foot[1], cg, fstr),
+                                        lerp(foot[2], cb, fstr),
+                                        1.0,
+                                    ]
+                                } else {
+                                    [foot[0], foot[1], foot[2], 1.0]
+                                }
                             }
                             None => palette_col,
                         };
@@ -602,6 +628,7 @@ mod tests {
             frame_hue_rate: 0.0,
             bright_osc: 0.0,
             edge_strength: 0.0, // no edge tint ⇒ face is pure source colour
+            face_strength: 0.0, // no face colorize ⇒ face is pure source colour
             shapes: vec![CascadeShape {
                 hue_spread: 0.0,
                 ..CascadeCollageSettings::default().shapes[0]
@@ -626,6 +653,25 @@ mod tests {
         let b = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(d > 0.0, "neon edge tint (on) must differ from plain edges (off)");
+    }
+
+    #[test]
+    fn face_tint_off_differs_from_on() {
+        // On a coloured source, colorizing the face toward a different tile hue must
+        // change covered pixels vs pure footage.
+        let src = solid(160, 200, [0.2, 0.7, 0.3, 1.0]); // green source
+        let off = CascadeCollageSettings {
+            face_strength: 0.0,
+            ..Default::default()
+        };
+        let on = CascadeCollageSettings {
+            face_strength: 0.8,
+            ..Default::default()
+        };
+        let a = render_cascade_collage_frame(0, 0, Some(&src), &off, 0).unwrap();
+        let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
+        let d = a.max_channel_difference(&b).expect("comparable");
+        assert!(d > 0.0, "face colorize (on) must differ from pure footage (off)");
     }
 
     #[test]

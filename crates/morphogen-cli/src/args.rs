@@ -725,6 +725,13 @@ pub(crate) enum Commands {
         /// ~0.85 = glowing coloured lines like the reference.
         #[arg(long, default_value_t = 0.85)]
         edge_strength: f32,
+        /// Colorize the tile FACE toward its hue in [0, 1] (keeps footage luma/texture).
+        /// 0 = pure footage; ~0.55 = coloured textured blocks with per-cascade hue variation.
+        #[arg(long, default_value_t = 0.55)]
+        face_strength: f32,
+        /// Saturation of the colorized face in [0, 1].
+        #[arg(long, default_value_t = 0.85)]
+        face_sat: f32,
         #[arg(long, default_value_t = 71)]
         seed: u64,
     },

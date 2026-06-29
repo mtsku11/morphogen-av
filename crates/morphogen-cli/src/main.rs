@@ -583,6 +583,8 @@ fn run() -> Result<(), CliError> {
             bright_osc,
             edge_width,
             edge_strength,
+            face_strength,
+            face_sat,
             seed,
         } => render_cascade_collage_sequence(CascadeCollageSequenceRequest {
             source_dir: source_dir.as_deref(),
@@ -597,6 +599,8 @@ fn run() -> Result<(), CliError> {
                 bright_osc,
                 edge_width,
                 edge_strength,
+                face_strength,
+                face_sat,
                 seed,
                 ..CascadeCollageSettings::default()
             },
