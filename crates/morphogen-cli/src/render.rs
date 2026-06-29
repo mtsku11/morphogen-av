@@ -15,6 +15,7 @@ use morphogen_core::{
 use morphogen_render::{
     advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
     render_block_collage_frame, BlockCollageSettings,
+    render_cascade_collage_frame, CascadeCollageSettings,
     compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
     render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
     compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask,
@@ -2339,6 +2340,51 @@ pub(crate) fn render_cascade_trails_sequence(
     );
     Ok(FrameSequenceRenderResult {
         frame_count: request.frames,
+    })
+}
+
+pub(crate) struct CascadeCollageSequenceRequest<'a> {
+    pub(crate) output_dir: &'a Path,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) frames: u32,
+    pub(crate) settings: CascadeCollageSettings,
+}
+
+pub(crate) fn render_cascade_collage_sequence(
+    request: CascadeCollageSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+    if request.width == 0 || request.height == 0 {
+        return Err(CliError::Message(
+            "width and height must be greater than zero".to_string(),
+        ));
+    }
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..request.frames {
+        let rendered =
+            render_cascade_collage_frame(request.width, request.height, &request.settings, index)?;
+        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+    }
+
+    println!(
+        "rendered cascade collage sequence with {} frame(s) ({}x{}, scrib_amp_scale {:.2}, morph_rate {:.3}, frame_hue_rate {:.3}) to {}",
+        request.frames,
+        request.width,
+        request.height,
+        request.settings.scrib_amp_scale,
+        request.settings.morph_rate,
+        request.settings.frame_hue_rate,
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult {
+        frame_count: request.frames as usize,
     })
 }
 

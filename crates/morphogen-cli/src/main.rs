@@ -1,7 +1,8 @@
 use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
-    BlockCollageSettings, CascadeFieldType, CascadeTrailSettings, ChannelShiftSettings,
+    BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
+    ChannelShiftSettings,
     CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
     FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
     GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
@@ -568,6 +569,31 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             frames,
+        })
+        .map(|_| ()),
+        Commands::RenderCascadeCollageSequence {
+            output_dir,
+            width,
+            height,
+            frames,
+            scrib_amp_scale,
+            morph_rate,
+            frame_hue_rate,
+            bright_osc,
+            seed,
+        } => render_cascade_collage_sequence(CascadeCollageSequenceRequest {
+            output_dir: &output_dir,
+            width,
+            height,
+            frames,
+            settings: CascadeCollageSettings {
+                scrib_amp_scale,
+                morph_rate,
+                frame_hue_rate,
+                bright_osc,
+                seed,
+                ..CascadeCollageSettings::default()
+            },
         })
         .map(|_| ()),
         Commands::RenderPixelSortSequence {

@@ -685,6 +685,37 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+    /// Render the scribbled-edge tile cascade — a procedural collage of rect/L tiles, each
+    /// re-stamped in an in-frame cascade with one scribbled morphing edge (CPU, deterministic,
+    /// source-less generator). Uses the validated 4-shape composition.
+    /// **Off case:** `--scrib-amp-scale 0` straightens every edge;
+    /// `--morph-rate 0 --frame-hue-rate 0` makes all frames identical.
+    RenderCascadeCollageSequence {
+        output_dir: PathBuf,
+        /// Output width in pixels.
+        #[arg(long, default_value_t = 360)]
+        width: u32,
+        /// Output height in pixels.
+        #[arg(long, default_value_t = 480)]
+        height: u32,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 48)]
+        frames: u32,
+        /// Global scribble amplitude multiplier. 0 = all edges straight (off case).
+        #[arg(long, default_value_t = 1.0)]
+        scrib_amp_scale: f32,
+        /// Per-frame morph drift (scribble re-draw / edge grow / brightness). 0 = static frames.
+        #[arg(long, default_value_t = 0.12)]
+        morph_rate: f32,
+        /// Per-frame global hue rotation in turns. 0 = no per-frame colour change.
+        #[arg(long, default_value_t = 0.0)]
+        frame_hue_rate: f32,
+        /// Per-step brightness oscillation amplitude in [0, 1].
+        #[arg(long, default_value_t = 0.12)]
+        bright_osc: f32,
+        #[arg(long, default_value_t = 71)]
+        seed: u64,
+    },
     /// Render a pixel-sort effect — per-line threshold-bounded span sorting (CPU, deterministic).
     /// Within each row or column, contiguous runs of pixels whose sort key falls in
     /// `[threshold-low, threshold-high]` are sorted independently; outside-mask pixels stay.

@@ -26,6 +26,8 @@ pub enum RenderError {
     InvalidCoagulationSettings(String),
     #[error("invalid block collage settings: {0}")]
     InvalidBlockCollageSettings(String),
+    #[error("invalid cascade collage settings: {0}")]
+    InvalidCascadeCollageSettings(String),
     #[error("invalid pixel sort settings: {0}")]
     InvalidPixelSortSettings(String),
     #[error("invalid palette quantize settings: {0}")]
