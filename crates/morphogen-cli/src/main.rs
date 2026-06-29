@@ -581,6 +581,8 @@ fn run() -> Result<(), CliError> {
             morph_rate,
             frame_hue_rate,
             bright_osc,
+            edge_width,
+            edge_strength,
             seed,
         } => render_cascade_collage_sequence(CascadeCollageSequenceRequest {
             source_dir: source_dir.as_deref(),
@@ -593,6 +595,8 @@ fn run() -> Result<(), CliError> {
                 morph_rate,
                 frame_hue_rate,
                 bright_osc,
+                edge_width,
+                edge_strength,
                 seed,
                 ..CascadeCollageSettings::default()
             },

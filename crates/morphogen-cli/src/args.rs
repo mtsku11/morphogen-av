@@ -718,6 +718,13 @@ pub(crate) enum Commands {
         /// Per-step brightness oscillation amplitude in [0, 1].
         #[arg(long, default_value_t = 0.12)]
         bright_osc: f32,
+        /// Width in pixels of the neon edge band traced along every tile boundary.
+        #[arg(long, default_value_t = 2.5)]
+        edge_width: f32,
+        /// Blend toward the neon edge colour in [0, 1]. 0 = edges show footage (off case);
+        /// ~0.85 = glowing coloured lines like the reference.
+        #[arg(long, default_value_t = 0.85)]
+        edge_strength: f32,
         #[arg(long, default_value_t = 71)]
         seed: u64,
     },

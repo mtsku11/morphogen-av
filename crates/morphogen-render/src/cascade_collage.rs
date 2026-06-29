@@ -29,7 +29,7 @@ use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 /// Algorithm identifier — bump when the rasterizer, scribble formulation, morph, or
 /// colour model changes so stale caches/checkpoints invalidate.
-pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v1";
+pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v3";
 
 /// Tile geometry: a plain rectangle (4 straight edges) or an L (outer box minus a
 /// notched corner = 6 straight edges).
@@ -63,6 +63,11 @@ pub struct CascadeShape {
     /// Half-extents (fraction of canvas).
     pub hw: f32,
     pub hh: f32,
+    /// Texture-mode sample origin (fraction of source) — the centre of the source crop
+    /// this tile carries. Distinct from `cx,cy` so each tile shows a *different* region
+    /// of the footage (a collage); set equal to `cx,cy` to reassemble the source.
+    pub src_cx: f32,
+    pub src_cy: f32,
     pub kind: ShapeKind,
     /// Notch corner offset (fraction of canvas) — L only.
     pub notch_u: f32,
@@ -83,6 +88,9 @@ pub struct CascadeShape {
     pub base_hue: f32,
     pub sat: f32,
     pub val: f32,
+    /// Hue (turns, 0..1) of this tile's neon EDGE lines (the cascade seams). The face
+    /// stays footage/palette; the edge band is tinted toward this hue.
+    pub edge_hue: f32,
     /// Scribble amplitude in pixels (before the global `scrib_amp_scale`).
     pub scrib_amp: f32,
     /// Hue ramp across the cascade (turns from first to last copy) — each stacked
@@ -109,6 +117,14 @@ pub struct CascadeCollageSettings {
     pub frame_hue_rate: f32,
     /// Per-step brightness oscillation amplitude (0..1).
     pub bright_osc: f32,
+    /// Width (pixels) of the tinted neon edge band along every tile boundary.
+    pub edge_width: f32,
+    /// Blend toward the edge colour at the boundary, in [0, 1]. `0` ⇒ edges show
+    /// footage/palette like the interior (the off case); `1` ⇒ pure neon lines.
+    pub edge_strength: f32,
+    /// Saturation and value of the neon edge colour (0..1) — high ⇒ glowing lines.
+    pub edge_sat: f32,
+    pub edge_val: f32,
     /// Deterministic seed for the scribble noise.
     pub seed: u64,
 }
@@ -127,6 +143,8 @@ impl Default for CascadeCollageSettings {
                     cy: 0.30,
                     hw: 0.42,
                     hh: 0.42,
+                    src_cx: 0.45,
+                    src_cy: 0.45,
                     kind: ShapeKind::L,
                     notch_u: 0.10,
                     notch_v: 0.08,
@@ -139,6 +157,7 @@ impl Default for CascadeCollageSettings {
                     base_hue: 0.90,
                     sat: 0.94,
                     val: 0.80,
+                    edge_hue: 0.90, // magenta edges
                     scrib_amp: 12.0,
                     hue_spread: 0.05,
                     edge_grow: 0.06,
@@ -149,6 +168,8 @@ impl Default for CascadeCollageSettings {
                     cy: 0.30,
                     hw: 0.42,
                     hh: 0.42,
+                    src_cx: 0.30,
+                    src_cy: 0.75,
                     kind: ShapeKind::Rect,
                     notch_u: 0.0,
                     notch_v: 0.0,
@@ -161,6 +182,7 @@ impl Default for CascadeCollageSettings {
                     base_hue: 0.07,
                     sat: 0.95,
                     val: 0.93,
+                    edge_hue: 0.07, // orange edges
                     scrib_amp: 11.0,
                     hue_spread: 0.05,
                     edge_grow: 0.06,
@@ -171,6 +193,8 @@ impl Default for CascadeCollageSettings {
                     cy: 0.70,
                     hw: 0.42,
                     hh: 0.42,
+                    src_cx: 0.70,
+                    src_cy: 0.55,
                     kind: ShapeKind::Rect,
                     notch_u: 0.0,
                     notch_v: 0.0,
@@ -183,6 +207,7 @@ impl Default for CascadeCollageSettings {
                     base_hue: 0.47,
                     sat: 0.90,
                     val: 0.66,
+                    edge_hue: 0.50, // cyan edges
                     scrib_amp: 12.0,
                     hue_spread: 0.05,
                     edge_grow: 0.06,
@@ -193,6 +218,8 @@ impl Default for CascadeCollageSettings {
                     cy: 0.70,
                     hw: 0.42,
                     hh: 0.42,
+                    src_cx: 0.55,
+                    src_cy: 0.25,
                     kind: ShapeKind::L,
                     notch_u: -0.10,
                     notch_v: -0.08,
@@ -205,6 +232,7 @@ impl Default for CascadeCollageSettings {
                     base_hue: 0.78,
                     sat: 0.80,
                     val: 0.66,
+                    edge_hue: 0.92, // magenta/pink edges
                     scrib_amp: 11.0,
                     hue_spread: 0.05,
                     edge_grow: 0.06,
@@ -214,6 +242,10 @@ impl Default for CascadeCollageSettings {
             morph_rate: 0.12,
             frame_hue_rate: 0.0,
             bright_osc: 0.12,
+            edge_width: 2.5,
+            edge_strength: 0.85,
+            edge_sat: 1.0,
+            edge_val: 1.0,
             seed: 71,
         }
     }
@@ -380,6 +412,9 @@ pub fn render_cascade_collage_frame(
         let ts = settings.seed ^ (si as u64).wrapping_mul(131);
         let cx = shape.cx * fw;
         let cy = shape.cy * fh;
+        // texture sample origin (source px) — distinct from draw home so tiles collage
+        let scx = shape.src_cx * fw;
+        let scy = shape.src_cy * fh;
         let hw = shape.hw * fw;
         let hh = shape.hh * fh;
         let nu0 = shape.notch_u * fw;
@@ -405,6 +440,14 @@ pub fn render_cascade_collage_frame(
                 let (r, g, b) = hsv_to_rgb(hue, shape.sat, v_eff);
                 [r, g, b, 1.0]
             };
+            // neon edge colour for this step's boundary lines (drifts with hue_shift)
+            let edge_col = hsv_to_rgb(
+                (shape.edge_hue + hue_shift).rem_euclid(1.0),
+                settings.edge_sat,
+                settings.edge_val,
+            );
+            let ew = settings.edge_width.max(0.0);
+            let estr = settings.edge_strength;
 
             let maxr = hw.max(hh) + amp.abs() + 4.0;
             let y0 = (oy - maxr).floor().max(0.0) as i64;
@@ -419,42 +462,51 @@ pub fn render_cascade_collage_frame(
                 let row = y as usize * w;
                 for x in x0..x1 {
                     let u = x as f32 - ox;
-                    let inside = match shape.kind {
-                        ShapeKind::Rect => match shape.scrib {
-                            ScribbleEdge::Right => {
-                                u >= -hw && u <= hw + sc_v && v >= -hh && v <= hh
-                            }
-                            ScribbleEdge::Left => {
-                                u >= -hw - sc_v && u <= hw && v >= -hh && v <= hh
-                            }
-                            ScribbleEdge::Top => {
-                                let sc = scribble(u, ts, phase, amp);
-                                u >= -hw && u <= hw && v >= -hh - sc && v <= hh
-                            }
-                            ScribbleEdge::Bottom => {
-                                let sc = scribble(u, ts, phase, amp);
-                                u >= -hw && u <= hw && v >= -hh && v <= hh + sc
-                            }
-                            ScribbleEdge::Notch => u >= -hw && u <= hw && v >= -hh && v <= hh,
-                        },
+                    // membership + distance to the nearest tile edge (px)
+                    let (inside, edge_dist) = match shape.kind {
+                        ShapeKind::Rect => {
+                            let (bul, buh, bvl, bvh) = match shape.scrib {
+                                ScribbleEdge::Right => (-hw, hw + sc_v, -hh, hh),
+                                ScribbleEdge::Left => (-hw - sc_v, hw, -hh, hh),
+                                ScribbleEdge::Top => {
+                                    let sc = scribble(u, ts, phase, amp);
+                                    (-hw, hw, -hh - sc, hh)
+                                }
+                                ScribbleEdge::Bottom => {
+                                    let sc = scribble(u, ts, phase, amp);
+                                    (-hw, hw, -hh, hh + sc)
+                                }
+                                ScribbleEdge::Notch => (-hw, hw, -hh, hh),
+                            };
+                            let inside = u >= bul && u <= buh && v >= bvl && v <= bvh;
+                            let d = (u - bul).min(buh - u).min(v - bvl).min(bvh - v);
+                            (inside, d)
+                        }
                         ShapeKind::L => {
                             if !(u >= -hw && u <= hw && v >= -hh && v <= hh) {
-                                false
+                                (false, 0.0)
                             } else {
                                 let nu = nu0 + sc_v;
                                 let nv = nv0 + grow;
-                                let cu = if shape.notch_right { u >= nu } else { u <= nu };
-                                let cv = if shape.notch_bottom { v >= nv } else { v <= nv };
-                                !(cu && cv)
+                                let du_n = if shape.notch_right { nu - u } else { u - nu };
+                                let dv_n = if shape.notch_bottom { nv - v } else { v - nv };
+                                let removed = du_n <= 0.0 && dv_n <= 0.0;
+                                let outer = (u + hw).min(hw - u).min(v + hh).min(hh - v);
+                                // distance to the notch boundary (the L's inner corner)
+                                let notch = if du_n > 0.0 && dv_n > 0.0 {
+                                    du_n.min(dv_n)
+                                } else {
+                                    du_n.max(dv_n)
+                                };
+                                (!removed, outer.min(notch))
                             }
                         }
                     };
                     if inside {
-                        let color = match source {
-                            // texture mode: carry the source crop centred on the tile's
-                            // home (cx + u = x - dx*step), optionally hue-rotated + shaded.
+                        // face: footage crop (texture mode) or flat palette colour
+                        let base = match source {
                             Some(src) => {
-                                let s = sample_bilinear_clamped(src, cx + u, cy + v);
+                                let s = sample_bilinear_clamped(src, scx + u, scy + v);
                                 let (r, g, b) = if hue_shift != 0.0 {
                                     hue_rotate(s[0], s[1], s[2], hue_shift)
                                 } else {
@@ -468,6 +520,18 @@ pub fn render_cascade_collage_frame(
                                 ]
                             }
                             None => palette_col,
+                        };
+                        // edge: blend the boundary band toward the neon edge colour
+                        let color = if estr > 0.0 && ew > 0.0 && edge_dist < ew {
+                            let t = estr * (1.0 - edge_dist / ew);
+                            [
+                                lerp(base[0], edge_col.0, t),
+                                lerp(base[1], edge_col.1, t),
+                                lerp(base[2], edge_col.2, t),
+                                1.0,
+                            ]
+                        } else {
+                            base
                         };
                         pixels[row + x as usize] = color;
                     }
@@ -537,6 +601,7 @@ mod tests {
         let s = CascadeCollageSettings {
             frame_hue_rate: 0.0,
             bright_osc: 0.0,
+            edge_strength: 0.0, // no edge tint ⇒ face is pure source colour
             shapes: vec![CascadeShape {
                 hue_spread: 0.0,
                 ..CascadeCollageSettings::default().shapes[0]
@@ -548,6 +613,19 @@ mod tests {
         // a covered pixel near the tile centre must equal the source colour
         let p = out.pixel(54, 72).unwrap();
         assert_eq!(p, [0.2, 0.6, 0.9, 1.0], "covered pixel carries source colour");
+    }
+
+    #[test]
+    fn edge_tint_off_differs_from_on() {
+        let on = CascadeCollageSettings::default();
+        let off = CascadeCollageSettings {
+            edge_strength: 0.0,
+            ..Default::default()
+        };
+        let a = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
+        let d = a.max_channel_difference(&b).expect("comparable");
+        assert!(d > 0.0, "neon edge tint (on) must differ from plain edges (off)");
     }
 
     #[test]

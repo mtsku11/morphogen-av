@@ -77,6 +77,13 @@ phase advance; 0 ⇒ frames don't drift), `frame_hue_rate` (per-frame global hue
 rotation in turns; 0 ⇒ no per-frame colour change), `bright_osc`
 (per-step brightness oscillation amplitude), `seed`.
 
+**Neon edge tint** (the reference's "colour lives in the edges" treatment): the tile
+*face* shows footage/palette, but a band of width `edge_width` px along every tile
+boundary (straight, scribbled, and L-notch edges) is blended by `edge_strength`
+toward a neon colour — per-shape `edge_hue` at global `edge_sat`/`edge_val`. Stacked
+by the cascade, the surviving edge slivers become glowing coloured lines.
+`edge_strength = 0` ⇒ edges show footage (the off case).
+
 Per shape (`CascadeShape`, all spatial values are **fractions of canvas** unless
 noted): `cx, cy` start centre; `hw, hh` half-extents; `kind` (`Rect|L`);
 `notch_u, notch_v` notch corner + `notch_right, notch_bottom` (L only); `scrib`
