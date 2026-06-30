@@ -14,7 +14,7 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
+    BlendMode, CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
     CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
@@ -750,6 +750,12 @@ pub(crate) enum Commands {
         /// Overall COLOUR: rotate every tile's hue by this many turns [0,1).
         #[arg(long, default_value_t = 0.0)]
         hue_rotate: f32,
+        /// How blocks composite onto each other (unify them instead of hard-occluding).
+        #[arg(long, value_enum, default_value_t = CliBlendMode::Normal)]
+        block_blend: CliBlendMode,
+        /// Per-block opacity [0,1]. 1 = hard occlude; <1 = blocks blend/show through.
+        #[arg(long, default_value_t = 1.0)]
+        block_opacity: f32,
         #[arg(long, default_value_t = 71)]
         seed: u64,
     },
@@ -1961,6 +1967,28 @@ impl From<CliWindowFunction> for WindowFunction {
             CliWindowFunction::Hann => Self::Hann,
             CliWindowFunction::Hamming => Self::Hamming,
             CliWindowFunction::Rectangular => Self::Rectangular,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliBlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Average,
+    Lighten,
+}
+
+impl From<CliBlendMode> for BlendMode {
+    fn from(value: CliBlendMode) -> Self {
+        match value {
+            CliBlendMode::Normal => Self::Normal,
+            CliBlendMode::Multiply => Self::Multiply,
+            CliBlendMode::Screen => Self::Screen,
+            CliBlendMode::Average => Self::Average,
+            CliBlendMode::Lighten => Self::Lighten,
         }
     }
 }

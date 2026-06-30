@@ -35,8 +35,8 @@ pub use block_collage::{
     render_block_collage_frame, BlockCollageSettings, BLOCK_COLLAGE_ALGORITHM,
 };
 pub use cascade_collage::{
-    render_cascade_collage_frame, CascadeCollageSettings, CascadeShape, Notch, ScribbleEdge,
-    CASCADE_COLLAGE_ALGORITHM,
+    render_cascade_collage_frame, BlendMode, CascadeCollageSettings, CascadeShape, Notch,
+    ScribbleEdge, CASCADE_COLLAGE_ALGORITHM,
 };
 pub use channel_shift::{
     compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,

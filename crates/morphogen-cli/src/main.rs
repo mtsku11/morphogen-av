@@ -590,6 +590,8 @@ fn run() -> Result<(), CliError> {
             tile_scale,
             detail_tiles,
             hue_rotate,
+            block_blend,
+            block_opacity,
             seed,
         } => {
             let mut settings = CascadeCollageSettings {
@@ -603,6 +605,8 @@ fn run() -> Result<(), CliError> {
                 face_sat,
                 hue_steps,
                 edge_detect,
+                block_blend: block_blend.into(),
+                block_opacity,
                 seed,
                 ..CascadeCollageSettings::default()
             };

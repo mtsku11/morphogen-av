@@ -29,7 +29,7 @@ use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 /// Algorithm identifier — bump when the rasterizer, scribble formulation, morph, or
 /// colour model changes so stale caches/checkpoints invalidate.
-pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v6";
+pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v7";
 
 /// Lifts the small per-pixel footage gradients (Sobel magnitude ~0.05–0.3) into
 /// visible contour lines, so `edge_detect ≈ 1` already exposes lines on the face.
@@ -51,6 +51,24 @@ pub enum ScribbleEdge {
 /// Maximum notches per shape (fixed so [`CascadeShape`] stays `Copy`). 4 allows a
 /// plus/cross (all four corners notched).
 pub const MAX_NOTCHES: usize = 4;
+
+/// How each block (a shape + its cascade, rendered to its own layer) is composited
+/// onto the blocks below — lets blocks merge instead of hard-occluding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlendMode {
+    /// Replace (with `block_opacity`): at opacity 1 this is the hard last-writer look.
+    #[default]
+    Normal,
+    /// `dst * src` — overlaps darken; blocks tint through one another.
+    Multiply,
+    /// `1-(1-dst)(1-src)` — overlaps brighten; neon lines glow where blocks cross.
+    Screen,
+    /// `(dst+src)/2` — even mix; blocks read as equal translucent panes.
+    Average,
+    /// `max(dst,src)` — keeps the brighter of the two; merges glow without washing out.
+    Lighten,
+}
 
 /// An axis-aligned rectangle subtracted from a tile, in local fractions of canvas
 /// (relative to the tile centre). Subtracting notches yields rectilinear shapes
@@ -150,6 +168,11 @@ pub struct CascadeCollageSettings {
     /// Sobel edge-detect strength on the footage, in [0, 1+]. `0` ⇒ off; higher burns the
     /// video's own contours in as dark ink lines (adds to the geometric + scribble lines).
     pub edge_detect: f32,
+    /// How each block composites onto the ones below.
+    pub block_blend: BlendMode,
+    /// Per-block composite opacity in [0, 1]. `1` ⇒ hard occlude (today's look);
+    /// `<1` ⇒ blocks blend together / show through → a more unified image.
+    pub block_opacity: f32,
     /// Deterministic seed for the scribble noise.
     pub seed: u64,
 }
@@ -374,6 +397,8 @@ impl Default for CascadeCollageSettings {
             face_sat: 0.85,
             hue_steps: 5,
             edge_detect: 0.0,
+            block_blend: BlendMode::Normal,
+            block_opacity: 1.0,
             seed: 71,
         }
     }
@@ -498,6 +523,32 @@ fn hue_rotate(r: f32, g: f32, b: f32, shift: f32) -> (f32, f32, f32) {
     hsv_to_rgb((h + shift).rem_euclid(1.0), s, v)
 }
 
+/// Combine a block-layer colour `src` over the canvas colour `dst` by `mode`, then
+/// mix by `opacity`. `opacity == 1` + `Normal` reproduces hard last-writer occlusion.
+fn composite(dst: [f32; 4], src: [f32; 3], mode: BlendMode, opacity: f32) -> [f32; 4] {
+    let blended = match mode {
+        BlendMode::Normal => src,
+        BlendMode::Multiply => [dst[0] * src[0], dst[1] * src[1], dst[2] * src[2]],
+        BlendMode::Screen => [
+            1.0 - (1.0 - dst[0]) * (1.0 - src[0]),
+            1.0 - (1.0 - dst[1]) * (1.0 - src[1]),
+            1.0 - (1.0 - dst[2]) * (1.0 - src[2]),
+        ],
+        BlendMode::Average => [
+            (dst[0] + src[0]) * 0.5,
+            (dst[1] + src[1]) * 0.5,
+            (dst[2] + src[2]) * 0.5,
+        ],
+        BlendMode::Lighten => [dst[0].max(src[0]), dst[1].max(src[1]), dst[2].max(src[2])],
+    };
+    [
+        lerp(dst[0], blended[0], opacity),
+        lerp(dst[1], blended[1], opacity),
+        lerp(dst[2], blended[2], opacity),
+        1.0,
+    ]
+}
+
 // ─── Frame renderer ─────────────────────────────────────────────────────────────
 
 /// Render one frame of the scribbled-edge tile cascade.
@@ -541,8 +592,17 @@ pub fn render_cascade_collage_frame(
     let fstr = settings.face_strength;
     let fsat = settings.face_sat;
     let edge_detect = settings.edge_detect.max(0.0);
+    let block_blend = settings.block_blend;
+    let block_opacity = settings.block_opacity.clamp(0.0, 1.0);
+    // each block (a shape + its cascade) is stamped to its own layer, then composited
+    // onto the canvas — so blocks can blend/merge instead of hard-occluding.
+    let mut layer = vec![[0.0_f32; 4]; w * h];
 
     for (si, shape) in settings.shapes.iter().enumerate() {
+        // reset this block's layer (alpha 0 = uncovered; rgb is set where covered)
+        for px in layer.iter_mut() {
+            px[3] = 0.0;
+        }
         let ts = settings.seed ^ (si as u64).wrapping_mul(131);
         let cx = shape.cx * fw;
         let cy = shape.cy * fh;
@@ -715,8 +775,15 @@ pub fn render_cascade_collage_frame(
                     } else {
                         base
                     };
-                    pixels[row + x as usize] = color;
+                    layer[row + x as usize] = [color[0], color[1], color[2], 1.0];
                 }
+            }
+        }
+        // composite this block's layer onto the canvas
+        for i in 0..pixels.len() {
+            if layer[i][3] > 0.0 {
+                let src = [layer[i][0], layer[i][1], layer[i][2]];
+                pixels[i] = composite(pixels[i], src, block_blend, block_opacity);
             }
         }
     }
@@ -855,6 +922,23 @@ mod tests {
         let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(d > 0.0, "edge-detect (on) must darken footage contours vs off");
+    }
+
+    #[test]
+    fn block_blend_off_differs_from_on() {
+        // Translucent block compositing must change the overlap regions vs hard occlude.
+        let off = CascadeCollageSettings {
+            block_opacity: 1.0,
+            ..Default::default()
+        };
+        let on = CascadeCollageSettings {
+            block_opacity: 0.5,
+            ..Default::default()
+        };
+        let a = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
+        let d = a.max_channel_difference(&b).expect("comparable");
+        assert!(d > 0.0, "block blend (opacity<1) must differ from hard occlude");
     }
 
     #[test]
