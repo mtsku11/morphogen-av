@@ -432,6 +432,70 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedCascadeCollageSequenceArgumentsIncludeCascadeControls() throws {
+    let request = CascadeCollageSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-collage-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/cascade-collage", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      scribAmpScale: 1.0,
+      edgeStrength: 0.85,
+      faceStrength: 0.55,
+      edgeDetect: 1.2,
+      tileScale: 1.0,
+      detailTiles: 4,
+      hueRotate: 0.0,
+      blockBlend: .screen,
+      blockOpacity: 0.8,
+      seed: 71,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddCascadeCollageSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-cascade-collage-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("--edge-detect"))
+    XCTAssertTrue(arguments.contains("1.2"))
+    XCTAssertTrue(arguments.contains("--block-blend"))
+    XCTAssertTrue(arguments.contains("screen"))
+    XCTAssertTrue(arguments.contains("--block-opacity"))
+    XCTAssertTrue(arguments.contains("0.8"))
+    XCTAssertTrue(arguments.contains("--detail-tiles"))
+    XCTAssertTrue(arguments.contains("4"))
+    XCTAssertTrue(arguments.contains("--seed"))
+    XCTAssertTrue(arguments.contains("71"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+  }
+
+  func testQueuedCascadeCollageSequenceArgumentsRejectInvalidValues() {
+    let invalid = CascadeCollageSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-collage-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/cascade-collage", isDirectory: true),
+      frames: 0,
+      frameRate: 24.0,
+      scribAmpScale: 1.0,
+      edgeStrength: 0.85,
+      faceStrength: 0.55,
+      edgeDetect: 0.0,
+      tileScale: 1.0,
+      detailTiles: 4,
+      hueRotate: 0.0,
+      blockBlend: .normal,
+      blockOpacity: 1.0,
+      seed: 0,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddCascadeCollageSequenceArguments(request: invalid)
+    )
+  }
+
   func testQueuedFluidAdvectionArgumentsRejectInvalidValues() {
     let invalidFrames = FluidAdvectSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/fluid-queue.json"),

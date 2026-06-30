@@ -105,6 +105,18 @@ final class AppState: ObservableObject {
   @Published var cascadeRiverTurbulence = 0.8
   @Published var cascadeTemporalTiles = false
   @Published var cascadeDecay = 0.0
+  // Cascade Collage — scribbled-edge tile cascade (locked default composition).
+  @Published var cascadeCollageTileScale = 1.0
+  @Published var cascadeCollageDetailTiles = 4
+  @Published var cascadeCollageHueRotate = 0.0
+  @Published var cascadeCollageScribAmpScale = 1.0
+  @Published var cascadeCollageEdgeStrength = 0.85
+  @Published var cascadeCollageFaceStrength = 0.55
+  @Published var cascadeCollageEdgeDetect = 0.0
+  @Published var cascadeCollageBlockBlend: CascadeCollageBlendOption = .normal
+  @Published var cascadeCollageBlockOpacity = 1.0
+  @Published var cascadeCollageSeed = 71
+  @Published var cascadeCollageSummary = "No cascade-collage sequence rendered"
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -1236,6 +1248,59 @@ final class AppState: ObservableObject {
     }
   }
 
+  func runCascadeCollageSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering the cascade collage."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
+      statusMessage = "Choose a frame sequence output directory before rendering the cascade collage."
+      return
+    }
+
+    let request = CascadeCollageSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultCascadeCollageSequenceRenderQueueURL(),
+      sourceDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("cascade-collage", isDirectory: true),
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
+      frameRate: proResFrameRate.framesPerSecond,
+      scribAmpScale: cascadeCollageScribAmpScale,
+      edgeStrength: cascadeCollageEdgeStrength,
+      faceStrength: cascadeCollageFaceStrength,
+      edgeDetect: cascadeCollageEdgeDetect,
+      tileScale: cascadeCollageTileScale,
+      detailTiles: cascadeCollageDetailTiles,
+      hueRotate: cascadeCollageHueRotate,
+      blockBlend: cascadeCollageBlockBlend,
+      blockOpacity: cascadeCollageBlockOpacity,
+      seed: UInt64(max(0, cascadeCollageSeed)),
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing cascade collage through morphogen-cli..."
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedCascadeCollageSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.cascadeCollageSummary = "\(bundle.frameCount) cascade collage frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued cascade collage sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Cascade collage render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.cascadeCollageSummary = "Cascade collage render failed: \(error.localizedDescription)"
+          self.statusMessage = "Cascade collage render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   private func runFluidAdvectionQueue(
     label: String,
     requestDescription: String,
@@ -2269,6 +2334,31 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
       return "scanline-smear"
     case .codecEngrave:
       return "codec-engrave"
+    }
+  }
+}
+
+enum CascadeCollageBlendOption: String, CaseIterable, Identifiable {
+  case normal = "Normal"
+  case multiply = "Multiply"
+  case screen = "Screen"
+  case average = "Average"
+  case lighten = "Lighten"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .normal:
+      return "normal"
+    case .multiply:
+      return "multiply"
+    case .screen:
+      return "screen"
+    case .average:
+      return "average"
+    case .lighten:
+      return "lighten"
     }
   }
 }

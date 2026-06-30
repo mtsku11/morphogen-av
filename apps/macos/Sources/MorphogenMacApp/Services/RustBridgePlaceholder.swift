@@ -70,6 +70,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultCascadeCollageSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-cascade-collage-sequence-queue.json"
+    )
+  }
+
   static func defaultGranularMosaicPoolSequenceRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-granular-pool-sequence-queue.json"
@@ -452,6 +458,98 @@ enum RustBridgePlaceholder {
       bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
       commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
     )
+  }
+
+  static func runQueuedCascadeCollageSequenceRender(
+    request: CascadeCollageSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddCascadeCollageSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-cascade-collage-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddCascadeCollageSequenceArguments(
+    request: CascadeCollageSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    try validateFluidNumbers([
+      ("scribble amount", request.scribAmpScale),
+      ("edge strength", request.edgeStrength),
+      ("face strength", request.faceStrength),
+      ("edge detect", request.edgeDetect),
+      ("tile scale", request.tileScale),
+      ("block opacity", request.blockOpacity)
+    ])
+
+    let arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-cascade-collage-sequence",
+      request.queueURL.path,
+      request.sourceDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--scrib-amp-scale",
+      cliNumber(request.scribAmpScale),
+      "--edge-strength",
+      cliNumber(request.edgeStrength),
+      "--face-strength",
+      cliNumber(request.faceStrength),
+      "--edge-detect",
+      cliNumber(request.edgeDetect),
+      "--tile-scale",
+      cliNumber(request.tileScale),
+      "--detail-tiles",
+      String(request.detailTiles),
+      "--hue-rotate",
+      cliNumber(request.hueRotate),
+      "--block-blend",
+      request.blockBlend.cliValue,
+      "--block-opacity",
+      cliNumber(request.blockOpacity),
+      "--seed",
+      String(request.seed)
+    ]
+
+    var withProject = arguments
+    if let projectURL = request.projectURL {
+      withProject.append("--project-path")
+      withProject.append(projectURL.path)
+    }
+    return withProject
   }
 
   static func queueAddCascadeTrailsSequenceArguments(
@@ -2433,6 +2531,25 @@ struct CascadeTrailsSequenceRenderQueueCommandRequest {
   let riverTurbulence: Double
   let temporalTiles: Bool
   let decay: Double
+  let projectURL: URL?
+}
+
+struct CascadeCollageSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let scribAmpScale: Double
+  let edgeStrength: Double
+  let faceStrength: Double
+  let edgeDetect: Double
+  let tileScale: Double
+  let detailTiles: Int
+  let hueRotate: Double
+  let blockBlend: CascadeCollageBlendOption
+  let blockOpacity: Double
+  let seed: UInt64
   let projectURL: URL?
 }
 

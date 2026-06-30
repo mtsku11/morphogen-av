@@ -469,6 +469,82 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Cascade Collage — Scribbled-Edge Tile Cascade")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.cascadeCollageTileScale, in: 0.3...2.0, step: 0.05) {
+              Text("Tile Scale \(state.cascadeCollageTileScale, specifier: "%.2f")")
+            }
+            .frame(width: 175, alignment: .leading)
+
+            Stepper(value: $state.cascadeCollageDetailTiles, in: 0...4, step: 1) {
+              Text("Detail Tiles \(state.cascadeCollageDetailTiles)")
+            }
+            .frame(width: 160, alignment: .leading)
+
+            Stepper(value: $state.cascadeCollageHueRotate, in: 0...1, step: 0.02) {
+              Text("Hue Rotate \(state.cascadeCollageHueRotate, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+
+            Stepper(value: $state.cascadeCollageSeed, in: 0...9999, step: 1) {
+              Text("Seed \(state.cascadeCollageSeed)")
+            }
+            .frame(width: 130, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.cascadeCollageScribAmpScale, in: 0...2, step: 0.05) {
+              Text("Scribble \(state.cascadeCollageScribAmpScale, specifier: "%.2f")")
+            }
+            .frame(width: 160, alignment: .leading)
+
+            Stepper(value: $state.cascadeCollageEdgeStrength, in: 0...1, step: 0.05) {
+              Text("Edge Strength \(state.cascadeCollageEdgeStrength, specifier: "%.2f")")
+            }
+            .frame(width: 190, alignment: .leading)
+
+            Stepper(value: $state.cascadeCollageFaceStrength, in: 0...1, step: 0.05) {
+              Text("Face Strength \(state.cascadeCollageFaceStrength, specifier: "%.2f")")
+            }
+            .frame(width: 190, alignment: .leading)
+
+            Stepper(value: $state.cascadeCollageEdgeDetect, in: 0...2, step: 0.05) {
+              Text("Edge Detect \(state.cascadeCollageEdgeDetect, specifier: "%.2f")")
+            }
+            .frame(width: 175, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Picker("Block Blend", selection: $state.cascadeCollageBlockBlend) {
+              ForEach(CascadeCollageBlendOption.allCases) { mode in
+                Text(mode.rawValue).tag(mode)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 320)
+
+            Stepper(value: $state.cascadeCollageBlockOpacity, in: 0...1, step: 0.05) {
+              Text("Block Opacity \(state.cascadeCollageBlockOpacity, specifier: "%.2f")")
+            }
+            .frame(width: 195, alignment: .leading)
+          }
+
+          Text(state.cascadeCollageSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runCascadeCollageSequenceRender()
+          } label: {
+            Label("Run Cascade Collage", systemImage: "square.stack.3d.up")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Granular Mosaic — Temporal Pool (Joint-AV)")
             .font(.subheadline.weight(.semibold))
 
