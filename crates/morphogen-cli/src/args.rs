@@ -737,9 +737,19 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 5)]
         hue_steps: u32,
         /// Sobel edge-detect strength on the footage in [0, 1+]. 0 = off; higher burns the
-        /// video's own contours in as dark ink lines.
+        /// video's own contours in as bright neon contour lines on the tile faces.
         #[arg(long, default_value_t = 0.0)]
         edge_detect: f32,
+        /// Tile SIZE multiplier (scales every tile's extent). >1 = bigger tiles.
+        #[arg(long, default_value_t = 1.0)]
+        tile_scale: f32,
+        /// Tile AMOUNT: number of extra many-sided detail tiles (0–4) on top of the 4
+        /// large coverage tiles. 0 = clean 4-tile look; 4 = busiest.
+        #[arg(long, default_value_t = 4)]
+        detail_tiles: u32,
+        /// Overall COLOUR: rotate every tile's hue by this many turns [0,1).
+        #[arg(long, default_value_t = 0.0)]
+        hue_rotate: f32,
         #[arg(long, default_value_t = 71)]
         seed: u64,
     },

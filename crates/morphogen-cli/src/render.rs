@@ -2352,6 +2352,26 @@ pub(crate) struct CascadeCollageSequenceRequest<'a> {
     pub(crate) settings: CascadeCollageSettings,
 }
 
+/// Apply the high-level generative knobs to the default composition: tile size
+/// (`tile_scale`), tile amount (`detail_tiles` extra tiles on top of the 4 coverage
+/// tiles), and overall colour (`hue_rotate` shifts every tile's hue).
+pub(crate) fn apply_cascade_generative(
+    settings: &mut CascadeCollageSettings,
+    tile_scale: f32,
+    detail_tiles: u32,
+    hue_rotate: f32,
+) {
+    let base = 4usize.min(settings.shapes.len());
+    let keep = (base + detail_tiles as usize).min(settings.shapes.len());
+    settings.shapes.truncate(keep);
+    for s in &mut settings.shapes {
+        s.hw *= tile_scale;
+        s.hh *= tile_scale;
+        s.base_hue = (s.base_hue + hue_rotate).rem_euclid(1.0);
+        s.edge_hue = (s.edge_hue + hue_rotate).rem_euclid(1.0);
+    }
+}
+
 pub(crate) fn render_cascade_collage_sequence(
     request: CascadeCollageSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {

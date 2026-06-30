@@ -587,14 +587,12 @@ fn run() -> Result<(), CliError> {
             face_sat,
             hue_steps,
             edge_detect,
+            tile_scale,
+            detail_tiles,
+            hue_rotate,
             seed,
-        } => render_cascade_collage_sequence(CascadeCollageSequenceRequest {
-            source_dir: source_dir.as_deref(),
-            output_dir: &output_dir,
-            width,
-            height,
-            frames,
-            settings: CascadeCollageSettings {
+        } => {
+            let mut settings = CascadeCollageSettings {
                 scrib_amp_scale,
                 morph_rate,
                 frame_hue_rate,
@@ -607,9 +605,18 @@ fn run() -> Result<(), CliError> {
                 edge_detect,
                 seed,
                 ..CascadeCollageSettings::default()
-            },
-        })
-        .map(|_| ()),
+            };
+            apply_cascade_generative(&mut settings, tile_scale, detail_tiles, hue_rotate);
+            render_cascade_collage_sequence(CascadeCollageSequenceRequest {
+                source_dir: source_dir.as_deref(),
+                output_dir: &output_dir,
+                width,
+                height,
+                frames,
+                settings,
+            })
+            .map(|_| ())
+        }
         Commands::RenderPixelSortSequence {
             source_a_dir,
             source_b_dir,
