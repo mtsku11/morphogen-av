@@ -29,7 +29,11 @@ use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 /// Algorithm identifier — bump when the rasterizer, scribble formulation, morph, or
 /// colour model changes so stale caches/checkpoints invalidate.
-pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v5";
+pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v6";
+
+/// Lifts the small per-pixel footage gradients (Sobel magnitude ~0.05–0.3) into
+/// visible contour lines, so `edge_detect ≈ 1` already exposes lines on the face.
+const EDGE_DETECT_GAIN: f32 = 5.0;
 
 /// Which single OUTER edge of the tile is the scribbled warbling line (or `None`).
 /// Notches carry their own scribble via [`Notch::scrib`].
@@ -644,8 +648,9 @@ pub fn render_cascade_collage_frame(
                         continue;
                     }
 
-                    // face: footage crop (texture mode) or flat palette colour
-                    let base = match source {
+                    // face: footage crop (texture mode) or flat palette colour, plus a
+                    // detected-contour line amount (Sobel) to expose lines ON the face.
+                    let (base, det_line) = match source {
                         Some(src) => {
                             let s = sample_bilinear_clamped(src, scx + u, scy + v);
                             let (r, g, b) = if hue_shift != 0.0 {
@@ -653,29 +658,13 @@ pub fn render_cascade_collage_frame(
                             } else {
                                 (s[0], s[1], s[2])
                             };
-                            let mut foot = [
+                            let foot = [
                                 (r * sh).clamp(0.0, 1.0),
                                 (g * sh).clamp(0.0, 1.0),
                                 (b * sh).clamp(0.0, 1.0),
                             ];
-                            // edge-detect: Sobel on footage luma → dark ink lines
-                            if edge_detect > 0.0 {
-                                let sx = scx + u;
-                                let sy = scy + v;
-                                let lat = |dx: f32, dy: f32| {
-                                    let p = sample_bilinear_clamped(src, sx + dx, sy + dy);
-                                    0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
-                                };
-                                let gx = lat(1.0, 0.0) - lat(-1.0, 0.0);
-                                let gy = lat(0.0, 1.0) - lat(0.0, -1.0);
-                                let mag = (gx * gx + gy * gy).sqrt();
-                                let f = (1.0 - (edge_detect * mag).clamp(0.0, 1.0)).max(0.0);
-                                foot[0] *= f;
-                                foot[1] *= f;
-                                foot[2] *= f;
-                            }
                             // colorize toward the tile hue, keeping the footage luma
-                            if fstr > 0.0 {
+                            let face = if fstr > 0.0 {
                                 let luma = 0.2126 * foot[0] + 0.7152 * foot[1] + 0.0722 * foot[2];
                                 let (cr, cg, cb) = hsv_to_rgb(face_hue, fsat, luma);
                                 [
@@ -686,13 +675,37 @@ pub fn render_cascade_collage_frame(
                                 ]
                             } else {
                                 [foot[0], foot[1], foot[2], 1.0]
-                            }
+                            };
+                            // edge-detect: Sobel on footage luma → a line amount that
+                            // lights the contour up in the neon edge colour (EDGE_DETECT_GAIN
+                            // lifts the small footage gradients into visible lines).
+                            let det = if edge_detect > 0.0 {
+                                let sx = scx + u;
+                                let sy = scy + v;
+                                let lat = |dx: f32, dy: f32| {
+                                    let p = sample_bilinear_clamped(src, sx + dx, sy + dy);
+                                    0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+                                };
+                                let gx = lat(1.0, 0.0) - lat(-1.0, 0.0);
+                                let gy = lat(0.0, 1.0) - lat(0.0, -1.0);
+                                let mag = (gx * gx + gy * gy).sqrt();
+                                (edge_detect * EDGE_DETECT_GAIN * mag).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            };
+                            (face, det)
                         }
-                        None => palette_col,
+                        None => (palette_col, 0.0),
                     };
-                    // neon edge band along every boundary (outer + notch edges)
-                    let color = if estr > 0.0 && ew > 0.0 && edge_dist < ew {
-                        let t = estr * (1.0 - edge_dist / ew);
+                    // both the geometric edge band and the detected footage contours glow
+                    // in the same neon edge colour → unified line language on the face.
+                    let geo_t = if estr > 0.0 && ew > 0.0 && edge_dist < ew {
+                        estr * (1.0 - edge_dist / ew)
+                    } else {
+                        0.0
+                    };
+                    let t = geo_t.max(det_line);
+                    let color = if t > 0.0 {
                         [
                             lerp(base[0], edge_col.0, t),
                             lerp(base[1], edge_col.1, t),
