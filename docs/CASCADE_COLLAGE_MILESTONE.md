@@ -134,13 +134,20 @@ cascading outward toward its corner with its scribbled edge facing centre.
    stays the no-source fallback. Optional `hue_spread`/`frame_hue_rate` rotate the
    sampled hue; `bright_osc` shades. Verified: solid-source covered pixel == source
    colour; 0 background; determinism (texture tests).
-4. **Metal kernel** (NEXT) — rasterize + `vnoise1` scribble in MSL (splitmix64
-   precedent) + source sampling, parity-gated per frame (A8). The per-stamp rasterize
-   is parity-friendly (no cross-frame state, last-writer = highest step index →
-   gather by max covering step, mirroring `field_particles_splat`).
-5. **Queue + SwiftUI** — `RenderJobTask` variant, queue add/run, sticky backend
-   picker.
-6. **A→B morph drive** — drive `morph_rate`/`scrib_amp` from **Source A** analysis
+4. **Face look-dev + high-level params** (DONE) — face hue-tint, quantized per-copy
+   hue variation, rectilinear multi-notch tiles (T/U/plus/staircase), edge-detect that
+   exposes footage contours as neon lines, and CLI knobs `--tile-scale` (size),
+   `--detail-tiles` (amount), `--hue-rotate` (colour) over the default composition.
+5. **Metal kernel** — **DECIDED CPU-ONLY** (user, 2026-06-30). The effect is a
+   per-pixel gather over ~400 stamps (8 tiles × ~50 copies), each needing full
+   scribble/notch/colour eval: O(w·h·stamps) is likely **slower** than the
+   bbox-limited CPU (already ~0.2 s/frame @640×360), and the `sin`-based scribbled hard
+   edges make boundary pixels flip on sub-ULP CPU↔MSL `sin` differences, tripping the
+   strict 1/255 frame gate (workable only via fragile validate-then-trust, or by
+   replacing scribble's `sin` with hash-only noise = a look change). Determinism (the
+   #1 invariant) is CPU-only regardless. So this effect stays CPU, like `fluid_mosaic`.
+6. **Queue + SwiftUI** (next) — `RenderJobTask` variant, queue add/run.
+7. **A→B morph drive** — drive `morph_rate`/`scrib_amp` from **Source A** analysis
    (luma/flow) so A modulates B's cascade. (Single-source B texture is slice 3; this
    adds the A side.)
 
