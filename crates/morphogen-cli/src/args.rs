@@ -732,6 +732,14 @@ pub(crate) enum Commands {
         /// Saturation of the colorized face in [0, 1].
         #[arg(long, default_value_t = 0.85)]
         face_sat: f32,
+        /// Discrete hue levels for the per-copy variation (each cascade copy a different
+        /// hue within the tile's spread). <=1 = continuous.
+        #[arg(long, default_value_t = 5)]
+        hue_steps: u32,
+        /// Sobel edge-detect strength on the footage in [0, 1+]. 0 = off; higher burns the
+        /// video's own contours in as dark ink lines.
+        #[arg(long, default_value_t = 0.0)]
+        edge_detect: f32,
         #[arg(long, default_value_t = 71)]
         seed: u64,
     },

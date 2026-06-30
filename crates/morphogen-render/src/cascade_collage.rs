@@ -29,32 +29,40 @@ use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 /// Algorithm identifier — bump when the rasterizer, scribble formulation, morph, or
 /// colour model changes so stale caches/checkpoints invalidate.
-pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v4";
+pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v5";
 
-/// Tile geometry: a plain rectangle (4 straight edges) or an L (outer box minus a
-/// notched corner = 6 straight edges).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ShapeKind {
-    #[default]
-    Rect,
-    L,
-}
-
-/// Which single edge of the tile is the scribbled warbling line. For `Rect` one of
-/// the four straight sides; for `L` the `Notch` (the notch's vertical edge).
+/// Which single OUTER edge of the tile is the scribbled warbling line (or `None`).
+/// Notches carry their own scribble via [`Notch::scrib`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScribbleEdge {
-    Left,
     #[default]
+    None,
+    Left,
     Right,
     Top,
     Bottom,
-    Notch,
 }
 
-/// One cascading shape. Spatial fractions are of the canvas (0..1) unless noted.
+/// Maximum notches per shape (fixed so [`CascadeShape`] stays `Copy`). 4 allows a
+/// plus/cross (all four corners notched).
+pub const MAX_NOTCHES: usize = 4;
+
+/// An axis-aligned rectangle subtracted from a tile, in local fractions of canvas
+/// (relative to the tile centre). Subtracting notches yields rectilinear shapes
+/// (L, T, U, plus, staircase) whose every corner is 90° or 270°. `scrib` wobbles the
+/// notch's interior edges (the ones inside the outer box).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Notch {
+    pub u0: f32,
+    pub u1: f32,
+    pub v0: f32,
+    pub v1: f32,
+    pub scrib: bool,
+}
+
+/// One cascading shape: an outer rectangle minus up to [`MAX_NOTCHES`] notches.
+/// Spatial fractions are of the canvas (0..1) unless noted.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CascadeShape {
     /// Start centre (fraction of canvas).
@@ -68,18 +76,13 @@ pub struct CascadeShape {
     /// of the footage (a collage); set equal to `cx,cy` to reassemble the source.
     pub src_cx: f32,
     pub src_cy: f32,
-    pub kind: ShapeKind,
-    /// Notch corner offset (fraction of canvas) — L only.
-    pub notch_u: f32,
-    pub notch_v: f32,
-    /// Which corner is removed (L only): `notch_right` picks the +u side, else -u;
-    /// `notch_bottom` picks the +v side, else -v.
-    pub notch_right: bool,
-    pub notch_bottom: bool,
-    /// Which edge is scribbled.
-    pub scrib: ScribbleEdge,
-    /// Per-step cascade offset, in pixels (direction chosen *away from* the scribbled
-    /// edge so it stays exposed).
+    /// Rectangular notches subtracted from the outer box (first `notch_count` used).
+    pub notches: [Notch; MAX_NOTCHES],
+    pub notch_count: u8,
+    /// Which outer edge is scribbled (notches scribble via their own flag).
+    pub outer_scrib: ScribbleEdge,
+    /// Per-step cascade offset, in pixels (direction chosen *away from* the exposed
+    /// edges so they stay visible).
     pub dx: f32,
     pub dy: f32,
     /// Number of cascade copies stamped per frame.
@@ -88,16 +91,22 @@ pub struct CascadeShape {
     pub base_hue: f32,
     pub sat: f32,
     pub val: f32,
-    /// Hue (turns, 0..1) of this tile's neon EDGE lines (the cascade seams). The face
-    /// stays footage/palette; the edge band is tinted toward this hue.
+    /// Hue (turns, 0..1) of this tile's neon EDGE lines (the cascade seams).
     pub edge_hue: f32,
     /// Scribble amplitude in pixels (before the global `scrib_amp_scale`).
     pub scrib_amp: f32,
-    /// Hue ramp across the cascade (turns from first to last copy) — each stacked
-    /// copy a slightly different hue.
+    /// Per-copy hue variation amplitude (turns) — each cascade copy a different hue
+    /// within ±`hue_spread`, quantized to `hue_steps`. Makes every block multi-coloured.
     pub hue_spread: f32,
-    /// Straight notch edge extend/shorten amplitude (fraction of `hh`).
+    /// Notch interior-edge extend/shorten amplitude over the cascade (fraction of `hh`).
     pub edge_grow: f32,
+}
+
+impl CascadeShape {
+    fn notches(&self) -> &[Notch] {
+        let n = (self.notch_count as usize).min(MAX_NOTCHES);
+        &self.notches[..n]
+    }
 }
 
 /// Settings for the scribbled-edge tile cascade.
@@ -132,117 +141,221 @@ pub struct CascadeCollageSettings {
     pub face_strength: f32,
     /// Saturation of the colorized face (0..1).
     pub face_sat: f32,
+    /// Number of discrete hue levels for the per-copy variation. `<=1` ⇒ continuous.
+    pub hue_steps: u32,
+    /// Sobel edge-detect strength on the footage, in [0, 1+]. `0` ⇒ off; higher burns the
+    /// video's own contours in as dark ink lines (adds to the geometric + scribble lines).
+    pub edge_detect: f32,
     /// Deterministic seed for the scribble noise.
     pub seed: u64,
 }
 
+/// A notch (fractions of canvas, relative to tile centre).
+fn notch(u0: f32, u1: f32, v0: f32, v1: f32, scrib: bool) -> Notch {
+    Notch { u0, u1, v0, v1, scrib }
+}
+
 impl Default for CascadeCollageSettings {
-    /// The validated 4-shape quadrant composition: magenta L (TL), orange rect (TR),
-    /// teal rect (BL), purple L (BR), each cascading outward toward its corner with
-    /// its scribbled edge facing the centre.
+    /// Layered composition: four large quadrant tiles (rect/L) guarantee full coverage,
+    /// then four smaller many-sided rectilinear tiles (T, U, plus, staircase) stack on
+    /// top to add sides, scribbled edges and colour variety.
     fn default() -> Self {
+        // shared field defaults; per-shape fields overridden via struct update
+        let base = CascadeShape {
+            cx: 0.5,
+            cy: 0.5,
+            hw: 0.42,
+            hh: 0.42,
+            src_cx: 0.5,
+            src_cy: 0.5,
+            notches: [Notch::default(); MAX_NOTCHES],
+            notch_count: 0,
+            outer_scrib: ScribbleEdge::None,
+            dx: 0.0,
+            dy: 0.0,
+            steps: 55,
+            base_hue: 0.0,
+            sat: 0.9,
+            val: 0.8,
+            edge_hue: 0.0,
+            scrib_amp: 11.0,
+            hue_spread: 0.14,
+            edge_grow: 0.06,
+        };
         Self {
             background: [0.118, 0.047, 0.157],
             shapes: vec![
-                // magenta — TL, L, notch toward centre (BR), cascade up-left
+                // ── coverage layer: 4 large quadrant tiles ───────────────────────────
+                // magenta L (TL): notch the bottom-right corner toward centre
                 CascadeShape {
                     cx: 0.30,
                     cy: 0.30,
-                    hw: 0.42,
-                    hh: 0.42,
                     src_cx: 0.45,
                     src_cy: 0.45,
-                    kind: ShapeKind::L,
-                    notch_u: 0.10,
-                    notch_v: 0.08,
-                    notch_right: true,
-                    notch_bottom: true,
-                    scrib: ScribbleEdge::Notch,
+                    notches: [
+                        notch(0.10, 0.50, 0.08, 0.50, true),
+                        Notch::default(),
+                        Notch::default(),
+                        Notch::default(),
+                    ],
+                    notch_count: 1,
                     dx: -1.20,
                     dy: -1.20,
-                    steps: 55,
                     base_hue: 0.90,
                     sat: 0.94,
                     val: 0.80,
-                    edge_hue: 0.90, // magenta edges
+                    edge_hue: 0.90,
                     scrib_amp: 12.0,
-                    hue_spread: 0.10,
-                    edge_grow: 0.06,
+                    ..base
                 },
-                // orange — TR, rect, LEFT edge (toward centre) scribbled, cascade up-right
+                // orange rect (TR): scribbled LEFT edge toward centre
                 CascadeShape {
                     cx: 0.70,
                     cy: 0.30,
-                    hw: 0.42,
-                    hh: 0.42,
                     src_cx: 0.30,
                     src_cy: 0.75,
-                    kind: ShapeKind::Rect,
-                    notch_u: 0.0,
-                    notch_v: 0.0,
-                    notch_right: false,
-                    notch_bottom: false,
-                    scrib: ScribbleEdge::Left,
+                    outer_scrib: ScribbleEdge::Left,
                     dx: 1.20,
                     dy: -1.20,
-                    steps: 55,
                     base_hue: 0.07,
                     sat: 0.95,
                     val: 0.93,
-                    edge_hue: 0.07, // orange edges
-                    scrib_amp: 11.0,
-                    hue_spread: 0.10,
-                    edge_grow: 0.06,
+                    edge_hue: 0.07,
+                    ..base
                 },
-                // teal — BL, rect, RIGHT edge (toward centre) scribbled, cascade down-left
+                // teal rect (BL): scribbled RIGHT edge toward centre
                 CascadeShape {
                     cx: 0.30,
                     cy: 0.70,
-                    hw: 0.42,
-                    hh: 0.42,
                     src_cx: 0.70,
                     src_cy: 0.55,
-                    kind: ShapeKind::Rect,
-                    notch_u: 0.0,
-                    notch_v: 0.0,
-                    notch_right: false,
-                    notch_bottom: false,
-                    scrib: ScribbleEdge::Right,
+                    outer_scrib: ScribbleEdge::Right,
                     dx: -1.20,
                     dy: 1.20,
-                    steps: 55,
                     base_hue: 0.47,
                     sat: 0.90,
                     val: 0.66,
-                    edge_hue: 0.50, // cyan edges
+                    edge_hue: 0.50,
                     scrib_amp: 12.0,
-                    hue_spread: 0.10,
-                    edge_grow: 0.06,
+                    ..base
                 },
-                // purple — BR, L, notch toward centre (TL), cascade down-right
+                // purple L (BR): notch the top-left corner toward centre
                 CascadeShape {
                     cx: 0.70,
                     cy: 0.70,
-                    hw: 0.42,
-                    hh: 0.42,
                     src_cx: 0.55,
                     src_cy: 0.25,
-                    kind: ShapeKind::L,
-                    notch_u: -0.10,
-                    notch_v: -0.08,
-                    notch_right: false,
-                    notch_bottom: false,
-                    scrib: ScribbleEdge::Notch,
+                    notches: [
+                        notch(-0.50, -0.10, -0.50, -0.08, true),
+                        Notch::default(),
+                        Notch::default(),
+                        Notch::default(),
+                    ],
+                    notch_count: 1,
                     dx: 1.20,
                     dy: 1.20,
-                    steps: 55,
                     base_hue: 0.78,
                     sat: 0.80,
                     val: 0.66,
-                    edge_hue: 0.92, // magenta/pink edges
-                    scrib_amp: 11.0,
-                    hue_spread: 0.10,
-                    edge_grow: 0.06,
+                    edge_hue: 0.92,
+                    ..base
+                },
+                // ── detail layer: 4 small many-sided tiles on top ────────────────────
+                // blue T (notch both bottom corners)
+                CascadeShape {
+                    cx: 0.50,
+                    cy: 0.34,
+                    hw: 0.24,
+                    hh: 0.20,
+                    src_cx: 0.50,
+                    src_cy: 0.40,
+                    notches: [
+                        notch(-0.30, -0.09, 0.04, 0.30, true),
+                        notch(0.09, 0.30, 0.04, 0.30, true),
+                        Notch::default(),
+                        Notch::default(),
+                    ],
+                    notch_count: 2,
+                    dx: 0.9,
+                    dy: 1.1,
+                    steps: 38,
+                    base_hue: 0.60,
+                    sat: 0.85,
+                    val: 0.85,
+                    edge_hue: 0.55,
+                    ..base
+                },
+                // green U (notch the top middle)
+                CascadeShape {
+                    cx: 0.34,
+                    cy: 0.60,
+                    hw: 0.20,
+                    hh: 0.20,
+                    src_cx: 0.62,
+                    src_cy: 0.50,
+                    notches: [
+                        notch(-0.10, 0.10, -0.30, 0.03, true),
+                        Notch::default(),
+                        Notch::default(),
+                        Notch::default(),
+                    ],
+                    notch_count: 1,
+                    dx: -1.0,
+                    dy: 0.8,
+                    steps: 38,
+                    base_hue: 0.33,
+                    sat: 0.82,
+                    val: 0.80,
+                    edge_hue: 0.33,
+                    ..base
+                },
+                // yellow plus (notch all four corners)
+                CascadeShape {
+                    cx: 0.66,
+                    cy: 0.56,
+                    hw: 0.17,
+                    hh: 0.17,
+                    src_cx: 0.40,
+                    src_cy: 0.30,
+                    notches: [
+                        notch(-0.30, -0.07, -0.30, -0.07, true),
+                        notch(0.07, 0.30, -0.30, -0.07, true),
+                        notch(-0.30, -0.07, 0.07, 0.30, true),
+                        notch(0.07, 0.30, 0.07, 0.30, true),
+                    ],
+                    notch_count: 4,
+                    dx: 1.0,
+                    dy: -0.9,
+                    steps: 34,
+                    base_hue: 0.15,
+                    sat: 0.92,
+                    val: 0.92,
+                    edge_hue: 0.15,
+                    ..base
+                },
+                // red staircase (two stepped notches)
+                CascadeShape {
+                    cx: 0.50,
+                    cy: 0.80,
+                    hw: 0.26,
+                    hh: 0.16,
+                    src_cx: 0.30,
+                    src_cy: 0.65,
+                    notches: [
+                        notch(0.05, 0.32, -0.20, 0.02, true),
+                        notch(-0.20, 0.05, -0.20, -0.05, true),
+                        Notch::default(),
+                        Notch::default(),
+                    ],
+                    notch_count: 2,
+                    dx: -0.8,
+                    dy: 1.0,
+                    steps: 34,
+                    base_hue: 0.99,
+                    sat: 0.90,
+                    val: 0.85,
+                    edge_hue: 0.99,
+                    ..base
                 },
             ],
             scrib_amp_scale: 1.0,
@@ -255,6 +368,8 @@ impl Default for CascadeCollageSettings {
             edge_val: 1.0,
             face_strength: 0.55,
             face_sat: 0.85,
+            hue_steps: 5,
+            edge_detect: 0.0,
             seed: 71,
         }
     }
@@ -417,6 +532,12 @@ pub fn render_cascade_collage_frame(
     let fh = height as f32;
     let ff = frame as f32;
 
+    let ew = settings.edge_width.max(0.0);
+    let estr = settings.edge_strength;
+    let fstr = settings.face_strength;
+    let fsat = settings.face_sat;
+    let edge_detect = settings.edge_detect.max(0.0);
+
     for (si, shape) in settings.shapes.iter().enumerate() {
         let ts = settings.seed ^ (si as u64).wrapping_mul(131);
         let cx = shape.cx * fw;
@@ -426,11 +547,9 @@ pub fn render_cascade_collage_frame(
         let scy = shape.src_cy * fh;
         let hw = shape.hw * fw;
         let hh = shape.hh * fh;
-        let nu0 = shape.notch_u * fw;
-        let nv0 = shape.notch_v * fh;
         let amp = shape.scrib_amp * settings.scrib_amp_scale;
         let steps = shape.steps.max(1);
-        let denom = if steps > 1 { (steps - 1) as f32 } else { 1.0 };
+        let notches = shape.notches();
 
         for step in 0..steps {
             let sf = step as f32;
@@ -440,8 +559,15 @@ pub fn render_cascade_collage_frame(
             let grow = shape.edge_grow * hh * (sf * 0.05 + ff * settings.morph_rate).sin();
             let osc = 0.5 + 0.5 * (sf * 0.6 + ff * settings.morph_rate).sin();
             let sh = 1.0 - settings.bright_osc + settings.bright_osc * osc;
-            // hue drift across the cascade (+ optional per-frame rotation), in turns
-            let hue_shift = shape.hue_spread * (sf / denom) + settings.frame_hue_rate * ff;
+            // per-copy hue variation: quantized pseudo-random in ±hue_spread, so EVERY
+            // block (incl. red) reads as a mix of different hues across its cascade.
+            let raw = hash1(ts ^ 0xA13F, step as i64);
+            let lvl = if settings.hue_steps > 1 {
+                (raw * settings.hue_steps as f32).floor() / (settings.hue_steps as f32 - 1.0)
+            } else {
+                raw
+            };
+            let hue_shift = (lvl - 0.5) * 2.0 * shape.hue_spread + settings.frame_hue_rate * ff;
             // palette-mode flat colour (used only when there is no source texture)
             let palette_col = {
                 let hue = (shape.base_hue + hue_shift).rem_euclid(1.0);
@@ -449,18 +575,12 @@ pub fn render_cascade_collage_frame(
                 let (r, g, b) = hsv_to_rgb(hue, shape.sat, v_eff);
                 [r, g, b, 1.0]
             };
-            // neon edge colour for this step's boundary lines (drifts with hue_shift)
             let edge_col = hsv_to_rgb(
                 (shape.edge_hue + hue_shift).rem_euclid(1.0),
                 settings.edge_sat,
                 settings.edge_val,
             );
-            let ew = settings.edge_width.max(0.0);
-            let estr = settings.edge_strength;
-            // face colorize: per-step hue (base + cascade ramp) → in-block hue variation
             let face_hue = (shape.base_hue + hue_shift).rem_euclid(1.0);
-            let fstr = settings.face_strength;
-            let fsat = settings.face_sat;
 
             let maxr = hw.max(hh) + amp.abs() + 4.0;
             let y0 = (oy - maxr).floor().max(0.0) as i64;
@@ -470,97 +590,119 @@ pub fn render_cascade_collage_frame(
 
             for y in y0..y1 {
                 let v = y as f32 - oy;
-                // edge scribble for v-dependent edges (Right/Left/Notch)
                 let sc_v = scribble(v, ts, phase, amp);
                 let row = y as usize * w;
                 for x in x0..x1 {
                     let u = x as f32 - ox;
-                    // membership + distance to the nearest tile edge (px)
-                    let (inside, edge_dist) = match shape.kind {
-                        ShapeKind::Rect => {
-                            let (bul, buh, bvl, bvh) = match shape.scrib {
-                                ScribbleEdge::Right => (-hw, hw + sc_v, -hh, hh),
-                                ScribbleEdge::Left => (-hw - sc_v, hw, -hh, hh),
-                                ScribbleEdge::Top => {
-                                    let sc = scribble(u, ts, phase, amp);
-                                    (-hw, hw, -hh - sc, hh)
-                                }
-                                ScribbleEdge::Bottom => {
-                                    let sc = scribble(u, ts, phase, amp);
-                                    (-hw, hw, -hh, hh + sc)
-                                }
-                                ScribbleEdge::Notch => (-hw, hw, -hh, hh),
-                            };
-                            let inside = u >= bul && u <= buh && v >= bvl && v <= bvh;
-                            let d = (u - bul).min(buh - u).min(v - bvl).min(bvh - v);
-                            (inside, d)
-                        }
-                        ShapeKind::L => {
-                            if !(u >= -hw && u <= hw && v >= -hh && v <= hh) {
-                                (false, 0.0)
-                            } else {
-                                let nu = nu0 + sc_v;
-                                let nv = nv0 + grow;
-                                let du_n = if shape.notch_right { nu - u } else { u - nu };
-                                let dv_n = if shape.notch_bottom { nv - v } else { v - nv };
-                                let removed = du_n <= 0.0 && dv_n <= 0.0;
-                                let outer = (u + hw).min(hw - u).min(v + hh).min(hh - v);
-                                // distance to the notch boundary (the L's inner corner)
-                                let notch = if du_n > 0.0 && dv_n > 0.0 {
-                                    du_n.min(dv_n)
-                                } else {
-                                    du_n.max(dv_n)
-                                };
-                                (!removed, outer.min(notch))
-                            }
-                        }
+                    // outer box (one edge optionally scribbled)
+                    let (bul, buh, bvl, bvh) = match shape.outer_scrib {
+                        ScribbleEdge::None => (-hw, hw, -hh, hh),
+                        ScribbleEdge::Right => (-hw, hw + sc_v, -hh, hh),
+                        ScribbleEdge::Left => (-hw - sc_v, hw, -hh, hh),
+                        ScribbleEdge::Top => (-hw, hw, -hh - scribble(u, ts, phase, amp), hh),
+                        ScribbleEdge::Bottom => (-hw, hw, -hh, hh + scribble(u, ts, phase, amp)),
                     };
-                    if inside {
-                        // face: footage crop (texture mode) or flat palette colour
-                        let base = match source {
-                            Some(src) => {
-                                let s = sample_bilinear_clamped(src, scx + u, scy + v);
-                                let (r, g, b) = if hue_shift != 0.0 {
-                                    hue_rotate(s[0], s[1], s[2], hue_shift)
-                                } else {
-                                    (s[0], s[1], s[2])
-                                };
-                                let foot = [
-                                    (r * sh).clamp(0.0, 1.0),
-                                    (g * sh).clamp(0.0, 1.0),
-                                    (b * sh).clamp(0.0, 1.0),
-                                ];
-                                // colorize toward the tile hue, keeping the footage luma
-                                if fstr > 0.0 {
-                                    let luma =
-                                        0.2126 * foot[0] + 0.7152 * foot[1] + 0.0722 * foot[2];
-                                    let (cr, cg, cb) = hsv_to_rgb(face_hue, fsat, luma);
-                                    [
-                                        lerp(foot[0], cr, fstr),
-                                        lerp(foot[1], cg, fstr),
-                                        lerp(foot[2], cb, fstr),
-                                        1.0,
-                                    ]
-                                } else {
-                                    [foot[0], foot[1], foot[2], 1.0]
-                                }
-                            }
-                            None => palette_col,
-                        };
-                        // edge: blend the boundary band toward the neon edge colour
-                        let color = if estr > 0.0 && ew > 0.0 && edge_dist < ew {
-                            let t = estr * (1.0 - edge_dist / ew);
-                            [
-                                lerp(base[0], edge_col.0, t),
-                                lerp(base[1], edge_col.1, t),
-                                lerp(base[2], edge_col.2, t),
-                                1.0,
-                            ]
-                        } else {
-                            base
-                        };
-                        pixels[row + x as usize] = color;
+                    if !(u >= bul && u <= buh && v >= bvl && v <= bvh) {
+                        continue;
                     }
+                    let mut edge_dist = (u - bul).min(buh - u).min(v - bvl).min(bvh - v);
+                    // subtract notches → rectilinear shape; track distance to every edge
+                    let mut removed = false;
+                    for nt in notches {
+                        let mut nu0 = nt.u0 * fw;
+                        let mut nu1 = nt.u1 * fw;
+                        let mut nv0 = nt.v0 * fh;
+                        let mut nv1 = nt.v1 * fh;
+                        // wobble / morph the notch's INTERIOR edges (those inside the box)
+                        if nt.scrib {
+                            if nu0 > -hw && nu0 < hw {
+                                nu0 += scribble(v, ts ^ 0x51, phase, amp);
+                            }
+                            if nu1 > -hw && nu1 < hw {
+                                nu1 += scribble(v, ts ^ 0x52, phase, amp);
+                            }
+                            if nv0 > -hh && nv0 < hh {
+                                nv0 += scribble(u, ts ^ 0x53, phase, amp);
+                            }
+                            if nv1 > -hh && nv1 < hh {
+                                nv1 += scribble(u, ts ^ 0x54, phase, amp);
+                            }
+                        }
+                        if nv0 > -hh && nv0 < hh {
+                            nv0 += grow;
+                        }
+                        if u > nu0 && u < nu1 && v > nv0 && v < nv1 {
+                            removed = true;
+                            break;
+                        }
+                        // distance from this solid pixel to the notch rect (its boundary)
+                        let dx = (nu0 - u).max(u - nu1).max(0.0);
+                        let dy = (nv0 - v).max(v - nv1).max(0.0);
+                        edge_dist = edge_dist.min((dx * dx + dy * dy).sqrt());
+                    }
+                    if removed {
+                        continue;
+                    }
+
+                    // face: footage crop (texture mode) or flat palette colour
+                    let base = match source {
+                        Some(src) => {
+                            let s = sample_bilinear_clamped(src, scx + u, scy + v);
+                            let (r, g, b) = if hue_shift != 0.0 {
+                                hue_rotate(s[0], s[1], s[2], hue_shift)
+                            } else {
+                                (s[0], s[1], s[2])
+                            };
+                            let mut foot = [
+                                (r * sh).clamp(0.0, 1.0),
+                                (g * sh).clamp(0.0, 1.0),
+                                (b * sh).clamp(0.0, 1.0),
+                            ];
+                            // edge-detect: Sobel on footage luma → dark ink lines
+                            if edge_detect > 0.0 {
+                                let sx = scx + u;
+                                let sy = scy + v;
+                                let lat = |dx: f32, dy: f32| {
+                                    let p = sample_bilinear_clamped(src, sx + dx, sy + dy);
+                                    0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+                                };
+                                let gx = lat(1.0, 0.0) - lat(-1.0, 0.0);
+                                let gy = lat(0.0, 1.0) - lat(0.0, -1.0);
+                                let mag = (gx * gx + gy * gy).sqrt();
+                                let f = (1.0 - (edge_detect * mag).clamp(0.0, 1.0)).max(0.0);
+                                foot[0] *= f;
+                                foot[1] *= f;
+                                foot[2] *= f;
+                            }
+                            // colorize toward the tile hue, keeping the footage luma
+                            if fstr > 0.0 {
+                                let luma = 0.2126 * foot[0] + 0.7152 * foot[1] + 0.0722 * foot[2];
+                                let (cr, cg, cb) = hsv_to_rgb(face_hue, fsat, luma);
+                                [
+                                    lerp(foot[0], cr, fstr),
+                                    lerp(foot[1], cg, fstr),
+                                    lerp(foot[2], cb, fstr),
+                                    1.0,
+                                ]
+                            } else {
+                                [foot[0], foot[1], foot[2], 1.0]
+                            }
+                        }
+                        None => palette_col,
+                    };
+                    // neon edge band along every boundary (outer + notch edges)
+                    let color = if estr > 0.0 && ew > 0.0 && edge_dist < ew {
+                        let t = estr * (1.0 - edge_dist / ew);
+                        [
+                            lerp(base[0], edge_col.0, t),
+                            lerp(base[1], edge_col.1, t),
+                            lerp(base[2], edge_col.2, t),
+                            1.0,
+                        ]
+                    } else {
+                        base
+                    };
+                    pixels[row + x as usize] = color;
                 }
             }
         }
@@ -672,6 +814,34 @@ mod tests {
         let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(d > 0.0, "face colorize (on) must differ from pure footage (off)");
+    }
+
+    #[test]
+    fn edge_detect_off_differs_from_on() {
+        // Source with a hard vertical edge so Sobel is non-zero; edge-detect must
+        // darken those contours (changes covered pixels).
+        let src = ImageBufferF32::from_fn(160, 200, |x, _| {
+            if x < 80 {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            }
+        })
+        .unwrap();
+        let off = CascadeCollageSettings {
+            edge_detect: 0.0,
+            face_strength: 0.0,
+            ..Default::default()
+        };
+        let on = CascadeCollageSettings {
+            edge_detect: 1.0,
+            face_strength: 0.0,
+            ..Default::default()
+        };
+        let a = render_cascade_collage_frame(0, 0, Some(&src), &off, 0).unwrap();
+        let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
+        let d = a.max_channel_difference(&b).expect("comparable");
+        assert!(d > 0.0, "edge-detect (on) must darken footage contours vs off");
     }
 
     #[test]

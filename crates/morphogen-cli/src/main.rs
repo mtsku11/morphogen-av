@@ -585,6 +585,8 @@ fn run() -> Result<(), CliError> {
             edge_strength,
             face_strength,
             face_sat,
+            hue_steps,
+            edge_detect,
             seed,
         } => render_cascade_collage_sequence(CascadeCollageSequenceRequest {
             source_dir: source_dir.as_deref(),
@@ -601,6 +603,8 @@ fn run() -> Result<(), CliError> {
                 edge_strength,
                 face_strength,
                 face_sat,
+                hue_steps,
+                edge_detect,
                 seed,
                 ..CascadeCollageSettings::default()
             },
