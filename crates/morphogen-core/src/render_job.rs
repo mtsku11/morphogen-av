@@ -85,6 +85,50 @@ fn default_river_turbulence() -> f32 {
     0.8
 }
 
+fn default_cascade_collage_scrib_amp_scale() -> f32 {
+    1.0
+}
+
+fn default_cascade_collage_morph_rate() -> f32 {
+    0.12
+}
+
+fn default_cascade_collage_bright_osc() -> f32 {
+    0.12
+}
+
+fn default_cascade_collage_edge_width() -> f32 {
+    2.5
+}
+
+fn default_cascade_collage_edge_strength() -> f32 {
+    0.85
+}
+
+fn default_cascade_collage_face_strength() -> f32 {
+    0.55
+}
+
+fn default_cascade_collage_face_sat() -> f32 {
+    0.85
+}
+
+fn default_cascade_collage_hue_steps() -> u32 {
+    5
+}
+
+fn default_cascade_collage_tile_scale() -> f32 {
+    1.0
+}
+
+fn default_cascade_collage_detail_tiles() -> u32 {
+    4
+}
+
+fn default_cascade_collage_block_opacity() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -203,6 +247,48 @@ pub enum RenderJobTask {
         temporal_tiles: bool,
         #[serde(default)]
         decay: f32,
+    },
+    /// Scribbled-edge tile cascade — a procedural/textured collage of rect/L tiles,
+    /// each re-stamped in an in-frame cascade with one scribbled morphing edge. Tiles
+    /// carry a crop of the source video (texture + colour). Stateless single-frame
+    /// composite (no cross-frame state), unlike `FrameSequenceCascadeTrails`.
+    FrameSequenceCascadeCollage {
+        source_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        #[serde(default = "default_cascade_collage_scrib_amp_scale")]
+        scrib_amp_scale: f32,
+        #[serde(default = "default_cascade_collage_morph_rate")]
+        morph_rate: f32,
+        #[serde(default)]
+        frame_hue_rate: f32,
+        #[serde(default = "default_cascade_collage_bright_osc")]
+        bright_osc: f32,
+        #[serde(default = "default_cascade_collage_edge_width")]
+        edge_width: f32,
+        #[serde(default = "default_cascade_collage_edge_strength")]
+        edge_strength: f32,
+        #[serde(default = "default_cascade_collage_face_strength")]
+        face_strength: f32,
+        #[serde(default = "default_cascade_collage_face_sat")]
+        face_sat: f32,
+        #[serde(default = "default_cascade_collage_hue_steps")]
+        hue_steps: u32,
+        #[serde(default)]
+        edge_detect: f32,
+        #[serde(default = "default_cascade_collage_tile_scale")]
+        tile_scale: f32,
+        #[serde(default = "default_cascade_collage_detail_tiles")]
+        detail_tiles: u32,
+        #[serde(default)]
+        hue_rotate: f32,
+        #[serde(default)]
+        block_blend: String,
+        #[serde(default = "default_cascade_collage_block_opacity")]
+        block_opacity: f32,
+        #[serde(default)]
+        seed: u64,
     },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.

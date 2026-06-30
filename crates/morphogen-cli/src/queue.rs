@@ -13,13 +13,14 @@ use morphogen_core::{
     RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
-    flow_displace_cpu, BlockCollageSettings, CascadeFieldType, CascadeTrailSettings,
-    ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource, PixelSortSettings,
-    SortAxis, SortDirection, SortKey, StructureMode, VideoVocoderSettings,
-    BLOCK_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM,
-    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PIXEL_SORT_ALGORITHM,
-    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+    flow_displace_cpu, BlendMode, BlockCollageSettings, CascadeCollageSettings, CascadeFieldType,
+    CascadeTrailSettings, ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource,
+    PixelSortSettings, SortAxis, SortDirection, SortKey, StructureMode, VideoVocoderSettings,
+    BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM,
+    FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
+    PIXEL_SORT_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
 use crate::args::*;
@@ -573,6 +574,237 @@ pub(crate) fn queue_add_cascade_trails_sequence(
         queue_path.display()
     );
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) struct QueueAddCascadeCollageSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) scrib_amp_scale: f32,
+    pub(crate) morph_rate: f32,
+    pub(crate) frame_hue_rate: f32,
+    pub(crate) bright_osc: f32,
+    pub(crate) edge_width: f32,
+    pub(crate) edge_strength: f32,
+    pub(crate) face_strength: f32,
+    pub(crate) face_sat: f32,
+    pub(crate) hue_steps: u32,
+    pub(crate) edge_detect: f32,
+    pub(crate) tile_scale: f32,
+    pub(crate) detail_tiles: u32,
+    pub(crate) hue_rotate: f32,
+    pub(crate) block_blend: BlendMode,
+    pub(crate) block_opacity: f32,
+    pub(crate) seed: u64,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_cascade_collage_sequence(
+    request: QueueAddCascadeCollageSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    validate_queued_sequence_timing(request.frames, request.frame_rate)?;
+    // build-then-validate: catches invalid knobs before the job is persisted
+    let mut probe_settings = CascadeCollageSettings {
+        scrib_amp_scale: request.scrib_amp_scale,
+        morph_rate: request.morph_rate,
+        frame_hue_rate: request.frame_hue_rate,
+        bright_osc: request.bright_osc,
+        edge_width: request.edge_width,
+        edge_strength: request.edge_strength,
+        face_strength: request.face_strength,
+        face_sat: request.face_sat,
+        hue_steps: request.hue_steps,
+        edge_detect: request.edge_detect,
+        block_blend: request.block_blend,
+        block_opacity: request.block_opacity,
+        seed: request.seed,
+        ..CascadeCollageSettings::default()
+    };
+    apply_cascade_generative(
+        &mut probe_settings,
+        request.tile_scale,
+        request.detail_tiles,
+        request.hue_rotate,
+    );
+    probe_settings.validate()?;
+
+    let mut queue = load_or_default_queue(request.queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = request.output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: request
+            .project_path
+            .map(|p| p.to_string_lossy().to_string()),
+        settings: png_sequence_settings(request.frame_rate),
+        task: RenderJobTask::FrameSequenceCascadeCollage {
+            source_frame_directory: request.source_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames: request.frames,
+            frame_rate: request.frame_rate,
+            scrib_amp_scale: request.scrib_amp_scale,
+            morph_rate: request.morph_rate,
+            frame_hue_rate: request.frame_hue_rate,
+            bright_osc: request.bright_osc,
+            edge_width: request.edge_width,
+            edge_strength: request.edge_strength,
+            face_strength: request.face_strength,
+            face_sat: request.face_sat,
+            hue_steps: request.hue_steps,
+            edge_detect: request.edge_detect,
+            tile_scale: request.tile_scale,
+            detail_tiles: request.detail_tiles,
+            hue_rotate: request.hue_rotate,
+            block_blend: cascade_block_blend_label(request.block_blend),
+            block_opacity: request.block_opacity,
+            seed: request.seed,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            request.source_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(request.queue_path)?;
+    println!(
+        "queued cascade-collage render job {job_id} in {}",
+        request.queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceCascadeCollage { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running cascade-collage jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceCascadeCollage {
+        source_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        scrib_amp_scale,
+        morph_rate,
+        frame_hue_rate,
+        bright_osc,
+        edge_width,
+        edge_strength,
+        face_strength,
+        face_sat,
+        hue_steps,
+        edge_detect,
+        tile_scale,
+        detail_tiles,
+        hue_rotate,
+        block_blend,
+        block_opacity,
+        seed,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a cascade-collage render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let mut settings = CascadeCollageSettings {
+        scrib_amp_scale,
+        morph_rate,
+        frame_hue_rate,
+        bright_osc,
+        edge_width,
+        edge_strength,
+        face_strength,
+        face_sat,
+        hue_steps,
+        edge_detect,
+        block_blend: parse_cascade_block_blend(&block_blend),
+        block_opacity,
+        seed,
+        ..CascadeCollageSettings::default()
+    };
+    apply_cascade_generative(&mut settings, tile_scale, detail_tiles, hue_rotate);
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_cascade_collage_sequence(CascadeCollageSequenceRequest {
+            source_dir: Some(Path::new(&source_frame_directory)),
+            output_dir: &output_dir.join("frames"),
+            width: 0,
+            height: 0,
+            frames,
+            settings: settings.clone(),
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_cascade_collage",
+            effect_key: "cascade_collage",
+            effect: serde_json::json!({
+                "algorithm": CASCADE_COLLAGE_ALGORITHM,
+                "settings": settings,
+                "backend": "CPU"
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "cascade-collage",
+    )
+}
+
+fn cascade_block_blend_label(mode: BlendMode) -> String {
+    match mode {
+        BlendMode::Normal => "normal".to_string(),
+        BlendMode::Multiply => "multiply".to_string(),
+        BlendMode::Screen => "screen".to_string(),
+        BlendMode::Average => "average".to_string(),
+        BlendMode::Lighten => "lighten".to_string(),
+    }
+}
+
+fn parse_cascade_block_blend(s: &str) -> BlendMode {
+    match s {
+        "multiply" => BlendMode::Multiply,
+        "screen" => BlendMode::Screen,
+        "average" => BlendMode::Average,
+        "lighten" => BlendMode::Lighten,
+        _ => BlendMode::Normal,
+    }
 }
 
 pub(crate) struct QueueAddGranularMosaicSequenceRequest<'a> {
@@ -3968,6 +4200,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             }
             RenderJobTask::FrameSequenceFieldParticles { .. } => "frame_sequence_field_particles",
             RenderJobTask::FrameSequenceCascadeTrails { .. } => "frame_sequence_cascade_trails",
+            RenderJobTask::FrameSequenceCascadeCollage { .. } => "frame_sequence_cascade_collage",
             RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
             RenderJobTask::FrameSequencePixelSort { .. } => "frame_sequence_pixel_sort",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",

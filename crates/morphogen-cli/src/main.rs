@@ -1242,6 +1242,53 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddCascadeCollageSequence {
+            queue_path,
+            source_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            scrib_amp_scale,
+            morph_rate,
+            frame_hue_rate,
+            bright_osc,
+            edge_width,
+            edge_strength,
+            face_strength,
+            face_sat,
+            hue_steps,
+            edge_detect,
+            tile_scale,
+            detail_tiles,
+            hue_rotate,
+            block_blend,
+            block_opacity,
+            seed,
+            project_path,
+        } => queue_add_cascade_collage_sequence(QueueAddCascadeCollageSequenceRequest {
+            queue_path: &queue_path,
+            source_dir: &source_dir,
+            output_root_dir: &output_root_dir,
+            frames,
+            frame_rate,
+            scrib_amp_scale,
+            morph_rate,
+            frame_hue_rate,
+            bright_osc,
+            edge_width,
+            edge_strength,
+            face_strength,
+            face_sat,
+            hue_steps,
+            edge_detect,
+            tile_scale,
+            detail_tiles,
+            hue_rotate,
+            block_blend: block_blend.into(),
+            block_opacity,
+            seed,
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueAddBlockCollageSequence {
             queue_path,
             source_a_dir,
@@ -1622,6 +1669,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunCascadeTrailsSequence { queue_path } => {
             queue_run_cascade_trails_sequence(&queue_path)
+        }
+        Commands::QueueRunCascadeCollageSequence { queue_path } => {
+            queue_run_cascade_collage_sequence(&queue_path)
         }
         Commands::QueueRunBlockCollageSequence { queue_path } => {
             queue_run_block_collage_sequence(&queue_path)

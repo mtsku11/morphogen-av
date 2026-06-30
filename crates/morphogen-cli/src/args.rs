@@ -1453,6 +1453,51 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    /// Persist a cascade-collage render job to the queue (texture mode: tiles carry
+    /// crops of `source_dir`'s video). Mirrors `render-cascade-collage-sequence`.
+    QueueAddCascadeCollageSequence {
+        queue_path: PathBuf,
+        source_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 1.0)]
+        scrib_amp_scale: f32,
+        #[arg(long, default_value_t = 0.12)]
+        morph_rate: f32,
+        #[arg(long, default_value_t = 0.0)]
+        frame_hue_rate: f32,
+        #[arg(long, default_value_t = 0.12)]
+        bright_osc: f32,
+        #[arg(long, default_value_t = 2.5)]
+        edge_width: f32,
+        #[arg(long, default_value_t = 0.85)]
+        edge_strength: f32,
+        #[arg(long, default_value_t = 0.55)]
+        face_strength: f32,
+        #[arg(long, default_value_t = 0.85)]
+        face_sat: f32,
+        #[arg(long, default_value_t = 5)]
+        hue_steps: u32,
+        #[arg(long, default_value_t = 0.0)]
+        edge_detect: f32,
+        #[arg(long, default_value_t = 1.0)]
+        tile_scale: f32,
+        #[arg(long, default_value_t = 4)]
+        detail_tiles: u32,
+        #[arg(long, default_value_t = 0.0)]
+        hue_rotate: f32,
+        #[arg(long, value_enum, default_value_t = CliBlendMode::Normal)]
+        block_blend: CliBlendMode,
+        #[arg(long, default_value_t = 1.0)]
+        block_opacity: f32,
+        #[arg(long, default_value_t = 71)]
+        seed: u64,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,
@@ -1785,6 +1830,9 @@ pub(crate) enum Commands {
         queue_path: PathBuf,
     },
     QueueRunCascadeTrailsSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunCascadeCollageSequence {
         queue_path: PathBuf,
     },
     /// Persist a block-collage render job to the queue.
