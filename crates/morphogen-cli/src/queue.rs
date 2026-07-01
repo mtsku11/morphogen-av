@@ -16,11 +16,11 @@ use morphogen_render::{
     flow_displace_cpu, BlendMode, BlockCollageSettings, CascadeCollageSettings, CascadeFieldType,
     CascadeTrailSettings, ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings,
     FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource,
-    PixelSortSettings, SortAxis, SortDirection, SortKey, StructureMode, VideoVocoderSettings,
-    BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM,
-    FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
-    PIXEL_SORT_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
-    RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+    PixelSortSettings, RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection, SortKey,
+    StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM,
+    CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
+    FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PIXEL_SORT_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
+    POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
 };
 
 use crate::args::*;
@@ -1903,6 +1903,175 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         outcome,
         "cascade-trails",
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) struct QueueAddRetroStaticSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) real_bpp: u32,
+    pub(crate) assumed_bpp: u32,
+    pub(crate) filter: ScanlineFilter,
+    pub(crate) strength: f32,
+    pub(crate) backend: RenderBackend,
+    pub(crate) project_path: Option<&'a Path>,
+}
+
+pub(crate) fn queue_add_retro_static_sequence(
+    request: QueueAddRetroStaticSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    validate_queued_sequence_timing(request.frames, request.frame_rate)?;
+    let settings = RetroStaticSettings {
+        real_bpp: request.real_bpp,
+        assumed_bpp: request.assumed_bpp,
+        filter: request.filter,
+        strength: request.strength,
+    };
+    settings.validate()?;
+
+    let mut queue = load_or_default_queue(request.queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = request.output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: request
+            .project_path
+            .map(|p| p.to_string_lossy().to_string()),
+        settings: png_sequence_settings(request.frame_rate),
+        task: RenderJobTask::FrameSequenceRetroStatic {
+            source_frame_directory: request.source_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames: request.frames,
+            frame_rate: request.frame_rate,
+            real_bpp: request.real_bpp,
+            assumed_bpp: request.assumed_bpp,
+            filter: scanline_filter_label(request.filter),
+            strength: request.strength,
+            backend: request.backend,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            request.source_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(request.queue_path)?;
+    println!(
+        "queued retro-static render job {job_id} in {}",
+        request.queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceRetroStatic { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running retro-static jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceRetroStatic {
+        source_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        real_bpp,
+        assumed_bpp,
+        filter,
+        strength,
+        backend,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a retro-static render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = RetroStaticSettings {
+        real_bpp,
+        assumed_bpp,
+        filter: parse_scanline_filter(&filter),
+        strength,
+    };
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_retro_static_sequence(RetroStaticSequenceRequest {
+            source_dir: Path::new(&source_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames,
+            backend,
+        })?;
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_retro_static",
+            effect_key: "retro_static",
+            effect: serde_json::json!({
+                "algorithm": RETRO_STATIC_ALGORITHM,
+                "settings": settings,
+                "backend": format!("{backend:?}")
+            }),
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "retro-static",
+    )
+}
+
+fn scanline_filter_label(filter: ScanlineFilter) -> String {
+    match filter {
+        ScanlineFilter::None => "none".to_string(),
+        ScanlineFilter::Sub => "sub".to_string(),
+        ScanlineFilter::Up => "up".to_string(),
+        ScanlineFilter::Average => "average".to_string(),
+        ScanlineFilter::Paeth => "paeth".to_string(),
+    }
+}
+
+fn parse_scanline_filter(s: &str) -> ScanlineFilter {
+    match s {
+        "sub" => ScanlineFilter::Sub,
+        "up" => ScanlineFilter::Up,
+        "average" => ScanlineFilter::Average,
+        "paeth" => ScanlineFilter::Paeth,
+        _ => ScanlineFilter::None,
+    }
 }
 
 pub(crate) struct QueueAddBlockCollageSequenceRequest<'a> {
@@ -4201,6 +4370,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceFieldParticles { .. } => "frame_sequence_field_particles",
             RenderJobTask::FrameSequenceCascadeTrails { .. } => "frame_sequence_cascade_trails",
             RenderJobTask::FrameSequenceCascadeCollage { .. } => "frame_sequence_cascade_collage",
+            RenderJobTask::FrameSequenceRetroStatic { .. } => "frame_sequence_retro_static",
             RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
             RenderJobTask::FrameSequencePixelSort { .. } => "frame_sequence_pixel_sort",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",

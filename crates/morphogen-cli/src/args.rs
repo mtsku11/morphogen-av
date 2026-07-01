@@ -1529,6 +1529,29 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
+    /// Persist a retro-static render job to the queue. Mirrors
+    /// `render-retro-static-sequence`.
+    QueueAddRetroStaticSequence {
+        queue_path: PathBuf,
+        source_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 4)]
+        real_bpp: u32,
+        #[arg(long, default_value_t = 3)]
+        assumed_bpp: u32,
+        #[arg(long, value_enum, default_value_t = CliScanlineFilter::Paeth)]
+        filter: CliScanlineFilter,
+        #[arg(long, default_value_t = 1.0)]
+        strength: f32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Metal)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,
@@ -1864,6 +1887,9 @@ pub(crate) enum Commands {
         queue_path: PathBuf,
     },
     QueueRunCascadeCollageSequence {
+        queue_path: PathBuf,
+    },
+    QueueRunRetroStaticSequence {
         queue_path: PathBuf,
     },
     /// Persist a block-collage render job to the queue.

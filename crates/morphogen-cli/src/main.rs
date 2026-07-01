@@ -1311,6 +1311,31 @@ fn run() -> Result<(), CliError> {
             seed,
             project_path: project_path.as_deref(),
         }),
+        Commands::QueueAddRetroStaticSequence {
+            queue_path,
+            source_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            real_bpp,
+            assumed_bpp,
+            filter,
+            strength,
+            backend,
+            project_path,
+        } => queue_add_retro_static_sequence(QueueAddRetroStaticSequenceRequest {
+            queue_path: &queue_path,
+            source_dir: &source_dir,
+            output_root_dir: &output_root_dir,
+            frames,
+            frame_rate,
+            real_bpp,
+            assumed_bpp,
+            filter: filter.into(),
+            strength,
+            backend: backend.into(),
+            project_path: project_path.as_deref(),
+        }),
         Commands::QueueAddBlockCollageSequence {
             queue_path,
             source_a_dir,
@@ -1694,6 +1719,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::QueueRunCascadeCollageSequence { queue_path } => {
             queue_run_cascade_collage_sequence(&queue_path)
+        }
+        Commands::QueueRunRetroStaticSequence { queue_path } => {
+            queue_run_retro_static_sequence(&queue_path)
         }
         Commands::QueueRunBlockCollageSequence { queue_path } => {
             queue_run_block_collage_sequence(&queue_path)

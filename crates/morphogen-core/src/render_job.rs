@@ -129,6 +129,22 @@ fn default_cascade_collage_block_opacity() -> f32 {
     1.0
 }
 
+fn default_retro_static_real_bpp() -> u32 {
+    4
+}
+
+fn default_retro_static_assumed_bpp() -> u32 {
+    3
+}
+
+fn default_retro_static_filter() -> String {
+    "paeth".to_string()
+}
+
+fn default_retro_static_strength() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -289,6 +305,26 @@ pub enum RenderJobTask {
         block_opacity: f32,
         #[serde(default)]
         seed: u64,
+    },
+    /// Retro static — deliberate scanline-filter misread glitch: simulate a
+    /// PNG-style adaptive filter, then deliberately decode it at the wrong
+    /// bytes-per-pixel stride. Stateless single-source, integer-domain (CPU/Metal
+    /// bit-identical).
+    FrameSequenceRetroStatic {
+        source_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        #[serde(default = "default_retro_static_real_bpp")]
+        real_bpp: u32,
+        #[serde(default = "default_retro_static_assumed_bpp")]
+        assumed_bpp: u32,
+        #[serde(default = "default_retro_static_filter")]
+        filter: String,
+        #[serde(default = "default_retro_static_strength")]
+        strength: f32,
+        #[serde(default)]
+        backend: RenderBackend,
     },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
