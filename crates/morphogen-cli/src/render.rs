@@ -17,6 +17,7 @@ use morphogen_render::{
     render_block_collage_frame, BlockCollageSettings,
     render_cascade_collage_frame, CascadeCollageSettings,
     compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
+    render_retro_static_frame, RetroStaticSettings,
     render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
     compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask,
     render_pixel_sort_frame, MaskSource, PixelSortSettings, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
@@ -5609,6 +5610,87 @@ pub(crate) fn render_channel_shift_sequence(
         request.output_dir.display()
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct RetroStaticSequenceRequest<'a> {
+    pub(crate) source_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: RetroStaticSettings,
+    pub(crate) frames: u32,
+    pub(crate) backend: RenderBackend,
+}
+
+pub(crate) fn render_retro_static_sequence(
+    request: RetroStaticSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+    let source_frames = collect_image_frames(request.source_dir)?;
+    if source_frames.is_empty() {
+        return Err(CliError::Message(
+            "retro static requires at least one PNG frame in the source directory".to_string(),
+        ));
+    }
+    let frame_count = (request.frames as usize).min(source_frames.len());
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..frame_count {
+        let source = load_image_f32(&source_frames[index])?;
+        let rendered = if request.backend == RenderBackend::Metal {
+            render_retro_static_frame_metal(&source, &request.settings)?
+        } else {
+            render_retro_static_frame(&source, &request.settings)?
+        };
+        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+    }
+
+    println!(
+        "rendered retro static sequence with {} frame(s) (real_bpp {}, assumed_bpp {}, strength {:.2}, backend {:?}) from {} to {}",
+        frame_count,
+        request.settings.real_bpp,
+        request.settings.assumed_bpp,
+        request.settings.strength,
+        request.backend,
+        request.source_dir.display(),
+        request.output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_retro_static_frame_metal(
+    source: &ImageBufferF32,
+    settings: &RetroStaticSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::retro_static_metal(source, settings)?;
+    let cpu = render_retro_static_frame(source, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU retro static outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal retro static diverged from CPU reference by {difference} \
+             (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_retro_static_frame_metal(
+    _source: &ImageBufferF32,
+    _settings: &RetroStaticSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 #[cfg(target_os = "macos")]

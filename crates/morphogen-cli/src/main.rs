@@ -5,7 +5,7 @@ use morphogen_render::{
     ChannelShiftSettings,
     CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
     FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
-    GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
+    GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings, RetroStaticSettings,
     StructureMode, VideoVocoderSettings,
 };
 
@@ -683,6 +683,28 @@ fn run() -> Result<(), CliError> {
             source_a_dir: source_a_dir.as_deref(),
             flow_gain,
             radius,
+        })
+        .map(|_| ()),
+        Commands::RenderRetroStaticSequence {
+            source_dir,
+            output_dir,
+            frames,
+            real_bpp,
+            assumed_bpp,
+            filter,
+            strength,
+            backend,
+        } => render_retro_static_sequence(RetroStaticSequenceRequest {
+            source_dir: &source_dir,
+            output_dir: &output_dir,
+            settings: RetroStaticSettings {
+                real_bpp,
+                assumed_bpp,
+                filter: filter.into(),
+                strength,
+            },
+            frames,
+            backend: backend.into(),
         })
         .map(|_| ()),
         Commands::RenderPaletteQuantizeSequence {

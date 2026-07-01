@@ -31,6 +31,7 @@ pub use flow_displace_dispatch::{
     LUCAS_KANADE_REFINE_SHADER_SOURCE, CHANNEL_SHIFT_KERNEL_NAME, CHANNEL_SHIFT_SHADER_SOURCE,
     PALETTE_QUANTIZE_KERNEL_NAME, PALETTE_QUANTIZE_SHADER_SOURCE,
     PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
+    RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE,
     VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 pub use pipeline_placeholder::MetalPipelinePlan;
@@ -40,7 +41,7 @@ pub use runtime::{
     field_particles_splat_metal, flow_displace_metal, flow_feedback_metal, fluid_advect_metal,
     fluid_advect_two_source_metal, granular_mosaic_metal, granular_mosaic_pool_metal,
     channel_shift_metal, palette_quantize_metal, pixel_sort_metal,
-    pyramidal_lucas_kanade_flow_metal,
+    pyramidal_lucas_kanade_flow_metal, retro_static_metal,
     video_vocoder_match_metal,
 };
 pub use texture_placeholder::MetalTexturePlan;

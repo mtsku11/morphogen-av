@@ -14,8 +14,9 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    BlendMode, CoagulationFlowSource, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
-    CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+    BlendMode, CoagulationFlowSource, ScanlineFilter, StructureMode, VectorRemixMode,
+    CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM,
+    MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -843,6 +844,36 @@ pub(crate) enum Commands {
         radius: i32,
         /// Render backend. `metal` is gated against the CPU reference per frame
         /// (constant-offset mode only; A-flow mode is CPU-only).
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+    },
+    /// Render the retro-static glitch: deterministically simulate a PNG-style
+    /// scanline filter, then deliberately misread it at the wrong bytes-per-pixel
+    /// stride (filter residuals shown as colour + progressive per-row shear).
+    /// **Off case:** `--strength 0` returns the source verbatim.
+    RenderRetroStaticSequence {
+        /// Source frames (PNG sequence).
+        source_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Simulated encoder's bytes-per-pixel (3 = RGB, 4 = RGBA typical).
+        #[arg(long, default_value_t = 4)]
+        real_bpp: u32,
+        /// The "wrong" decoder's bytes-per-pixel — the shear knob. Equal to
+        /// `--real-bpp` = no shear (residual noise only).
+        #[arg(long, default_value_t = 3)]
+        assumed_bpp: u32,
+        /// Simulated adaptive scanline filter. `Paeth` matches the vivid look of the
+        /// original discovery (real PNG encoders typically choose Paeth/Sub/Up for
+        /// photographic content); `None` is much subtler (shear only, no residual noise).
+        #[arg(long, value_enum, default_value_t = CliScanlineFilter::Paeth)]
+        filter: CliScanlineFilter,
+        /// Blend toward the glitch in [0, 1]. 0 = byte-identical passthrough (off case).
+        #[arg(long, default_value_t = 1.0)]
+        strength: f32,
+        /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
     },
@@ -2037,6 +2068,28 @@ impl From<CliBlendMode> for BlendMode {
             CliBlendMode::Screen => Self::Screen,
             CliBlendMode::Average => Self::Average,
             CliBlendMode::Lighten => Self::Lighten,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliScanlineFilter {
+    #[default]
+    None,
+    Sub,
+    Up,
+    Average,
+    Paeth,
+}
+
+impl From<CliScanlineFilter> for ScanlineFilter {
+    fn from(value: CliScanlineFilter) -> Self {
+        match value {
+            CliScanlineFilter::None => Self::None,
+            CliScanlineFilter::Sub => Self::Sub,
+            CliScanlineFilter::Up => Self::Up,
+            CliScanlineFilter::Average => Self::Average,
+            CliScanlineFilter::Paeth => Self::Paeth,
         }
     }
 }

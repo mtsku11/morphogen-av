@@ -7,8 +7,8 @@ use morphogen_render::{
     pyramidal_lucas_kanade_flow_with_refiner, ChannelShiftSettings, FieldParticleSettings,
     FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
     GrainSelection, GranularMosaicSettings, ImageBufferF32, PaletteQuantizeSettings, ParticleField,
-    PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError, SortAxis,
-    SortDirection, SortKey, StructureMode,
+    PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError, RetroStaticSettings,
+    ScanlineFilter, SortAxis, SortDirection, SortKey, StructureMode,
 };
 
 use crate::{
@@ -19,6 +19,7 @@ use crate::{
     CONVOLUTION_BLEND_SHADER_SOURCE, FIELD_PARTICLES_SPLAT_KERNEL_NAME,
     CHANNEL_SHIFT_KERNEL_NAME, CHANNEL_SHIFT_SHADER_SOURCE,
     PALETTE_QUANTIZE_KERNEL_NAME, PALETTE_QUANTIZE_SHADER_SOURCE,
+    RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE,
     FIELD_PARTICLES_SPLAT_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
     FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME,
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
@@ -125,6 +126,16 @@ struct PixelSortMetalParams {
     threshold_low: f32,
     threshold_high: f32,
     max_span: u32,
+}
+
+#[repr(C)]
+struct RetroStaticMetalParams {
+    width: u32,
+    height: u32,
+    real_bpp: u32,
+    assumed_bpp: u32,
+    filter: u32,
+    strength: f32,
 }
 
 #[repr(C)]
@@ -2008,6 +2019,89 @@ pub fn pixel_sort_metal(
         (&params as *const PixelSortMetalParams).cast(),
     );
     encoder.dispatch_thread_groups(threadgroups, threads_per_tg);
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+    }
+
+    read_rgba_f32_texture(&output_texture, w, h)
+}
+
+fn scanline_filter_id(filter: ScanlineFilter) -> u32 {
+    match filter {
+        ScanlineFilter::None => 0,
+        ScanlineFilter::Sub => 1,
+        ScanlineFilter::Up => 2,
+        ScanlineFilter::Average => 3,
+        ScanlineFilter::Paeth => 4,
+    }
+}
+
+pub fn retro_static_metal(
+    source: &ImageBufferF32,
+    settings: &RetroStaticSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if source.width == 0 || source.height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+
+    let w = source.width;
+    let h = source.height;
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(RETRO_STATIC_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(RETRO_STATIC_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let source_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&source_texture, source)?;
+
+    let params = RetroStaticMetalParams {
+        width: w,
+        height: h,
+        real_bpp: settings.real_bpp,
+        assumed_bpp: settings.assumed_bpp,
+        filter: scanline_filter_id(settings.filter),
+        strength: settings.strength,
+    };
+
+    let tg_w = 16_u64.min(w as u64);
+    let tg_h = 16_u64.min(h as u64);
+    let grid_w = div_ceil(w, tg_w as u32) as u64;
+    let grid_h = div_ceil(h, tg_h as u32) as u64;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&source_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<RetroStaticMetalParams>() as u64,
+        (&params as *const RetroStaticMetalParams).cast(),
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize::new(grid_w, grid_h, 1),
+        MTLSize::new(tg_w, tg_h, 1),
+    );
     encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();

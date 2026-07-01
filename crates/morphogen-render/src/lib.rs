@@ -24,6 +24,7 @@ pub mod granular_mosaic;
 pub mod image_buffer;
 pub mod luminance_flow;
 pub mod optical_flow;
+pub mod retro_static;
 pub mod sampler;
 pub mod video_vocoder;
 pub mod vortex_field;
@@ -135,6 +136,9 @@ pub use optical_flow::{
     pyramidal_lucas_kanade_flow_with_refiner, refine_level_cpu, FlowConfidenceMap,
     LucasKanadeLevelRefiner, PyramidalLucasKanadeEstimate, LUCAS_KANADE_WINDOW_RADIUS,
     PYRAMIDAL_LUCAS_KANADE_MAX_LEVELS, PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
+};
+pub use retro_static::{
+    render_retro_static_frame, RetroStaticSettings, ScanlineFilter, RETRO_STATIC_ALGORITHM,
 };
 pub use sampler::sample_bilinear_clamped;
 pub use video_vocoder::{

@@ -38,6 +38,8 @@ pub const CHANNEL_SHIFT_SHADER_SOURCE: &str = include_str!("../shaders/channel_s
 pub const PALETTE_QUANTIZE_KERNEL_NAME: &str = "palette_quantize";
 pub const PALETTE_QUANTIZE_SHADER_SOURCE: &str =
     include_str!("../shaders/palette_quantize.metal");
+pub const RETRO_STATIC_KERNEL_NAME: &str = "retro_static";
+pub const RETRO_STATIC_SHADER_SOURCE: &str = include_str!("../shaders/retro_static.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
