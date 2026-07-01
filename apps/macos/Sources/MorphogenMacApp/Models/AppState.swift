@@ -117,6 +117,15 @@ final class AppState: ObservableObject {
   @Published var cascadeCollageBlockOpacity = 1.0
   @Published var cascadeCollageSeed = 71
   @Published var cascadeCollageSummary = "No cascade-collage sequence rendered"
+  // Retro Static — deliberate scanline-filter misread glitch.
+  @Published var retroStaticRealBpp = 4
+  @Published var retroStaticAssumedBpp = 3
+  @Published var retroStaticFilter: RetroStaticFilterOption = .paeth
+  @Published var retroStaticStrength = 1.0
+  @Published var retroStaticBackend = AppState.stickyBackend("backend.retroStatic", default: .metal) {
+    didSet { AppState.persistBackend("backend.retroStatic", retroStaticBackend) }
+  }
+  @Published var retroStaticSummary = "No retro-static sequence rendered"
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -1301,6 +1310,54 @@ final class AppState: ObservableObject {
     }
   }
 
+  func runRetroStaticSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering retro static."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
+      statusMessage = "Choose a frame sequence output directory before rendering retro static."
+      return
+    }
+
+    let request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultRetroStaticSequenceRenderQueueURL(),
+      sourceDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("retro-static", isDirectory: true),
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
+      frameRate: proResFrameRate.framesPerSecond,
+      realBpp: retroStaticRealBpp,
+      assumedBpp: retroStaticAssumedBpp,
+      filter: retroStaticFilter,
+      strength: retroStaticStrength,
+      backend: retroStaticBackend,
+      projectURL: projectURL
+    )
+
+    statusMessage = "Queueing retro static through morphogen-cli..."
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedRetroStaticSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.retroStaticSummary = "\(bundle.frameCount) retro-static frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued retro static sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Retro static render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.retroStaticSummary = "Retro static render failed: \(error.localizedDescription)"
+          self.statusMessage = "Retro static render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
   private func runFluidAdvectionQueue(
     label: String,
     requestDescription: String,
@@ -2334,6 +2391,31 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
       return "scanline-smear"
     case .codecEngrave:
       return "codec-engrave"
+    }
+  }
+}
+
+enum RetroStaticFilterOption: String, CaseIterable, Identifiable {
+  case none = "None"
+  case sub = "Sub"
+  case up = "Up"
+  case average = "Average"
+  case paeth = "Paeth"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .none:
+      return "none"
+    case .sub:
+      return "sub"
+    case .up:
+      return "up"
+    case .average:
+      return "average"
+    case .paeth:
+      return "paeth"
     }
   }
 }

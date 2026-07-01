@@ -545,6 +545,58 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Retro Static — Scanline-Filter Misread Glitch")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Picker("Backend", selection: $state.retroStaticBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+
+            Picker("Filter", selection: $state.retroStaticFilter) {
+              ForEach(RetroStaticFilterOption.allCases) { filter in
+                Text(filter.rawValue).tag(filter)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 300)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.retroStaticRealBpp, in: 1...8, step: 1) {
+              Text("Real BPP \(state.retroStaticRealBpp)")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.retroStaticAssumedBpp, in: 1...8, step: 1) {
+              Text("Assumed BPP \(state.retroStaticAssumedBpp)")
+            }
+            .frame(width: 170, alignment: .leading)
+
+            Stepper(value: $state.retroStaticStrength, in: 0...1, step: 0.05) {
+              Text("Strength \(state.retroStaticStrength, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+          }
+
+          Text(state.retroStaticSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runRetroStaticSequenceRender()
+          } label: {
+            Label("Run Retro Static", systemImage: "tv")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Granular Mosaic — Temporal Pool (Joint-AV)")
             .font(.subheadline.weight(.semibold))
 

@@ -496,6 +496,58 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedRetroStaticSequenceArgumentsIncludeGlitchControls() throws {
+    let request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      realBpp: 4,
+      assumedBpp: 3,
+      filter: .paeth,
+      strength: 1.0,
+      backend: .metal,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(7),
+      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-retro-static-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("--real-bpp"))
+    XCTAssertTrue(arguments.contains("4"))
+    XCTAssertTrue(arguments.contains("--assumed-bpp"))
+    XCTAssertTrue(arguments.contains("3"))
+    XCTAssertTrue(arguments.contains("--filter"))
+    XCTAssertTrue(arguments.contains("paeth"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+  }
+
+  func testQueuedRetroStaticSequenceArgumentsRejectInvalidValues() {
+    let invalid = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 0,
+      frameRate: 24.0,
+      realBpp: 4,
+      assumedBpp: 3,
+      filter: .none,
+      strength: 1.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: invalid)
+    )
+  }
+
   func testQueuedFluidAdvectionArgumentsRejectInvalidValues() {
     let invalidFrames = FluidAdvectSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/fluid-queue.json"),

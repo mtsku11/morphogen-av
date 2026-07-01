@@ -76,6 +76,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultRetroStaticSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-retro-static-sequence-queue.json"
+    )
+  }
+
   static func defaultGranularMosaicPoolSequenceRenderQueueURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-granular-pool-sequence-queue.json"
@@ -550,6 +556,85 @@ enum RustBridgePlaceholder {
       withProject.append(projectURL.path)
     }
     return withProject
+  }
+
+  static func runQueuedRetroStaticSequenceRender(
+    request: RetroStaticSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddRetroStaticSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-retro-static-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddRetroStaticSequenceArguments(
+    request: RetroStaticSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    guard request.realBpp > 0, request.assumedBpp > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("real/assumed bpp must be greater than zero")
+    }
+    try validateFluidNumbers([("strength", request.strength)])
+    guard (0...1).contains(request.strength) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("strength must be in [0, 1]")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-retro-static-sequence",
+      request.queueURL.path,
+      request.sourceDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--real-bpp",
+      String(request.realBpp),
+      "--assumed-bpp",
+      String(request.assumedBpp),
+      "--filter",
+      request.filter.cliValue,
+      "--strength",
+      cliNumber(request.strength),
+      "--backend",
+      request.backend.cliValue
+    ]
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    return arguments
   }
 
   static func queueAddCascadeTrailsSequenceArguments(
@@ -2550,6 +2635,20 @@ struct CascadeCollageSequenceRenderQueueCommandRequest {
   let blockBlend: CascadeCollageBlendOption
   let blockOpacity: Double
   let seed: UInt64
+  let projectURL: URL?
+}
+
+struct RetroStaticSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let realBpp: Int
+  let assumedBpp: Int
+  let filter: RetroStaticFilterOption
+  let strength: Double
+  let backend: FeedbackRenderBackendOption
   let projectURL: URL?
 }
 
