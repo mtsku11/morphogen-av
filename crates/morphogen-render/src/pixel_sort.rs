@@ -280,7 +280,7 @@ fn sort_span(span: &mut [[f32; 4]], key: SortKey, direction: SortDirection) {
     span.sort_by(|a, b| {
         let ka = pixel_sort_key(*a, key);
         let kb = pixel_sort_key(*b, key);
-        let ord = ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal);
+        let ord = ka.total_cmp(&kb);
         match direction {
             SortDirection::Asc => ord,
             SortDirection::Desc => ord.reverse(),

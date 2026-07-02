@@ -791,8 +791,7 @@ fn select_grain_index(
             let left_distance = (left.mean_luminance - luminance).abs();
             let right_distance = (right.mean_luminance - luminance).abs();
             left_distance
-                .partial_cmp(&right_distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&right_distance)
                 .then_with(|| left.index.cmp(&right.index))
         })
         .map(|descriptor| descriptor.index)
@@ -969,8 +968,7 @@ fn select_color_grain_index(
             let left_distance = weighted_distance_sq(&left.mean_color, &target, &FEATURE_WEIGHTS);
             let right_distance = weighted_distance_sq(&right.mean_color, &target, &FEATURE_WEIGHTS);
             left_distance
-                .partial_cmp(&right_distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&right_distance)
                 .then_with(|| left.index.cmp(&right.index))
         })
         .map(|descriptor| descriptor.index)
@@ -1049,8 +1047,7 @@ fn select_pool_grain_index(
         .iter()
         .min_by(|left, right| {
             distance(left)
-                .partial_cmp(&distance(right))
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&distance(right))
                 .then_with(|| left.global_index.cmp(&right.global_index))
         })
         .map(|grain| grain.global_index)

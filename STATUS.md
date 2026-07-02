@@ -4,19 +4,29 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-06-26_
+_Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **365 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **431 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **54 passing, 0 failing** before the latest preset picker change;
-  the current run requires escalated SwiftPM module-cache writes and was rejected
-  by the approval system usage limit.
+- `swift test`: **64 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Audit quick wins (bugfix batch).** From a full-repo audit: (1) the SwiftUI
+  dev bridge now passes `--release` on every `cargo run` invocation, so
+  GUI-initiated renders use release binaries (the first render after a clean
+  build pays a one-time release compile); (2) `RenderQueue::save_json` writes
+  temp-then-rename so a crash can never truncate `render-queue.json`;
+  (3) float sort comparators standardized on `total_cmp` (`pixel_sort`,
+  `granular_mosaic`) — NaN-safe under Rust ≥1.81 sort semantics, byte-identical
+  ordering for the finite values these paths produce; (4) `renders/` and
+  `__pycache__/` gitignored. Audit follow-ups still open: no in-flight render
+  guard/cancel in the app (double-dispatch races on the shared queue JSON),
+  fixed `job-0001` output overwrite, `%.6g` knob truncation in the bridge.
 
 - **Datamosh Codec Engrave preset.** Added `--preset codec-engrave` for the
   denser subject-detail version of the glitch-art reference: block/vector

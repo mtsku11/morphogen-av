@@ -46,7 +46,11 @@ impl RenderQueue {
             }
         }
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)?;
+        // Write-then-rename so a crash mid-write can never leave a truncated
+        // queue file behind; the rename is atomic on the same filesystem.
+        let temp_path = path.with_extension("json.tmp");
+        fs::write(&temp_path, json)?;
+        fs::rename(&temp_path, path)?;
         Ok(())
     }
 

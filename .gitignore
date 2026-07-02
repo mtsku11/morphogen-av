@@ -15,3 +15,6 @@ DerivedData/
 # Manual-testing source clips (large binaries); keep any fixture media tracked.
 *.mp4
 !tests/fixtures/**/*.mp4
+# Local render output artifacts and Python bytecode.
+renders/
+__pycache__/
