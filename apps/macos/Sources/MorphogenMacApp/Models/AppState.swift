@@ -126,6 +126,12 @@ final class AppState: ObservableObject {
     didSet { AppState.persistBackend("backend.retroStatic", retroStaticBackend) }
   }
   @Published var retroStaticSummary = "No retro-static sequence rendered"
+  @Published var retroStaticModStrengthSource = ModulationSourceOption.off
+  @Published var retroStaticModStrengthScale = 1.0
+  @Published var retroStaticModStrengthOffset = 0.0
+  @Published var retroStaticModulatorAudioURL: URL?
+  @Published var retroStaticModulatorFramesURL: URL?
+  @Published var retroStaticModSampling = ModulationSamplingOption.hold
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -259,6 +265,15 @@ final class AppState: ObservableObject {
     didSet { AppState.persistBackend("backend.pixelSort", pixelSortBackend) }
   }
   @Published var pixelSortSummary = "No pixel sort rendered"
+  @Published var pixelSortModLowSource = ModulationSourceOption.off
+  @Published var pixelSortModLowScale = 1.0
+  @Published var pixelSortModLowOffset = 0.0
+  @Published var pixelSortModHighSource = ModulationSourceOption.off
+  @Published var pixelSortModHighScale = 1.0
+  @Published var pixelSortModHighOffset = 0.0
+  @Published var pixelSortModulatorAudioURL: URL?
+  @Published var pixelSortModulatorFramesURL: URL?
+  @Published var pixelSortModSampling = ModulationSamplingOption.hold
 
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
@@ -1310,6 +1325,84 @@ final class AppState: ObservableObject {
     }
   }
 
+  /// Build the route list from per-knob mod slots, validating that the chosen
+  /// sources have their modulator media picked. Returns `nil` (with a status
+  /// message) when a required modulator is missing.
+  private func modulationRoutes(
+    slots: [(target: String, source: ModulationSourceOption, scale: Double, offset: Double)],
+    modulatorAudioURL: URL?,
+    modulatorFramesURL: URL?,
+    effectLabel: String
+  ) -> [ModulationRouteSpec]? {
+    var routes: [ModulationRouteSpec] = []
+    for slot in slots {
+      guard let source = slot.source.cliValue else { continue }
+      if slot.source.needsAudio && modulatorAudioURL == nil {
+        statusMessage = "Pick a modulator WAV before rendering \(effectLabel) with an audio source."
+        return nil
+      }
+      if slot.source.needsFrames && modulatorFramesURL == nil {
+        statusMessage =
+          "Pick a modulator frame directory before rendering \(effectLabel) with a luma/flow source."
+        return nil
+      }
+      routes.append(
+        ModulationRouteSpec(
+          target: slot.target, source: source, scale: slot.scale, offset: slot.offset
+        )
+      )
+    }
+    return routes
+  }
+
+  func chooseRetroStaticModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    retroStaticModulatorAudioURL = url
+    statusMessage = "Retro-static modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseRetroStaticModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    retroStaticModulatorFramesURL = url
+    statusMessage = "Retro-static modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func choosePixelSortModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    pixelSortModulatorAudioURL = url
+    statusMessage = "Pixel-sort modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func choosePixelSortModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    pixelSortModulatorFramesURL = url
+    statusMessage = "Pixel-sort modulator frames selected: \(url.lastPathComponent)"
+  }
+
   func runRetroStaticSequenceRender() {
     guard let carrierURL = frameSequenceCarrierURL else {
       statusMessage = "Select Source B frame directory before rendering retro static."
@@ -1319,6 +1412,15 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering retro static."
       return
     }
+    guard let routes = modulationRoutes(
+      slots: [(
+        "strength", retroStaticModStrengthSource,
+        retroStaticModStrengthScale, retroStaticModStrengthOffset
+      )],
+      modulatorAudioURL: retroStaticModulatorAudioURL,
+      modulatorFramesURL: retroStaticModulatorFramesURL,
+      effectLabel: "retro static"
+    ) else { return }
 
     let request = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultRetroStaticSequenceRenderQueueURL(),
@@ -1331,7 +1433,11 @@ final class AppState: ObservableObject {
       filter: retroStaticFilter,
       strength: retroStaticStrength,
       backend: retroStaticBackend,
-      projectURL: projectURL
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: retroStaticModulatorAudioURL,
+      modulatorFramesURL: retroStaticModulatorFramesURL,
+      modulationSampling: retroStaticModSampling
     )
 
     statusMessage = "Queueing retro static through morphogen-cli..."
@@ -1963,6 +2069,15 @@ final class AppState: ObservableObject {
       statusMessage = "Choose an output directory before rendering pixel sort."
       return
     }
+    guard let routes = modulationRoutes(
+      slots: [
+        ("threshold_low", pixelSortModLowSource, pixelSortModLowScale, pixelSortModLowOffset),
+        ("threshold_high", pixelSortModHighSource, pixelSortModHighScale, pixelSortModHighOffset),
+      ],
+      modulatorAudioURL: pixelSortModulatorAudioURL,
+      modulatorFramesURL: pixelSortModulatorFramesURL,
+      effectLabel: "pixel sort"
+    ) else { return }
 
     let request = PixelSortSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultPixelSortSequenceRenderQueueURL(),
@@ -1978,7 +2093,11 @@ final class AppState: ObservableObject {
       maskSource: pixelSortMaskSource,
       flowRadius: pixelSortFlowRadius,
       backend: pixelSortBackend,
-      projectURL: projectURL
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: pixelSortModulatorAudioURL,
+      modulatorFramesURL: pixelSortModulatorFramesURL,
+      modulationSampling: pixelSortModSampling
     )
 
     statusMessage = "Queueing pixel sort render through morphogen-cli..."
@@ -2391,6 +2510,66 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
       return "scanline-smear"
     case .codecEngrave:
       return "codec-engrave"
+    }
+  }
+}
+
+/// Modulation-matrix source choice for one knob's mod slot. `off` = the knob
+/// stays a constant (no route emitted).
+enum ModulationSourceOption: String, CaseIterable, Identifiable {
+  case off = "Off"
+  case audioRms = "Audio RMS"
+  case audioOnset = "Audio Onset"
+  case audioCentroid = "Audio Centroid"
+  case luma = "Luma"
+  case flow = "Flow"
+
+  var id: String { rawValue }
+
+  /// CLI route-grammar spelling; `nil` for `off`.
+  var cliValue: String? {
+    switch self {
+    case .off:
+      return nil
+    case .audioRms:
+      return "audio-rms"
+    case .audioOnset:
+      return "audio-onset"
+    case .audioCentroid:
+      return "audio-centroid"
+    case .luma:
+      return "luma"
+    case .flow:
+      return "flow"
+    }
+  }
+
+  var needsAudio: Bool {
+    switch self {
+    case .audioRms, .audioOnset, .audioCentroid:
+      return true
+    default:
+      return false
+    }
+  }
+
+  var needsFrames: Bool {
+    self == .luma || self == .flow
+  }
+}
+
+enum ModulationSamplingOption: String, CaseIterable, Identifiable {
+  case hold = "Hold"
+  case smooth = "Smooth"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .hold:
+      return "hold"
+    case .smooth:
+      return "smooth"
     }
   }
 }

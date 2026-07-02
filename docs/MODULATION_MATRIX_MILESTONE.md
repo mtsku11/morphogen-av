@@ -145,8 +145,17 @@ mirror the core type so the graph model stays the single long-term home
    assertions (smoke), pre-slice job JSON deserializes unmodulated (core test).
    *Channel-shift has no queue task at all yet — adding one (with routes) is
    its own vertical slice, not part of route persistence.*
-3. **SwiftUI.** Route editor on the render panel (target picker filtered by
-   effect, source picker, scale/offset steppers).
+3. **SwiftUI — LANDED.** Per-knob **mod slots** rather than a free-form route
+   list: each modulatable target on the retro-static (strength) and pixel-sort
+   (threshold low/high) panel sections gets a source picker (Off = no route,
+   so duplicate-target routes are impossible by construction) plus scale/offset
+   steppers, with shared modulator WAV/frames pickers and a hold/smooth
+   sampling picker that appear only when a slot is active. The bridge appends
+   the `--modulate` flag set to `queue-add-…` (no routes ⇒ no flags = the
+   exact unmodulated path) and validates finiteness + modulator-media presence
+   app-side before dispatch; the CLI's add-time validation remains the
+   authority. Argument tests pin the route spec formatting, the no-route
+   omission, and the missing-media rejection.
 4. **Later:** integer/enum targets, stateful-effect targets, per-route sampling,
    envelope caching as analysis sidecars, multiple modulators per render.
 

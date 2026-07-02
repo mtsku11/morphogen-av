@@ -529,6 +529,104 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("--project-path"))
   }
 
+  func testQueuedRetroStaticSequenceArgumentsCarryModulationRoutes() throws {
+    var request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      realBpp: 4,
+      assumedBpp: 3,
+      filter: .paeth,
+      strength: 1.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "strength", source: "audio-rms", scale: 0.9, offset: 0.05)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulationSampling = .smooth
+
+    let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
+
+    guard let modulateIndex = arguments.firstIndex(of: "--modulate") else {
+      return XCTFail("expected a --modulate flag")
+    }
+    XCTAssertEqual(arguments[modulateIndex + 1], "strength=audio-rms:0.9,0.05")
+    guard let audioIndex = arguments.firstIndex(of: "--modulator-audio") else {
+      return XCTFail("expected a --modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[audioIndex + 1], "/tmp/modulator.wav")
+    guard let samplingIndex = arguments.firstIndex(of: "--modulation-sampling") else {
+      return XCTFail("expected a --modulation-sampling flag")
+    }
+    XCTAssertEqual(arguments[samplingIndex + 1], "smooth")
+    XCTAssertFalse(arguments.contains("--modulator-frames"))
+  }
+
+  func testQueuedRetroStaticSequenceArgumentsOmitModulationFlagsWithoutRoutes() throws {
+    let request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      realBpp: 4,
+      assumedBpp: 3,
+      filter: .paeth,
+      strength: 1.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
+
+    XCTAssertFalse(arguments.contains("--modulate"))
+    XCTAssertFalse(arguments.contains("--modulator-audio"))
+    XCTAssertFalse(arguments.contains("--modulator-frames"))
+    XCTAssertFalse(arguments.contains("--modulation-sampling"))
+  }
+
+  func testQueuedPixelSortSequenceArgumentsCarryModulationRoutesAndRequireMedia() throws {
+    var request = PixelSortSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/pixel-sort-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/pixel-sort", isDirectory: true),
+      axis: .row,
+      key: .luma,
+      direction: .asc,
+      thresholdLow: 0.25,
+      thresholdHigh: 0.8,
+      maxSpan: 0,
+      maskSource: .selfMask,
+      flowRadius: 4,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "threshold_low", source: "audio-onset", scale: 0.5, offset: 0.2),
+      ModulationRouteSpec(target: "threshold_high", source: "flow", scale: 1, offset: 0),
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulatorFramesURL = URL(fileURLWithPath: "/tmp/modulator-frames", isDirectory: true)
+
+    let arguments = try RustBridgePlaceholder.queueAddPixelSortSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("threshold_low=audio-onset:0.5,0.2"))
+    XCTAssertTrue(arguments.contains("threshold_high=flow:1,0"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("--modulator-frames"))
+
+    // A flow route without the modulator frame directory is rejected app-side.
+    request.modulatorFramesURL = nil
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddPixelSortSequenceArguments(request: request)
+    )
+  }
+
   func testQueuedRetroStaticSequenceArgumentsRejectInvalidValues() {
     let invalid = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),

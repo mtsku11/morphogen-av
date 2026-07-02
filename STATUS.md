@@ -10,7 +10,7 @@ _Last updated: 2026-07-02_
 
 - `cargo test --workspace`: **445 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **64 passing, 0 failing.**
+- `swift test`: **67 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,26 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — slice 3 (SwiftUI mod slots).** The route editor ships
+  as per-knob **mod slots**, not a free-form route list: retro-static
+  (strength) and pixel-sort (threshold low/high) panel sections each gain a
+  source picker (Off/audio-rms/onset/centroid/luma/flow; Off = no route, so
+  duplicate targets are impossible by construction), scale/offset steppers
+  (shown only when a source is chosen), shared modulator WAV / frames pickers,
+  and a hold/smooth sampling picker (`ModulationSlotRow` / `ModulationMediaRow`
+  in RenderPanelView, option enums in AppState). The bridge appends the
+  `--modulate` flag set to the queue-add commands via a shared
+  `appendModulationArguments` (no routes ⇒ no flags = the exact unmodulated
+  arg array, pinned by test) and rejects non-finite scale/offset or missing
+  modulator media app-side; AppState guards give a status message before
+  dispatch. Request structs take defaulted `var` fields so pre-slice call
+  sites keep meaning (house pattern). **Verified:** `swift build` +
+  `swift test` 64 → **67** (3 new bridge arg tests: route formatting incl.
+  `cliNumber` output, no-route flag omission, flow-route-without-frames
+  throws). Not visually exercised beyond compile + tests (no interactive
+  launch in this session). Remaining: integer/enum targets, stateful-effect
+  targets, channel-shift queue task + panel exposure.
 
 - **Modulation matrix — slice 2 (queue persistence).** `--modulate` routes now
   persist on the `frame_sequence_retro_static` and `frame_sequence_pixel_sort`

@@ -646,6 +646,13 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
     return arguments
   }
 
@@ -1874,6 +1881,13 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
 
     return arguments
   }
@@ -2457,6 +2471,49 @@ enum RustBridgePlaceholder {
     String(format: "%.6g", locale: Locale(identifier: "en_US_POSIX"), value)
   }
 
+  /// Append the modulation-matrix flag set shared by the modulatable
+  /// `queue-add-…` commands. No routes ⇒ no flags (the exact unmodulated path).
+  private static func appendModulationArguments(
+    _ arguments: inout [String],
+    routes: [ModulationRouteSpec],
+    modulatorAudioURL: URL?,
+    modulatorFramesURL: URL?,
+    sampling: ModulationSamplingOption
+  ) throws {
+    guard !routes.isEmpty else { return }
+    for route in routes {
+      guard route.scale.isFinite && route.offset.isFinite else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "modulation scale and offset must be finite for target \(route.target)"
+        )
+      }
+      arguments.append("--modulate")
+      arguments.append(
+        "\(route.target)=\(route.source):\(cliNumber(route.scale)),\(cliNumber(route.offset))"
+      )
+    }
+    if routes.contains(where: { $0.source.hasPrefix("audio-") }) {
+      guard let audioURL = modulatorAudioURL else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "audio-* modulation sources require a modulator WAV"
+        )
+      }
+      arguments.append("--modulator-audio")
+      arguments.append(audioURL.path)
+    }
+    if routes.contains(where: { $0.source == "luma" || $0.source == "flow" }) {
+      guard let framesURL = modulatorFramesURL else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "luma/flow modulation sources require a modulator frame directory"
+        )
+      }
+      arguments.append("--modulator-frames")
+      arguments.append(framesURL.path)
+    }
+    arguments.append("--modulation-sampling")
+    arguments.append(sampling.cliValue)
+  }
+
   private static func validateFluidSequenceFrames(_ frames: Int, frameRate: Double) throws {
     guard frames > 0 else {
       throw RustBridgeError.invalidFrameSequenceRequest("frame count must be greater than zero")
@@ -2689,6 +2746,16 @@ struct CascadeCollageSequenceRenderQueueCommandRequest {
   let projectURL: URL?
 }
 
+/// One modulation-matrix patch cable passed to `queue-add-…` as a
+/// `--modulate "<target>=<source>:<scale>,<offset>"` flag.
+struct ModulationRouteSpec: Equatable {
+  let target: String
+  /// CLI source spelling: audio-rms, audio-onset, audio-centroid, luma, flow.
+  let source: String
+  let scale: Double
+  let offset: Double
+}
+
 struct RetroStaticSequenceRenderQueueCommandRequest {
   let queueURL: URL
   let sourceDirectoryURL: URL
@@ -2701,6 +2768,12 @@ struct RetroStaticSequenceRenderQueueCommandRequest {
   let strength: Double
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating slice 3
+  // keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct FluidAdvectionRenderQueueCommandResult {
@@ -2916,6 +2989,12 @@ struct PixelSortSequenceRenderQueueCommandRequest {
   let flowRadius: Int
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating slice 3
+  // keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct PixelSortSequenceRenderQueueCommandResult {

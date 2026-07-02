@@ -583,6 +583,22 @@ struct RenderPanelView: View {
             .frame(width: 170, alignment: .leading)
           }
 
+          ModulationSlotRow(
+            label: "Strength",
+            source: $state.retroStaticModStrengthSource,
+            scale: $state.retroStaticModStrengthScale,
+            offset: $state.retroStaticModStrengthOffset
+          )
+
+          ModulationMediaRow(
+            sources: [state.retroStaticModStrengthSource],
+            audioURL: state.retroStaticModulatorAudioURL,
+            framesURL: state.retroStaticModulatorFramesURL,
+            sampling: $state.retroStaticModSampling,
+            chooseAudio: { state.chooseRetroStaticModulatorWAV() },
+            chooseFrames: { state.chooseRetroStaticModulatorFrames() }
+          )
+
           Text(state.retroStaticSummary)
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -1387,6 +1403,29 @@ struct RenderPanelView: View {
           .frame(width: 200)
           .help("Metal is self-mask only and gated per-frame against CPU. Cross-synth modes are CPU-only.")
 
+          ModulationSlotRow(
+            label: "Low",
+            source: $state.pixelSortModLowSource,
+            scale: $state.pixelSortModLowScale,
+            offset: $state.pixelSortModLowOffset
+          )
+
+          ModulationSlotRow(
+            label: "High",
+            source: $state.pixelSortModHighSource,
+            scale: $state.pixelSortModHighScale,
+            offset: $state.pixelSortModHighOffset
+          )
+
+          ModulationMediaRow(
+            sources: [state.pixelSortModLowSource, state.pixelSortModHighSource],
+            audioURL: state.pixelSortModulatorAudioURL,
+            framesURL: state.pixelSortModulatorFramesURL,
+            sampling: $state.pixelSortModSampling,
+            chooseAudio: { state.choosePixelSortModulatorWAV() },
+            chooseFrames: { state.choosePixelSortModulatorFrames() }
+          )
+
           Text(state.pixelSortSummary)
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -1427,5 +1466,79 @@ struct RenderPanelView: View {
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+  }
+}
+
+/// One knob's modulation slot: source picker (Off = no route) plus the affine
+/// scale/offset mapping, shown only when a source is chosen.
+private struct ModulationSlotRow: View {
+  let label: String
+  @Binding var source: ModulationSourceOption
+  @Binding var scale: Double
+  @Binding var offset: Double
+
+  var body: some View {
+    HStack(spacing: 16) {
+      Picker("Mod \(label)", selection: $source) {
+        ForEach(ModulationSourceOption.allCases) { option in
+          Text(option.rawValue).tag(option)
+        }
+      }
+      .frame(width: 280)
+      .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
+
+      if source != .off {
+        Stepper(value: $scale, in: -8...8, step: 0.1) {
+          Text("Scale \(scale, specifier: "%.2f")")
+        }
+        .frame(width: 150, alignment: .leading)
+        .help("knob = clamp(envelope × scale + offset)")
+
+        Stepper(value: $offset, in: -1...1, step: 0.05) {
+          Text("Offset \(offset, specifier: "%.2f")")
+        }
+        .frame(width: 160, alignment: .leading)
+      }
+    }
+  }
+}
+
+/// The modulator media + sampling controls shared by an effect's mod slots;
+/// hidden until any slot picks a source.
+private struct ModulationMediaRow: View {
+  let sources: [ModulationSourceOption]
+  let audioURL: URL?
+  let framesURL: URL?
+  @Binding var sampling: ModulationSamplingOption
+  let chooseAudio: () -> Void
+  let chooseFrames: () -> Void
+
+  var body: some View {
+    if sources.contains(where: { $0 != .off }) {
+      HStack(spacing: 16) {
+        if sources.contains(where: \.needsAudio) {
+          Button("Modulator WAV…", action: chooseAudio)
+          Text(audioURL?.lastPathComponent ?? "none selected")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        if sources.contains(where: \.needsFrames) {
+          Button("Modulator Frames…", action: chooseFrames)
+          Text(framesURL?.lastPathComponent ?? "none selected")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Picker("Sampling", selection: $sampling) {
+          ForEach(ModulationSamplingOption.allCases) { option in
+            Text(option.rawValue).tag(option)
+          }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 200)
+        .help("Hold steps between envelope samples; Smooth interpolates linearly.")
+      }
+    }
   }
 }
