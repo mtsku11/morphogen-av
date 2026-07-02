@@ -132,6 +132,42 @@ final class AppState: ObservableObject {
   @Published var retroStaticModulatorAudioURL: URL?
   @Published var retroStaticModulatorFramesURL: URL?
   @Published var retroStaticModSampling = ModulationSamplingOption.hold
+  // Channel Shift — constant per-channel RGB offsets + optional A-flow row shifts.
+  @Published var channelShiftRX = 0.0
+  @Published var channelShiftRY = 0.0
+  @Published var channelShiftGX = 0.0
+  @Published var channelShiftGY = 0.0
+  @Published var channelShiftBX = 0.0
+  @Published var channelShiftBY = 0.0
+  @Published var channelShiftFlowGain = 0.0
+  @Published var channelShiftFlowRadius = 4
+  // CPU default: flow-driven mode is CPU-only, so the out-of-box state keeps
+  // every knob combination valid; picking Metal is sticky like the other effects.
+  @Published var channelShiftBackend = AppState.stickyBackend("backend.channelShift", default: .cpu) {
+    didSet { AppState.persistBackend("backend.channelShift", channelShiftBackend) }
+  }
+  @Published var channelShiftSummary = "No channel-shift sequence rendered"
+  @Published var channelShiftModRXSource = ModulationSourceOption.off
+  @Published var channelShiftModRXScale = 1.0
+  @Published var channelShiftModRXOffset = 0.0
+  @Published var channelShiftModRYSource = ModulationSourceOption.off
+  @Published var channelShiftModRYScale = 1.0
+  @Published var channelShiftModRYOffset = 0.0
+  @Published var channelShiftModGXSource = ModulationSourceOption.off
+  @Published var channelShiftModGXScale = 1.0
+  @Published var channelShiftModGXOffset = 0.0
+  @Published var channelShiftModGYSource = ModulationSourceOption.off
+  @Published var channelShiftModGYScale = 1.0
+  @Published var channelShiftModGYOffset = 0.0
+  @Published var channelShiftModBXSource = ModulationSourceOption.off
+  @Published var channelShiftModBXScale = 1.0
+  @Published var channelShiftModBXOffset = 0.0
+  @Published var channelShiftModBYSource = ModulationSourceOption.off
+  @Published var channelShiftModBYScale = 1.0
+  @Published var channelShiftModBYOffset = 0.0
+  @Published var channelShiftModulatorAudioURL: URL?
+  @Published var channelShiftModulatorFramesURL: URL?
+  @Published var channelShiftModSampling = ModulationSamplingOption.hold
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -1379,6 +1415,30 @@ final class AppState: ObservableObject {
     statusMessage = "Retro-static modulator frames selected: \(url.lastPathComponent)"
   }
 
+  func chooseChannelShiftModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    channelShiftModulatorAudioURL = url
+    statusMessage = "Channel-shift modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseChannelShiftModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    channelShiftModulatorFramesURL = url
+    statusMessage = "Channel-shift modulator frames selected: \(url.lastPathComponent)"
+  }
+
   func choosePixelSortModulatorWAV() {
     guard let url = MediaFilePicker.chooseWAVFile(
       title: "Choose Modulator WAV",
@@ -1459,6 +1519,80 @@ final class AppState: ObservableObject {
           self.failPreviewIfNeeded(message: error.localizedDescription)
           self.retroStaticSummary = "Retro static render failed: \(error.localizedDescription)"
           self.statusMessage = "Retro static render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runChannelShiftSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering channel shift."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
+      statusMessage = "Choose a frame sequence output directory before rendering channel shift."
+      return
+    }
+    if channelShiftFlowGain != 0 && frameSequenceModulatorURL == nil {
+      statusMessage = "Select Source A frame directory before rendering flow-driven channel shift."
+      return
+    }
+    guard let routes = modulationRoutes(
+      slots: [
+        ("shift_r_x", channelShiftModRXSource, channelShiftModRXScale, channelShiftModRXOffset),
+        ("shift_r_y", channelShiftModRYSource, channelShiftModRYScale, channelShiftModRYOffset),
+        ("shift_g_x", channelShiftModGXSource, channelShiftModGXScale, channelShiftModGXOffset),
+        ("shift_g_y", channelShiftModGYSource, channelShiftModGYScale, channelShiftModGYOffset),
+        ("shift_b_x", channelShiftModBXSource, channelShiftModBXScale, channelShiftModBXOffset),
+        ("shift_b_y", channelShiftModBYSource, channelShiftModBYScale, channelShiftModBYOffset)
+      ],
+      modulatorAudioURL: channelShiftModulatorAudioURL,
+      modulatorFramesURL: channelShiftModulatorFramesURL,
+      effectLabel: "channel shift"
+    ) else { return }
+
+    let request = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultChannelShiftSequenceRenderQueueURL(),
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("channel-shift", isDirectory: true),
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
+      frameRate: proResFrameRate.framesPerSecond,
+      shiftRX: channelShiftRX,
+      shiftRY: channelShiftRY,
+      shiftGX: channelShiftGX,
+      shiftGY: channelShiftGY,
+      shiftBX: channelShiftBX,
+      shiftBY: channelShiftBY,
+      sourceADirectoryURL: channelShiftFlowGain != 0 ? frameSequenceModulatorURL : nil,
+      flowGain: channelShiftFlowGain,
+      flowRadius: channelShiftFlowRadius,
+      backend: channelShiftBackend,
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: channelShiftModulatorAudioURL,
+      modulatorFramesURL: channelShiftModulatorFramesURL,
+      modulationSampling: channelShiftModSampling
+    )
+
+    statusMessage = "Queueing channel shift through morphogen-cli..."
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedChannelShiftSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.channelShiftSummary = "\(bundle.frameCount) channel-shift frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary = "Queued channel shift sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Channel shift render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.channelShiftSummary = "Channel shift render failed: \(error.localizedDescription)"
+          self.statusMessage = "Channel shift render failed: \(error.localizedDescription)"
         }
       }
     }

@@ -613,6 +613,145 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Channel Shift — RGB Split (+ A-Flow Rows)")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Picker("Backend", selection: $state.channelShiftBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+            .help("Metal covers constant offsets and is parity-gated. Flow-driven mode (Flow Gain ≠ 0) is CPU-only.")
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.channelShiftRX, in: -64...64, step: 1) {
+              Text("R X \(state.channelShiftRX, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.channelShiftGX, in: -64...64, step: 1) {
+              Text("G X \(state.channelShiftGX, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.channelShiftBX, in: -64...64, step: 1) {
+              Text("B X \(state.channelShiftBX, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.channelShiftRY, in: -64...64, step: 1) {
+              Text("R Y \(state.channelShiftRY, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.channelShiftGY, in: -64...64, step: 1) {
+              Text("G Y \(state.channelShiftGY, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Stepper(value: $state.channelShiftBY, in: -64...64, step: 1) {
+              Text("B Y \(state.channelShiftBY, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.channelShiftFlowGain, in: -16...16, step: 0.5) {
+              Text("Flow Gain \(state.channelShiftFlowGain, specifier: "%.1f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("A-flow per-row X shift gain; 0 keeps constant-offset mode. Needs Source A frames and the CPU backend.")
+
+            if state.channelShiftFlowGain != 0 {
+              Stepper(value: $state.channelShiftFlowRadius, in: 1...8, step: 1) {
+                Text("Flow Radius \(state.channelShiftFlowRadius)")
+              }
+              .frame(width: 180, alignment: .leading)
+              .help("Lucas-Kanade window half-radius for the A-flow rows.")
+            }
+          }
+
+          ModulationSlotRow(
+            label: "R X",
+            source: $state.channelShiftModRXSource,
+            scale: $state.channelShiftModRXScale,
+            offset: $state.channelShiftModRXOffset,
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+          )
+
+          ModulationSlotRow(
+            label: "R Y",
+            source: $state.channelShiftModRYSource,
+            scale: $state.channelShiftModRYScale,
+            offset: $state.channelShiftModRYOffset,
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+          )
+
+          ModulationSlotRow(
+            label: "G X",
+            source: $state.channelShiftModGXSource,
+            scale: $state.channelShiftModGXScale,
+            offset: $state.channelShiftModGXOffset,
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+          )
+
+          ModulationSlotRow(
+            label: "G Y",
+            source: $state.channelShiftModGYSource,
+            scale: $state.channelShiftModGYScale,
+            offset: $state.channelShiftModGYOffset,
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+          )
+
+          ModulationSlotRow(
+            label: "B X",
+            source: $state.channelShiftModBXSource,
+            scale: $state.channelShiftModBXScale,
+            offset: $state.channelShiftModBXOffset,
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+          )
+
+          ModulationSlotRow(
+            label: "B Y",
+            source: $state.channelShiftModBYSource,
+            scale: $state.channelShiftModBYScale,
+            offset: $state.channelShiftModBYOffset,
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+          )
+
+          ModulationMediaRow(
+            sources: [
+              state.channelShiftModRXSource, state.channelShiftModRYSource,
+              state.channelShiftModGXSource, state.channelShiftModGYSource,
+              state.channelShiftModBXSource, state.channelShiftModBYSource
+            ],
+            audioURL: state.channelShiftModulatorAudioURL,
+            framesURL: state.channelShiftModulatorFramesURL,
+            sampling: $state.channelShiftModSampling,
+            chooseAudio: { state.chooseChannelShiftModulatorWAV() },
+            chooseFrames: { state.chooseChannelShiftModulatorFrames() }
+          )
+
+          Text(state.channelShiftSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runChannelShiftSequenceRender()
+          } label: {
+            Label("Run Channel Shift", systemImage: "rectangle.split.3x1")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Granular Mosaic — Temporal Pool (Joint-AV)")
             .font(.subheadline.weight(.semibold))
 
@@ -1476,6 +1615,12 @@ private struct ModulationSlotRow: View {
   @Binding var source: ModulationSourceOption
   @Binding var scale: Double
   @Binding var offset: Double
+  // Defaults suit [0, 1] knobs; pixel-unit targets (channel-shift offsets)
+  // pass wider ranges so the envelope can span a visible shift.
+  var scaleRange: ClosedRange<Double> = -8...8
+  var scaleStep = 0.1
+  var offsetRange: ClosedRange<Double> = -1...1
+  var offsetStep = 0.05
 
   var body: some View {
     HStack(spacing: 16) {
@@ -1488,13 +1633,13 @@ private struct ModulationSlotRow: View {
       .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
 
       if source != .off {
-        Stepper(value: $scale, in: -8...8, step: 0.1) {
+        Stepper(value: $scale, in: scaleRange, step: scaleStep) {
           Text("Scale \(scale, specifier: "%.2f")")
         }
         .frame(width: 150, alignment: .leading)
         .help("knob = clamp(envelope × scale + offset)")
 
-        Stepper(value: $offset, in: -1...1, step: 0.05) {
+        Stepper(value: $offset, in: offsetRange, step: offsetStep) {
           Text("Offset \(offset, specifier: "%.2f")")
         }
         .frame(width: 160, alignment: .leading)

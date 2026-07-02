@@ -75,6 +75,12 @@ contracts live in the `*_MILESTONE.md` docs.
   (CPU-only), and modulated modes; add→run byte-identical to the direct render
   (smoke-tested); add-time validation before persisting. Deferred: SwiftUI
   channel-shift panel exposure.
+- Channel-shift SwiftUI panel: backend picker (CPU default; flow mode is
+  CPU-only), six shift steppers, flow gain/radius, and slice-3 mod slots on all
+  six `shift_*` targets (`ModulationSlotRow` gained defaulted range params for
+  pixel-unit knobs); bridge emits `--flag=value` shift/flow-gain forms so
+  negative pixels survive clap, fail-fast for flow-without-A / flow-on-Metal.
+  Deferred: integer/enum/stateful modulation targets.
 
 ## Next
 

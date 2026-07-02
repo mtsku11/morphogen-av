@@ -166,6 +166,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultChannelShiftSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-channel-shift-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -1892,6 +1898,122 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  static func runQueuedChannelShiftSequenceRender(
+    request: ChannelShiftSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddChannelShiftSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "--release",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-channel-shift-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddChannelShiftSequenceArguments(
+    request: ChannelShiftSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    let shifts: [(flag: String, value: Double)] = [
+      ("--shift-r-x", request.shiftRX),
+      ("--shift-r-y", request.shiftRY),
+      ("--shift-g-x", request.shiftGX),
+      ("--shift-g-y", request.shiftGY),
+      ("--shift-b-x", request.shiftBX),
+      ("--shift-b-y", request.shiftBY)
+    ]
+    for shift in shifts {
+      guard shift.value.isFinite else {
+        throw RustBridgeError.invalidFrameSequenceRequest("\(shift.flag) must be finite")
+      }
+    }
+    guard request.flowGain.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("flow gain must be finite")
+    }
+    if request.flowGain != 0 {
+      guard request.sourceADirectoryURL != nil else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "flow-driven channel shift requires a Source A frame directory"
+        )
+      }
+      guard request.backend == .cpu else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "flow-driven channel shift is CPU-only; pick the CPU backend"
+        )
+      }
+      guard request.flowRadius > 0 else {
+        throw RustBridgeError.invalidFrameSequenceRequest("flow radius must be greater than zero")
+      }
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "--release",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-channel-shift-sequence",
+      request.queueURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate)
+    ]
+    // `--flag=value` single-token form so negative shifts survive clap parsing.
+    for shift in shifts {
+      arguments.append("\(shift.flag)=\(cliNumber(shift.value))")
+    }
+    if request.flowGain != 0, let sourceAURL = request.sourceADirectoryURL {
+      arguments.append("--source-a-dir")
+      arguments.append(sourceAURL.path)
+      arguments.append("--flow-gain=\(cliNumber(request.flowGain))")
+      arguments.append("--radius")
+      arguments.append(String(request.flowRadius))
+    }
+    arguments.append("--backend")
+    arguments.append(request.backend.cliValue)
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
+
+    return arguments
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -3001,6 +3123,32 @@ struct PixelSortSequenceRenderQueueCommandResult {
   let queueURL: URL
   let bundleURL: URL
   let commandSummary: String
+}
+
+struct ChannelShiftSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let shiftRX: Double
+  let shiftRY: Double
+  let shiftGX: Double
+  let shiftGY: Double
+  let shiftBX: Double
+  let shiftBY: Double
+  /// Source A frames; required when `flowGain` is non-zero (A-flow row shifts, CPU-only).
+  let sourceADirectoryURL: URL?
+  let flowGain: Double
+  let flowRadius: Int
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating slice 3
+  // keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct ConvolutionalBlendSequenceRenderQueueCommandRequest {

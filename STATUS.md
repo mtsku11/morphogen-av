@@ -10,7 +10,7 @@ _Last updated: 2026-07-02_
 
 - `cargo test --workspace`: **446 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **67 passing, 0 failing.**
+- `swift test`: **70 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,29 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Channel-shift SwiftUI panel.** RenderPanelView gains a "Channel Shift —
+  RGB Split (+ A-Flow Rows)" section next to retro-static: sticky backend
+  picker (defaults **CPU** so the out-of-box state keeps flow-driven mode
+  valid; Metal is constant-offsets-only), six shift steppers (R/G/B × X/Y,
+  ±64 px), flow-gain stepper with a radius stepper that appears when gain ≠ 0,
+  and the slice-3 mod-slot pattern on all six `shift_*` targets.
+  `ModulationSlotRow` gained defaulted range parameters (existing call sites
+  unchanged) because its ±8 scale / ±1 offset defaults suit [0, 1] knobs but
+  are invisible for pixel-unit targets — channel-shift slots use ±64.
+  Bridge: `ChannelShiftSequenceRenderQueueCommandRequest` +
+  `queueAddChannelShiftSequenceArguments` (shift/flow-gain flags emitted in
+  `--flag=value` form so negative pixels survive clap) +
+  `runQueuedChannelShiftSequenceRender`; app-side fail-fast for flow-without-
+  Source-A and flow-on-Metal. Source A comes from the shared frame-sequence
+  modulator picker; Source B from the shared carrier picker. **Verified:**
+  `swift test` 67 → **70** (constant-mode args incl. `=`-form negatives,
+  flow+modulation args, both invalid-flow rejections); the exact bridge
+  argument shape run end-to-end against the real CLI (flow + `--modulate
+  "shift_r_x=luma:12,0"`: manifest records `channel_shift_flow_driven_cpu_v1`,
+  `shift_b_x: -6.0`, the route, smooth sampling). No interactive app launch
+  this session (no screenshot harness for the shell — same caveat as slice 3).
+  Remaining: integer/enum/stateful modulation targets.
 
 - **Channel-shift queue task.** `frame_sequence_channel_shift` joins the render
   queue: core `RenderJobTask::FrameSequenceChannelShift` (all fields

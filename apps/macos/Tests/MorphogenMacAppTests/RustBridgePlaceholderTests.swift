@@ -627,6 +627,142 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedChannelShiftSequenceArgumentsIncludeShiftControls() throws {
+    let request = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/channel-shift-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/channel-shift", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      shiftRX: 8,
+      shiftRY: 0,
+      shiftGX: 0,
+      shiftGY: 0,
+      shiftBX: -6,
+      shiftBY: 0,
+      sourceADirectoryURL: nil,
+      flowGain: 0,
+      flowRadius: 4,
+      backend: .metal,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-channel-shift-sequence"]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    XCTAssertTrue(arguments.contains("--shift-r-x=8"))
+    // Negative shifts ride in `--flag=value` form so clap does not read them as flags.
+    XCTAssertTrue(arguments.contains("--shift-b-x=-6"))
+    XCTAssertTrue(arguments.contains("--shift-g-y=0"))
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+    // Constant mode carries no flow-driven flags.
+    XCTAssertFalse(arguments.contains("--source-a-dir"))
+    XCTAssertFalse(arguments.contains { $0.hasPrefix("--flow-gain") })
+    XCTAssertFalse(arguments.contains("--radius"))
+    XCTAssertFalse(arguments.contains("--modulate"))
+    XCTAssertFalse(arguments.contains("--modulation-sampling"))
+  }
+
+  func testQueuedChannelShiftSequenceArgumentsCarryFlowModeAndModulationRoutes() throws {
+    var request = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/channel-shift-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/channel-shift", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      shiftRX: 0,
+      shiftRY: 0,
+      shiftGX: 0,
+      shiftGY: 0,
+      shiftBX: 0,
+      shiftBY: 0,
+      sourceADirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      flowGain: 3,
+      flowRadius: 5,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "shift_r_x", source: "luma", scale: 12, offset: 0),
+      ModulationRouteSpec(target: "shift_b_y", source: "audio-rms", scale: -8, offset: 2),
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulatorFramesURL = URL(fileURLWithPath: "/tmp/modulator-frames", isDirectory: true)
+    request.modulationSampling = .smooth
+
+    let arguments = try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--source-a-dir"))
+    XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
+    XCTAssertTrue(arguments.contains("--flow-gain=3"))
+    guard let radiusIndex = arguments.firstIndex(of: "--radius") else {
+      return XCTFail("expected a --radius flag")
+    }
+    XCTAssertEqual(arguments[radiusIndex + 1], "5")
+    XCTAssertTrue(arguments.contains("shift_r_x=luma:12,0"))
+    XCTAssertTrue(arguments.contains("shift_b_y=audio-rms:-8,2"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("--modulator-frames"))
+    guard let samplingIndex = arguments.firstIndex(of: "--modulation-sampling") else {
+      return XCTFail("expected a --modulation-sampling flag")
+    }
+    XCTAssertEqual(arguments[samplingIndex + 1], "smooth")
+  }
+
+  func testQueuedChannelShiftSequenceArgumentsRejectInvalidFlowModes() {
+    let base = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/channel-shift-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/channel-shift", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      shiftRX: 0,
+      shiftRY: 0,
+      shiftGX: 0,
+      shiftGY: 0,
+      shiftBX: 0,
+      shiftBY: 0,
+      sourceADirectoryURL: nil,
+      flowGain: 3,
+      flowRadius: 4,
+      backend: .cpu,
+      projectURL: nil
+    )
+    // Flow-driven mode without Source A frames is rejected app-side.
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: base)
+    )
+
+    // Flow-driven mode on the Metal backend is rejected app-side (CPU-only path).
+    let metalFlow = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: base.queueURL,
+      carrierDirectoryURL: base.carrierDirectoryURL,
+      outputRootDirectoryURL: base.outputRootDirectoryURL,
+      frames: 96,
+      frameRate: 24.0,
+      shiftRX: 0,
+      shiftRY: 0,
+      shiftGX: 0,
+      shiftGY: 0,
+      shiftBX: 0,
+      shiftBY: 0,
+      sourceADirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      flowGain: 3,
+      flowRadius: 4,
+      backend: .metal,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: metalFlow)
+    )
+  }
+
   func testQueuedRetroStaticSequenceArgumentsRejectInvalidValues() {
     let invalid = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
