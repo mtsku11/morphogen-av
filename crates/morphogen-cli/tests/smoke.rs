@@ -707,6 +707,209 @@ fn render_feedback_sequence_checkpoints_and_resumes() {
 }
 
 #[test]
+fn render_feedback_sequence_modulated_routes_join_checkpoint_contract() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    // Three identical source frames; the per-frame variation comes from the
+    // WAV's RMS ramp driving the routed knob.
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        for dir in [&modulator_dir, &carrier_dir] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    // A 0.75 s quiet→loud amplitude ramp at 8192 Hz: the RMS envelope rises
+    // across the three output frames (frame-rate 4), so the routed
+    // feedback_mix varies per frame — and frame N's state consumed frames
+    // 0..N's values, which is what resume must reproduce.
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let route = "feedback_mix=audio-rms:0.5,0.25";
+    let base_args = |output_dir: &str| {
+        vec![
+            "render-feedback-sequence".to_string(),
+            modulator_arg.clone(),
+            carrier_arg.clone(),
+            output_dir.to_string(),
+            "--carrier-amount".to_string(),
+            "8".to_string(),
+            "--feedback-amount".to_string(),
+            "12".to_string(),
+            "--feedback-mix".to_string(),
+            "0.7".to_string(),
+            "--decay".to_string(),
+            "0.95".to_string(),
+            "--max-frames".to_string(),
+            "3".to_string(),
+            "--frame-rate".to_string(),
+            "4".to_string(),
+            "--flow-source".to_string(),
+            "luminance".to_string(),
+        ]
+    };
+    let modulated_args = |output_dir: &str| {
+        let mut args = base_args(output_dir);
+        args.extend([
+            "--modulate".to_string(),
+            route.to_string(),
+            "--modulator-audio".to_string(),
+            wav_arg.clone(),
+        ]);
+        args
+    };
+
+    // Unmodulated reference (the off case) and the uninterrupted modulated
+    // render the resumed one must match.
+    let off_dir = temp_dir.path().join("off-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&off_dir.to_string_lossy()))
+        .assert()
+        .success();
+    let uninterrupted_dir = temp_dir.path().join("uninterrupted-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(modulated_args(&uninterrupted_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "modulation routes: feedback_mix=audio-rms:0.5,0.25",
+        ));
+
+    // The route actually drives the state evolution.
+    assert_ne!(
+        fs::read(uninterrupted_dir.join("frames/frame_000002.png")).expect("modulated frame"),
+        fs::read(off_dir.join("frames/frame_000002.png")).expect("unmodulated frame"),
+        "routed feedback_mix must change the rendered sequence"
+    );
+
+    // Interrupt after frame 0, then resume with identical arguments: the
+    // milestone's acceptance test is byte-identity with the uninterrupted
+    // render (the envelope re-samples at the same absolute frame indices).
+    let resumed_dir = temp_dir.path().join("resumed-output");
+    let resumed_args = modulated_args(&resumed_dir.to_string_lossy());
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed flow-feedback sequence after frame 0",
+        ));
+
+    // The checkpoint's contract carries the modulation block: routes in CLI
+    // order, sampling, envelope fps, and a content fingerprint of the
+    // modulator WAV (no frames modulator was used).
+    let checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_dir.join("checkpoint.json")).expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "feedback_mix");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+    // Exactly-representable f32 literals so the JSON round-trip compares clean.
+    assert_eq!(modulation["routes"][0]["scale"], 0.5);
+    assert_eq!(modulation["routes"][0]["offset"], 0.25);
+    assert_eq!(modulation["sampling"], "hold");
+    assert_eq!(modulation["fps"], 4.0);
+    assert_eq!(modulation["modulator_audio"]["path"], wav_arg.as_str());
+    assert!(modulation["modulator_audio"]["checksum"]
+        .as_str()
+        .expect("audio checksum")
+        .starts_with("fnv1a64:"));
+    assert!(modulation["modulator_frames"].is_null());
+
+    // A changed route must refuse to resume — the knob history would differ.
+    let mut changed_route_args = base_args(&resumed_dir.to_string_lossy());
+    changed_route_args.extend([
+        "--modulate".to_string(),
+        "feedback_mix=audio-rms:0.75,0.25".to_string(),
+        "--modulator-audio".to_string(),
+        wav_arg.clone(),
+    ]);
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&changed_route_args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+    // Dropping the routes entirely must refuse for the same reason.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&resumed_dir.to_string_lossy()))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered flow-feedback sequence with 3 frame(s)",
+        ));
+    for frame_name in ["frame_000000.png", "frame_000001.png", "frame_000002.png"] {
+        assert_eq!(
+            fs::read(resumed_dir.join("frames").join(frame_name)).expect("resumed frame"),
+            fs::read(uninterrupted_dir.join("frames").join(frame_name))
+                .expect("uninterrupted frame"),
+            "resumed modulated render must be byte-identical ({frame_name})"
+        );
+    }
+
+    // A pre-slice checkpoint (no modulation key at all) deserializes as
+    // unmodulated and stays resumable by an unmodulated render.
+    let legacy_dir = temp_dir.path().join("legacy-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+    let checkpoint_path = legacy_dir.join("checkpoint.json");
+    let mut legacy_checkpoint: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).expect("read legacy"))
+            .expect("parse legacy");
+    let contract = legacy_checkpoint["contract"]
+        .as_object_mut()
+        .expect("contract object");
+    assert!(contract.remove("modulation").is_some());
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_string(&legacy_checkpoint).expect("serialize legacy"),
+    )
+    .expect("write legacy checkpoint");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered flow-feedback sequence with 3 frame(s)",
+        ));
+}
+
+#[test]
 fn render_datamosh_sequence_reuses_flow_sidecars_and_resumes() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");

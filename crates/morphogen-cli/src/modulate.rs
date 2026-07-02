@@ -35,6 +35,12 @@ pub(crate) struct ModulationPlan {
 impl ModulationPlan {
     /// Routed `(target, mapped value)` pairs for output frame `index` (the
     /// caller applies them through the effect's clamping apply function).
+    /// The resolved routes in CLI order — the canonical form persisted into a
+    /// stateful effect's sequence contract.
+    pub(crate) fn route_list(&self) -> Vec<ModulationRoute> {
+        self.routes.iter().map(|(route, _)| route.clone()).collect()
+    }
+
     pub(crate) fn frame_values(&self, index: usize) -> impl Iterator<Item = (&str, f32)> + '_ {
         let t = index as f64 / self.fps;
         self.routes.iter().map(move |(route, samples)| {

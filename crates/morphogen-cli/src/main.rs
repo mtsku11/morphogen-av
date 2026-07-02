@@ -1040,6 +1040,10 @@ fn run() -> Result<(), CliError> {
             backend,
             flow_source,
             stop_after_frame,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => render_feedback_sequence(FeedbackSequenceRenderRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -1064,6 +1068,16 @@ fn run() -> Result<(), CliError> {
             job_id: "direct-feedback-sequence",
             provenance: None,
             stop_after_frame,
+            // The feedback envelope samples against the render's own
+            // frame-rate — one timeline per stateful render, the queue-slice
+            // precedent — rather than a separate --modulation-fps knob.
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: frame_rate,
+            },
         })
         .map(|_| ()),
         Commands::CacheSyntheticFlow {

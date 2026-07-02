@@ -1355,6 +1355,24 @@ pub(crate) enum Commands {
         flow_source: CliFlowSource,
         #[arg(long)]
         stop_after_frame: bool,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: carrier_amount, feedback_amount, feedback_mix, decay,
+        /// structure_mix. Sources: audio-rms/audio-onset/audio-centroid (need
+        /// --modulator-audio), luma/flow (need --modulator-frames). Envelopes
+        /// sample against --frame-rate; routes join the checkpoint contract, so
+        /// a route or modulator change refuses to resume an existing output
+        /// directory.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     CacheSyntheticFlow {
         output_dir: PathBuf,

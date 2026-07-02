@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **449 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **451 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **75 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,36 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — stateful targets (slice 6, flow feedback, direct
+  CLI).** The last deferred target class opens: `render-feedback-sequence`
+  gains the standard `--modulate` flag set (envelopes sample against
+  `--frame-rate` — one timeline per stateful render, the queue-slice
+  precedent, no separate `--modulation-fps`). Targets `carrier_amount` /
+  `feedback_amount` (±4096 px, shift-range precedent), `feedback_mix` [0, 1],
+  `decay` / `structure_mix` (one-sided ≥ 0, mirroring `validate`);
+  `structure_mode` and `iterations` are deliberately not targets (an envelope
+  must not drive a backend-invalid or contract-breaking configuration). On a
+  stateful effect frame N depends on the whole knob history, so the
+  **modulation config joins the sequence contract**: the checkpoint's
+  serde-defaulted `modulation` block records routes (CLI order), sampling,
+  envelope fps, and **fnv1a64 content fingerprints of exactly the modulator
+  media the routed sources consume** — contract equality already gates
+  resume, so any route/sampling/fps/modulator-content change refuses with the
+  existing "settings changed" error, while pre-slice checkpoints deserialize
+  to `None` and stay resumable unmodulated (both pinned by smoke test). The
+  per-frame settings copy is applied at the top of each frame's state update
+  and feeds **both** the render and the supersample. Contract:
+  `docs/MODULATION_MATRIX_MILESTONE.md` ("Stateful targets"). **Verified:**
+  workspace 449 → **451** (clamp-rule unit test; smoke: interrupted+resumed
+  modulated render byte-identical to uninterrupted 3/3 frames, changed/dropped
+  routes refuse resume, checkpoint modulation block pinned, ON≠OFF), clippy
+  `-D warnings` + fmt clean; readout on moving testsrc2 self-feedback with an
+  RMS ramp → `feedback_mix=audio-rms:0.75,0.2`: OFF-vs-ON cross-delta grows
+  **0.000 → 42.1/255** monotonically over 12 frames (frame 0 identical —
+  envelope starts silent), frames Read (OFF = mild displacement, ON = heavy
+  accumulated feedback smear). Remaining: datamosh/fluid-advect stateful
+  targets, queue/SwiftUI exposure of feedback routes.
 
 - **SwiftUI enum mod slots (From→To variant pickers).** The deferred
   enum-slot design is resolved: `EnumModulationSlotRow` shows two variant

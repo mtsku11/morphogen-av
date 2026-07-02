@@ -4292,6 +4292,10 @@ pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliEr
             job_id: &job_id,
             provenance: Some(&provenance),
             stop_after_frame: false,
+            // Feedback routes are direct-CLI only for now (milestone:
+            // queue/SwiftUI exposure deferred); pre-slice jobs stay
+            // unmodulated.
+            modulation: ModulationCliArgs::default(),
         })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())

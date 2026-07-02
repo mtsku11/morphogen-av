@@ -18,8 +18,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChannelShiftSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RenderError,
-    RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection,
+    ChannelShiftSettings, FlowFeedbackSettings, PaletteQuantizeSettings, PixelSortSettings,
+    QuantizeMode, RenderError, RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// Which analysis descriptor drives a route.
@@ -252,6 +252,18 @@ pub const CHANNEL_SHIFT_MODULATION_TARGETS: &[&str] = &[
     "shift_b_y",
 ];
 pub const PALETTE_QUANTIZE_MODULATION_TARGETS: &[&str] = &["levels", "mode"];
+/// Flow feedback is the first **stateful** effect with modulation targets:
+/// each frame's state update consumes that frame's knobs, so frame N depends
+/// on the whole knob history (milestone doc, "Stateful targets").
+/// `structure_mode` is deliberately excluded — multiscale is CPU-only, and an
+/// envelope must not drive a render into a backend-invalid configuration.
+pub const FLOW_FEEDBACK_MODULATION_TARGETS: &[&str] = &[
+    "carrier_amount",
+    "feedback_amount",
+    "feedback_mix",
+    "decay",
+    "structure_mix",
+];
 
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
@@ -356,6 +368,31 @@ pub fn apply_channel_shift_modulation(
                 "channel-shift",
                 target,
                 CHANNEL_SHIFT_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed flow-feedback knob with a mapped value. Clamps mirror
+/// `FlowFeedbackSettings::validate` (one-sided where validate is one-sided);
+/// the amounts share the channel-shift pixel range.
+pub fn apply_flow_feedback_modulation(
+    settings: &mut FlowFeedbackSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "carrier_amount" => settings.carrier_amount = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "feedback_amount" => settings.feedback_amount = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "feedback_mix" => settings.feedback_mix = value.clamp(0.0, 1.0),
+        "decay" => settings.decay = value.max(0.0),
+        "structure_mix" => settings.structure_mix = value.max(0.0),
+        _ => {
+            return Err(unknown_target(
+                "flow-feedback",
+                target,
+                FLOW_FEEDBACK_MODULATION_TARGETS,
             ))
         }
     }
@@ -524,6 +561,41 @@ mod tests {
         assert!(apply_channel_shift_modulation(&mut shift, "strength", 1.0).is_err());
         let mut quantize = PaletteQuantizeSettings::default();
         assert!(apply_palette_quantize_modulation(&mut quantize, "dither", 1.0).is_err());
+    }
+
+    #[test]
+    fn flow_feedback_targets_clamp_to_validate_ranges() {
+        let mut feedback = FlowFeedbackSettings {
+            carrier_amount: 12.0,
+            feedback_amount: 24.0,
+            feedback_mix: 0.72,
+            decay: 0.995,
+            iterations: 1,
+            structure_mix: 0.0,
+            structure_mode: Default::default(),
+        };
+        apply_flow_feedback_modulation(&mut feedback, "feedback_mix", 1.5).unwrap();
+        assert_eq!(feedback.feedback_mix, 1.0);
+        apply_flow_feedback_modulation(&mut feedback, "feedback_mix", -0.5).unwrap();
+        assert_eq!(feedback.feedback_mix, 0.0);
+        apply_flow_feedback_modulation(&mut feedback, "decay", -1.0).unwrap();
+        assert_eq!(feedback.decay, 0.0);
+        apply_flow_feedback_modulation(&mut feedback, "decay", 1.5).unwrap();
+        assert_eq!(
+            feedback.decay, 1.5,
+            "decay clamp is one-sided like validate"
+        );
+        apply_flow_feedback_modulation(&mut feedback, "structure_mix", -3.0).unwrap();
+        assert_eq!(feedback.structure_mix, 0.0);
+        apply_flow_feedback_modulation(&mut feedback, "carrier_amount", 99999.0).unwrap();
+        assert_eq!(feedback.carrier_amount, 4096.0);
+        apply_flow_feedback_modulation(&mut feedback, "feedback_amount", -99999.0).unwrap();
+        assert_eq!(feedback.feedback_amount, -4096.0);
+        // Every clamped combination stays legal for the render.
+        feedback.validate().unwrap();
+        // structure_mode is deliberately not a target (backend-invalid variants).
+        assert!(apply_flow_feedback_modulation(&mut feedback, "structure_mode", 1.0).is_err());
+        assert!(apply_flow_feedback_modulation(&mut feedback, "iterations", 1.0).is_err());
     }
 
     #[test]

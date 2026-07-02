@@ -131,9 +131,56 @@ under the same clamp-then-round, ties-away-from-zero rule.
   indices 0 and 1. Sweeping an N-variant knob end-to-end needs
   `scale ≈ N−1` (e.g. `filter=luma:4` to reach `paeth`).
 
-Deferred target classes: **stateful effects** (datamosh, feedback, fluid
-advect — per-frame knob changes alter state evolution, so the route config
-must join the checkpoint-invalidation contract first).
+### Stateful targets — routes join the checkpoint contract
+
+On a stateful temporal effect, frame `N`'s output depends on the **whole knob
+history** `0..N` (each frame's state update consumes that frame's knobs), not
+just frame `N`'s values. That is deterministic — the envelope is a pure
+function of (modulator media, analysis algorithm, scale/offset, sampling,
+fps) — but it makes the route configuration part of the state contract:
+
+1. **Per-frame application point.** The per-frame settings copy is
+   overwritten at the top of each frame's state update; the same modulated
+   settings feed every knob consumer inside that frame (render, supersample).
+   Clamp-never-error as everywhere: clamps mirror the settings' `validate`
+   ranges, one-sided where validate is one-sided.
+2. **The modulation config joins the sequence contract.** The checkpoint's
+   contract block gains a serde-defaulted `modulation` field: the resolved
+   routes (canonical order), sampling mode, envelope fps, and a
+   **content fingerprint of the modulator media** (same fnv1a64 scheme as the
+   source fingerprints — a path alone would let edited media silently change
+   the envelope mid-resume). Contract equality already gates resume, so any
+   change to routes, sampling, fps, or modulator content refuses to resume
+   with the existing "settings changed; start with a new output directory"
+   error. Pre-slice checkpoints deserialize to `modulation: None` ==
+   unmodulated, so they stay resumable by unmodulated renders.
+3. **Resume reproducibility.** Resuming at frame `K` re-extracts the envelope
+   from the (fingerprint-pinned) modulator media and samples it at the same
+   absolute frame indices, so an interrupted-and-resumed render is
+   byte-identical to an uninterrupted one — this is the acceptance test.
+4. **Analysis caches are unaffected.** Routes modulate *render* knobs; flow
+   fields and other analysis sidecars are functions of the sources only, so
+   flow-cache reuse rules do not change under modulation.
+5. **Target class restriction:** only per-frame-consumed knobs are
+   modulatable. Knobs that select a code path with backend restrictions
+   (feedback `structure_mode` — multiscale is CPU-only) or restructure the
+   sequence (datamosh `keyframe_interval`) stay excluded: an envelope must
+   not drive a render into an erroring or contract-breaking configuration.
+
+First stateful effect: **flow feedback** (`render-feedback-sequence`, direct
+CLI). Targets and clamps:
+
+| Target | Clamp | Notes |
+|---|---|---|
+| `carrier_amount` | `[-4096, 4096]` | px flow gain (shift-range precedent) |
+| `feedback_amount` | `[-4096, 4096]` | px flow gain; also feeds supersampling |
+| `feedback_mix` | `[0, 1]` | the cliff lever |
+| `decay` | `max(0)` | one-sided, mirrors validate |
+| `structure_mix` | `max(0)` | one-sided, mirrors validate |
+
+Deferred: datamosh targets (`DatamoshSequenceSettings` is CLI-side, needs its
+apply fn placed first), fluid-advect targets, queue/SwiftUI exposure of
+feedback routes.
 
 ## Determinism & continuity
 

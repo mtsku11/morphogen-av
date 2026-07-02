@@ -16,7 +16,8 @@ use crate::imaging::collect_image_frames;
 use crate::render::{
     render_datamosh_sequence, render_feedback_sequence, render_frame_sequence,
     render_granular_mosaic_pool_sequence, DatamoshSequenceRequest, FeedbackSequenceRenderRequest,
-    FrameSequenceRenderRequest, GranularMosaicPoolSequenceRequest, RmsAmountConfig,
+    FrameSequenceRenderRequest, GranularMosaicPoolSequenceRequest, ModulationCliArgs,
+    RmsAmountConfig,
 };
 
 pub(crate) struct ShowcaseRenderRequest<'a> {
@@ -128,6 +129,7 @@ pub(crate) fn render_showcase(request: ShowcaseRenderRequest<'_>) -> Result<(), 
         job_id: "showcase-feedback",
         provenance: None,
         stop_after_frame: false,
+        modulation: ModulationCliArgs::default(),
     })?;
 
     render_granular_mosaic_pool_sequence(GranularMosaicPoolSequenceRequest {

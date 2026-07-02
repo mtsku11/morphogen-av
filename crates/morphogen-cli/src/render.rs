@@ -55,8 +55,9 @@ use morphogen_render::{
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 use morphogen_render::{
-    apply_channel_shift_modulation, apply_palette_quantize_modulation, apply_pixel_sort_modulation,
-    apply_retro_static_modulation, ModulationSampling,
+    apply_channel_shift_modulation, apply_flow_feedback_modulation,
+    apply_palette_quantize_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
+    ModulationRoute, ModulationSampling,
 };
 use serde::{Deserialize, Serialize};
 
@@ -4685,12 +4686,32 @@ pub(crate) struct FeedbackSequenceRenderRequest<'a> {
     pub(crate) job_id: &'a str,
     pub(crate) provenance: Option<&'a RenderJobProvenance>,
     pub(crate) stop_after_frame: bool,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct FeedbackSequenceSourceFingerprint {
     directory: String,
     frame_count: u32,
+    checksum: String,
+}
+
+/// Modulation config as it joins the stateful sequence contract: the resolved
+/// routes in CLI order, sampling, envelope fps, and **content fingerprints**
+/// of the modulator media — a path alone would let edited media silently
+/// change the envelope (and so the state evolution) across a resume.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct FeedbackModulationContract {
+    routes: Vec<ModulationRoute>,
+    sampling: ModulationSampling,
+    fps: f64,
+    modulator_audio: Option<FeedbackModulationMediaFingerprint>,
+    modulator_frames: Option<FeedbackModulationMediaFingerprint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct FeedbackModulationMediaFingerprint {
+    path: String,
     checksum: String,
 }
 
@@ -4705,6 +4726,11 @@ pub(crate) struct FeedbackSequenceContract {
     temporal_supersampling: u32,
     backend: RenderBackend,
     reset_at_frame: Option<u32>,
+    /// `None` == unmodulated; pre-slice checkpoints deserialize here and stay
+    /// resumable by unmodulated renders. Contract equality gates resume, so
+    /// any route/sampling/fps/modulator-content change refuses to resume.
+    #[serde(default)]
+    modulation: Option<FeedbackModulationContract>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4739,6 +4765,7 @@ pub(crate) fn render_feedback_sequence(
         job_id,
         provenance,
         stop_after_frame,
+        modulation,
     } = request;
 
     let flow_algorithm = flow_source_algorithm(flow_source);
@@ -4789,6 +4816,20 @@ pub(crate) fn render_feedback_sequence(
             "reset-at-frame must refer to a rendered frame".to_string(),
         ));
     }
+    let modulation_plan = modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        // Dry-run at frame 0 so an unknown target fails before any frame or
+        // checkpoint state exists.
+        let mut probe = settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_flow_feedback_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+    let modulation_contract = modulation_plan
+        .as_ref()
+        .map(|plan| feedback_modulation_contract(plan, &modulation))
+        .transpose()?;
     let contract = FeedbackSequenceContract {
         version: FLOW_FEEDBACK_RENDER_CONTRACT_VERSION,
         flow_algorithm: flow_algorithm.to_string(),
@@ -4799,6 +4840,7 @@ pub(crate) fn render_feedback_sequence(
         temporal_supersampling,
         backend,
         reset_at_frame,
+        modulation: modulation_contract,
     };
     let provenance = provenance.cloned().unwrap_or_else(|| {
         feedback_sequence_provenance(modulator_dir, carrier_dir, flow_cache_dir, flow_algorithm)
@@ -4823,6 +4865,17 @@ pub(crate) fn render_feedback_sequence(
         FlowSource::Luminance => flow_algorithm,
     };
     for index in start_frame..frame_count {
+        // Per-frame settings copy, overwritten at the top of each frame's
+        // state update; the same modulated settings feed every knob consumer
+        // inside this frame (render and supersample). Frame N's state depends
+        // on the whole knob history, which is why the routes live in the
+        // sequence contract.
+        let mut frame_settings = settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_flow_feedback_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
         let is_reset_frame = Some(index as u32) == reset_at_frame;
@@ -4883,11 +4936,11 @@ pub(crate) fn render_feedback_sequence(
         let history = (!is_reset_frame)
             .then_some(previous_output.as_ref())
             .flatten();
-        let output = render_feedback_frame(&carrier, history, &flow, settings, backend)?;
+        let output = render_feedback_frame(&carrier, history, &flow, frame_settings, backend)?;
         let export_frame = flow_temporal_supersample_cpu(
             &output,
             &flow,
-            settings.feedback_amount,
+            frame_settings.feedback_amount,
             temporal_supersampling,
         )?;
         let output_path = frame_dir.join(format!("frame_{index:06}.png"));
@@ -5239,6 +5292,59 @@ pub(crate) fn feedback_source_fingerprint(
         directory: directory.to_string_lossy().to_string(),
         frame_count,
         checksum: format!("fnv1a64:{checksum:016x}"),
+    })
+}
+
+/// Build the modulation block of the sequence contract from the resolved
+/// plan: routes in CLI order, sampling, envelope fps, and content
+/// fingerprints of exactly the modulator media the routed sources consume
+/// (an unused `--modulator-*` flag does not join the contract).
+fn feedback_modulation_contract(
+    plan: &ModulationPlan,
+    args: &ModulationCliArgs<'_>,
+) -> Result<FeedbackModulationContract, CliError> {
+    let routes = plan.route_list();
+    let uses_audio = routes.iter().any(|route| route.source.needs_audio());
+    let uses_frames = routes.iter().any(|route| route.source.needs_frames());
+    // build_plan already required the media flags for the sources in use.
+    let modulator_audio = uses_audio
+        .then_some(args.modulator_audio)
+        .flatten()
+        .map(feedback_modulation_audio_fingerprint)
+        .transpose()?;
+    let modulator_frames = uses_frames
+        .then_some(args.modulator_frames)
+        .flatten()
+        .map(feedback_modulation_frames_fingerprint)
+        .transpose()?;
+    Ok(FeedbackModulationContract {
+        routes,
+        sampling: args.sampling,
+        fps: args.fps,
+        modulator_audio,
+        modulator_frames,
+    })
+}
+
+fn feedback_modulation_audio_fingerprint(
+    path: &Path,
+) -> Result<FeedbackModulationMediaFingerprint, CliError> {
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    update_fnv1a(&mut checksum, &fs::read(path)?);
+    Ok(FeedbackModulationMediaFingerprint {
+        path: path.to_string_lossy().to_string(),
+        checksum: format!("fnv1a64:{checksum:016x}"),
+    })
+}
+
+fn feedback_modulation_frames_fingerprint(
+    path: &Path,
+) -> Result<FeedbackModulationMediaFingerprint, CliError> {
+    let frames = collect_image_frames(path)?;
+    let fingerprint = feedback_source_fingerprint(path, &frames)?;
+    Ok(FeedbackModulationMediaFingerprint {
+        path: fingerprint.directory,
+        checksum: fingerprint.checksum,
     })
 }
 
