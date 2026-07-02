@@ -1621,6 +1621,59 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
     },
+    /// Queue a channel-shift (RGB split) sequence job. Constant per-channel
+    /// offsets, optional A-flow per-row shifts, and modulation-matrix routes.
+    QueueAddChannelShiftSequence {
+        queue_path: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 0.0)]
+        shift_r_x: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_r_y: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_g_x: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_g_y: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_b_x: f32,
+        #[arg(long, default_value_t = 0.0)]
+        shift_b_y: f32,
+        /// Source A frames (required when --flow-gain is non-zero).
+        #[arg(long)]
+        source_a_dir: Option<PathBuf>,
+        /// A-flow per-row shift gain. 0 disables flow-driven mode (CPU-only).
+        #[arg(long, default_value_t = 0.0)]
+        flow_gain: f32,
+        /// Lucas-Kanade window radius for A-flow mode.
+        #[arg(long, default_value_t = 4)]
+        radius: i32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: shift_r_x, shift_r_y, shift_g_x, shift_g_y, shift_b_x, shift_b_y.
+        /// Persisted on the job; envelope times sample against the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+    },
+    QueueRunChannelShiftSequence {
+        queue_path: PathBuf,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,

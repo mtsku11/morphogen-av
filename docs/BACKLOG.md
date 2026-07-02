@@ -70,6 +70,11 @@ contracts live in the `*_MILESTONE.md` docs.
   the retro-static and pixel-sort panel sections; bridge emits the
   `--modulate` flag set on queue-add. Deferred: a channel-shift queue task,
   integer/enum/stateful targets.
+- Channel-shift queue task: `frame_sequence_channel_shift` render-job task +
+  `queue-add`/`queue-run-channel-shift-sequence` covering constant, flow-driven
+  (CPU-only), and modulated modes; add→run byte-identical to the direct render
+  (smoke-tested); add-time validation before persisting. Deferred: SwiftUI
+  channel-shift panel exposure.
 
 ## Next
 

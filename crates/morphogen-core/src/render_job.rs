@@ -337,6 +337,50 @@ pub enum RenderJobTask {
         #[serde(default)]
         modulation_sampling: ModulationSampling,
     },
+    /// Channel shift (RGB split / chromatic aberration): each colour channel is
+    /// sampled from the carrier at an independently offset position. Optional
+    /// A-flow mode adds per-row X shifts from Source A's optical flow (CPU-only).
+    FrameSequenceChannelShift {
+        carrier_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        #[serde(default)]
+        shift_r_x: f32,
+        #[serde(default)]
+        shift_r_y: f32,
+        #[serde(default)]
+        shift_g_x: f32,
+        #[serde(default)]
+        shift_g_y: f32,
+        #[serde(default)]
+        shift_b_x: f32,
+        #[serde(default)]
+        shift_b_y: f32,
+        /// Source A frames for the flow-driven per-row shift mode; `None` =
+        /// constant offsets only. Distinct from `modulator_frames_directory`,
+        /// which feeds the modulation-matrix luma/flow envelopes.
+        #[serde(default)]
+        flow_source_frame_directory: Option<String>,
+        /// Per-row shift gain over A's mean row X-flow. `0` = flow mode off.
+        #[serde(default)]
+        flow_gain: f32,
+        /// Lucas-Kanade window radius for the flow-driven mode.
+        #[serde(default = "default_channel_shift_flow_radius")]
+        flow_radius: i32,
+        #[serde(default)]
+        backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated). Envelope times
+        /// are sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+    },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
     /// No blending — hard cuts at every tile boundary.
@@ -1045,6 +1089,10 @@ pub struct RenderJobModulationRoute {
 
 fn default_modulation_scale() -> f32 {
     1.0
+}
+
+fn default_channel_shift_flow_radius() -> i32 {
+    4
 }
 
 /// Named deterministic datamosh presets for the flow-reuse path. Bitstream

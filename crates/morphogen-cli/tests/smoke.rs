@@ -4449,3 +4449,106 @@ fn queue_add_rejects_bad_modulation_routes_before_persisting() {
         "rejected queue-add must not write a queue file"
     );
 }
+
+#[test]
+fn queue_channel_shift_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+    // Luma-driven red shift: the modulator frames are the carrier frames
+    // themselves, giving a constant non-zero envelope on the gradient fixture.
+    let route = "shift_r_x=luma:12";
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-channel-shift-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "2",
+            "--shift-b-x=-6",
+            "--modulate",
+            route,
+            "--modulator-frames",
+            source_arg.as_str(),
+            "--modulation-fps",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-channel-shift-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "4",
+            "--shift-b-x=-6",
+            "--modulate",
+            route,
+            "--modulator-frames",
+            source_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-channel-shift-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render is byte-identical to the direct render (path-independent).
+    for frame_name in ["frame_000000.png", "frame_000001.png"] {
+        assert_eq!(
+            fs::read(output_root.join("job-0001/frames").join(frame_name)).expect("queued frame"),
+            fs::read(direct_dir.join(frame_name)).expect("direct frame"),
+            "queue render must be byte-identical to direct render ({frame_name})"
+        );
+    }
+
+    // The modulated red shift actually displaced pixels: output differs from
+    // the source even though the constant red shift is zero.
+    assert_ne!(
+        fs::read(output_root.join("job-0001/frames/frame_000000.png")).expect("queued frame"),
+        fs::read(source_dir.join("frame_000001.png")).expect("source frame"),
+        "luma-routed shift must displace the red channel"
+    );
+
+    // Manifest records the channel-shift algorithm, knobs, and routes.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_channel_shift");
+    let effect = &manifest["channel_shift"];
+    assert_eq!(effect["algorithm"], "channel_shift_constant_cpu_v1");
+    assert_eq!(effect["settings"]["shift_b_x"], -6.0);
+    let modulation = &effect["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "shift_r_x");
+    assert_eq!(modulation["routes"][0]["source"], "luma");
+    assert_eq!(modulation["routes"][0]["scale"], 12.0);
+    assert_eq!(modulation["fps"], 4.0);
+    assert_eq!(modulation["modulator_frames"], source_arg.as_str());
+}

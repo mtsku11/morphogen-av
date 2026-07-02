@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **445 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **446 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **67 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,25 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Channel-shift queue task.** `frame_sequence_channel_shift` joins the render
+  queue: core `RenderJobTask::FrameSequenceChannelShift` (all fields
+  serde-default), `queue-add-channel-shift-sequence` /
+  `queue-run-channel-shift-sequence` CLI commands covering all three existing
+  modes — constant offsets (CPU or parity-gated Metal), A-flow-driven per-row
+  shifts (CPU-only, `--flow-gain` + `--source-a-dir`), and modulation-matrix
+  routes on the six `shift_*` targets (same `--modulate` flag set as slice 2,
+  validated fail-fast before persisting). `queue-run` shares
+  `render_channel_shift_sequence` with the direct command, so add→run is
+  byte-identical to the direct render — pinned by smoke test along with the
+  manifest's algorithm/settings/modulation block. **Verified:** workspace
+  445 → **446**, clippy/fmt clean; manual queue runs of the flow-driven branch
+  (manifest records `channel_shift_flow_driven_cpu_v1`, flow knobs) and the
+  Metal constant branch (CPU algorithm id + `"backend": "Metal"`, matching the
+  retro-static convention); both add-time errors (flow without
+  `--source-a-dir`, flow + Metal) fire before any queue file is written.
+  Remaining from the slice-3 note: SwiftUI channel-shift panel exposure,
+  integer/enum/stateful modulation targets.
 
 - **Modulation matrix — slice 3 (SwiftUI mod slots).** The route editor ships
   as per-knob **mod slots**, not a free-form route list: retro-static
