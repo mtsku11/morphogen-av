@@ -106,6 +106,13 @@ pub struct ModulationRoute {
     /// pre-slice checkpoints and manifests stay byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<ModulationSampling>,
+    /// Named modulator this route reads (`<name>.<source>` in the CLI
+    /// grammar, media supplied by `--named-modulator-audio/frames name=path`);
+    /// `None` reads the default `--modulator-audio`/`--modulator-frames`
+    /// media. Skipped when unset so pre-slice checkpoints and manifests stay
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modulator: Option<String>,
 }
 
 fn default_scale() -> f32 {
@@ -113,11 +120,11 @@ fn default_scale() -> f32 {
 }
 
 /// Parse the CLI route grammar
-/// `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]`.
+/// `<target>=[<name>.]<source>[:<scale>[,<offset>]][@hold|@smooth]`.
 pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError> {
     let bad = |detail: &str| {
         RenderError::InvalidModulationRoute(format!(
-            "'{spec}': {detail} (expected <target>=<source>[:<scale>[,<offset>]][@hold|@smooth])"
+            "'{spec}': {detail} (expected <target>=[<name>.]<source>[:<scale>[,<offset>]][@hold|@smooth])"
         ))
     };
     // The optional per-route sampling suffix comes off first so the rest of
@@ -145,6 +152,18 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
     let (source_name, params) = match rest.split_once(':') {
         Some((source, params)) => (source, Some(params)),
         None => (rest, None),
+    };
+    // An optional `<name>.` prefix selects a named modulator; the source
+    // names themselves contain no '.', so the first dot is unambiguous.
+    let (modulator, source_name) = match source_name.split_once('.') {
+        Some((name, source_name)) => {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(bad("empty modulator name"));
+            }
+            (Some(name.to_string()), source_name)
+        }
+        None => (None, source_name),
     };
     let source_name = source_name.trim();
     let source = ModulationSource::parse(source_name).ok_or_else(|| {
@@ -182,6 +201,7 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
         scale,
         offset,
         sampling,
+        modulator,
     })
 }
 
@@ -556,6 +576,40 @@ mod tests {
             "strength=audio-rms@linear", // unknown sampling suffix
             "strength=audio-rms:1,0@",   // empty sampling suffix
             "strength=audio-rms@hold@",  // suffix must be terminal
+        ] {
+            assert!(
+                parse_modulation_route(spec).is_err(),
+                "expected '{spec}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_named_modulator_prefix() {
+        // Bare source reads the default modulator (None) — the pre-slice path.
+        let route = parse_modulation_route("strength=audio-rms:0.5,0.25").unwrap();
+        assert_eq!(route.modulator, None);
+
+        let route = parse_modulation_route("strength=drums.audio-rms:0.5,0.25@smooth").unwrap();
+        assert_eq!(route.modulator.as_deref(), Some("drums"));
+        assert_eq!(route.source, ModulationSource::AudioRms);
+        assert_eq!(route.sampling, Some(ModulationSampling::Smooth));
+
+        let route = parse_modulation_route("shift_r_x= cam2 . flow :24").unwrap();
+        assert_eq!(route.modulator.as_deref(), Some("cam2"));
+        assert_eq!(route.source, ModulationSource::Flow);
+        assert_eq!(route.scale, 24.0);
+
+        // Unset modulator serializes to the pre-slice JSON shape (no key).
+        let unnamed = parse_modulation_route("strength=audio-rms").unwrap();
+        assert!(!serde_json::to_string(&unnamed)
+            .unwrap()
+            .contains("modulator"));
+
+        for spec in [
+            "strength=.audio-rms",     // empty modulator name
+            "strength=drums.wobble",   // unknown source behind a valid name
+            "strength=drums.rms.late", // source names contain no '.'
         ] {
             assert!(
                 parse_modulation_route(spec).is_err(),

@@ -366,6 +366,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
     /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
@@ -552,6 +559,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render the mutual two-source faux-fluid advection (experimental, deterministic):
     /// Source A's optical-flow motion advects Source B's colour as a continuous dye. Frame
@@ -601,6 +615,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render the single-source optical-flow-driven advection (experimental, deterministic):
     /// the video is advected by its OWN motion. Each frame the source's Lucas-Kanade flow
@@ -650,6 +671,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render the discrete-carrier particle advection (experimental, deterministic):
     /// a grid of coloured particles seeded from the source rides the shared steady-vortex
@@ -921,6 +949,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render a channel-shift (RGB-split / chromatic aberration) sequence. Each
     /// colour channel is sampled from B at an independently offset position. Alpha
@@ -987,6 +1022,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render the retro-static glitch: deterministically simulate a PNG-style
     /// scanline filter, then deliberately misread it at the wrong bytes-per-pixel
@@ -1040,6 +1082,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).
@@ -1084,6 +1133,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
@@ -1488,6 +1544,13 @@ pub(crate) enum Commands {
         /// reused only on an algorithm/fps/content-fingerprint match).
         #[arg(long)]
         modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     CacheSyntheticFlow {
         output_dir: PathBuf,

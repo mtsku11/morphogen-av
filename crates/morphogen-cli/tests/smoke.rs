@@ -5128,6 +5128,252 @@ fn modulation_envelope_sidecar_reuses_and_invalidates_on_content_change() {
 }
 
 #[test]
+fn named_modulators_drive_independent_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+    // Two different envelopes: a rising and a falling amplitude ramp.
+    let rising_wav = temp_dir.path().join("rising.wav");
+    let rising: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&rising_wav, 8192, &rising);
+    let falling_wav = temp_dir.path().join("falling.wav");
+    let falling: Vec<f32> = (0..6144)
+        .map(|i| (1.0 - i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&falling_wav, 8192, &falling);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let rising_arg = rising_wav.to_string_lossy().to_string();
+    let falling_arg = falling_wav.to_string_lossy().to_string();
+    let render = |output_dir: &Path, extra: &[&str]| {
+        let mut args = vec!["render-channel-shift-sequence", source_arg.as_str()];
+        let output_arg = output_dir.to_string_lossy().to_string();
+        let output_arg = Box::leak(output_arg.into_boxed_str());
+        args.push(output_arg);
+        args.extend(["--frames", "3", "--modulation-fps", "4"]);
+        args.extend_from_slice(extra);
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+    };
+
+    // Two named modulators drive two knobs from different envelopes.
+    let named_dir = temp_dir.path().join("named");
+    render(
+        &named_dir,
+        &[
+            "--modulate",
+            "shift_r_x=a.audio-rms:32,0",
+            "--modulate",
+            "shift_b_x=b.audio-rms:32,0",
+            "--named-modulator-audio",
+            &format!("a={rising_arg}"),
+            "--named-modulator-audio",
+            &format!("b={falling_arg}"),
+        ],
+    )
+    .success()
+    .stdout(predicate::str::contains(
+        "modulation routes: shift_r_x=a.audio-rms:32,0 shift_b_x=b.audio-rms:32,0",
+    ));
+
+    // Both knobs from ONE modulator differs — the second envelope matters.
+    let single_dir = temp_dir.path().join("single");
+    render(
+        &single_dir,
+        &[
+            "--modulate",
+            "shift_r_x=audio-rms:32,0",
+            "--modulate",
+            "shift_b_x=audio-rms:32,0",
+            "--modulator-audio",
+            rising_arg.as_str(),
+        ],
+    )
+    .success();
+    assert_ne!(
+        fs::read(named_dir.join("frame_000002.png")).expect("named frame"),
+        fs::read(single_dir.join("frame_000002.png")).expect("single frame"),
+        "a second modulator must change the routed knob history"
+    );
+
+    // Continuity: a named route reading the same media as the default
+    // modulator is byte-identical to the unnamed route.
+    let aliased_dir = temp_dir.path().join("aliased");
+    render(
+        &aliased_dir,
+        &[
+            "--modulate",
+            "shift_r_x=a.audio-rms:32,0",
+            "--named-modulator-audio",
+            &format!("a={rising_arg}"),
+        ],
+    )
+    .success();
+    let unnamed_dir = temp_dir.path().join("unnamed");
+    render(
+        &unnamed_dir,
+        &[
+            "--modulate",
+            "shift_r_x=audio-rms:32,0",
+            "--modulator-audio",
+            rising_arg.as_str(),
+        ],
+    )
+    .success();
+    assert_png_frames_identical(&unnamed_dir, &aliased_dir, 3);
+
+    // A named route without its media flag, and a duplicate name, both fail
+    // up front.
+    render(
+        &temp_dir.path().join("missing"),
+        &["--modulate", "shift_r_x=x.audio-rms"],
+    )
+    .failure()
+    .stderr(predicate::str::contains(
+        "requires --named-modulator-audio x=<path>",
+    ));
+    render(
+        &temp_dir.path().join("duplicate"),
+        &[
+            "--modulate",
+            "shift_r_x=a.audio-rms",
+            "--named-modulator-audio",
+            &format!("a={rising_arg}"),
+            "--named-modulator-audio",
+            &format!("a={falling_arg}"),
+        ],
+    )
+    .failure()
+    .stderr(predicate::str::contains(
+        "duplicate --named-modulator-audio",
+    ));
+
+    // Named modulators stay direct-CLI only: queue-add rejects them and
+    // persists nothing.
+    let queue_path = temp_dir.path().join("queue.json");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-channel-shift-sequence",
+            queue_path.to_string_lossy().as_ref(),
+            source_arg.as_str(),
+            temp_dir.path().join("out").to_string_lossy().as_ref(),
+            "--modulate",
+            "shift_r_x=a.audio-rms",
+            "--modulator-audio",
+            rising_arg.as_str(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("direct-CLI only"));
+    assert!(!queue_path.exists());
+}
+
+#[test]
+fn named_modulator_joins_feedback_checkpoint_contract() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        for dir in [&modulator_dir, &carrier_dir] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let output_dir = temp_dir.path().join("output");
+    let args = vec![
+        "render-feedback-sequence".to_string(),
+        modulator_arg,
+        carrier_arg,
+        output_dir.to_string_lossy().to_string(),
+        "--feedback-mix".to_string(),
+        "0.7".to_string(),
+        "--max-frames".to_string(),
+        "3".to_string(),
+        "--frame-rate".to_string(),
+        "4".to_string(),
+        "--flow-source".to_string(),
+        "luminance".to_string(),
+        "--modulate".to_string(),
+        "feedback_mix=fb.audio-rms:0.5,0.25".to_string(),
+        "--named-modulator-audio".to_string(),
+        format!("fb={wav_arg}"),
+    ];
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+
+    // The checkpoint contract fingerprints the named media the route consumes;
+    // the default-modulator slots stay empty (no unnamed route used them).
+    let checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_dir.join("checkpoint.json")).expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["modulator"], "fb");
+    assert!(modulation["modulator_audio"].is_null());
+    let named = &modulation["named_modulators"][0];
+    assert_eq!(named["name"], "fb");
+    assert_eq!(named["kind"], "audio");
+    assert_eq!(named["path"], wav_arg.as_str());
+    assert!(named["checksum"]
+        .as_str()
+        .expect("checksum")
+        .starts_with("fnv1a64:"));
+
+    // Identical arguments resume to completion (contract equality holds
+    // across the named fingerprints).
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered flow-feedback sequence with 3 frame(s)",
+        ));
+
+    // A renamed modulator changes the contract and refuses to resume.
+    let mut renamed = args.clone();
+    renamed[13] = "feedback_mix=fb2.audio-rms:0.5,0.25".to_string();
+    renamed[15] = format!("fb2={wav_arg}");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&renamed)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+}
+
+#[test]
 fn queue_add_rejects_bad_modulation_routes_before_persisting() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");

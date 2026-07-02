@@ -79,6 +79,9 @@ pub(crate) struct ModulationCliArgs<'a> {
     pub(crate) fps: f64,
     /// Optional envelope-sidecar directory (luma/flow extraction reuse).
     pub(crate) cache_dir: Option<&'a Path>,
+    /// Raw `<name>=<path>` named-modulator specs (`<name>.<source>` routes).
+    pub(crate) named_modulator_audio: &'a [String],
+    pub(crate) named_modulator_frames: &'a [String],
 }
 
 impl ModulationCliArgs<'_> {
@@ -90,6 +93,8 @@ impl ModulationCliArgs<'_> {
             sampling: self.sampling,
             fps: self.fps,
             cache_dir: self.cache_dir,
+            named_modulator_audio: self.named_modulator_audio,
+            named_modulator_frames: self.named_modulator_frames,
         })
     }
 }
@@ -4809,6 +4814,20 @@ pub(crate) struct FeedbackModulationContract {
     fps: f64,
     modulator_audio: Option<FeedbackModulationMediaFingerprint>,
     modulator_frames: Option<FeedbackModulationMediaFingerprint>,
+    /// Content fingerprints of the named modulators the routes consume, in
+    /// (name, kind) order. Skipped when empty so pre-slice checkpoints stay
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    named_modulators: Vec<NamedModulationMediaFingerprint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct NamedModulationMediaFingerprint {
+    name: String,
+    /// `audio` or `frames`.
+    kind: String,
+    path: String,
+    checksum: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -5406,8 +5425,14 @@ fn feedback_modulation_contract(
     args: &ModulationCliArgs<'_>,
 ) -> Result<FeedbackModulationContract, CliError> {
     let routes = plan.route_list();
-    let uses_audio = routes.iter().any(|route| route.source.needs_audio());
-    let uses_frames = routes.iter().any(|route| route.source.needs_frames());
+    // The default modulator's fingerprints cover only unnamed routes; named
+    // routes fingerprint their own media below.
+    let uses_audio = routes
+        .iter()
+        .any(|route| route.modulator.is_none() && route.source.needs_audio());
+    let uses_frames = routes
+        .iter()
+        .any(|route| route.modulator.is_none() && route.source.needs_frames());
     // build_plan already required the media flags for the sources in use.
     let modulator_audio = uses_audio
         .then_some(args.modulator_audio)
@@ -5419,12 +5444,69 @@ fn feedback_modulation_contract(
         .flatten()
         .map(feedback_modulation_frames_fingerprint)
         .transpose()?;
+
+    // Named modulators: fingerprint exactly the (name, kind) media the routed
+    // sources consume, in a canonical order. build_plan already validated the
+    // name→media resolution.
+    let named_audio = crate::modulate::parse_named_modulator_specs(
+        args.named_modulator_audio,
+        "--named-modulator-audio",
+    )?;
+    let named_frames = crate::modulate::parse_named_modulator_specs(
+        args.named_modulator_frames,
+        "--named-modulator-frames",
+    )?;
+    let mut named_modulators: Vec<NamedModulationMediaFingerprint> = Vec::new();
+    for route in &routes {
+        let Some(name) = route.modulator.as_deref() else {
+            continue;
+        };
+        let kind = if route.source.needs_audio() {
+            "audio"
+        } else {
+            "frames"
+        };
+        if named_modulators
+            .iter()
+            .any(|entry| entry.name == name && entry.kind == kind)
+        {
+            continue;
+        }
+        let named = if route.source.needs_audio() {
+            &named_audio
+        } else {
+            &named_frames
+        };
+        let path = named
+            .iter()
+            .find(|(existing, _)| existing == name)
+            .map(|(_, path)| path.as_path())
+            .ok_or_else(|| {
+                CliError::Message(format!(
+                    "internal error: named modulator '{name}' missing after plan build"
+                ))
+            })?;
+        let fingerprint = if route.source.needs_audio() {
+            feedback_modulation_audio_fingerprint(path)?
+        } else {
+            feedback_modulation_frames_fingerprint(path)?
+        };
+        named_modulators.push(NamedModulationMediaFingerprint {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            path: fingerprint.path,
+            checksum: fingerprint.checksum,
+        });
+    }
+    named_modulators.sort_by(|a, b| (&a.name, &a.kind).cmp(&(&b.name, &b.kind)));
+
     Ok(FeedbackModulationContract {
         routes,
         sampling: args.sampling,
         fps: args.fps,
         modulator_audio,
         modulator_frames,
+        named_modulators,
     })
 }
 

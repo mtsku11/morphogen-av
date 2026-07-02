@@ -1622,6 +1622,8 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
                 fps: frame_rate,
                 // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                 cache_dir: None,
+                named_modulator_audio: &[],
+                named_modulator_frames: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -1728,6 +1730,8 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
                     fps: frame_rate,
                     // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                     cache_dir: None,
+                    named_modulator_audio: &[],
+                    named_modulator_frames: &[],
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -1830,6 +1834,8 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
                     fps: frame_rate,
                     // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                     cache_dir: None,
+                    named_modulator_audio: &[],
+                    named_modulator_frames: &[],
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2215,6 +2221,8 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
                 fps: frame_rate,
                 // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                 cache_dir: None,
+                named_modulator_audio: &[],
+                named_modulator_frames: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2456,6 +2464,8 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
                 fps: frame_rate,
                 // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                 cache_dir: None,
+                named_modulator_audio: &[],
+                named_modulator_frames: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2642,6 +2652,8 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
                 fps: frame_rate,
                 // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                 cache_dir: None,
+                named_modulator_audio: &[],
+                named_modulator_frames: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3783,6 +3795,8 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 fps: frame_rate,
                 // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                 cache_dir: None,
+                named_modulator_audio: &[],
+                named_modulator_frames: &[],
             },
         };
         let resolved_settings = resolve_datamosh_settings(&render_request);
@@ -4521,6 +4535,8 @@ pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliEr
                 fps: frame_rate,
                 // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                 cache_dir: None,
+                named_modulator_audio: &[],
+                named_modulator_frames: &[],
             },
         })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
@@ -5187,6 +5203,11 @@ fn parse_queue_modulation_routes(
     validate_route_targets(&routes)?;
     for route in &routes {
         probe(&route.target)?;
+        if let Some(name) = route.modulator.as_deref() {
+            return Err(CliError::Message(format!(
+                "named modulator '{name}' is direct-CLI only for now; queued jobs support the default modulator"
+            )));
+        }
         if route.source.needs_audio() && modulator_audio.is_none() {
             return Err(CliError::Message(format!(
                 "modulation source '{}' requires --modulator-audio <wav>",
@@ -5472,6 +5493,8 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
                 fps: frame_rate,
                 // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
                 cache_dir: None,
+                named_modulator_audio: &[],
+                named_modulator_frames: &[],
             },
         })?;
         let mut effect = serde_json::json!({

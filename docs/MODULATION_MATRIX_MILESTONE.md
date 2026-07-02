@@ -89,6 +89,36 @@ Examples:
   62.5 ms RMS hop at 8192 Hz — 0.25 s is a multiple). Prove `@smooth` with a
   frame rate that does not divide the hop grid.
 
+### Named modulators (multiple modulators per render)
+
+A route's source may carry a modulator-name prefix — `<target>=<name>.<source>`
+— whose media is supplied by the repeatable flags
+`--named-modulator-audio <name>=<wav>` / `--named-modulator-frames <name>=<dir>`.
+A bare source keeps reading the default `--modulator-audio`/`--modulator-frames`
+media (the exact pre-slice path), so e.g. one knob can breathe with the drums
+stem while another tracks a second clip's motion:
+
+```
+--modulate "feedback_mix=drums.audio-rms:0.75" \
+--modulate "carrier_amount=cam2.flow:24" \
+--named-modulator-audio drums=stems/drums.wav \
+--named-modulator-frames cam2=clips/cam2-frames
+```
+
+- Envelopes are extracted once per **(modulator, source)** pair; two routes on
+  the same named source share one extraction.
+- A named route whose media flag is missing, an empty name, and a duplicate
+  name are hard errors before rendering. Modulator names contain no `.`.
+- Continuity: a named route reading the same media as the default modulator is
+  byte-identical to the unnamed route.
+- Stateful contracts gain a skip-when-empty `named_modulators` fingerprint
+  list ((name, kind, path, checksum) in canonical order) covering exactly the
+  named media the routes consume; renaming a modulator or changing its content
+  refuses to resume, and pre-slice checkpoints stay byte-identical.
+- Envelope sidecars are per modulator (`envelope_<name>.<source>.json`).
+- **Direct CLI only for now:** queue-add rejects named routes ("direct-CLI
+  only") before persisting; SwiftUI slots emit unnamed routes.
+
 ### Envelope sidecars (`--modulation-cache-dir`)
 
 Extracted **luma/flow** envelopes are per-frame analysis over the whole
