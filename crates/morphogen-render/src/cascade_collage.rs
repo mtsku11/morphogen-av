@@ -179,7 +179,13 @@ pub struct CascadeCollageSettings {
 
 /// A notch (fractions of canvas, relative to tile centre).
 fn notch(u0: f32, u1: f32, v0: f32, v1: f32, scrib: bool) -> Notch {
-    Notch { u0, u1, v0, v1, scrib }
+    Notch {
+        u0,
+        u1,
+        v0,
+        v1,
+        scrib,
+    }
 }
 
 impl Default for CascadeCollageSettings {
@@ -579,9 +585,12 @@ pub fn render_cascade_collage_frame(
         settings.background[2],
         1.0,
     ];
-    let mut pixels = vec![bg; w.checked_mul(h).ok_or_else(|| {
-        RenderError::InvalidCascadeCollageSettings("dimensions too large".into())
-    })?];
+    let mut pixels = vec![
+        bg;
+        w.checked_mul(h).ok_or_else(|| {
+            RenderError::InvalidCascadeCollageSettings("dimensions too large".into())
+        })?
+    ];
 
     let fw = width as f32;
     let fh = height as f32;
@@ -804,7 +813,10 @@ mod tests {
         let s = CascadeCollageSettings::default();
         let a = render_cascade_collage_frame(180, 240, None, &s, 3).unwrap();
         let b = render_cascade_collage_frame(180, 240, None, &s, 3).unwrap();
-        assert_eq!(a, b, "A1: identical (settings, frame) must be byte-identical");
+        assert_eq!(
+            a, b,
+            "A1: identical (settings, frame) must be byte-identical"
+        );
     }
 
     #[test]
@@ -813,7 +825,10 @@ mod tests {
         let out = render_cascade_collage_frame(180, 240, None, &s, 0).unwrap();
         let bg = [s.background[0], s.background[1], s.background[2], 1.0];
         let gaps = out.pixels.iter().filter(|p| **p == bg).count();
-        assert_eq!(gaps, 0, "A2: default composition must fully cover (no gaps)");
+        assert_eq!(
+            gaps, 0,
+            "A2: default composition must fully cover (no gaps)"
+        );
     }
 
     #[test]
@@ -825,7 +840,10 @@ mod tests {
         };
         let f0 = render_cascade_collage_frame(160, 200, None, &s, 0).unwrap();
         let f9 = render_cascade_collage_frame(160, 200, None, &s, 9).unwrap();
-        assert_eq!(f0, f9, "A3: no per-frame drift ⇒ frames identical to frame 0");
+        assert_eq!(
+            f0, f9,
+            "A3: no per-frame drift ⇒ frames identical to frame 0"
+        );
     }
 
     #[test]
@@ -838,7 +856,10 @@ mod tests {
         let a = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
         let b = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
-        assert!(d > 0.0, "A4: straight-edge (off) must differ from scribbled (on)");
+        assert!(
+            d > 0.0,
+            "A4: straight-edge (off) must differ from scribbled (on)"
+        );
     }
 
     #[test]
@@ -861,7 +882,11 @@ mod tests {
         assert_eq!(out.width, 180, "texture mode output matches source dims");
         // a covered pixel near the tile centre must equal the source colour
         let p = out.pixel(54, 72).unwrap();
-        assert_eq!(p, [0.2, 0.6, 0.9, 1.0], "covered pixel carries source colour");
+        assert_eq!(
+            p,
+            [0.2, 0.6, 0.9, 1.0],
+            "covered pixel carries source colour"
+        );
     }
 
     #[test]
@@ -874,7 +899,10 @@ mod tests {
         let a = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
         let b = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
-        assert!(d > 0.0, "neon edge tint (on) must differ from plain edges (off)");
+        assert!(
+            d > 0.0,
+            "neon edge tint (on) must differ from plain edges (off)"
+        );
     }
 
     #[test]
@@ -893,7 +921,10 @@ mod tests {
         let a = render_cascade_collage_frame(0, 0, Some(&src), &off, 0).unwrap();
         let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
-        assert!(d > 0.0, "face colorize (on) must differ from pure footage (off)");
+        assert!(
+            d > 0.0,
+            "face colorize (on) must differ from pure footage (off)"
+        );
     }
 
     #[test]
@@ -921,7 +952,10 @@ mod tests {
         let a = render_cascade_collage_frame(0, 0, Some(&src), &off, 0).unwrap();
         let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
-        assert!(d > 0.0, "edge-detect (on) must darken footage contours vs off");
+        assert!(
+            d > 0.0,
+            "edge-detect (on) must darken footage contours vs off"
+        );
     }
 
     #[test]
@@ -938,7 +972,10 @@ mod tests {
         let a = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
         let b = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
-        assert!(d > 0.0, "block blend (opacity<1) must differ from hard occlude");
+        assert!(
+            d > 0.0,
+            "block blend (opacity<1) must differ from hard occlude"
+        );
     }
 
     #[test]
@@ -947,7 +984,10 @@ mod tests {
         let s = CascadeCollageSettings::default();
         let a = render_cascade_collage_frame(0, 0, Some(&src), &s, 2).unwrap();
         let b = render_cascade_collage_frame(0, 0, Some(&src), &s, 2).unwrap();
-        assert_eq!(a, b, "texture mode must be byte-identical for identical inputs");
+        assert_eq!(
+            a, b,
+            "texture mode must be byte-identical for identical inputs"
+        );
     }
 
     #[test]

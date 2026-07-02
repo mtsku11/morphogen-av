@@ -3,10 +3,8 @@
 pub mod audio_route;
 pub mod block_collage;
 pub mod cascade_collage;
-pub mod channel_shift;
-pub mod palette_quantize;
-pub mod pixel_sort;
 pub mod cascade_trails;
+pub mod channel_shift;
 pub mod coagulate;
 pub mod conv_blend;
 pub mod cpu_reference;
@@ -24,6 +22,8 @@ pub mod granular_mosaic;
 pub mod image_buffer;
 pub mod luminance_flow;
 pub mod optical_flow;
+pub mod palette_quantize;
+pub mod pixel_sort;
 pub mod retro_static;
 pub mod sampler;
 pub mod video_vocoder;
@@ -39,23 +39,14 @@ pub use cascade_collage::{
     render_cascade_collage_frame, BlendMode, CascadeCollageSettings, CascadeShape, Notch,
     ScribbleEdge, CASCADE_COLLAGE_ALGORITHM,
 };
-pub use channel_shift::{
-    compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
-    CHANNEL_SHIFT_ALGORITHM, CHANNEL_SHIFT_FLOW_ALGORITHM,
-};
-pub use palette_quantize::{
-    render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode, NEON_PALETTE,
-    PALETTE_QUANTIZE_ALGORITHM,
-};
-pub use pixel_sort::{
-    compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask, render_pixel_sort_frame,
-    MaskSource, PixelSortSettings, SortAxis, SortDirection, SortKey, PIXEL_SORT_ALGORITHM,
-    PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
-};
 pub use cascade_trails::{
     advance_cascade_trails, assign_temporal_patches, initialize_cascade_trails,
     render_cascade_trails, CascadeFieldType, CascadeTrailSettings, CascadeTrailState,
     CASCADE_TRAIL_ALGORITHM,
+};
+pub use channel_shift::{
+    compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
+    CHANNEL_SHIFT_ALGORITHM, CHANNEL_SHIFT_FLOW_ALGORITHM,
 };
 pub use coagulate::{
     advance_coagulation_field, advect_coagulation_field, apply_history_smear, average_cell_flows,
@@ -136,6 +127,15 @@ pub use optical_flow::{
     pyramidal_lucas_kanade_flow_with_refiner, refine_level_cpu, FlowConfidenceMap,
     LucasKanadeLevelRefiner, PyramidalLucasKanadeEstimate, LUCAS_KANADE_WINDOW_RADIUS,
     PYRAMIDAL_LUCAS_KANADE_MAX_LEVELS, PYRAMIDAL_LUCAS_KANADE_WARP_ITERATIONS,
+};
+pub use palette_quantize::{
+    render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode, NEON_PALETTE,
+    PALETTE_QUANTIZE_ALGORITHM,
+};
+pub use pixel_sort::{
+    compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask, render_pixel_sort_frame,
+    MaskSource, PixelSortSettings, SortAxis, SortDirection, SortKey, PIXEL_SORT_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
 };
 pub use retro_static::{
     render_retro_static_frame, RetroStaticSettings, ScanlineFilter, RETRO_STATIC_ALGORITHM,

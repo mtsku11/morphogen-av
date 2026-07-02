@@ -2,11 +2,10 @@ use clap::Parser;
 use morphogen_audio::StftConfig;
 use morphogen_render::{
     BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
-    ChannelShiftSettings,
-    CoagulationSettings, ConvolutionBlendSettings, DispersionSettings, FieldParticleSettings,
-    FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
-    GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings, RetroStaticSettings,
-    StructureMode, VideoVocoderSettings,
+    ChannelShiftSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
+    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
+    FluidMosaicSettings, GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
+    RetroStaticSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;

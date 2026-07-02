@@ -22,9 +22,8 @@ pub use project::{Project, ProjectMetadata};
 pub use render_job::{
     video_audio_route_algorithm_id, ConvolutionMethod, CrossSynthFilterType, CrossSynthMode,
     CrossSynthWindow, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
-    ExportFormat, FlowSource, GrainSelectionMode,
-    GranularAudioModulation, IrMode, KernelMode, PixelSortAxis, PixelSortDirection,
-    PixelSortKey, PixelSortMaskSource, RenderBackend, RenderJob,
+    ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, IrMode, KernelMode,
+    PixelSortAxis, PixelSortDirection, PixelSortKey, PixelSortMaskSource, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
     RenderSettings, RenderTimingMetadata, VectorRemixMode, VideoAudioRouteDescriptor,

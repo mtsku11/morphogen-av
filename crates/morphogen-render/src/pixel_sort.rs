@@ -21,9 +21,11 @@ pub const PIXEL_SORT_CROSS_SYNTH_ALGORITHM: &str = "pixel_sort_cross_synth_mask_
 /// What drives the span-detection mask (determines which pixels are sortable).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MaskSource {
     /// Self mask: B's own sort-key value determines sortability (single-source classic).
     #[serde(rename = "self")]
+    #[default]
     SelfMask,
     /// A's Rec.709 luma (resampled to B's grid) determines sortability.
     ALuma,
@@ -31,12 +33,6 @@ pub enum MaskSource {
     AEdge,
     /// Optical-flow magnitude between consecutive A frames (peak-normalised) — moving regions sort.
     AFlow,
-}
-
-impl Default for MaskSource {
-    fn default() -> Self {
-        MaskSource::SelfMask
-    }
 }
 
 impl MaskSource {
@@ -53,7 +49,9 @@ impl MaskSource {
 /// Which component of a pixel drives the sort order.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SortKey {
+    #[default]
     Luma,
     Hue,
     Sat,
@@ -62,38 +60,24 @@ pub enum SortKey {
     Blue,
 }
 
-impl Default for SortKey {
-    fn default() -> Self {
-        SortKey::Luma
-    }
-}
-
 /// Sort order within each span.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SortDirection {
+    #[default]
     Asc,
     Desc,
-}
-
-impl Default for SortDirection {
-    fn default() -> Self {
-        SortDirection::Asc
-    }
 }
 
 /// Whether to sort along rows (horizontal streaks) or columns (vertical streaks).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SortAxis {
+    #[default]
     Row,
     Col,
-}
-
-impl Default for SortAxis {
-    fn default() -> Self {
-        SortAxis::Row
-    }
 }
 
 /// Knobs for the pixel-sort renderer.
@@ -223,10 +207,8 @@ pub fn compute_a_edge_mask(source_a: &ImageBufferF32, b_width: u32, b_height: u3
                 let sx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
                 lumas[sy * w + sx]
             };
-            let gx = -s(-1, -1) + s(-1, 1) - 2.0 * s(0, -1) + 2.0 * s(0, 1)
-                - s(1, -1) + s(1, 1);
-            let gy = -s(-1, -1) - 2.0 * s(-1, 0) - s(-1, 1)
-                + s(1, -1) + 2.0 * s(1, 0) + s(1, 1);
+            let gx = -s(-1, -1) + s(-1, 1) - 2.0 * s(0, -1) + 2.0 * s(0, 1) - s(1, -1) + s(1, 1);
+            let gy = -s(-1, -1) - 2.0 * s(-1, 0) - s(-1, 1) + s(1, -1) + 2.0 * s(1, 0) + s(1, 1);
             out.push(((gx * gx + gy * gy).sqrt() / norm).min(1.0));
         }
     }
@@ -249,11 +231,9 @@ pub fn compute_a_flow_mask(flow: &FlowField, b_width: u32, b_height: u32) -> Vec
     let bh = b_height as f32;
     let mut out = Vec::with_capacity((b_width * b_height) as usize);
     for y in 0..b_height as usize {
-        let fy = ((y as f32 + 0.5) * fh as f32 / bh - 0.5)
-            .clamp(0.0, fh as f32 - 1.0) as usize;
+        let fy = ((y as f32 + 0.5) * fh as f32 / bh - 0.5).clamp(0.0, fh as f32 - 1.0) as usize;
         for x in 0..b_width as usize {
-            let fx = ((x as f32 + 0.5) * fw as f32 / bw - 0.5)
-                .clamp(0.0, fw as f32 - 1.0) as usize;
+            let fx = ((x as f32 + 0.5) * fw as f32 / bw - 0.5).clamp(0.0, fw as f32 - 1.0) as usize;
             out.push(normed[fy * fw + fx]);
         }
     }
@@ -303,7 +283,11 @@ fn sort_line(
     let n = line.len();
     let mut i = 0;
     while i < n {
-        let mv = if a_mask.is_empty() { pixel_sort_key(line[i], key) } else { a_mask[i] };
+        let mv = if a_mask.is_empty() {
+            pixel_sort_key(line[i], key)
+        } else {
+            a_mask[i]
+        };
         if mv < low || mv > high {
             i += 1;
             continue;
@@ -311,8 +295,14 @@ fn sort_line(
         let span_start = i;
         i += 1;
         while i < n {
-            let mv2 = if a_mask.is_empty() { pixel_sort_key(line[i], key) } else { a_mask[i] };
-            if mv2 < low || mv2 > high { break; }
+            let mv2 = if a_mask.is_empty() {
+                pixel_sort_key(line[i], key)
+            } else {
+                a_mask[i]
+            };
+            if mv2 < low || mv2 > high {
+                break;
+            }
             i += 1;
         }
         let span = &mut line[span_start..i];
@@ -460,7 +450,10 @@ mod tests {
         assert!((out.pixels[1][0] - 0.3).abs() < 1e-6, "span[0] = 0.3");
         assert!((out.pixels[2][0] - 0.5).abs() < 1e-6, "span[1] = 0.5");
         // Span [4]: single element, unchanged.
-        assert!((out.pixels[4][0] - 0.4).abs() < 1e-6, "single-pixel span unchanged");
+        assert!(
+            (out.pixels[4][0] - 0.4).abs() < 1e-6,
+            "single-pixel span unchanged"
+        );
     }
 
     #[test]
@@ -508,10 +501,14 @@ mod tests {
         // Col 0 lumas: [0.8, 0.2, 0.6, 0.4] → sorted: [0.2, 0.4, 0.6, 0.8]
         // Col 1 lumas: [0.1, 0.9, 0.3, 0.7] → sorted: [0.1, 0.3, 0.7, 0.9]
         let pixels: Vec<[f32; 4]> = vec![
-            [0.8, 0.8, 0.8, 1.0], [0.1, 0.1, 0.1, 1.0],
-            [0.2, 0.2, 0.2, 1.0], [0.9, 0.9, 0.9, 1.0],
-            [0.6, 0.6, 0.6, 1.0], [0.3, 0.3, 0.3, 1.0],
-            [0.4, 0.4, 0.4, 1.0], [0.7, 0.7, 0.7, 1.0],
+            [0.8, 0.8, 0.8, 1.0],
+            [0.1, 0.1, 0.1, 1.0],
+            [0.2, 0.2, 0.2, 1.0],
+            [0.9, 0.9, 0.9, 1.0],
+            [0.6, 0.6, 0.6, 1.0],
+            [0.3, 0.3, 0.3, 1.0],
+            [0.4, 0.4, 0.4, 1.0],
+            [0.7, 0.7, 0.7, 1.0],
         ];
         let src = ImageBufferF32::new(2, 4, pixels).unwrap();
         let s = PixelSortSettings {
@@ -549,7 +546,10 @@ mod tests {
         };
         let out = render_pixel_sort_frame(&src, &s, &[]).unwrap();
         assert!((out.pixels[0][0] - 0.3).abs() < 1e-6, "px0.R=0.3");
-        assert!((out.pixels[0][1] - 0.9).abs() < 1e-6, "px0.G=0.9 follows its R");
+        assert!(
+            (out.pixels[0][1] - 0.9).abs() < 1e-6,
+            "px0.G=0.9 follows its R"
+        );
         assert!((out.pixels[1][0] - 0.6).abs() < 1e-6, "px1.R=0.6");
         assert!((out.pixels[2][0] - 0.8).abs() < 1e-6, "px2.R=0.8");
     }
@@ -559,7 +559,11 @@ mod tests {
         // 3 B pixels (greyscale): lumas [0.8, 0.2, 0.5]
         // A mask values override span detection: [0.3, 0.3, 0.3] → all sortable
         // Threshold [0.25, 0.75]: all sortable via a_mask, sorted by B's luma asc → [0.2,0.5,0.8]
-        let b_pixels: Vec<[f32; 4]> = vec![[0.8, 0.8, 0.8, 1.0], [0.2, 0.2, 0.2, 1.0], [0.5, 0.5, 0.5, 1.0]];
+        let b_pixels: Vec<[f32; 4]> = vec![
+            [0.8, 0.8, 0.8, 1.0],
+            [0.2, 0.2, 0.2, 1.0],
+            [0.5, 0.5, 0.5, 1.0],
+        ];
         let src = ImageBufferF32::new(3, 1, b_pixels).unwrap();
         let s = PixelSortSettings {
             threshold_low: 0.25,
@@ -568,13 +572,25 @@ mod tests {
         };
         // Without a_mask: only luma=0.5 is in [0.25,0.75]; 0.8 and 0.2 are outside → no sort.
         let out_self = render_pixel_sort_frame(&src, &s, &[]).unwrap();
-        assert!((out_self.pixels[0][0] - 0.8).abs() < 1e-6, "self: 0.8 unsortable");
+        assert!(
+            (out_self.pixels[0][0] - 0.8).abs() < 1e-6,
+            "self: 0.8 unsortable"
+        );
         // With a_mask=[0.4,0.4,0.4]: all three in [0.25,0.75] → all sort by B's luma.
         let a_mask = vec![0.4f32, 0.4, 0.4];
         let out_cross = render_pixel_sort_frame(&src, &s, &a_mask).unwrap();
-        assert!((out_cross.pixels[0][0] - 0.2).abs() < 1e-6, "cross: 0.2 first");
-        assert!((out_cross.pixels[1][0] - 0.5).abs() < 1e-6, "cross: 0.5 second");
-        assert!((out_cross.pixels[2][0] - 0.8).abs() < 1e-6, "cross: 0.8 third");
+        assert!(
+            (out_cross.pixels[0][0] - 0.2).abs() < 1e-6,
+            "cross: 0.2 first"
+        );
+        assert!(
+            (out_cross.pixels[1][0] - 0.5).abs() < 1e-6,
+            "cross: 0.5 second"
+        );
+        assert!(
+            (out_cross.pixels[2][0] - 0.8).abs() < 1e-6,
+            "cross: 0.8 third"
+        );
     }
 
     #[test]

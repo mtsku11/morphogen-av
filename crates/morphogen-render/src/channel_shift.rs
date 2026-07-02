@@ -158,7 +158,7 @@ mod tests {
 
         // R at position x should equal source R at (x - 2), clamped at left edge.
         for x in 0..8u32 {
-            let src_x = if x < 2 { 0 } else { x - 2 };
+            let src_x = x.saturating_sub(2);
             let expected_r = src.pixel(src_x, 0).unwrap()[0];
             let out_r = out.pixel(x, 0).unwrap()[0];
             assert!(
@@ -170,10 +170,9 @@ mod tests {
 
     #[test]
     fn alpha_is_unshifted() {
-        let src = ImageBufferF32::from_fn(8, 1, |x, _| {
-            [0.5, 0.5, 0.5, if x == 4 { 1.0 } else { 0.5 }]
-        })
-        .unwrap();
+        let src =
+            ImageBufferF32::from_fn(8, 1, |x, _| [0.5, 0.5, 0.5, if x == 4 { 1.0 } else { 0.5 }])
+                .unwrap();
         let settings = ChannelShiftSettings {
             shift_r_x: 3.0,
             ..Default::default()
@@ -188,9 +187,17 @@ mod tests {
         // 4-wide × 2-tall flow; row 0 x-components: [1,3,1,3] mean=2; row 1: [0,0,0,4] mean=1
         let flow = FlowField::from_fn(4, 2, |x, y| {
             let vx = if y == 0 {
-                if x % 2 == 1 { 3.0 } else { 1.0 }
+                if x % 2 == 1 {
+                    3.0
+                } else {
+                    1.0
+                }
             } else {
-                if x == 3 { 4.0 } else { 0.0 }
+                if x == 3 {
+                    4.0
+                } else {
+                    0.0
+                }
             };
             [vx, 0.0]
         })
@@ -220,14 +227,13 @@ mod tests {
         let out = render_channel_shift_frame(&src, &settings, &[2.0]).unwrap();
         // All channels at position x should be drawn from x-2 in source.
         for x in 0..8u32 {
-            let src_x = if x < 2 { 0 } else { x - 2 };
+            let src_x = x.saturating_sub(2);
             let expected = src.pixel(src_x, 0).unwrap()[0];
             let px = out.pixel(x, 0).unwrap();
-            for ch in 0..3usize {
+            for (ch, &value) in px.iter().take(3).enumerate() {
                 assert!(
-                    (px[ch] - expected).abs() < 1e-6,
-                    "ch {ch} mismatch at x={x}: got {} expected {expected}",
-                    px[ch]
+                    (value - expected).abs() < 1e-6,
+                    "ch {ch} mismatch at x={x}: got {value} expected {expected}",
                 );
             }
         }

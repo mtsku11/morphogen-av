@@ -36,8 +36,7 @@ pub const PIXEL_SORT_SHADER_SOURCE: &str = include_str!("../shaders/pixel_sort.m
 pub const CHANNEL_SHIFT_KERNEL_NAME: &str = "channel_shift";
 pub const CHANNEL_SHIFT_SHADER_SOURCE: &str = include_str!("../shaders/channel_shift.metal");
 pub const PALETTE_QUANTIZE_KERNEL_NAME: &str = "palette_quantize";
-pub const PALETTE_QUANTIZE_SHADER_SOURCE: &str =
-    include_str!("../shaders/palette_quantize.metal");
+pub const PALETTE_QUANTIZE_SHADER_SOURCE: &str = include_str!("../shaders/palette_quantize.metal");
 pub const RETRO_STATIC_KERNEL_NAME: &str = "retro_static";
 pub const RETRO_STATIC_SHADER_SOURCE: &str = include_str!("../shaders/retro_static.metal");
 
@@ -661,8 +660,7 @@ mod tests {
 
     #[test]
     fn lucas_kanade_refine_shader_has_expected_bindings() {
-        validate_lucas_kanade_refine_shader_source()
-            .expect("lucas kanade refine shader preflight");
+        validate_lucas_kanade_refine_shader_source().expect("lucas kanade refine shader preflight");
     }
 
     #[test]

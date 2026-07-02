@@ -13,51 +13,46 @@ use morphogen_core::{
     RenderJobProvenance, RenderJobSourceProvenance, RenderTimingMetadata, SourceRole,
 };
 use morphogen_render::{
-    advance_cascade_trails, assign_temporal_patches, advance_coagulation_field, advance_dispersion_field,
-    render_block_collage_frame, BlockCollageSettings,
-    render_cascade_collage_frame, CascadeCollageSettings,
-    compute_per_row_shifts, render_channel_shift_frame, ChannelShiftSettings,
-    render_retro_static_frame, RetroStaticSettings,
-    render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
-    compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask,
-    render_pixel_sort_frame, MaskSource, PixelSortSettings, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
-    advance_field_particles,
-    advance_fluid_mosaic, analyze_convolution_kernel_cpu, analyze_convolution_kernels_color_cpu,
-    analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu,
-    analyze_luma_band_envelope_cpu, apply_history_smear, apply_tone_map_cpu, average_cell_flows,
-    coagulation_field, composite_with_field, convolution_blend_color_cpu, convolution_blend_cpu,
-    datamosh_block_refresh_composite, datamosh_codec_engrave_frame_cpu, datamosh_residual_flow,
-    datamosh_scanline_smear_frame_cpu, disperse_composite_cpu, downsample_flow_to_cells,
-    feedback_state_path, flow_displace_cpu, flow_feedback_frame_cpu, flow_temporal_supersample_cpu,
-    fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu,
-    granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
-    initialize_cascade_trails, initialize_field_particles, initialize_fluid_mosaic,
-    is_datamosh_keyframe,
-    luma_specification_tone_map, luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu,
-    quantize_flow_to_blocks, read_flow_cache, read_flow_feedback_state,
-    read_grain_color_descriptor_cache, read_grain_descriptor_cache,
-    read_grain_pool_descriptor_cache, read_grain_selection_cache, refresh_field_particle_colors,
-    refresh_fluid_mosaic_colors, remix_block_vectors, render_cascade_trails,
-    render_field_particles, render_fluid_mosaic,
+    advance_cascade_trails, advance_coagulation_field, advance_dispersion_field,
+    advance_field_particles, advance_fluid_mosaic, analyze_convolution_kernel_cpu,
+    analyze_convolution_kernels_color_cpu, analyze_grain_colors_cpu, analyze_grain_pool_cpu,
+    analyze_grains_cpu, analyze_luma_band_envelope_cpu, apply_history_smear, apply_tone_map_cpu,
+    assign_temporal_patches, average_cell_flows, coagulation_field, composite_with_field,
+    compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask, compute_per_row_shifts,
+    convolution_blend_color_cpu, convolution_blend_cpu, datamosh_block_refresh_composite,
+    datamosh_codec_engrave_frame_cpu, datamosh_residual_flow, datamosh_scanline_smear_frame_cpu,
+    disperse_composite_cpu, downsample_flow_to_cells, feedback_state_path, flow_displace_cpu,
+    flow_feedback_frame_cpu, flow_temporal_supersample_cpu, fluid_advect_frame_cpu,
+    fluid_advect_two_source_frame_cpu, granular_mosaic_with_pool_selection_cpu,
+    granular_mosaic_with_selection_cpu, initialize_cascade_trails, initialize_field_particles,
+    initialize_fluid_mosaic, is_datamosh_keyframe, luma_specification_tone_map,
+    luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, quantize_flow_to_blocks,
+    read_flow_cache, read_flow_feedback_state, read_grain_color_descriptor_cache,
+    read_grain_descriptor_cache, read_grain_pool_descriptor_cache, read_grain_selection_cache,
+    refresh_field_particle_colors, refresh_fluid_mosaic_colors, remix_block_vectors,
+    render_block_collage_frame, render_cascade_collage_frame, render_cascade_trails,
+    render_channel_shift_frame, render_field_particles, render_fluid_mosaic,
+    render_palette_quantize_frame, render_pixel_sort_frame, render_retro_static_frame,
     reset_residual_in_refreshed_blocks, resort_fluid_mosaic_colors, select_grains_cpu,
     select_grains_from_pool_cpu, select_grains_multimodal_cpu, synthesize_turbulence_flow,
     uniform_displacement_field, video_vocoder_cpu, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, zero_flow, AntiRepeat,
+    BlockCollageSettings, CascadeCollageSettings, CascadeTrailSettings, ChannelShiftSettings,
     CoagulationField, CoagulationFlowSource, CoagulationSettings, CodecEngraveSettings,
-    CascadeTrailSettings, ConvolutionBlendSettings, ConvolutionKernel, DispersionField,
-    DispersionSettings,
+    ConvolutionBlendSettings, ConvolutionKernel, DispersionField, DispersionSettings,
     FieldParticleSettings, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
     FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor,
-    GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32,
-    ParticleField, PoolSelectionWindow, RmsDisplacementEnvelope, ScanlineSmearSettings,
-    TemporalCoherence, VectorRemixMode, VideoVocoderSettings, DATAMOSH_CODEC_ENGRAVE_ALGORITHM,
+    GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, MaskSource,
+    PaletteQuantizeSettings, ParticleField, PixelSortSettings, PoolSelectionWindow, QuantizeMode,
+    RetroStaticSettings, RmsDisplacementEnvelope, ScanlineSmearSettings, TemporalCoherence,
+    VectorRemixMode, VideoVocoderSettings, DATAMOSH_CODEC_ENGRAVE_ALGORITHM,
     DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
     GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
-    POOLED_GRAIN_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1633,7 +1628,9 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
     Ok(())
 }
 
-pub(crate) fn datamosh_bitstream_algorithm(operation: CliDatamoshBitstreamOperation) -> &'static str {
+pub(crate) fn datamosh_bitstream_algorithm(
+    operation: CliDatamoshBitstreamOperation,
+) -> &'static str {
     match operation {
         CliDatamoshBitstreamOperation::PframeDuplicate => DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM,
         CliDatamoshBitstreamOperation::RemoveKeyframe => {
@@ -1645,7 +1642,9 @@ pub(crate) fn datamosh_bitstream_algorithm(operation: CliDatamoshBitstreamOperat
     }
 }
 
-pub(crate) fn datamosh_bitstream_operation_name(operation: CliDatamoshBitstreamOperation) -> &'static str {
+pub(crate) fn datamosh_bitstream_operation_name(
+    operation: CliDatamoshBitstreamOperation,
+) -> &'static str {
     match operation {
         CliDatamoshBitstreamOperation::PframeDuplicate => "pframe_duplicate",
         CliDatamoshBitstreamOperation::RemoveKeyframe => "remove_keyframe",
@@ -2393,8 +2392,8 @@ pub(crate) fn render_cascade_collage_sequence(
             ));
         }
         let count = (request.frames as usize).min(source_frames.len());
-        for index in 0..count {
-            let source = load_image_f32(&source_frames[index])?;
+        for (index, frame_path) in source_frames.iter().enumerate().take(count) {
+            let source = load_image_f32(frame_path)?;
             let rendered = render_cascade_collage_frame(
                 source.width,
                 source.height,
@@ -2402,7 +2401,10 @@ pub(crate) fn render_cascade_collage_sequence(
                 &request.settings,
                 index as u32,
             )?;
-            save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+            save_png(
+                &rendered,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
         }
         println!(
             "rendered cascade collage sequence with {} frame(s) (texture from {}, scrib_amp_scale {:.2}, morph_rate {:.3}) to {}",
@@ -2428,7 +2430,10 @@ pub(crate) fn render_cascade_collage_sequence(
                 &request.settings,
                 index,
             )?;
-            save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+            save_png(
+                &rendered,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
         }
         println!(
             "rendered cascade collage sequence with {} frame(s) ({}x{} palette, scrib_amp_scale {:.2}, morph_rate {:.3}, frame_hue_rate {:.3}) to {}",
@@ -2479,8 +2484,12 @@ pub(crate) fn render_block_collage_sequence(
     for index in 0..frame_count {
         let source_a = load_image_f32(&source_a_frames[index])?;
         let source_b = load_image_f32(&source_b_frames[index])?;
-        let rendered = render_block_collage_frame(&source_a, &source_b, &request.settings, index as u32)?;
-        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+        let rendered =
+            render_block_collage_frame(&source_a, &source_b, &request.settings, index as u32)?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
     }
 
     if source_a_frames.len() != source_b_frames.len() {
@@ -2527,7 +2536,8 @@ pub(crate) fn render_pixel_sort_sequence(
     let mask_source = request.settings.mask_source;
     if mask_source != MaskSource::SelfMask && request.backend == RenderBackend::Metal {
         return Err(CliError::Message(
-            "cross-synth mask modes (a-luma, a-edge, a-flow) are CPU-only; use --backend cpu".to_string(),
+            "cross-synth mask modes (a-luma, a-edge, a-flow) are CPU-only; use --backend cpu"
+                .to_string(),
         ));
     }
 
@@ -2552,8 +2562,8 @@ pub(crate) fn render_pixel_sort_sequence(
     let mut prev_a: Option<ImageBufferF32> = None;
     let mut metal_flow_validated = false;
 
-    for index in 0..frame_count {
-        let source_b = load_image_f32(&source_b_frames[index])?;
+    for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let source_b = load_image_f32(frame_path)?;
         let bw = source_b.width;
         let bh = source_b.height;
 
@@ -2597,7 +2607,10 @@ pub(crate) fn render_pixel_sort_sequence(
             RenderBackend::Cpu => render_pixel_sort_frame(&source_b, &request.settings, &a_mask)?,
             RenderBackend::Metal => render_pixel_sort_frame_metal(&source_b, &request.settings)?,
         };
-        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
     }
 
     let algo = if mask_source == MaskSource::SelfMask {
@@ -5428,76 +5441,6 @@ pub(crate) fn load_rms_amount_modulation(
         amount_scale: config.amount_scale,
     }))
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rms_amount_modulation_uses_latest_descriptor_at_or_before_frame_time() {
-        let modulation = RmsAmountModulation {
-            descriptors: vec![
-                AudioDescriptorFrame {
-                    time_seconds: 0.0,
-                    rms: 0.25,
-                    spectral_centroid_hz: None,
-                },
-                AudioDescriptorFrame {
-                    time_seconds: 0.5,
-                    rms: 0.75,
-                    spectral_centroid_hz: None,
-                },
-            ],
-            frame_rate: 4.0,
-            amount_scale: 8.0,
-        };
-
-        assert_eq!(modulation.amount_for_frame(0, 10.0), 12.0);
-        assert_eq!(modulation.amount_for_frame(1, 10.0), 12.0);
-        assert_eq!(modulation.amount_for_frame(2, 10.0), 16.0);
-    }
-
-    #[test]
-    fn granular_audio_controls_route_cached_scalars_to_grain_settings() {
-        let controls = GranularAudioControls {
-            frame_rate: 4.0,
-            rms: Some(vec![TimedScalarControl {
-                time_seconds: 0.0,
-                value: 0.5,
-            }]),
-            onset: Some(vec![
-                TimedScalarControl {
-                    time_seconds: 0.0,
-                    value: 0.0,
-                },
-                TimedScalarControl {
-                    time_seconds: 0.5,
-                    value: 1.0,
-                },
-            ]),
-            centroid: Some(vec![TimedScalarControl {
-                time_seconds: 0.0,
-                value: 0.5,
-            }]),
-            rms_variation_scale: 0.6,
-            onset_rearrangement_scale: 0.4,
-            centroid_grain_size_scale: 8.0,
-        };
-        let base = GranularMosaicSettings {
-            grain_size: 16,
-            rearrangement: 0.2,
-            variation: 0.1,
-            seed: 42,
-        };
-
-        let first = controls.settings_for_frame(0, base);
-        let second = controls.settings_for_frame(2, base);
-
-        assert_eq!(first.grain_size, 20);
-        assert_eq!(first.variation, 0.4);
-        assert_eq!(first.rearrangement, 0.2);
-        assert_eq!(second.rearrangement, 0.6);
-    }
-}
 
 // ─── Channel Shift ────────────────────────────────────────────────────────────
 
@@ -5544,10 +5487,8 @@ pub(crate) fn render_channel_shift_sequence(
         ));
     }
 
-    let source_a_frames: Option<Vec<_>> = request
-        .source_a_dir
-        .map(collect_image_frames)
-        .transpose()?;
+    let source_a_frames: Option<Vec<_>> =
+        request.source_a_dir.map(collect_image_frames).transpose()?;
 
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
@@ -5555,8 +5496,8 @@ pub(crate) fn render_channel_shift_sequence(
     let mut prev_a: Option<ImageBufferF32> = None;
     let mut metal_flow_validated = false;
 
-    for index in 0..frame_count {
-        let source_b = load_image_f32(&source_b_frames[index])?;
+    for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let source_b = load_image_f32(frame_path)?;
 
         let per_row_shifts: Vec<f32> = if flow_active {
             let a_frames = source_a_frames.as_ref().unwrap();
@@ -5588,7 +5529,10 @@ pub(crate) fn render_channel_shift_sequence(
         } else {
             render_channel_shift_frame(&source_b, &request.settings, &per_row_shifts)?
         };
-        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
     }
 
     let mode_label = if flow_active {
@@ -5596,9 +5540,12 @@ pub(crate) fn render_channel_shift_sequence(
     } else {
         format!(
             "R:{:+.1},{:+.1} G:{:+.1},{:+.1} B:{:+.1},{:+.1} px",
-            request.settings.shift_r_x, request.settings.shift_r_y,
-            request.settings.shift_g_x, request.settings.shift_g_y,
-            request.settings.shift_b_x, request.settings.shift_b_y,
+            request.settings.shift_r_x,
+            request.settings.shift_r_y,
+            request.settings.shift_g_x,
+            request.settings.shift_g_y,
+            request.settings.shift_b_x,
+            request.settings.shift_b_y,
         )
     };
     println!(
@@ -5638,14 +5585,17 @@ pub(crate) fn render_retro_static_sequence(
     let frame_count = (request.frames as usize).min(source_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
-    for index in 0..frame_count {
-        let source = load_image_f32(&source_frames[index])?;
+    for (index, frame_path) in source_frames.iter().enumerate().take(frame_count) {
+        let source = load_image_f32(frame_path)?;
         let rendered = if request.backend == RenderBackend::Metal {
             render_retro_static_frame_metal(&source, &request.settings)?
         } else {
             render_retro_static_frame(&source, &request.settings)?
         };
-        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
     }
 
     println!(
@@ -5763,15 +5713,18 @@ pub(crate) fn render_palette_quantize_sequence(
         QuantizeMode::Kmeans => "kmeans".to_string(),
     };
 
-    for index in 0..frame_count {
-        let source_b = load_image_f32(&source_b_frames[index])?;
+    for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let source_b = load_image_f32(frame_path)?;
         let rendered = match request.backend {
             RenderBackend::Cpu => render_palette_quantize_frame(&source_b, &request.settings)?,
             RenderBackend::Metal => {
                 render_palette_quantize_frame_metal(&source_b, &request.settings)?
             }
         };
-        save_png(&rendered, &request.output_dir.join(format!("frame_{index:06}.png")))?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
     }
 
     println!(
@@ -5806,6 +5759,76 @@ pub(crate) fn render_palette_quantize_frame_metal(
         )));
     }
     Ok(gpu)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rms_amount_modulation_uses_latest_descriptor_at_or_before_frame_time() {
+        let modulation = RmsAmountModulation {
+            descriptors: vec![
+                AudioDescriptorFrame {
+                    time_seconds: 0.0,
+                    rms: 0.25,
+                    spectral_centroid_hz: None,
+                },
+                AudioDescriptorFrame {
+                    time_seconds: 0.5,
+                    rms: 0.75,
+                    spectral_centroid_hz: None,
+                },
+            ],
+            frame_rate: 4.0,
+            amount_scale: 8.0,
+        };
+
+        assert_eq!(modulation.amount_for_frame(0, 10.0), 12.0);
+        assert_eq!(modulation.amount_for_frame(1, 10.0), 12.0);
+        assert_eq!(modulation.amount_for_frame(2, 10.0), 16.0);
+    }
+
+    #[test]
+    fn granular_audio_controls_route_cached_scalars_to_grain_settings() {
+        let controls = GranularAudioControls {
+            frame_rate: 4.0,
+            rms: Some(vec![TimedScalarControl {
+                time_seconds: 0.0,
+                value: 0.5,
+            }]),
+            onset: Some(vec![
+                TimedScalarControl {
+                    time_seconds: 0.0,
+                    value: 0.0,
+                },
+                TimedScalarControl {
+                    time_seconds: 0.5,
+                    value: 1.0,
+                },
+            ]),
+            centroid: Some(vec![TimedScalarControl {
+                time_seconds: 0.0,
+                value: 0.5,
+            }]),
+            rms_variation_scale: 0.6,
+            onset_rearrangement_scale: 0.4,
+            centroid_grain_size_scale: 8.0,
+        };
+        let base = GranularMosaicSettings {
+            grain_size: 16,
+            rearrangement: 0.2,
+            variation: 0.1,
+            seed: 42,
+        };
+
+        let first = controls.settings_for_frame(0, base);
+        let second = controls.settings_for_frame(2, base);
+
+        assert_eq!(first.grain_size, 20);
+        assert_eq!(first.variation, 0.4);
+        assert_eq!(first.rearrangement, 0.2);
+        assert_eq!(second.rearrangement, 0.6);
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

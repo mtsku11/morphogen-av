@@ -7,26 +7,26 @@ use morphogen_render::{
     pyramidal_lucas_kanade_flow_with_refiner, ChannelShiftSettings, FieldParticleSettings,
     FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
     GrainSelection, GranularMosaicSettings, ImageBufferF32, PaletteQuantizeSettings, ParticleField,
-    PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError, RetroStaticSettings,
-    ScanlineFilter, SortAxis, SortDirection, SortKey, StructureMode,
+    PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError,
+    RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection, SortKey, StructureMode,
 };
 
 use crate::{
     FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
-    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, COAGULATED_COMPOSITE_KERNEL_NAME,
+    ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, CHANNEL_SHIFT_KERNEL_NAME,
+    CHANNEL_SHIFT_SHADER_SOURCE, COAGULATED_COMPOSITE_KERNEL_NAME,
     COAGULATED_COMPOSITE_SHADER_SOURCE, CONVOLUTION_BLEND_COLOR_KERNEL_NAME,
     CONVOLUTION_BLEND_COLOR_SHADER_SOURCE, CONVOLUTION_BLEND_KERNEL_NAME,
     CONVOLUTION_BLEND_SHADER_SOURCE, FIELD_PARTICLES_SPLAT_KERNEL_NAME,
-    CHANNEL_SHIFT_KERNEL_NAME, CHANNEL_SHIFT_SHADER_SOURCE,
-    PALETTE_QUANTIZE_KERNEL_NAME, PALETTE_QUANTIZE_SHADER_SOURCE,
-    RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE,
     FIELD_PARTICLES_SPLAT_SHADER_SOURCE, FLOW_DISPLACE_KERNEL_NAME, FLOW_DISPLACE_SHADER_SOURCE,
     FLUID_ADVECT_KERNEL_NAME, FLUID_ADVECT_SHADER_SOURCE, FLUID_ADVECT_TWO_SOURCE_KERNEL_NAME,
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
     GRANULAR_MOSAIC_SHADER_SOURCE, LUCAS_KANADE_REFINE_KERNEL_NAME,
-    LUCAS_KANADE_REFINE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
-    VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
+    LUCAS_KANADE_REFINE_SHADER_SOURCE, PALETTE_QUANTIZE_KERNEL_NAME,
+    PALETTE_QUANTIZE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
+    RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME,
+    VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -1951,15 +1951,15 @@ pub fn pixel_sort_metal(
         SortAxis::Col => 1,
     };
     let key_u32: u32 = match settings.key {
-        SortKey::Luma  => 0,
-        SortKey::Hue   => 1,
-        SortKey::Sat   => 2,
-        SortKey::Red   => 3,
+        SortKey::Luma => 0,
+        SortKey::Hue => 1,
+        SortKey::Sat => 2,
+        SortKey::Red => 3,
         SortKey::Green => 4,
-        SortKey::Blue  => 5,
+        SortKey::Blue => 5,
     };
     let dir_u32: u32 = match settings.direction {
-        SortDirection::Asc  => 0,
+        SortDirection::Asc => 0,
         SortDirection::Desc => 1,
     };
 
@@ -1977,10 +1977,18 @@ pub fn pixel_sort_metal(
         .map_err(MetalDispatchError::PipelineCreation)?;
 
     let source_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
     );
     let output_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
     );
     upload_rgba_f32_texture(&source_texture, source)?;
 
@@ -2025,7 +2033,9 @@ pub fn pixel_sort_metal(
 
     let status = command_buffer.status();
     if status != MTLCommandBufferStatus::Completed {
-        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
     }
 
     read_rgba_f32_texture(&output_texture, w, h)
@@ -2066,10 +2076,18 @@ pub fn retro_static_metal(
         .map_err(MetalDispatchError::PipelineCreation)?;
 
     let source_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
     );
     let output_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
     );
     upload_rgba_f32_texture(&source_texture, source)?;
 
@@ -2098,17 +2116,16 @@ pub fn retro_static_metal(
         std::mem::size_of::<RetroStaticMetalParams>() as u64,
         (&params as *const RetroStaticMetalParams).cast(),
     );
-    encoder.dispatch_thread_groups(
-        MTLSize::new(grid_w, grid_h, 1),
-        MTLSize::new(tg_w, tg_h, 1),
-    );
+    encoder.dispatch_thread_groups(MTLSize::new(grid_w, grid_h, 1), MTLSize::new(tg_w, tg_h, 1));
     encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
     let status = command_buffer.status();
     if status != MTLCommandBufferStatus::Completed {
-        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
     }
 
     read_rgba_f32_texture(&output_texture, w, h)
@@ -2139,10 +2156,18 @@ pub fn channel_shift_metal(
         .map_err(MetalDispatchError::PipelineCreation)?;
 
     let source_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
     );
     let output_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
     );
     upload_rgba_f32_texture(&source_texture, source_b)?;
 
@@ -2173,17 +2198,16 @@ pub fn channel_shift_metal(
         std::mem::size_of::<ChannelShiftMetalParams>() as u64,
         (&params as *const ChannelShiftMetalParams).cast(),
     );
-    encoder.dispatch_thread_groups(
-        MTLSize::new(grid_w, grid_h, 1),
-        MTLSize::new(tg_w, tg_h, 1),
-    );
+    encoder.dispatch_thread_groups(MTLSize::new(grid_w, grid_h, 1), MTLSize::new(tg_w, tg_h, 1));
     encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
     let status = command_buffer.status();
     if status != MTLCommandBufferStatus::Completed {
-        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
     }
 
     read_rgba_f32_texture(&output_texture, w, h)
@@ -2224,14 +2248,27 @@ pub fn palette_quantize_metal(
         .map_err(MetalDispatchError::PipelineCreation)?;
 
     let source_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderRead,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
     );
     let output_texture = new_texture(
-        &device, w, h, MTLPixelFormat::RGBA32Float, MTLTextureUsage::ShaderWrite,
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
     );
     upload_rgba_f32_texture(&source_texture, source_b)?;
 
-    let params = PaletteQuantizeMetalParams { width: w, height: h, mode, levels };
+    let params = PaletteQuantizeMetalParams {
+        width: w,
+        height: h,
+        mode,
+        levels,
+    };
 
     let tg_w = 16_u64.min(w as u64);
     let tg_h = 16_u64.min(h as u64);
@@ -2249,17 +2286,16 @@ pub fn palette_quantize_metal(
         std::mem::size_of::<PaletteQuantizeMetalParams>() as u64,
         (&params as *const PaletteQuantizeMetalParams).cast(),
     );
-    encoder.dispatch_thread_groups(
-        MTLSize::new(grid_w, grid_h, 1),
-        MTLSize::new(tg_w, tg_h, 1),
-    );
+    encoder.dispatch_thread_groups(MTLSize::new(grid_w, grid_h, 1), MTLSize::new(tg_w, tg_h, 1));
     encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
     let status = command_buffer.status();
     if status != MTLCommandBufferStatus::Completed {
-        return Err(MetalDispatchError::CommandBufferFailed(format!("{status:?}")));
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
     }
 
     read_rgba_f32_texture(&output_texture, w, h)
@@ -2414,14 +2450,15 @@ mod tests {
         let previous = lk_textured_frame(64, 48, 0.0, 0.0);
         let current = lk_textured_frame(64, 48, 6.0, 4.0);
 
-        let cpu = morphogen_render::pyramidal_lucas_kanade_flow_cpu(
-            &previous, &current, 64, 48, radius,
-        )
-        .expect("cpu flow");
+        let cpu =
+            morphogen_render::pyramidal_lucas_kanade_flow_cpu(&previous, &current, 64, 48, radius)
+                .expect("cpu flow");
         let gpu = match pyramidal_lucas_kanade_flow_metal(&previous, &current, 64, 48, radius) {
             Ok(estimate) => estimate,
             Err(MetalDispatchError::DeviceUnavailable) => {
-                eprintln!("skipping Metal LK parity assertion because no Metal device is available");
+                eprintln!(
+                    "skipping Metal LK parity assertion because no Metal device is available"
+                );
                 return;
             }
             Err(error) => panic!("metal flow failed: {error}"),
@@ -2429,7 +2466,9 @@ mod tests {
 
         let mut max_flow_diff = 0.0_f32;
         for (g, c) in gpu.flow.vectors.iter().zip(cpu.flow.vectors.iter()) {
-            max_flow_diff = max_flow_diff.max((g[0] - c[0]).abs()).max((g[1] - c[1]).abs());
+            max_flow_diff = max_flow_diff
+                .max((g[0] - c[0]).abs())
+                .max((g[1] - c[1]).abs());
         }
         let mut max_conf_diff = 0.0_f32;
         for (g, c) in gpu
@@ -3041,7 +3080,6 @@ mod tests {
         })
         .expect("fixture");
 
-
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
             threshold_low: 0.20,
@@ -3110,7 +3148,6 @@ mod tests {
         })
         .expect("fixture");
 
-
         let settings = PixelSortSettings {
             axis: SortAxis::Row,
             threshold_low: 0.2,
@@ -3167,7 +3204,9 @@ mod tests {
 
     #[test]
     fn metal_pixel_sort_descending_matches_cpu() {
-        use morphogen_render::{render_pixel_sort_frame, PixelSortSettings, SortAxis, SortDirection};
+        use morphogen_render::{
+            render_pixel_sort_frame, PixelSortSettings, SortAxis, SortDirection,
+        };
 
         let fixture = ImageBufferF32::from_fn(32, 16, |x, y| {
             let v = ((x * 7 + y * 13 + 3) % 31 + 1) as f32 / 32.0;
@@ -3316,7 +3355,9 @@ mod tests {
 
     #[test]
     fn metal_palette_quantize_posterize_matches_cpu() {
-        use morphogen_render::{render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode};
+        use morphogen_render::{
+            render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
+        };
 
         let fixture = ImageBufferF32::from_fn(32, 24, |x, y| {
             let r = ((x * 7 + y * 3) % 17) as f32 / 17.0;
@@ -3344,15 +3385,17 @@ mod tests {
 
     #[test]
     fn metal_palette_quantize_palette_matches_cpu() {
-        use morphogen_render::{render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode};
+        use morphogen_render::{
+            render_palette_quantize_frame, PaletteQuantizeSettings, QuantizeMode,
+        };
 
         // Use pixels clearly within one Voronoi region to avoid FP tie-break risk.
         // Each quadrant is assigned to a different palette entry.
         let fixture = ImageBufferF32::from_fn(32, 32, |x, y| {
             let (r, g, b) = match (x < 16, y < 16) {
-                (true, true)   => (0.95f32, 0.05, 0.95), // near magenta (1,0,1)
-                (false, true)  => (0.90f32, 0.45, 0.05), // near orange  (1,0.5,0)
-                (true, false)  => (0.05f32, 0.72, 0.72), // near teal    (0,0.75,0.75)
+                (true, true) => (0.95f32, 0.05, 0.95),  // near magenta (1,0,1)
+                (false, true) => (0.90f32, 0.45, 0.05), // near orange  (1,0.5,0)
+                (true, false) => (0.05f32, 0.72, 0.72), // near teal    (0,0.75,0.75)
                 (false, false) => (0.05f32, 0.05, 0.05), // near black   (0,0,0)
             };
             [r, g, b, 1.0]

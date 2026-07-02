@@ -25,16 +25,12 @@ pub const NEON_PALETTE: [[f32; 3]; 4] = [
 /// Quantize mode.  Only `Posterize` is implemented in Slice 1.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum QuantizeMode {
+    #[default]
     Posterize,
     Palette,
     Kmeans,
-}
-
-impl Default for QuantizeMode {
-    fn default() -> Self {
-        Self::Posterize
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -115,9 +111,7 @@ fn palette_map(source_b: &ImageBufferF32) -> Result<ImageBufferF32, RenderError>
 fn posterize(source_b: &ImageBufferF32, levels: u32) -> Result<ImageBufferF32, RenderError> {
     let scale = (levels - 1) as f32;
     ImageBufferF32::from_fn(source_b.width, source_b.height, |x, y| {
-        let px = source_b
-            .pixel(x, y)
-            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+        let px = source_b.pixel(x, y).unwrap_or([0.0, 0.0, 0.0, 0.0]);
         [
             (px[0] * scale).round() / scale,
             (px[1] * scale).round() / scale,
@@ -178,8 +172,7 @@ mod tests {
         for y in 0..2 {
             for x in 0..2 {
                 let px = out.pixel(x, y).unwrap();
-                for ch in 0..3 {
-                    let v = px[ch];
+                for (ch, &v) in px.iter().take(3).enumerate() {
                     assert!(
                         v == 0.0 || v == 1.0,
                         "levels=2 pixel ({x},{y}) ch {ch}: expected 0 or 1, got {v}"

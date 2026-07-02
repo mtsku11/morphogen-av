@@ -142,7 +142,13 @@ fn paeth_predictor(a: i32, b: i32, c: i32) -> i32 {
 
 /// The filtered byte at row `y`, intra-row slot `slot` (`0..w*real_bpp`), given
 /// the chosen filter. Predictor reads *raw* (never filtered) neighbour bytes.
-fn filtered_byte(source: &ImageBufferF32, y: i64, slot: i64, real_bpp: u32, filter: ScanlineFilter) -> u8 {
+fn filtered_byte(
+    source: &ImageBufferF32,
+    y: i64,
+    slot: i64,
+    real_bpp: u32,
+    filter: ScanlineFilter,
+) -> u8 {
     let x = slot / real_bpp as i64;
     let c = (slot % real_bpp as i64) as u32;
     let raw = raw_channel(source, x, y, c) as i32;
@@ -183,7 +189,8 @@ pub fn render_retro_static_frame(
     for y in 0..h as i64 {
         let row_base = y * real_row_len;
         for slot in 0..real_row_len {
-            filtered[(row_base + slot) as usize] = filtered_byte(source, y, slot, real_bpp, settings.filter);
+            filtered[(row_base + slot) as usize] =
+                filtered_byte(source, y, slot, real_bpp, settings.filter);
         }
     }
 
@@ -278,7 +285,10 @@ mod tests {
         let a = render_retro_static_frame(&src, &no_shear).unwrap();
         let b = render_retro_static_frame(&src, &shear).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
-        assert!(d > 0.0, "A4: real_bpp != assumed_bpp must differ from real_bpp == assumed_bpp");
+        assert!(
+            d > 0.0,
+            "A4: real_bpp != assumed_bpp must differ from real_bpp == assumed_bpp"
+        );
     }
 
     #[test]

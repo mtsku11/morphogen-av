@@ -4230,7 +4230,11 @@ fn pixel_sort_metal_parity_real_footage() {
         eprintln!("skipping: {path} not found");
         return;
     }
-    let decoded = ImageReader::open(path).unwrap().decode().unwrap().to_rgba32f();
+    let decoded = ImageReader::open(path)
+        .unwrap()
+        .decode()
+        .unwrap()
+        .to_rgba32f();
     let pixels: Vec<[f32; 4]> = decoded.pixels().map(|p| p.0).collect();
     let source = ImageBufferF32::new(decoded.width(), decoded.height(), pixels).unwrap();
 
@@ -4249,7 +4253,11 @@ fn pixel_sort_metal_parity_real_footage() {
     let mut worst_gpu = [0.0_f32; 4];
     let mut worst_cpu = [0.0_f32; 4];
     for (i, (g_px, c_px)) in gpu.pixels.iter().zip(cpu.pixels.iter()).enumerate() {
-        let diff = g_px.iter().zip(c_px.iter()).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        let diff = g_px
+            .iter()
+            .zip(c_px.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
         if diff > worst_diff {
             worst_diff = diff;
             worst_pos = (i as u32 % source.width, i as u32 / source.width);

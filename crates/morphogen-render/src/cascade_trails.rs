@@ -307,10 +307,7 @@ pub fn initialize_cascade_trails(
 /// the clip. Tile 0 gets frame 0, tile N−1 gets the last frame, intermediate tiles get
 /// proportionally intermediate frames. Call once after `initialize_cascade_trails` when
 /// `temporal_tiles` is enabled; patches stay frozen after this — do NOT call with `live_refresh`.
-pub fn assign_temporal_patches(
-    state: &mut CascadeTrailState,
-    frames: &[ImageBufferF32],
-) {
+pub fn assign_temporal_patches(state: &mut CascadeTrailState, frames: &[ImageBufferF32]) {
     let n_tiles = state.patches.len();
     let n_frames = frames.len();
     if n_tiles == 0 || n_frames == 0 {
@@ -323,8 +320,13 @@ pub fn assign_temporal_patches(
         .enumerate()
     {
         let frame_idx = (i * n_frames) / n_tiles;
-        let (_, fresh) =
-            sample_cell(&frames[frame_idx], origin.x0, origin.y0, origin.x1, origin.y1);
+        let (_, fresh) = sample_cell(
+            &frames[frame_idx],
+            origin.x0,
+            origin.y0,
+            origin.x1,
+            origin.y1,
+        );
         *patch = fresh;
     }
     // Re-stamp the accumulator with the newly assigned patches so frame 0 already shows the
@@ -432,7 +434,8 @@ pub fn advance_cascade_trails(
                     let px = (h1 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
                     let fy = 0.013 + (h2 & 0xFFFF) as f32 / 65535.0 * 0.040;
                     let py = (h3 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
-                    pos[0] = home_x + dir * settings.river_speed * settings.advect * t
+                    pos[0] = home_x
+                        + dir * settings.river_speed * settings.advect * t
                         + amplitude * (t * fx + px).sin();
                     pos[1] = home_y + amplitude * (t * fy + py).sin();
                 }
@@ -460,7 +463,10 @@ pub fn advance_cascade_trails(
                         let fy = 0.013 + (h2 & 0xFFFF) as f32 / 65535.0 * 0.040;
                         let py = (h3 & 0xFFFF) as f32 / 65535.0 * std::f32::consts::TAU;
                         let t = frame as f32;
-                        [amplitude * (t * fx + px).sin(), amplitude * (t * fy + py).sin()]
+                        [
+                            amplitude * (t * fx + px).sin(),
+                            amplitude * (t * fy + py).sin(),
+                        ]
                     })
                     .collect();
                 Some(offsets)
@@ -474,7 +480,9 @@ pub fn advance_cascade_trails(
                 let max_x = state.width.saturating_sub(state.tile_size) as f32;
                 let max_y = state.height.saturating_sub(state.tile_size) as f32;
                 let radius = settings.river_turbulence;
-                let frame_seed = settings.seed.wrapping_add((frame as u64).wrapping_mul(0x517CC1B727220A95));
+                let frame_seed = settings
+                    .seed
+                    .wrapping_add((frame as u64).wrapping_mul(0x517CC1B727220A95));
                 for (pos, origin) in state.positions.iter_mut().zip(state.origins.iter()) {
                     let h0 = tile_hash(frame_seed, origin.x0, origin.y0);
                     let h1 = splitmix(h0);
@@ -509,7 +517,8 @@ pub fn advance_cascade_trails(
     // temporal_tiles: patches are frozen at temporal-assignment time — never refresh.
     if settings.live_refresh && !settings.temporal_tiles {
         for (patch, origin) in state.patches.iter_mut().zip(state.origins.iter()) {
-            let (_, fresh) = sample_cell(current_source, origin.x0, origin.y0, origin.x1, origin.y1);
+            let (_, fresh) =
+                sample_cell(current_source, origin.x0, origin.y0, origin.x1, origin.y1);
             *patch = fresh;
         }
     }
@@ -705,7 +714,10 @@ fn splitmix(x: u64) -> u64 {
 /// Derive a u64 hash from the tile's home grid position and the global seed.
 #[inline]
 fn tile_hash(seed: u64, home_x: u32, home_y: u32) -> u64 {
-    splitmix(seed ^ ((home_x as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ (home_y as u64).wrapping_mul(0x6C62272E07BB0142)))
+    splitmix(
+        seed ^ ((home_x as u64).wrapping_mul(0x9E3779B97F4A7C15)
+            ^ (home_y as u64).wrapping_mul(0x6C62272E07BB0142)),
+    )
 }
 
 #[cfg(test)]
@@ -715,12 +727,7 @@ mod tests {
     /// A small synthetic colour-gradient source so tiles carry distinguishable patches.
     fn gradient_source(width: u32, height: u32) -> ImageBufferF32 {
         ImageBufferF32::from_fn(width, height, |x, y| {
-            [
-                x as f32 / width as f32,
-                y as f32 / height as f32,
-                0.5,
-                1.0,
-            ]
+            [x as f32 / width as f32, y as f32 / height as f32, 0.5, 1.0]
         })
         .unwrap()
     }
@@ -828,6 +835,9 @@ mod tests {
             grew |= now > prev;
             prev = now;
         }
-        assert!(grew, "with advect > 0 the trails should grow the painted area");
+        assert!(
+            grew,
+            "with advect > 0 the trails should grow the painted area"
+        );
     }
 }

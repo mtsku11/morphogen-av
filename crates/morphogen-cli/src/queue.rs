@@ -10,7 +10,8 @@ use morphogen_core::{
     PixelSortAxis, PixelSortDirection, PixelSortKey, PixelSortMaskSource, RenderBackend, RenderJob,
     RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
     RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
-    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode, VideoVocoderMode,
+    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode,
+    VideoVocoderMode,
 };
 use morphogen_render::{
     flow_displace_cpu, BlendMode, BlockCollageSettings, CascadeCollageSettings, CascadeFieldType,
@@ -1985,9 +1986,7 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
             )
         })
         .ok_or_else(|| {
-            CliError::Message(
-                "render queue has no queued or running retro-static jobs".to_string(),
-            )
+            CliError::Message("render queue has no queued or running retro-static jobs".to_string())
         })?;
 
     let job_id = queue.jobs[job_index].id.clone();
@@ -2149,7 +2148,9 @@ pub(crate) fn queue_run_block_collage_sequence(queue_path: &Path) -> Result<(), 
             )
         })
         .ok_or_else(|| {
-            CliError::Message("render queue has no queued or running block-collage jobs".to_string())
+            CliError::Message(
+                "render queue has no queued or running block-collage jobs".to_string(),
+            )
         })?;
 
     let job_id = queue.jobs[job_index].id.clone();
@@ -3239,12 +3240,8 @@ fn cli_bitstream_operation(op: DatamoshBitstreamOperation) -> CliDatamoshBitstre
         DatamoshBitstreamOperation::PframeDuplicate => {
             CliDatamoshBitstreamOperation::PframeDuplicate
         }
-        DatamoshBitstreamOperation::RemoveKeyframe => {
-            CliDatamoshBitstreamOperation::RemoveKeyframe
-        }
-        DatamoshBitstreamOperation::MotionTransfer => {
-            CliDatamoshBitstreamOperation::MotionTransfer
-        }
+        DatamoshBitstreamOperation::RemoveKeyframe => CliDatamoshBitstreamOperation::RemoveKeyframe,
+        DatamoshBitstreamOperation::MotionTransfer => CliDatamoshBitstreamOperation::MotionTransfer,
     }
 }
 

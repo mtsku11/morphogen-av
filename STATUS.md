@@ -12,6 +12,9 @@ _Last updated: 2026-07-02_
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **64 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
+- Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
+  "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
+  fmt/clippy behaviour; the 1.96 drift was reconciled 2026-07-02).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
