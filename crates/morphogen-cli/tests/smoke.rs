@@ -4552,3 +4552,114 @@ fn queue_channel_shift_modulated_matches_direct_and_records_routes() {
     assert_eq!(modulation["fps"], 4.0);
     assert_eq!(modulation["modulator_frames"], source_arg.as_str());
 }
+
+#[test]
+fn queue_palette_quantize_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+    // The modulator frames are the carrier frames themselves, giving a
+    // constant envelope of 1.0 (peak-relative luma) on the gradient fixture:
+    // levels = round(1.0 * 6 + 2) = 8 (visible posterize), and the enum route
+    // holds mode at variant index 0 (posterize).
+    let levels_route = "levels=luma:6,2";
+    let mode_route = "mode=luma:0,0";
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-palette-quantize-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "2",
+            "--modulate",
+            levels_route,
+            "--modulate",
+            mode_route,
+            "--modulator-frames",
+            source_arg.as_str(),
+            "--modulation-fps",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-palette-quantize-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            levels_route,
+            "--modulate",
+            mode_route,
+            "--modulator-frames",
+            source_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-palette-quantize-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render is byte-identical to the direct render (path-independent).
+    for frame_name in ["frame_000000.png", "frame_000001.png"] {
+        assert_eq!(
+            fs::read(output_root.join("job-0001/frames").join(frame_name)).expect("queued frame"),
+            fs::read(direct_dir.join(frame_name)).expect("direct frame"),
+            "queue render must be byte-identical to direct render ({frame_name})"
+        );
+    }
+
+    // The routed levels actually posterized: output differs from the source
+    // even though the static settings are the levels-256 passthrough.
+    assert_ne!(
+        fs::read(output_root.join("job-0001/frames/frame_000000.png")).expect("queued frame"),
+        fs::read(source_dir.join("frame_000001.png")).expect("source frame"),
+        "luma-routed levels must posterize the gradient"
+    );
+
+    // Manifest records the palette-quantize algorithm, knobs, and both routes.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_palette_quantize");
+    let effect = &manifest["palette_quantize"];
+    assert_eq!(effect["algorithm"], "palette_quantize_posterize_cpu_v1");
+    assert_eq!(effect["settings"]["mode"], "posterize");
+    assert_eq!(effect["settings"]["levels"], 256);
+    let modulation = &effect["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "levels");
+    assert_eq!(modulation["routes"][0]["source"], "luma");
+    assert_eq!(modulation["routes"][0]["scale"], 6.0);
+    assert_eq!(modulation["routes"][0]["offset"], 2.0);
+    assert_eq!(modulation["routes"][1]["target"], "mode");
+    assert_eq!(modulation["fps"], 4.0);
+    assert_eq!(modulation["modulator_frames"], source_arg.as_str());
+}

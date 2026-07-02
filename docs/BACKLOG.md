@@ -94,6 +94,11 @@ contracts live in the `*_MILESTONE.md` docs.
   unreachable). Enum routes persist on the existing pixel-sort/retro-static
   queue tasks with no queue changes. Deferred: SwiftUI enum mod slots,
   stateful modulation targets.
+- Palette-quantize queue task: `frame_sequence_palette_quantize` render-job
+  task + `queue-add`/`queue-run-palette-quantize-sequence` (channel-shift
+  precedent — add-time route validation, `mode` persisted as a string label,
+  add→run byte-identical smoke-tested with integer + enum routes). Deferred:
+  SwiftUI palette-quantize panel section, stateful modulation targets.
 
 ## Next
 

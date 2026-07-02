@@ -1697,6 +1697,45 @@ pub(crate) enum Commands {
     QueueRunChannelShiftSequence {
         queue_path: PathBuf,
     },
+    /// Queue a palette-quantize (posterize / neon palette) sequence job with
+    /// optional modulation-matrix routes.
+    QueueAddPaletteQuantizeSequence {
+        queue_path: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        /// Quantize mode: posterize (uniform steps) or palette (fixed neon colours).
+        #[arg(long, value_enum, default_value_t = CliQuantizeMode::Posterize)]
+        mode: CliQuantizeMode,
+        /// Discrete steps per channel for posterize mode (2–256; 256 = passthrough).
+        #[arg(long, default_value_t = 256)]
+        levels: u32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: levels (integer — clamped to [2, 256], then rounded), mode
+        /// (enum: posterize/palette by index). Persisted on the job; envelope
+        /// times sample against the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+    },
+    QueueRunPaletteQuantizeSequence {
+        queue_path: PathBuf,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,

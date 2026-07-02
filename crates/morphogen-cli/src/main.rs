@@ -1440,6 +1440,40 @@ fn run() -> Result<(), CliError> {
         Commands::QueueRunChannelShiftSequence { queue_path } => {
             queue_run_channel_shift_sequence(&queue_path)
         }
+        Commands::QueueAddPaletteQuantizeSequence {
+            queue_path,
+            source_b_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            mode,
+            levels,
+            backend,
+            project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+        } => queue_add_palette_quantize_sequence(QueueAddPaletteQuantizeSequenceRequest {
+            queue_path: &queue_path,
+            source_b_dir: &source_b_dir,
+            output_root_dir: &output_root_dir,
+            frames,
+            frame_rate,
+            settings: PaletteQuantizeSettings {
+                mode: mode.into(),
+                levels,
+            },
+            backend: backend.into(),
+            project_path: project_path.as_deref(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
+        }),
+        Commands::QueueRunPaletteQuantizeSequence { queue_path } => {
+            queue_run_palette_quantize_sequence(&queue_path)
+        }
         Commands::QueueAddBlockCollageSequence {
             queue_path,
             source_a_dir,

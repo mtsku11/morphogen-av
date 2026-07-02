@@ -207,7 +207,16 @@ mirror the core type so the graph model stays the single long-term home
    persist on the existing pixel-sort/retro-static queue tasks with no queue
    changes. SwiftUI mod slots for enum targets are deferred (the slot UI's
    scale/offset steppers need an enum-aware presentation).
-6. **Later:** stateful-effect targets, per-route sampling, envelope caching
+6. **Palette-quantize queue task — LANDED.** `frame_sequence_palette_quantize`
+   render-job task plus `queue-add`/`queue-run-palette-quantize-sequence`,
+   channel-shift precedent: routes validated at add time through the same
+   apply function (nothing persists on rejection), `mode` persisted as a
+   string label like retro-static's `filter`, queue-run rebuilds spec strings
+   so it shares the direct code path (add→run byte-identical, smoke-tested
+   with a `levels` + `mode` route pair). SwiftUI palette-quantize section is
+   its own later slice.
+7. **Later:** stateful-effect targets, SwiftUI enum mod slots +
+   palette-quantize panel section, per-route sampling, envelope caching
    as analysis sidecars, multiple modulators per render.
 
 ## Acceptance criteria (slice 1)

@@ -381,6 +381,35 @@ pub enum RenderJobTask {
         #[serde(default)]
         modulation_sampling: ModulationSampling,
     },
+    /// Palette quantize / posterize: collapse the carrier's colours to discrete
+    /// per-channel levels (posterize) or the built-in neon palette. Stateless
+    /// single-source, integer-domain (CPU/Metal bit-identical).
+    FrameSequencePaletteQuantize {
+        carrier_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        /// Quantize mode label: `posterize` or `palette`.
+        #[serde(default = "default_palette_quantize_mode")]
+        mode: String,
+        /// Discrete steps per channel for posterize mode (2–256; 256 =
+        /// byte-identical passthrough).
+        #[serde(default = "default_palette_quantize_levels")]
+        levels: u32,
+        #[serde(default)]
+        backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+    },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
     /// No blending — hard cuts at every tile boundary.
@@ -1093,6 +1122,14 @@ fn default_modulation_scale() -> f32 {
 
 fn default_channel_shift_flow_radius() -> i32 {
     4
+}
+
+fn default_palette_quantize_mode() -> String {
+    "posterize".to_string()
+}
+
+fn default_palette_quantize_levels() -> u32 {
+    256
 }
 
 /// Named deterministic datamosh presets for the flow-reuse path. Bitstream

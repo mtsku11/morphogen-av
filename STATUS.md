@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **448 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **449 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **70 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,22 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Palette-quantize queue task.** `frame_sequence_palette_quantize` core
+  render-job task + `queue-add`/`queue-run-palette-quantize-sequence` CLI,
+  built on the channel-shift precedent: routes (integer `levels`, enum
+  `mode`) validated at add time through the same
+  `apply_palette_quantize_modulation` probe (rejection persists nothing),
+  `mode` stored as a string label (`posterize`/`palette`) like retro-static's
+  `filter`, queue-run rebuilds `--modulate` spec strings from persisted
+  routes so it shares the direct render path. Manifest gets the
+  `palette_quantize` effect block (algorithm id, static settings, backend,
+  modulation block when routes exist). **Verified:** workspace 448 → **449**
+  (new smoke test: add→run byte-identical to the direct render 2/2 frames
+  with a `levels=luma:6,2` + `mode=luma:0,0` route pair, routed levels
+  actually posterize the gradient, manifest task/algorithm/settings/routes
+  pinned); clippy `-D warnings` + fmt clean. SwiftUI palette-quantize panel
+  section is its own later slice.
 
 - **Modulation matrix — enum targets (slice 5).** Pixel-sort
   `direction`/`axis`, retro-static `filter`, and palette-quantize `mode` join
