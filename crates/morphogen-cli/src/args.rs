@@ -14,9 +14,9 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    BlendMode, CoagulationFlowSource, ScanlineFilter, StructureMode, VectorRemixMode,
-    CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM,
-    MULTIMODAL_GRAIN_ALGORITHM,
+    BlendMode, CoagulationFlowSource, ModulationSampling, ScanlineFilter, StructureMode,
+    VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
+    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -803,6 +803,24 @@ pub(crate) enum Commands {
         /// Cross-synth mask modes are CPU-only regardless of this flag.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: threshold_low, threshold_high. Sources: audio-rms/audio-onset/
+        /// audio-centroid (need --modulator-audio), luma/flow (need --modulator-frames).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// Render a channel-shift (RGB-split / chromatic aberration) sequence. Each
     /// colour channel is sampled from B at an independently offset position. Alpha
@@ -846,6 +864,25 @@ pub(crate) enum Commands {
         /// (constant-offset mode only; A-flow mode is CPU-only).
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: shift_r_x, shift_r_y, shift_g_x, shift_g_y, shift_b_x, shift_b_y.
+        /// Sources: audio-rms/audio-onset/audio-centroid (need --modulator-audio),
+        /// luma/flow (need --modulator-frames).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// Render the retro-static glitch: deterministically simulate a PNG-style
     /// scanline filter, then deliberately misread it at the wrong bytes-per-pixel
@@ -876,6 +913,24 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: strength. Sources: audio-rms/audio-onset/audio-centroid (need
+        /// --modulator-audio), luma/flow (need --modulator-frames).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).
@@ -2428,6 +2483,24 @@ impl From<CliRenderBackend> for RenderBackend {
         match value {
             CliRenderBackend::Cpu => Self::Cpu,
             CliRenderBackend::Metal => Self::Metal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliModulationSampling {
+    /// Step: the latest envelope sample at or before the frame time.
+    #[default]
+    Hold,
+    /// Linear interpolation between the bracketing envelope samples.
+    Smooth,
+}
+
+impl From<CliModulationSampling> for ModulationSampling {
+    fn from(value: CliModulationSampling) -> Self {
+        match value {
+            CliModulationSampling::Hold => Self::Hold,
+            CliModulationSampling::Smooth => Self::Smooth,
         }
     }
 }

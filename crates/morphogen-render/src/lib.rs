@@ -21,6 +21,7 @@ pub mod grain_cache;
 pub mod granular_mosaic;
 pub mod image_buffer;
 pub mod luminance_flow;
+pub mod modulation;
 pub mod optical_flow;
 pub mod palette_quantize;
 pub mod pixel_sort;
@@ -122,6 +123,13 @@ pub use granular_mosaic::{
 };
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
+pub use modulation::{
+    apply_channel_shift_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
+    modulated_value, parse_modulation_route, peak_normalize, sample_envelope,
+    validate_route_targets, ModulationRoute, ModulationSampling, ModulationSource,
+    CHANNEL_SHIFT_MODULATION_TARGETS, PIXEL_SORT_MODULATION_TARGETS,
+    RETRO_STATIC_MODULATION_TARGETS,
+};
 pub use optical_flow::{
     lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu,
     pyramidal_lucas_kanade_flow_with_refiner, refine_level_cpu, FlowConfidenceMap,

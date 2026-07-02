@@ -54,11 +54,39 @@ use morphogen_render::{
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
+use morphogen_render::{
+    apply_channel_shift_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
+    ModulationSampling,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::args::*;
 use crate::error::CliError;
 use crate::imaging::*;
+use crate::modulate::{build_modulation_plan, ModulationPlan, ModulationRequest};
+/// The shared `--modulate` argument bundle carried by modulatable sequence
+/// requests; resolved into a `ModulationPlan` by the handler.
+#[derive(Default)]
+pub(crate) struct ModulationCliArgs<'a> {
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) sampling: ModulationSampling,
+    pub(crate) fps: f64,
+}
+
+impl ModulationCliArgs<'_> {
+    fn build_plan(&self) -> Result<Option<ModulationPlan>, CliError> {
+        build_modulation_plan(ModulationRequest {
+            specs: self.modulate,
+            modulator_audio: self.modulator_audio,
+            modulator_frames: self.modulator_frames,
+            sampling: self.sampling,
+            fps: self.fps,
+        })
+    }
+}
+
 pub(crate) fn render_test(output_path: &Path) -> Result<(), CliError> {
     let width = 256;
     let height = 256;
@@ -2521,6 +2549,7 @@ pub(crate) struct PixelSortSequenceRequest<'a> {
     pub(crate) backend: RenderBackend,
     /// LK window radius for a-flow mask mode.
     pub(crate) flow_radius: i32,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 pub(crate) fn render_pixel_sort_sequence(
@@ -2559,10 +2588,26 @@ pub(crate) fn render_pixel_sort_sequence(
     let frame_count = (request.frames as usize).min(b_count);
     fs::create_dir_all(request.output_dir)?;
 
+    let modulation = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation {
+        // Dry-run at frame 0 so an unknown target fails before any frame renders.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_pixel_sort_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     let mut prev_a: Option<ImageBufferF32> = None;
     let mut metal_flow_validated = false;
 
     for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation {
+            for (target, value) in plan.frame_values(index) {
+                apply_pixel_sort_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let source_b = load_image_f32(frame_path)?;
         let bw = source_b.width;
         let bh = source_b.height;
@@ -2604,8 +2649,8 @@ pub(crate) fn render_pixel_sort_sequence(
 
         // For non-flow modes update prev_a is not needed; for ALuma/AEdge prev_a stays None.
         let rendered = match request.backend {
-            RenderBackend::Cpu => render_pixel_sort_frame(&source_b, &request.settings, &a_mask)?,
-            RenderBackend::Metal => render_pixel_sort_frame_metal(&source_b, &request.settings)?,
+            RenderBackend::Cpu => render_pixel_sort_frame(&source_b, &frame_settings, &a_mask)?,
+            RenderBackend::Metal => render_pixel_sort_frame_metal(&source_b, &frame_settings)?,
         };
         save_png(
             &rendered,
@@ -5456,6 +5501,7 @@ pub(crate) struct ChannelShiftSequenceRequest<'a> {
     pub(crate) flow_gain: f32,
     /// Lucas-Kanade window radius for optical-flow in A-flow mode.
     pub(crate) radius: i32,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 pub(crate) fn render_channel_shift_sequence(
@@ -5493,10 +5539,26 @@ pub(crate) fn render_channel_shift_sequence(
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
+    let modulation = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation {
+        // Dry-run at frame 0 so an unknown target fails before any frame renders.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_channel_shift_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     let mut prev_a: Option<ImageBufferF32> = None;
     let mut metal_flow_validated = false;
 
     for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation {
+            for (target, value) in plan.frame_values(index) {
+                apply_channel_shift_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let source_b = load_image_f32(frame_path)?;
 
         let per_row_shifts: Vec<f32> = if flow_active {
@@ -5525,9 +5587,9 @@ pub(crate) fn render_channel_shift_sequence(
         };
 
         let rendered = if !flow_active && request.backend == RenderBackend::Metal {
-            render_channel_shift_frame_metal(&source_b, &request.settings)?
+            render_channel_shift_frame_metal(&source_b, &frame_settings)?
         } else {
-            render_channel_shift_frame(&source_b, &request.settings, &per_row_shifts)?
+            render_channel_shift_frame(&source_b, &frame_settings, &per_row_shifts)?
         };
         save_png(
             &rendered,
@@ -5565,6 +5627,7 @@ pub(crate) struct RetroStaticSequenceRequest<'a> {
     pub(crate) settings: RetroStaticSettings,
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 pub(crate) fn render_retro_static_sequence(
@@ -5585,12 +5648,28 @@ pub(crate) fn render_retro_static_sequence(
     let frame_count = (request.frames as usize).min(source_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
+    let modulation = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation {
+        // Dry-run at frame 0 so an unknown target fails before any frame renders.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_retro_static_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     for (index, frame_path) in source_frames.iter().enumerate().take(frame_count) {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation {
+            for (target, value) in plan.frame_values(index) {
+                apply_retro_static_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let source = load_image_f32(frame_path)?;
         let rendered = if request.backend == RenderBackend::Metal {
-            render_retro_static_frame_metal(&source, &request.settings)?
+            render_retro_static_frame_metal(&source, &frame_settings)?
         } else {
-            render_retro_static_frame(&source, &request.settings)?
+            render_retro_static_frame(&source, &frame_settings)?
         };
         save_png(
             &rendered,

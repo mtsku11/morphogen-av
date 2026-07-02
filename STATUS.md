@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **431 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **442 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **64 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,30 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — slice 1 (CPU + CLI).** The first generic typed-signal
+  routing layer toward the modular-synth goal: `--modulate
+  "<target>=<source>[:<scale>[,<offset>]]"` (repeatable) binds a normalized
+  analysis envelope — `audio-rms`/`audio-onset`/`audio-centroid` from
+  `--modulator-audio`, `luma`/`flow` from `--modulator-frames` — to a float
+  knob, per frame, on `render-retro-static-sequence` (`strength`),
+  `render-pixel-sort-sequence` (`threshold_low/high`), and
+  `render-channel-shift-sequence` (six `shift_*`). Engine in
+  `morphogen-render/src/modulation.rs` (route grammar, hold/smooth sampling,
+  per-effect clamped apply registries, 11 unit tests); CLI envelope extraction
+  in `morphogen-cli/src/modulate.rs` reuses the existing RMS/onset/centroid/
+  luma/flow extractors. Values clamp (never error); zero routes = the exact
+  unmodulated path; effect algorithm ids unchanged; the resolved routes print
+  at render time. **Verified:** workspace 431 → **442**, clippy/fmt clean;
+  readout on testsrc2 + a volume-ramp WAV — RMS→strength ON-vs-OFF shrinks
+  96.4 → 2.3/255 while ON-vs-source grows 0.68 → 95.6/255 (the knob tracks the
+  envelope; frames Read: clean early, fully glitched late); continuity
+  identity `strength=audio-rms:0,0.6` byte-identical to `--strength 0.6`;
+  flow→RGB-split frame 0 = 0.000 (flow's no-prior-frame convention) then
+  ≈55–60/255. Contract: `docs/MODULATION_MATRIX_MILESTONE.md` (notes the
+  reconciliation plan with core's schema-level graph `ModulationRoute`).
+  Deferred: queue persistence (slice 2), SwiftUI route editor (slice 3),
+  integer/enum/stateful targets.
 
 - **Audit quick wins (bugfix batch).** From a full-repo audit: (1) the SwiftUI
   dev bridge now passes `--release` on every `cargo run` invocation, so

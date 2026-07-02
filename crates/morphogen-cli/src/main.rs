@@ -12,6 +12,7 @@ mod args;
 mod audio;
 mod error;
 mod imaging;
+mod modulate;
 mod project;
 mod queue;
 mod render;
@@ -634,6 +635,11 @@ fn run() -> Result<(), CliError> {
             mask_source,
             flow_radius,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_pixel_sort_sequence(PixelSortSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -650,6 +656,13 @@ fn run() -> Result<(), CliError> {
             frames,
             backend: backend.into(),
             flow_radius,
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::RenderChannelShiftSequence {
@@ -666,6 +679,11 @@ fn run() -> Result<(), CliError> {
             flow_gain,
             radius,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_channel_shift_sequence(ChannelShiftSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -682,6 +700,13 @@ fn run() -> Result<(), CliError> {
             source_a_dir: source_a_dir.as_deref(),
             flow_gain,
             radius,
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::RenderRetroStaticSequence {
@@ -693,6 +718,11 @@ fn run() -> Result<(), CliError> {
             filter,
             strength,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_retro_static_sequence(RetroStaticSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -704,6 +734,13 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::RenderPaletteQuantizeSequence {

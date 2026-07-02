@@ -2025,6 +2025,8 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
             settings,
             frames,
             backend,
+            // Queued jobs don't carry modulation routes yet (milestone slice 2).
+            modulation: ModulationCliArgs::default(),
         })?;
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -4616,6 +4618,8 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
             frames,
             backend,
             flow_radius,
+            // Queued jobs don't carry modulation routes yet (milestone slice 2).
+            modulation: ModulationCliArgs::default(),
         })?;
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,

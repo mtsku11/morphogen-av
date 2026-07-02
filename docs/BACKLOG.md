@@ -57,6 +57,12 @@ contracts live in the `*_MILESTONE.md` docs.
 - Add experimental real-bitstream datamosh keyframe-removal (`datamosh-bitstream --operation remove-keyframe`) on the existing pure-Rust AVI surgery path.
 - Add reusable controlled-datamosh Source A optical-flow sidecars, disk resume
   checkpoints, and curated destructive presets across CLI, queue, and SwiftUI.
+- Modulation matrix slice 1 (CPU + CLI): generic `--modulate
+  <target>=<source>[:<scale>[,<offset>]]` routes normalized analysis envelopes
+  (audio RMS/onset/centroid, video luma/flow) onto float knobs of the
+  retro-static, pixel-sort, and channel-shift sequence commands. Contract:
+  `docs/MODULATION_MATRIX_MILESTONE.md`. Deferred slices: queue persistence,
+  SwiftUI route editor, integer/enum/stateful targets.
 
 ## Next
 

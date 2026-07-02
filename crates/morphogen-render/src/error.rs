@@ -34,6 +34,8 @@ pub enum RenderError {
     InvalidPixelSortSettings(String),
     #[error("invalid palette quantize settings: {0}")]
     InvalidPaletteQuantizeSettings(String),
+    #[error("invalid modulation route: {0}")]
+    InvalidModulationRoute(String),
     #[error("render inputs are incompatible: {0}")]
     IncompatibleInputs(String),
     #[error("I/O error: {0}")]
