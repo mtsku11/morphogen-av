@@ -18,8 +18,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChannelShiftSettings, PaletteQuantizeSettings, PixelSortSettings, RenderError,
-    RetroStaticSettings,
+    ChannelShiftSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RenderError,
+    RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// Which analysis descriptor drives a route.
@@ -240,8 +240,9 @@ pub fn modulated_value(
 /// Pixel shifts are clamped to a generous-but-sane pixel range.
 const SHIFT_RANGE: (f32, f32) = (-4096.0, 4096.0);
 
-pub const RETRO_STATIC_MODULATION_TARGETS: &[&str] = &["strength"];
-pub const PIXEL_SORT_MODULATION_TARGETS: &[&str] = &["threshold_low", "threshold_high"];
+pub const RETRO_STATIC_MODULATION_TARGETS: &[&str] = &["strength", "filter"];
+pub const PIXEL_SORT_MODULATION_TARGETS: &[&str] =
+    &["threshold_low", "threshold_high", "direction", "axis"];
 pub const CHANNEL_SHIFT_MODULATION_TARGETS: &[&str] = &[
     "shift_r_x",
     "shift_r_y",
@@ -250,17 +251,38 @@ pub const CHANNEL_SHIFT_MODULATION_TARGETS: &[&str] = &[
     "shift_b_x",
     "shift_b_y",
 ];
-pub const PALETTE_QUANTIZE_MODULATION_TARGETS: &[&str] = &["levels"];
+pub const PALETTE_QUANTIZE_MODULATION_TARGETS: &[&str] = &["levels", "mode"];
 
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
 const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
+
+// Enum-target variant orders (contract: milestone doc table). Unimplemented
+// variants are excluded — an envelope must not select an erroring variant
+// (palette-quantize `kmeans`).
+const SORT_DIRECTION_VARIANTS: [SortDirection; 2] = [SortDirection::Asc, SortDirection::Desc];
+const SORT_AXIS_VARIANTS: [SortAxis; 2] = [SortAxis::Row, SortAxis::Col];
+const SCANLINE_FILTER_VARIANTS: [ScanlineFilter; 5] = [
+    ScanlineFilter::None,
+    ScanlineFilter::Sub,
+    ScanlineFilter::Up,
+    ScanlineFilter::Average,
+    ScanlineFilter::Paeth,
+];
+const QUANTIZE_MODE_VARIANTS: [QuantizeMode; 2] = [QuantizeMode::Posterize, QuantizeMode::Palette];
 
 /// The contracted integer conversion: clamp to the declared range, then round
 /// to nearest with ties away from zero (`f32::round`). Clamp-then-round is
 /// safe because integer bounds round to themselves.
 fn integer_knob(value: f32, range: (f32, f32)) -> u32 {
     value.clamp(range.0, range.1).round() as u32
+}
+
+/// The contracted enum conversion: the integer rule over variant indices in
+/// declared order. Note a `[0, 1]` envelope at the default `scale 1` only
+/// spans indices 0 and 1; sweeping N variants needs `scale ≈ N−1`.
+fn enum_knob<T: Copy>(value: f32, variants: &[T]) -> T {
+    variants[integer_knob(value, (0.0, (variants.len() - 1) as f32)) as usize]
 }
 
 fn unknown_target(effect: &str, target: &str, available: &[&str]) -> RenderError {
@@ -278,6 +300,7 @@ pub fn apply_retro_static_modulation(
 ) -> Result<(), RenderError> {
     match target {
         "strength" => settings.strength = value.clamp(0.0, 1.0),
+        "filter" => settings.filter = enum_knob(value, &SCANLINE_FILTER_VARIANTS),
         _ => {
             return Err(unknown_target(
                 "retro-static",
@@ -301,6 +324,8 @@ pub fn apply_pixel_sort_modulation(
     match target {
         "threshold_low" => settings.threshold_low = value.clamp(0.0, 1.0),
         "threshold_high" => settings.threshold_high = value.clamp(0.0, 1.0),
+        "direction" => settings.direction = enum_knob(value, &SORT_DIRECTION_VARIANTS),
+        "axis" => settings.axis = enum_knob(value, &SORT_AXIS_VARIANTS),
         _ => {
             return Err(unknown_target(
                 "pixel-sort",
@@ -338,8 +363,9 @@ pub fn apply_channel_shift_modulation(
 }
 
 /// Overwrite one routed palette-quantize knob with a mapped value. `levels`
-/// is the first integer target: clamped to `[2, 256]`, then rounded per the
-/// contracted rule (nearest, ties away from zero).
+/// is the first integer target (clamped to `[2, 256]`, then rounded per the
+/// contracted rule); `mode` selects posterize/palette by variant index
+/// (`kmeans` is excluded — unimplemented variants must stay unreachable).
 pub fn apply_palette_quantize_modulation(
     settings: &mut PaletteQuantizeSettings,
     target: &str,
@@ -347,6 +373,7 @@ pub fn apply_palette_quantize_modulation(
 ) -> Result<(), RenderError> {
     match target {
         "levels" => settings.levels = integer_knob(value, LEVELS_RANGE),
+        "mode" => settings.mode = enum_knob(value, &QUANTIZE_MODE_VARIANTS),
         _ => {
             return Err(unknown_target(
                 "palette-quantize",
@@ -496,7 +523,48 @@ mod tests {
         let mut shift = ChannelShiftSettings::default();
         assert!(apply_channel_shift_modulation(&mut shift, "strength", 1.0).is_err());
         let mut quantize = PaletteQuantizeSettings::default();
-        assert!(apply_palette_quantize_modulation(&mut quantize, "mode", 1.0).is_err());
+        assert!(apply_palette_quantize_modulation(&mut quantize, "dither", 1.0).is_err());
+    }
+
+    #[test]
+    fn enum_targets_select_variants_by_index_in_declared_order() {
+        let mut sort = PixelSortSettings::default();
+        // Boundary values, rounding, and the tie rule on the 2-variant knobs.
+        apply_pixel_sort_modulation(&mut sort, "direction", 0.0).unwrap();
+        assert_eq!(sort.direction, SortDirection::Asc);
+        apply_pixel_sort_modulation(&mut sort, "direction", 0.4).unwrap();
+        assert_eq!(sort.direction, SortDirection::Asc);
+        apply_pixel_sort_modulation(&mut sort, "direction", 0.5).unwrap();
+        assert_eq!(sort.direction, SortDirection::Desc);
+        apply_pixel_sort_modulation(&mut sort, "axis", 99.0).unwrap();
+        assert_eq!(sort.axis, SortAxis::Col, "clamps to the last variant");
+        apply_pixel_sort_modulation(&mut sort, "axis", -99.0).unwrap();
+        assert_eq!(sort.axis, SortAxis::Row, "clamps to the first variant");
+
+        // The 5-variant filter knob: full declared order is reachable.
+        let mut retro = RetroStaticSettings::default();
+        let expected = [
+            (0.0, ScanlineFilter::None),
+            (1.0, ScanlineFilter::Sub),
+            (2.0, ScanlineFilter::Up),
+            (2.5, ScanlineFilter::Average), // tie away from zero
+            (4.0, ScanlineFilter::Paeth),
+        ];
+        for (value, filter) in expected {
+            apply_retro_static_modulation(&mut retro, "filter", value).unwrap();
+            assert_eq!(retro.filter, filter, "filter at {value}");
+        }
+
+        // `mode` clamps to palette; the unimplemented kmeans is unreachable.
+        let mut quantize = PaletteQuantizeSettings::default();
+        apply_palette_quantize_modulation(&mut quantize, "mode", 1.0).unwrap();
+        assert_eq!(quantize.mode, QuantizeMode::Palette);
+        apply_palette_quantize_modulation(&mut quantize, "mode", 9999.0).unwrap();
+        assert_eq!(
+            quantize.mode,
+            QuantizeMode::Palette,
+            "kmeans must be unreachable"
+        );
     }
 
     #[test]

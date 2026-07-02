@@ -804,7 +804,8 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
-        /// Targets: threshold_low, threshold_high. Sources: audio-rms/audio-onset/
+        /// Targets: threshold_low, threshold_high, direction (enum: asc/desc by
+        /// index), axis (enum: row/col by index). Sources: audio-rms/audio-onset/
         /// audio-centroid (need --modulator-audio), luma/flow (need --modulator-frames).
         #[arg(long = "modulate")]
         modulate: Vec<String>,
@@ -914,7 +915,8 @@ pub(crate) enum Commands {
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
-        /// Targets: strength. Sources: audio-rms/audio-onset/audio-centroid (need
+        /// Targets: strength, filter (enum: none/sub/up/average/paeth by index —
+        /// sweep needs scale 4). Sources: audio-rms/audio-onset/audio-centroid (need
         /// --modulator-audio), luma/flow (need --modulator-frames).
         #[arg(long = "modulate")]
         modulate: Vec<String>,
@@ -953,7 +955,8 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
         /// Targets: levels (integer — clamped to [2, 256], then rounded to nearest,
-        /// ties away from zero). Sources: audio-rms/audio-onset/audio-centroid (need
+        /// ties away from zero), mode (enum: posterize/palette by index; kmeans is
+        /// excluded). Sources: audio-rms/audio-onset/audio-centroid (need
         /// --modulator-audio), luma/flow (need --modulator-frames).
         #[arg(long = "modulate")]
         modulate: Vec<String>,
@@ -1626,8 +1629,9 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
-        /// Targets: strength. Persisted on the job; envelope times sample against
-        /// the job's --frame-rate.
+        /// Targets: strength, filter (enum: none/sub/up/average/paeth by index).
+        /// Persisted on the job; envelope times sample against the job's
+        /// --frame-rate.
         #[arg(long = "modulate")]
         modulate: Vec<String>,
         /// Modulator WAV for audio-* modulation sources.
@@ -2089,7 +2093,8 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
-        /// Targets: threshold_low, threshold_high. Persisted on the job; envelope
+        /// Targets: threshold_low, threshold_high, direction (enum: asc/desc by
+        /// index), axis (enum: row/col by index). Persisted on the job; envelope
         /// times sample against the job's --frame-rate.
         #[arg(long = "modulate")]
         modulate: Vec<String>,

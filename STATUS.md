@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **447 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **448 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **70 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,31 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — enum targets (slice 5).** Pixel-sort
+  `direction`/`axis`, retro-static `filter`, and palette-quantize `mode` join
+  the registries under the **contracted variant-index rule** (table in
+  `docs/MODULATION_MATRIX_MILESTONE.md`): variants get indices `0..N−1` in
+  declared order and the mapped value selects by the same clamp-then-round,
+  ties-away-from-zero rule (`enum_knob` over `integer_knob` in
+  `modulation.rs`). **Unimplemented variants are excluded** — palette-quantize
+  `kmeans` renders an error, so it is not in the variant list;
+  clamp-never-error extends to enum selection. Range trap documented: a
+  `[0, 1]` envelope at default scale only spans indices 0–1; sweeping the
+  5-variant `filter` needs `scale ≈ 4`. No queue changes needed — the queue
+  path validates/applies through the same per-effect apply functions, so enum
+  routes persist on the existing pixel-sort/retro-static tasks. SwiftUI mod
+  slots for enum targets deferred (steppers need an enum-aware presentation).
+  **Verified:** workspace 447 → **448** (variant-indexing unit test: boundary
+  clamp both ends, 0.5 tie flips to `desc`, all 5 filters reachable, `kmeans`
+  unreachable at 9999); clippy/fmt clean; three continuity identities
+  byte-identical (`direction=luma:0,1` ≡ `--direction desc`,
+  `filter=luma:0,4` ≡ `--filter paeth`, `mode=luma:0,1` ≡ `--mode palette`,
+  8/8 frames each); luma-ramp sweep on `direction=luma`: frames 0–3
+  byte-match the pure asc render, frames 4–7 byte-match pure desc — the flip
+  lands exactly at the 0.5 rounding boundary, flip frames Read (sorted-streak
+  gradients invert). Remaining target class: stateful effects (must join the
+  checkpoint-invalidation contract first).
 
 - **Modulation matrix — integer targets (slice 4).** Palette-quantize `levels`
   is the first integer modulation target, under the newly **contracted

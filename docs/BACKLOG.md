@@ -87,6 +87,13 @@ contracts live in the `*_MILESTONE.md` docs.
   `render-palette-quantize-sequence` gains the `--modulate` flag set (direct
   CLI only — no palette-quantize queue/SwiftUI exposure yet). Deferred:
   enum/stateful modulation targets.
+- Modulation matrix slice 5 (enum targets): pixel-sort `direction`/`axis`,
+  retro-static `filter`, palette-quantize `mode` join the registries under the
+  contracted variant-index rule (indices `0..N−1` in declared order, same
+  clamp-then-round tie rule; unimplemented variants excluded — `kmeans` stays
+  unreachable). Enum routes persist on the existing pixel-sort/retro-static
+  queue tasks with no queue changes. Deferred: SwiftUI enum mod slots,
+  stateful modulation targets.
 
 ## Next
 

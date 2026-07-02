@@ -107,10 +107,33 @@ either changes which frames flip value.
   `levels` to 256 produces that frame's documented byte-identical passthrough —
   deliberate, the integer analogue of pixel-sort's legal empty-mask frame.
 
-Deferred target classes: enum knobs (an envelope has no contracted order over
-variants yet), and **stateful effects** (datamosh, feedback, fluid advect —
-per-frame knob changes alter state evolution, so the route config must join
-the checkpoint-invalidation contract first).
+### Enum targets — the contracted variant-index rule
+
+An enum knob is an integer knob over its variant list: variants get indices
+`0..N-1` in the **declared order below** (which is contract), and the mapped
+value selects `variants[round(clamp(envelope(t)·scale + offset, 0, N−1))]`
+under the same clamp-then-round, ties-away-from-zero rule.
+
+| Effect | Target | Variant order (index 0 → N−1) |
+|---|---|---|
+| `render-pixel-sort-sequence` | `direction` | `asc`, `desc` |
+| `render-pixel-sort-sequence` | `axis` | `row`, `col` |
+| `render-retro-static-sequence` | `filter` | `none`, `sub`, `up`, `average`, `paeth` |
+| `render-palette-quantize-sequence` | `mode` | `posterize`, `palette` |
+
+- **Unimplemented variants are excluded.** Palette-quantize `kmeans` renders
+  an error, so it is not in the modulatable list — clamp-never-error extends
+  to enum selection: an envelope must not be able to drive an effect into an
+  erroring variant.
+- The continuity identity holds by index: `scale 0, offset K` is
+  byte-identical to passing variant `K`'s CLI value directly.
+- **Range trap:** a `[0, 1]` envelope at the default `scale 1` only spans
+  indices 0 and 1. Sweeping an N-variant knob end-to-end needs
+  `scale ≈ N−1` (e.g. `filter=luma:4` to reach `paeth`).
+
+Deferred target classes: **stateful effects** (datamosh, feedback, fluid
+advect — per-frame knob changes alter state evolution, so the route config
+must join the checkpoint-invalidation contract first).
 
 ## Determinism & continuity
 
@@ -177,8 +200,15 @@ mirror the core type so the graph model stays the single long-term home
    `render-palette-quantize-sequence` gains the standard `--modulate` flag set.
    Direct CLI only — palette-quantize has no queue task or SwiftUI section yet,
    so those exposures are their own later slices (channel-shift precedent).
-5. **Later:** enum targets, stateful-effect targets, per-route sampling,
-   envelope caching as analysis sidecars, multiple modulators per render.
+5. **Enum targets (CPU + CLI) — LANDED.** Pixel-sort `direction`/`axis`,
+   retro-static `filter`, palette-quantize `mode` join the registries under
+   the contracted variant-index rule above. Because the queue path validates
+   and applies routes through the same per-effect apply functions, enum routes
+   persist on the existing pixel-sort/retro-static queue tasks with no queue
+   changes. SwiftUI mod slots for enum targets are deferred (the slot UI's
+   scale/offset steppers need an enum-aware presentation).
+6. **Later:** stateful-effect targets, per-route sampling, envelope caching
+   as analysis sidecars, multiple modulators per render.
 
 ## Acceptance criteria (slice 1)
 
