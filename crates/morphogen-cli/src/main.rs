@@ -1187,6 +1187,10 @@ fn run() -> Result<(), CliError> {
             backend,
             flow_source,
             project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => queue_add_feedback_sequence(QueueAddFeedbackSequenceRequest {
             queue_path: &queue_path,
             modulator_dir: &modulator_dir,
@@ -1213,6 +1217,10 @@ fn run() -> Result<(), CliError> {
             backend: backend.into(),
             flow_source: flow_source.into(),
             project_path: project_path.as_deref(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
         }),
         Commands::QueueAddFluidAdvectSequence {
             queue_path,
@@ -1228,6 +1236,10 @@ fn run() -> Result<(), CliError> {
             seed,
             backend,
             project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => queue_add_fluid_advect_sequence(QueueAddFluidAdvectSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -1244,6 +1256,10 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             backend: backend.into(),
             project_path: project_path.as_deref(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
         }),
         Commands::QueueAddFluidAdvectTwoSourceSequence {
             queue_path,
@@ -1256,6 +1272,10 @@ fn run() -> Result<(), CliError> {
             reinject,
             backend,
             project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => queue_add_fluid_advect_two_source_sequence(
             QueueAddFluidAdvectTwoSourceSequenceRequest {
                 queue_path: &queue_path,
@@ -1267,6 +1287,10 @@ fn run() -> Result<(), CliError> {
                 frame_rate,
                 backend: backend.into(),
                 project_path: project_path.as_deref(),
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                modulation_sampling: modulation_sampling.into(),
             },
         ),
         Commands::QueueAddOpticalFlowAdvectSequence {
@@ -1279,6 +1303,10 @@ fn run() -> Result<(), CliError> {
             reinject,
             backend,
             project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => queue_add_optical_flow_advect_sequence(QueueAddOpticalFlowAdvectSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -1288,6 +1316,10 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             backend: backend.into(),
             project_path: project_path.as_deref(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
         }),
         Commands::QueueAddFieldParticlesSequence {
             queue_path,
@@ -1815,6 +1847,10 @@ fn run() -> Result<(), CliError> {
             max_frames,
             project_path,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => queue_add_datamosh_sequence(QueueAddDatamoshSequenceRequest {
             queue_path: &queue_path,
             modulator_dir: &modulator_dir,
@@ -1833,6 +1869,10 @@ fn run() -> Result<(), CliError> {
             max_frames,
             project_path: project_path.as_deref(),
             backend: backend.into(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
         }),
         Commands::QueueRunDatamoshSequence { queue_path } => {
             queue_run_datamosh_sequence(&queue_path)

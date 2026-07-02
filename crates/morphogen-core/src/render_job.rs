@@ -185,6 +185,20 @@ pub enum RenderJobTask {
         /// Defaults to 0.0 (disabled) so legacy jobs keep their meaning.
         #[serde(default)]
         structure_mix: f32,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`. Stateful: the routes join
+        /// the render's checkpoint contract.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        /// Modulator frames for the luma/flow envelopes. Distinct from
+        /// `modulator_frame_directory`, which is the effect's Source A.
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
     },
     FrameSequenceFluidAdvect {
         source_frame_directory: String,
@@ -199,6 +213,17 @@ pub enum RenderJobTask {
         seed: u64,
         #[serde(default)]
         backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
     },
     FrameSequenceFluidAdvectTwoSource {
         modulator_frame_directory: String,
@@ -210,6 +235,19 @@ pub enum RenderJobTask {
         reinject: f32,
         #[serde(default)]
         backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        /// Modulator frames for the luma/flow envelopes. Distinct from
+        /// `modulator_frame_directory`, which is the effect's Source A.
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
     },
     FrameSequenceOpticalFlowAdvect {
         source_frame_directory: String,
@@ -220,6 +258,17 @@ pub enum RenderJobTask {
         reinject: f32,
         #[serde(default)]
         backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
     },
     FrameSequenceFieldParticles {
         source_frame_directory: String,
@@ -653,6 +702,20 @@ pub enum RenderJobTask {
         /// one `frame_XXXXXX/manifest.json` + `frame_000000.flowf32` sidecar.
         #[serde(default)]
         flow_cache_directory: Option<String>,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`. Stateful: the routes join
+        /// the render's checkpoint contract.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        /// Modulator frames for the luma/flow envelopes. Distinct from
+        /// `modulator_frame_directory`, which is the effect's Source A.
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
     },
     /// Real bitstream datamosh via AVI chunk surgery: ffmpeg encodes to MPEG-4,
     /// pure-Rust RIFF surgery duplicates/removes/splices chunks, ffmpeg decodes to
@@ -1286,6 +1349,10 @@ mod tests {
             backend: RenderBackend::Cpu,
             flow_source: FlowSource::OpticalFlow,
             structure_mix: 0.6,
+            modulation_routes: Vec::new(),
+            modulator_audio_path: None,
+            modulator_frames_directory: None,
+            modulation_sampling: ModulationSampling::Hold,
         };
 
         let json = serde_json::to_string(&task).expect("serialize feedback task");
@@ -1339,6 +1406,10 @@ mod tests {
             reinject: 0.05,
             seed: 42,
             backend: RenderBackend::Metal,
+            modulation_routes: Vec::new(),
+            modulator_audio_path: None,
+            modulator_frames_directory: None,
+            modulation_sampling: ModulationSampling::Hold,
         };
 
         let json = serde_json::to_string(&task).expect("serialize fluid task");

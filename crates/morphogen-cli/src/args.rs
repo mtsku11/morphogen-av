@@ -1529,6 +1529,21 @@ pub(crate) enum Commands {
         flow_source: CliFlowSource,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: carrier_amount, feedback_amount, feedback_mix, decay,
+        /// structure_mix. Persisted on the job (they join the render's checkpoint
+        /// contract); envelope times sample against the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     QueueAddFluidAdvectSequence {
         queue_path: PathBuf,
@@ -1554,6 +1569,21 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: advect, turbulence_scale, turbulence_speed, detail, reinject.
+        /// Persisted on the job; envelope times sample against the job's
+        /// --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     QueueAddFluidAdvectTwoSourceSequence {
         queue_path: PathBuf,
@@ -1572,6 +1602,20 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: advect, reinject. Persisted on the job; envelope times sample
+        /// against the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     QueueAddOpticalFlowAdvectSequence {
         queue_path: PathBuf,
@@ -1589,6 +1633,20 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: advect, reinject. Persisted on the job; envelope times sample
+        /// against the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     QueueAddFieldParticlesSequence {
         queue_path: PathBuf,
@@ -2085,6 +2143,21 @@ pub(crate) enum Commands {
         project_path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: amount, residual_gain, residual_decay, refresh_threshold.
+        /// Persisted on the job (they join the render's checkpoint contract);
+        /// envelope times sample against the job manifest's fixed 30 fps.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     QueueRunDatamoshSequence {
         queue_path: PathBuf,

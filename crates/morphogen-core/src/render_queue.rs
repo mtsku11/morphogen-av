@@ -171,6 +171,72 @@ mod tests {
     }
 
     #[test]
+    fn stateful_jobs_written_before_modulation_routes_deserialize_unmodulated() {
+        // Flow feedback and datamosh cover the two stateful task shapes; the
+        // fluid-advect variants share the identical serde-defaulted block.
+        let feedback_json = r#"
+        {
+          "type": "frame_sequence_flow_feedback",
+          "modulator_frame_directory": "/tmp/mod",
+          "carrier_frame_directory": "/tmp/car",
+          "output_directory": "/tmp/out/job-0001",
+          "flow_cache_directory": null,
+          "carrier_amount": 8.0,
+          "feedback_amount": 12.0,
+          "feedback_mix": 0.7,
+          "decay": 0.95,
+          "iterations": 1,
+          "max_frames": null,
+          "frame_rate": 24.0
+        }
+        "#;
+        let task: RenderJobTask =
+            serde_json::from_str(feedback_json).expect("deserialize pre-slice feedback job");
+        let RenderJobTask::FrameSequenceFlowFeedback {
+            modulation_routes,
+            modulator_audio_path,
+            modulator_frames_directory,
+            modulation_sampling,
+            ..
+        } = task
+        else {
+            panic!("expected a flow-feedback task");
+        };
+        assert!(modulation_routes.is_empty());
+        assert!(modulator_audio_path.is_none());
+        assert!(modulator_frames_directory.is_none());
+        assert_eq!(modulation_sampling, ModulationSampling::Hold);
+
+        let datamosh_json = r#"
+        {
+          "type": "frame_sequence_datamosh",
+          "modulator_frame_directory": "/tmp/mod",
+          "carrier_frame_directory": "/tmp/car",
+          "output_directory": "/tmp/out/job-0002",
+          "keyframe_interval": 0,
+          "amount": 1.0,
+          "max_frames": null
+        }
+        "#;
+        let task: RenderJobTask =
+            serde_json::from_str(datamosh_json).expect("deserialize pre-slice datamosh job");
+        let RenderJobTask::FrameSequenceDatamosh {
+            modulation_routes,
+            modulator_audio_path,
+            modulator_frames_directory,
+            modulation_sampling,
+            ..
+        } = task
+        else {
+            panic!("expected a datamosh task");
+        };
+        assert!(modulation_routes.is_empty());
+        assert!(modulator_audio_path.is_none());
+        assert!(modulator_frames_directory.is_none());
+        assert_eq!(modulation_sampling, ModulationSampling::Hold);
+    }
+
+    #[test]
     fn frame_sequence_job_persists_source_and_cache_provenance() {
         let job = RenderJob {
             id: "job-0002".to_string(),

@@ -4984,6 +4984,303 @@ fn queue_add_rejects_bad_modulation_routes_before_persisting() {
 }
 
 #[test]
+fn queue_feedback_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        for dir in [&modulator_dir, &carrier_dir] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let route = "feedback_mix=audio-rms:0.5,0.25";
+
+    // Direct render: feedback samples envelopes against its own --frame-rate,
+    // which is exactly the queued job's frame_rate — the shared time base.
+    let direct_dir = temp_dir.path().join("direct");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--feedback-mix",
+            "0.7",
+            "--max-frames",
+            "3",
+            "--frame-rate",
+            "4",
+            "--flow-source",
+            "luminance",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-feedback-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--feedback-mix",
+            "0.7",
+            "--max-frames",
+            "3",
+            "--frame-rate",
+            "4",
+            "--flow-source",
+            "luminance",
+            "--no-flow-cache",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-feedback-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let job_frames = output_root.join("job-0001/frames");
+    assert_png_frames_identical(&direct_dir.join("frames"), &job_frames, 3);
+
+    // Stateful: the queued render's checkpoint contract carries the routes,
+    // so a re-run with different routes would refuse to resume.
+    let checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/checkpoint.json"))
+            .expect("read queued feedback checkpoint"),
+    )
+    .expect("parse queued feedback checkpoint");
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "feedback_mix");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+    assert_eq!(modulation["routes"][0]["scale"], 0.5);
+    assert_eq!(modulation["routes"][0]["offset"], 0.25);
+    assert_eq!(modulation["fps"], 4.0);
+}
+
+#[test]
+fn queue_datamosh_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    // A translating modulator so the flow (and therefore a routed amount) has
+    // something to scale.
+    write_texture_sequence(&modulator_dir, &[0, 2, 4]);
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        write_horizontal_carrier(&carrier_dir.join(frame_name), 24, 16);
+    }
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let route = "amount=audio-rms:0.5,0.25";
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+
+    // Unknown target fails at add time and persists nothing.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-datamosh-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--modulate",
+            "block_size=audio-rms",
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unknown datamosh modulation target",
+        ));
+    assert!(
+        !queue_path.exists(),
+        "rejected queue-add must not write a queue file"
+    );
+
+    // Direct render: the datamosh queue's fixed manifest rate (30 fps) is the
+    // envelope time base, so the direct run must pass --modulation-fps 30.
+    let direct_dir = temp_dir.path().join("direct");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-datamosh-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--keyframe-interval",
+            "0",
+            "--amount",
+            "1",
+            "--max-frames",
+            "3",
+            "--modulation-fps",
+            "30",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-datamosh-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--keyframe-interval",
+            "0",
+            "--amount",
+            "1",
+            "--max-frames",
+            "3",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-datamosh-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    assert_png_frames_identical(&direct_dir, &output_root.join("job-0001/frames"), 3);
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let modulation = &manifest["datamosh"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "amount");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+    assert_eq!(modulation["routes"][0]["scale"], 0.5);
+    assert_eq!(modulation["routes"][0]["offset"], 0.25);
+    assert_eq!(modulation["sampling"], "hold");
+    assert_eq!(modulation["fps"], 30.0);
+    assert_eq!(modulation["modulator_audio"], wav_arg.as_str());
+}
+
+#[test]
+fn queue_fluid_advect_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let route = "reinject=audio-rms:0.5,0.25";
+
+    let direct_dir = temp_dir.path().join("direct");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-fluid-advect-sequence",
+            source_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--modulation-fps",
+            "4",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-fluid-advect-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-fluid-advect-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    assert_png_frames_identical(&direct_dir, &output_root.join("job-0001/frames"), 3);
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let modulation = &manifest["fluid_advect"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "reinject");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+    assert_eq!(modulation["routes"][0]["scale"], 0.5);
+    assert_eq!(modulation["routes"][0]["offset"], 0.25);
+    assert_eq!(modulation["fps"], 4.0);
+}
+
+#[test]
 fn queue_channel_shift_modulated_matches_direct_and_records_routes() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
 
