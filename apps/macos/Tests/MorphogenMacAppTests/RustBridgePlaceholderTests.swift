@@ -18,7 +18,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
 
     let arguments = try RustBridgePlaceholder.queueAddFrameSequenceArguments(request: request)
 
-    XCTAssertEqual(arguments.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-frame-sequence"])
+    XCTAssertEqual(arguments.prefix(8), ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-frame-sequence"])
     XCTAssertTrue(arguments.contains("/tmp/frame-sequence-queue.json"))
     XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
@@ -66,7 +66,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
 
     let arguments = try RustBridgePlaceholder.renderShowcaseArguments(request: request)
 
-    XCTAssertEqual(arguments.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "render-showcase"])
+    XCTAssertEqual(arguments.prefix(8), ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "render-showcase"])
     XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
     XCTAssertTrue(arguments.contains("/tmp/showcase-preview"))
@@ -126,7 +126,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
 
     let arguments = try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request)
 
-    XCTAssertEqual(arguments.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-feedback-sequence"])
+    XCTAssertEqual(arguments.prefix(8), ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-feedback-sequence"])
     XCTAssertTrue(arguments.contains("--carrier-amount"))
     XCTAssertTrue(arguments.contains("1.5"))
     XCTAssertTrue(arguments.contains("--feedback-amount"))
@@ -195,8 +195,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddFluidAdvectSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-fluid-advect-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-fluid-advect-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
     XCTAssertTrue(arguments.contains("/tmp/output-root/fluid"))
@@ -240,8 +240,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-fluid-advect-two-source-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-fluid-advect-two-source-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
@@ -274,8 +274,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-optical-flow-advect-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-optical-flow-advect-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
     XCTAssertTrue(arguments.contains("/tmp/output-root/self-fluid"))
@@ -311,8 +311,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddFieldParticlesSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-field-particles-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-field-particles-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
     XCTAssertTrue(arguments.contains("/tmp/output-root/particles"))
@@ -362,8 +362,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-cascade-trails-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-cascade-trails-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
     XCTAssertTrue(arguments.contains("--tile-size"))
@@ -455,8 +455,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddCascadeCollageSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-cascade-collage-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-cascade-collage-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
     XCTAssertTrue(arguments.contains("--edge-detect"))
@@ -514,8 +514,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-retro-static-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-retro-static-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
     XCTAssertTrue(arguments.contains("--real-bpp"))
@@ -612,8 +612,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddGranularMosaicPoolSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-granular-mosaic-pool-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-granular-mosaic-pool-sequence"]
     )
     XCTAssertTrue(arguments.contains("/tmp/source-a-frames"))
     XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
@@ -683,8 +683,8 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddVideoVocoderSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-video-vocoder-sequence"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-video-vocoder-sequence"]
     )
     XCTAssertEqual(Self.value(after: "--mode", in: arguments), "match")
     XCTAssertEqual(Self.value(after: "--bands", in: arguments), "8")
@@ -733,12 +733,12 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-spectral-cross-synth"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-spectral-cross-synth"]
     )
-    XCTAssertEqual(arguments[7], "/tmp/cross-synth-queue.json")
-    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
-    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(arguments[8], "/tmp/cross-synth-queue.json")
+    XCTAssertEqual(arguments[9], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[10], "/tmp/source-b.wav")
     XCTAssertEqual(Self.value(after: "--mode", in: arguments), "filter")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
     XCTAssertEqual(Self.value(after: "--filter-type", in: arguments), "highpass")
@@ -789,12 +789,12 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddVideoAudioRouteArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-video-audio-route"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-video-audio-route"]
     )
-    XCTAssertEqual(arguments[7], "/tmp/video-audio-route-queue.json")
-    XCTAssertEqual(arguments[8], "/tmp/source-a-frames")
-    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(arguments[8], "/tmp/video-audio-route-queue.json")
+    XCTAssertEqual(arguments[9], "/tmp/source-a-frames")
+    XCTAssertEqual(arguments[10], "/tmp/source-b.wav")
     XCTAssertEqual(Self.value(after: "--descriptor", in: arguments), "flow")
     XCTAssertEqual(Self.value(after: "--mode", in: arguments), "filter")
     XCTAssertEqual(Self.value(after: "--filter-type", in: arguments), "highpass")
@@ -842,12 +842,12 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
 
     XCTAssertEqual(
-      arguments.prefix(7),
-      ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "queue-add-audio-impulse-convolution"]
+      arguments.prefix(8),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-audio-impulse-convolution"]
     )
-    XCTAssertEqual(arguments[7], "/tmp/impulse-conv-queue.json")
-    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
-    XCTAssertEqual(arguments[9], "/tmp/source-b.wav")
+    XCTAssertEqual(arguments[8], "/tmp/impulse-conv-queue.json")
+    XCTAssertEqual(arguments[9], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[10], "/tmp/source-b.wav")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.5")
     XCTAssertEqual(Self.value(after: "--max-impulse-samples", in: arguments), "4096")
     // Direct, non-resampling defaults omit the HQ-tier flags.
@@ -962,15 +962,15 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
 
     XCTAssertEqual(
-      arguments.prefix(7),
+      arguments.prefix(8),
       [
-        "cargo", "run", "--quiet", "-p", "morphogen-cli", "--",
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
         "queue-add-audio-video-route-sequence"
       ]
     )
-    XCTAssertEqual(arguments[7], "/tmp/audio-route-queue.json")
-    XCTAssertEqual(arguments[8], "/tmp/source-a.wav")
-    XCTAssertEqual(arguments[9], "/tmp/source-b-frames")
+    XCTAssertEqual(arguments[8], "/tmp/audio-route-queue.json")
+    XCTAssertEqual(arguments[9], "/tmp/source-a.wav")
+    XCTAssertEqual(arguments[10], "/tmp/source-b-frames")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
     XCTAssertEqual(Self.value(after: "--shift-x", in: arguments), "8")
     XCTAssertEqual(Self.value(after: "--shift-y", in: arguments), "-2")
@@ -1027,15 +1027,15 @@ final class RustBridgePlaceholderTests: XCTestCase {
     let arguments = try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: request)
 
     XCTAssertEqual(
-      arguments.prefix(7),
+      arguments.prefix(8),
       [
-        "cargo", "run", "--quiet", "-p", "morphogen-cli", "--",
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
         "queue-add-datamosh-sequence"
       ]
     )
-    XCTAssertEqual(arguments[7], "/tmp/datamosh-queue.json")
-    XCTAssertEqual(arguments[8], "/tmp/source-a-frames")
-    XCTAssertEqual(arguments[9], "/tmp/source-b-frames")
+    XCTAssertEqual(arguments[8], "/tmp/datamosh-queue.json")
+    XCTAssertEqual(arguments[9], "/tmp/source-a-frames")
+    XCTAssertEqual(arguments[10], "/tmp/source-b-frames")
     XCTAssertEqual(Self.value(after: "--keyframe-interval", in: arguments), "4")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
     XCTAssertEqual(Self.value(after: "--block-size", in: arguments), "16")
@@ -1193,15 +1193,15 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
 
     XCTAssertEqual(
-      arguments.prefix(7),
+      arguments.prefix(8),
       [
-        "cargo", "run", "--quiet", "-p", "morphogen-cli", "--",
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
         "queue-add-convolutional-blend-sequence"
       ]
     )
-    XCTAssertEqual(arguments[7], "/tmp/conv-blend-queue.json")
-    XCTAssertEqual(arguments[8], "/tmp/source-a-frames")
-    XCTAssertEqual(arguments[9], "/tmp/source-b-frames")
+    XCTAssertEqual(arguments[8], "/tmp/conv-blend-queue.json")
+    XCTAssertEqual(arguments[9], "/tmp/source-a-frames")
+    XCTAssertEqual(arguments[10], "/tmp/source-b-frames")
     XCTAssertEqual(Self.value(after: "--kernel-size", in: arguments), "5")
     XCTAssertEqual(Self.value(after: "--amount", in: arguments), "0.75")
     XCTAssertEqual(Self.value(after: "--backend", in: arguments), "metal")
@@ -1418,7 +1418,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
 
     let arguments = try RustBridgePlaceholder.mediaProxyExtractionArguments(request: request)
 
-    XCTAssertEqual(arguments.frameExtraction.prefix(7), ["cargo", "run", "--quiet", "-p", "morphogen-cli", "--", "extract-frames"])
+    XCTAssertEqual(arguments.frameExtraction.prefix(8), ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "extract-frames"])
     XCTAssertTrue(arguments.frameExtraction.contains("/tmp/proxy/source-a/frames"))
     XCTAssertTrue(arguments.frameExtraction.contains("--fps"))
     XCTAssertTrue(arguments.frameExtraction.contains("12"))
