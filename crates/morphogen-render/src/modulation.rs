@@ -17,7 +17,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ChannelShiftSettings, PixelSortSettings, RenderError, RetroStaticSettings};
+use crate::{
+    ChannelShiftSettings, PaletteQuantizeSettings, PixelSortSettings, RenderError,
+    RetroStaticSettings,
+};
 
 /// Which analysis descriptor drives a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +250,18 @@ pub const CHANNEL_SHIFT_MODULATION_TARGETS: &[&str] = &[
     "shift_b_x",
     "shift_b_y",
 ];
+pub const PALETTE_QUANTIZE_MODULATION_TARGETS: &[&str] = &["levels"];
+
+/// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
+/// passthrough (deliberately reachable by modulation).
+const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
+
+/// The contracted integer conversion: clamp to the declared range, then round
+/// to nearest with ties away from zero (`f32::round`). Clamp-then-round is
+/// safe because integer bounds round to themselves.
+fn integer_knob(value: f32, range: (f32, f32)) -> u32 {
+    value.clamp(range.0, range.1).round() as u32
+}
 
 fn unknown_target(effect: &str, target: &str, available: &[&str]) -> RenderError {
     RenderError::InvalidModulationRoute(format!(
@@ -316,6 +331,27 @@ pub fn apply_channel_shift_modulation(
                 "channel-shift",
                 target,
                 CHANNEL_SHIFT_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed palette-quantize knob with a mapped value. `levels`
+/// is the first integer target: clamped to `[2, 256]`, then rounded per the
+/// contracted rule (nearest, ties away from zero).
+pub fn apply_palette_quantize_modulation(
+    settings: &mut PaletteQuantizeSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "levels" => settings.levels = integer_knob(value, LEVELS_RANGE),
+        _ => {
+            return Err(unknown_target(
+                "palette-quantize",
+                target,
+                PALETTE_QUANTIZE_MODULATION_TARGETS,
             ))
         }
     }
@@ -459,6 +495,29 @@ mod tests {
         assert!(apply_pixel_sort_modulation(&mut sort, "max_span", 1.0).is_err());
         let mut shift = ChannelShiftSettings::default();
         assert!(apply_channel_shift_modulation(&mut shift, "strength", 1.0).is_err());
+        let mut quantize = PaletteQuantizeSettings::default();
+        assert!(apply_palette_quantize_modulation(&mut quantize, "mode", 1.0).is_err());
+    }
+
+    #[test]
+    fn integer_levels_clamp_then_round_ties_away_from_zero() {
+        let mut quantize = PaletteQuantizeSettings::default();
+        // Clamp at both ends of [2, 256].
+        apply_palette_quantize_modulation(&mut quantize, "levels", -5.0).unwrap();
+        assert_eq!(quantize.levels, 2);
+        apply_palette_quantize_modulation(&mut quantize, "levels", 9999.0).unwrap();
+        assert_eq!(quantize.levels, 256);
+        // Nearest integer, ties away from zero.
+        apply_palette_quantize_modulation(&mut quantize, "levels", 4.4).unwrap();
+        assert_eq!(quantize.levels, 4);
+        apply_palette_quantize_modulation(&mut quantize, "levels", 4.5).unwrap();
+        assert_eq!(quantize.levels, 5);
+        // The off case is reachable: 255.5 rounds to the passthrough 256.
+        apply_palette_quantize_modulation(&mut quantize, "levels", 255.5).unwrap();
+        assert_eq!(quantize.levels, 256);
+        // Continuity identity in integer form: scale 0, offset K == --levels K.
+        apply_palette_quantize_modulation(&mut quantize, "levels", 7.0).unwrap();
+        assert_eq!(quantize.levels, 7);
     }
 
     #[test]

@@ -55,8 +55,8 @@ use morphogen_render::{
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 use morphogen_render::{
-    apply_channel_shift_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
-    ModulationSampling,
+    apply_channel_shift_modulation, apply_palette_quantize_modulation, apply_pixel_sort_modulation,
+    apply_retro_static_modulation, ModulationSampling,
 };
 use serde::{Deserialize, Serialize};
 
@@ -5764,6 +5764,7 @@ pub(crate) struct PaletteQuantizeSequenceRequest<'a> {
     pub(crate) settings: PaletteQuantizeSettings,
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 pub(crate) fn render_palette_quantize_sequence(
@@ -5792,12 +5793,28 @@ pub(crate) fn render_palette_quantize_sequence(
         QuantizeMode::Kmeans => "kmeans".to_string(),
     };
 
+    let modulation = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation {
+        // Dry-run at frame 0 so an unknown target fails before any frame renders.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_palette_quantize_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation {
+            for (target, value) in plan.frame_values(index) {
+                apply_palette_quantize_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let source_b = load_image_f32(frame_path)?;
         let rendered = match request.backend {
-            RenderBackend::Cpu => render_palette_quantize_frame(&source_b, &request.settings)?,
+            RenderBackend::Cpu => render_palette_quantize_frame(&source_b, &frame_settings)?,
             RenderBackend::Metal => {
-                render_palette_quantize_frame_metal(&source_b, &request.settings)?
+                render_palette_quantize_frame_metal(&source_b, &frame_settings)?
             }
         };
         save_png(

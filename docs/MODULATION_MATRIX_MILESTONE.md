@@ -78,23 +78,39 @@ Examples:
 - An unknown target name for the effect, an unknown source name, or a route
   whose required modulator flag is missing are hard errors before rendering.
 
-## Targets (slice 1 — stateless effects, float knobs only)
+## Targets (stateless effects)
 
 | Effect command | Target keys | Clamp range |
 |---|---|---|
 | `render-retro-static-sequence` | `strength` | `[0, 1]` |
 | `render-pixel-sort-sequence` | `threshold_low`, `threshold_high` | `[0, 1]` |
 | `render-channel-shift-sequence` | `shift_r_x`, `shift_r_y`, `shift_g_x`, `shift_g_y`, `shift_b_x`, `shift_b_y` | `[-4096, 4096]` |
+| `render-palette-quantize-sequence` | `levels` (integer) | `[2, 256]`, then rounded |
 
 Clamping (not erroring) is deliberate: an envelope must never abort a render
 mid-sequence. `settings.validate()` still runs on the post-clamp value each
 frame. If modulation drives pixel-sort's `threshold_low` above `threshold_high`,
 that frame is the effect's own documented passthrough case — not an error.
 
-Deferred target classes: integer knobs (palette-quantize `levels` — needs a
-contracted rounding rule), enum knobs, and **stateful effects** (datamosh,
-feedback, fluid advect — per-frame knob changes alter state evolution, so the
-route config must join the checkpoint-invalidation contract first).
+### Integer targets — the contracted rounding rule
+
+An integer knob applies the same affine mapping and clamp as a float knob,
+then converts with **round to nearest, ties away from zero** (`f32::round`):
+`knob = round(clamp(envelope(t)·scale + offset, lo, hi)) as int`. The order
+(clamp, then round) and the tie rule are part of the contract — changing
+either changes which frames flip value.
+
+- Clamp bounds are integers, so clamp-then-round can never leave the range.
+- The continuity identity holds in integer form: `scale 0, offset K` (integer
+  `K`) is byte-identical to passing `--levels K` directly.
+- The knob's **off case stays reachable**: an envelope driving palette-quantize
+  `levels` to 256 produces that frame's documented byte-identical passthrough —
+  deliberate, the integer analogue of pixel-sort's legal empty-mask frame.
+
+Deferred target classes: enum knobs (an envelope has no contracted order over
+variants yet), and **stateful effects** (datamosh, feedback, fluid advect —
+per-frame knob changes alter state evolution, so the route config must join
+the checkpoint-invalidation contract first).
 
 ## Determinism & continuity
 
@@ -156,7 +172,12 @@ mirror the core type so the graph model stays the single long-term home
    app-side before dispatch; the CLI's add-time validation remains the
    authority. Argument tests pin the route spec formatting, the no-route
    omission, and the missing-media rejection.
-4. **Later:** integer/enum targets, stateful-effect targets, per-route sampling,
+4. **Integer targets (CPU + CLI) — LANDED.** Palette-quantize `levels` joins
+   the registry under the contracted rounding rule above;
+   `render-palette-quantize-sequence` gains the standard `--modulate` flag set.
+   Direct CLI only — palette-quantize has no queue task or SwiftUI section yet,
+   so those exposures are their own later slices (channel-shift precedent).
+5. **Later:** enum targets, stateful-effect targets, per-route sampling,
    envelope caching as analysis sidecars, multiple modulators per render.
 
 ## Acceptance criteria (slice 1)

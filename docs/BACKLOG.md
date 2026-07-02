@@ -81,6 +81,12 @@ contracts live in the `*_MILESTONE.md` docs.
   pixel-unit knobs); bridge emits `--flag=value` shift/flow-gain forms so
   negative pixels survive clap, fail-fast for flow-without-A / flow-on-Metal.
   Deferred: integer/enum/stateful modulation targets.
+- Modulation matrix slice 4 (integer targets): palette-quantize `levels` joins
+  the registry under the contracted rounding rule (clamp `[2, 256]`, then round
+  nearest, ties away from zero; off case reachable at 256);
+  `render-palette-quantize-sequence` gains the `--modulate` flag set (direct
+  CLI only — no palette-quantize queue/SwiftUI exposure yet). Deferred:
+  enum/stateful modulation targets.
 
 ## Next
 

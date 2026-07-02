@@ -951,6 +951,25 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: levels (integer — clamped to [2, 256], then rounded to nearest,
+        /// ties away from zero). Sources: audio-rms/audio-onset/audio-centroid (need
+        /// --modulator-audio), luma/flow (need --modulator-frames).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour

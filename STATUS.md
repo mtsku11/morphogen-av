@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **446 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **447 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **70 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,26 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — integer targets (slice 4).** Palette-quantize `levels`
+  is the first integer modulation target, under the newly **contracted
+  rounding rule** (in `docs/MODULATION_MATRIX_MILESTONE.md`): clamp to the
+  declared `[2, 256]` range, then round to nearest with ties away from zero
+  (`f32::round`); clamp-then-round order and the tie rule are contract, and
+  the knob's off case stays reachable (envelope → 256 = that frame's
+  byte-identical passthrough). Engine: `apply_palette_quantize_modulation` +
+  `PALETTE_QUANTIZE_MODULATION_TARGETS` in `modulation.rs`;
+  `render-palette-quantize-sequence` gains the standard `--modulate` flag set
+  (direct CLI only — palette-quantize has no queue task or SwiftUI section
+  yet; those are their own later slices, channel-shift precedent).
+  **Verified:** workspace 446 → **447** (rounding-rule unit test:
+  clamp ends, 4.4/4.5 tie, 255.5→256, integer continuity identity), clippy/fmt
+  clean; off case byte-identical pre-vs-post change (4/4 frames);
+  luma-ramp readout on the gradient carrier: ON-vs-carrier cross-delta falls
+  **61.6 → 0.755 → 0.380 → 0.000**/255 as levels sweeps 2→87→171→256 with the
+  final frame byte-identical (passthrough reached), frames Read (levels-2
+  frame collapses to pure primaries); `scale 0, offset 5` byte-identical to
+  `--levels 5`. Remaining target classes: enum knobs, stateful effects.
 
 - **Channel-shift SwiftUI panel.** RenderPanelView gains a "Channel Shift —
   RGB Split (+ A-Flow Rows)" section next to retro-static: sticky backend

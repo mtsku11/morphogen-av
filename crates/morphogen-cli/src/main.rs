@@ -750,6 +750,11 @@ fn run() -> Result<(), CliError> {
             mode,
             levels,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_palette_quantize_sequence(PaletteQuantizeSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -759,6 +764,13 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::RenderFluidMosaicSequence {
