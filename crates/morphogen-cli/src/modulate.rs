@@ -20,6 +20,7 @@ use morphogen_render::{
 
 use crate::audio::{build_flow_magnitude_samples, build_luma_samples};
 use crate::error::CliError;
+use crate::render::DatamoshSequenceSettings;
 
 /// Analysis defaults fixed by the milestone contract (recorded there, not knobs).
 const MODULATION_WINDOW: usize = 2048;
@@ -68,6 +69,44 @@ impl ModulationPlan {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+/// Datamosh modulation targets. The apply function lives CLI-side (unlike the
+/// other effects') because `DatamoshSequenceSettings` is itself a CLI-side
+/// struct. Excluded by the milestone's stateful-target rule: `keyframe_interval`
+/// restructures the sequence; `block_size` selects the bloom-vs-macroblock code
+/// path and the tier state topology; `vector_remix`/`remix_seed`/`preset`/
+/// `scanline_smear`/`codec_engrave` are structural mode/seed selections.
+pub(crate) const DATAMOSH_MODULATION_TARGETS: &[&str] = &[
+    "amount",
+    "residual_gain",
+    "residual_decay",
+    "refresh_threshold",
+];
+
+/// Overwrite one routed datamosh knob with a mapped value. Clamps mirror
+/// `render_datamosh_sequence`'s own validation (finite, non-negative); the
+/// upper bound is the shared modulation pixel range, so a runaway
+/// `scale·envelope` can never abort a frame mid-sequence (clamp-never-error).
+pub(crate) fn apply_datamosh_modulation(
+    settings: &mut DatamoshSequenceSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), CliError> {
+    let clamped = value.clamp(0.0, 4096.0);
+    match target {
+        "amount" => settings.amount = clamped,
+        "residual_gain" => settings.residual_gain = clamped,
+        "residual_decay" => settings.residual_decay = clamped,
+        "refresh_threshold" => settings.refresh_threshold = clamped,
+        _ => {
+            return Err(CliError::Message(format!(
+                "unknown datamosh modulation target '{target}' (available: {})",
+                DATAMOSH_MODULATION_TARGETS.join(", ")
+            )))
+        }
+    }
+    Ok(())
 }
 
 pub(crate) struct ModulationRequest<'a> {
@@ -215,4 +254,54 @@ fn require_modulator_frames<'a>(
             source.name()
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morphogen_core::DatamoshPreset;
+
+    #[test]
+    fn datamosh_targets_clamp_to_render_validation_ranges() {
+        let mut settings = DatamoshSequenceSettings {
+            keyframe_interval: 0,
+            amount: 1.0,
+            block_size: 16,
+            residual_gain: 0.5,
+            residual_decay: 0.8,
+            refresh_threshold: 0.0,
+            vector_remix: "none".to_string(),
+            remix_seed: 0,
+            preset: DatamoshPreset::Custom,
+            scanline_smear: false,
+            codec_engrave: false,
+        };
+        apply_datamosh_modulation(&mut settings, "amount", -3.0).unwrap();
+        assert_eq!(settings.amount, 0.0);
+        apply_datamosh_modulation(&mut settings, "amount", 99999.0).unwrap();
+        assert_eq!(settings.amount, 4096.0);
+        apply_datamosh_modulation(&mut settings, "residual_gain", 0.25).unwrap();
+        assert_eq!(settings.residual_gain, 0.25);
+        apply_datamosh_modulation(&mut settings, "residual_decay", -1.0).unwrap();
+        assert_eq!(settings.residual_decay, 0.0);
+        apply_datamosh_modulation(&mut settings, "refresh_threshold", 1.5).unwrap();
+        assert_eq!(settings.refresh_threshold, 1.5);
+        // Structural knobs are deliberately not targets: keyframe_interval
+        // restructures the sequence, block_size selects the code path and the
+        // tier state topology, the rest are mode/seed selections.
+        for excluded in [
+            "keyframe_interval",
+            "block_size",
+            "vector_remix",
+            "remix_seed",
+            "preset",
+            "scanline_smear",
+            "codec_engrave",
+        ] {
+            assert!(
+                apply_datamosh_modulation(&mut settings, excluded, 1.0).is_err(),
+                "'{excluded}' must not be a modulation target"
+            );
+        }
+    }
 }

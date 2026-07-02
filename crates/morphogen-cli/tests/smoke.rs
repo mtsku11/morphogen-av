@@ -1050,6 +1050,336 @@ fn render_datamosh_sequence_reuses_flow_sidecars_and_resumes() {
 }
 
 #[test]
+fn render_datamosh_sequence_modulated_routes_join_checkpoint_contract() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    // A translating modulator so the Lucas-Kanade flow is non-zero — a routed
+    // `amount` can only change the output where there is motion to scale.
+    write_texture_sequence(&modulator_dir, &[0, 2, 4]);
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        write_horizontal_carrier(&carrier_dir.join(frame_name), 24, 16);
+    }
+
+    // A 0.75 s quiet→loud amplitude ramp at 8192 Hz: at modulation-fps 4 the
+    // RMS envelope rises across the three output frames, so the routed amount
+    // varies per frame — and frame N's held output consumed frames 0..N's
+    // values, which is what resume must reproduce.
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let route = "amount=audio-rms:0.5,0.25";
+    let base_args = |output_dir: &str| {
+        vec![
+            "render-datamosh-sequence".to_string(),
+            modulator_arg.clone(),
+            carrier_arg.clone(),
+            output_dir.to_string(),
+            "--keyframe-interval".to_string(),
+            "0".to_string(),
+            "--amount".to_string(),
+            "1".to_string(),
+            "--max-frames".to_string(),
+            "3".to_string(),
+            "--modulation-fps".to_string(),
+            "4".to_string(),
+        ]
+    };
+    let modulated_args = |output_dir: &str| {
+        let mut args = base_args(output_dir);
+        args.extend([
+            "--modulate".to_string(),
+            route.to_string(),
+            "--modulator-audio".to_string(),
+            wav_arg.clone(),
+        ]);
+        args
+    };
+
+    // Unmodulated reference (the off case) and the uninterrupted modulated
+    // render the resumed one must match.
+    let off_dir = temp_dir.path().join("off-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&off_dir.to_string_lossy()))
+        .assert()
+        .success();
+    let uninterrupted_dir = temp_dir.path().join("uninterrupted-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(modulated_args(&uninterrupted_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "modulation routes: amount=audio-rms:0.5,0.25",
+        ));
+
+    // The route actually drives the state evolution (frame 0 is the carrier
+    // verbatim in both, so compare a P-frame).
+    assert_ne!(
+        fs::read(uninterrupted_dir.join("frame_000002.png")).expect("modulated frame"),
+        fs::read(off_dir.join("frame_000002.png")).expect("unmodulated frame"),
+        "routed amount must change the rendered sequence"
+    );
+
+    // Interrupt after frame 0, then resume with identical arguments: the
+    // milestone's acceptance test is byte-identity with the uninterrupted
+    // render (the envelope re-samples at the same absolute frame indices).
+    let resumed_dir = temp_dir.path().join("resumed-output");
+    let resumed_args = modulated_args(&resumed_dir.to_string_lossy());
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed datamosh sequence after frame 0",
+        ));
+
+    // The checkpoint's contract carries the modulation block: routes in CLI
+    // order, sampling, envelope fps, and a content fingerprint of the
+    // modulator WAV (no frames modulator was used).
+    let checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_dir.join("checkpoint.json")).expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "amount");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+    // Exactly-representable f32 literals so the JSON round-trip compares clean.
+    assert_eq!(modulation["routes"][0]["scale"], 0.5);
+    assert_eq!(modulation["routes"][0]["offset"], 0.25);
+    assert_eq!(modulation["sampling"], "hold");
+    assert_eq!(modulation["fps"], 4.0);
+    assert_eq!(modulation["modulator_audio"]["path"], wav_arg.as_str());
+    assert!(modulation["modulator_audio"]["checksum"]
+        .as_str()
+        .expect("audio checksum")
+        .starts_with("fnv1a64:"));
+    assert!(modulation["modulator_frames"].is_null());
+
+    // A changed route must refuse to resume — the knob history would differ.
+    let mut changed_route_args = base_args(&resumed_dir.to_string_lossy());
+    changed_route_args.extend([
+        "--modulate".to_string(),
+        "amount=audio-rms:0.75,0.25".to_string(),
+        "--modulator-audio".to_string(),
+        wav_arg.clone(),
+    ]);
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&changed_route_args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+    // Dropping the routes entirely must refuse for the same reason.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&resumed_dir.to_string_lossy()))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered datamosh sequence with 3 frame(s)",
+        ));
+    for frame_name in ["frame_000000.png", "frame_000001.png", "frame_000002.png"] {
+        assert_eq!(
+            fs::read(resumed_dir.join(frame_name)).expect("resumed frame"),
+            fs::read(uninterrupted_dir.join(frame_name)).expect("uninterrupted frame"),
+            "resumed modulated datamosh render must be byte-identical ({frame_name})"
+        );
+    }
+
+    // A pre-slice checkpoint (no modulation key at all) deserializes as
+    // unmodulated and stays resumable by an unmodulated render.
+    let legacy_dir = temp_dir.path().join("legacy-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+    let checkpoint_path = legacy_dir.join("checkpoint.json");
+    let mut legacy_checkpoint: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).expect("read legacy"))
+            .expect("parse legacy");
+    let contract = legacy_checkpoint["contract"]
+        .as_object_mut()
+        .expect("contract object");
+    assert!(contract.remove("modulation").is_some());
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_string(&legacy_checkpoint).expect("serialize legacy"),
+    )
+    .expect("write legacy checkpoint");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered datamosh sequence with 3 frame(s)",
+        ));
+}
+
+#[test]
+fn render_fluid_advect_sequence_modulation_continuity_identity() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let run = |output_dir: &str, extra: &[&str]| {
+        let mut args = vec![
+            "render-fluid-advect-sequence",
+            source_arg.as_str(),
+            output_dir,
+            "--frames",
+            "3",
+        ];
+        args.extend_from_slice(extra);
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+    };
+
+    // Continuity identity: `scale 0, offset K` pins the knob to K — byte-
+    // identical to passing the constant directly.
+    let constant_dir = temp_dir.path().join("constant-output");
+    run(&constant_dir.to_string_lossy(), &["--reinject", "0.3"]).success();
+    let routed_dir = temp_dir.path().join("routed-output");
+    run(
+        &routed_dir.to_string_lossy(),
+        &[
+            "--modulate",
+            "reinject=luma:0,0.3",
+            "--modulator-frames",
+            source_arg.as_str(),
+        ],
+    )
+    .success()
+    .stdout(predicate::str::contains(
+        "modulation routes: reinject=luma:0,0.3",
+    ));
+    assert_png_frames_identical(&constant_dir, &routed_dir, 3);
+
+    // The route reaches the render: the pinned 0.3 differs from the default
+    // reinject (frame 0 is the source verbatim either way).
+    let default_dir = temp_dir.path().join("default-output");
+    run(&default_dir.to_string_lossy(), &[]).success();
+    assert_ne!(
+        fs::read(routed_dir.join("frame_000001.png")).expect("routed frame"),
+        fs::read(default_dir.join("frame_000001.png")).expect("default frame"),
+        "routed reinject must change the rendered sequence"
+    );
+
+    // `seed` is a structural field, not a modulation target.
+    let rejected_dir = temp_dir.path().join("rejected-output");
+    run(
+        &rejected_dir.to_string_lossy(),
+        &[
+            "--modulate",
+            "seed=luma",
+            "--modulator-frames",
+            source_arg.as_str(),
+        ],
+    )
+    .failure()
+    .stderr(predicate::str::contains(
+        "unknown fluid-advect modulation target",
+    ));
+}
+
+#[test]
+fn render_optical_flow_advect_sequence_modulation_continuity_identity() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    // A translating source: its own Lucas-Kanade motion is the advecting
+    // field, so a routed `advect` needs real motion to scale.
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let run = |output_dir: &str, extra: &[&str]| {
+        let mut args = vec![
+            "render-optical-flow-advect-sequence",
+            source_arg.as_str(),
+            output_dir,
+            "--frames",
+            "3",
+        ];
+        args.extend_from_slice(extra);
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+    };
+
+    // Continuity identity on the shared two-source apply fn: `scale 0,
+    // offset K` is byte-identical to the constant knob.
+    let constant_dir = temp_dir.path().join("constant-output");
+    run(&constant_dir.to_string_lossy(), &["--advect", "2.5"]).success();
+    let routed_dir = temp_dir.path().join("routed-output");
+    run(
+        &routed_dir.to_string_lossy(),
+        &[
+            "--modulate",
+            "advect=luma:0,2.5",
+            "--modulator-frames",
+            source_arg.as_str(),
+        ],
+    )
+    .success()
+    .stdout(predicate::str::contains(
+        "modulation routes: advect=luma:0,2.5",
+    ));
+    assert_png_frames_identical(&constant_dir, &routed_dir, 3);
+
+    // The route reaches the render (default advect is 1.0).
+    let default_dir = temp_dir.path().join("default-output");
+    run(&default_dir.to_string_lossy(), &[]).success();
+    assert_ne!(
+        fs::read(routed_dir.join("frame_000001.png")).expect("routed frame"),
+        fs::read(default_dir.join("frame_000001.png")).expect("default frame"),
+        "routed advect must change the rendered sequence"
+    );
+
+    // Single-source-only knobs are not two-source targets.
+    let rejected_dir = temp_dir.path().join("rejected-output");
+    run(
+        &rejected_dir.to_string_lossy(),
+        &[
+            "--modulate",
+            "turbulence_scale=luma",
+            "--modulator-frames",
+            source_arg.as_str(),
+        ],
+    )
+    .failure()
+    .stderr(predicate::str::contains(
+        "unknown fluid-advect-two-source modulation target",
+    ));
+}
+
+#[test]
 fn feedback_flow_source_selects_recorded_algorithm() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");

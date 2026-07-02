@@ -18,8 +18,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChannelShiftSettings, FlowFeedbackSettings, PaletteQuantizeSettings, PixelSortSettings,
-    QuantizeMode, RenderError, RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection,
+    ChannelShiftSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
+    PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RenderError, RetroStaticSettings,
+    ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// Which analysis descriptor drives a route.
@@ -264,6 +265,22 @@ pub const FLOW_FEEDBACK_MODULATION_TARGETS: &[&str] = &[
     "decay",
     "structure_mix",
 ];
+/// Fluid advect (single-source procedural dye) is stateful — each frame's dye
+/// update consumes that frame's knobs — but has no checkpoint/resume path, so
+/// only the per-frame application rule of the milestone's "Stateful targets"
+/// section applies. `seed` is deliberately excluded (a structural field, like
+/// datamosh `remix_seed`).
+pub const FLUID_ADVECT_MODULATION_TARGETS: &[&str] = &[
+    "advect",
+    "turbulence_scale",
+    "turbulence_speed",
+    "detail",
+    "reinject",
+];
+/// Two-source / optical-flow advect share one settings struct (and this
+/// registry) across `render-fluid-advect-two-source-sequence` and
+/// `render-optical-flow-advect-sequence`.
+pub const FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS: &[&str] = &["advect", "reinject"];
 
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
@@ -393,6 +410,56 @@ pub fn apply_flow_feedback_modulation(
                 "flow-feedback",
                 target,
                 FLOW_FEEDBACK_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed fluid-advect knob with a mapped value. Clamps mirror
+/// `FluidAdvectSettings::validate` (advect/detail non-negative, reinject in
+/// `[0, 1]`); where validate only requires finiteness, the shared pixel range
+/// bounds the value so a runaway `scale·envelope` can never abort a frame's
+/// own validate call (clamp-never-error).
+pub fn apply_fluid_advect_modulation(
+    settings: &mut FluidAdvectSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "advect" => settings.advect = value.clamp(0.0, SHIFT_RANGE.1),
+        "turbulence_scale" => settings.turbulence_scale = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "turbulence_speed" => settings.turbulence_speed = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "detail" => settings.detail = value.clamp(0.0, SHIFT_RANGE.1),
+        "reinject" => settings.reinject = value.clamp(0.0, 1.0),
+        _ => {
+            return Err(unknown_target(
+                "fluid-advect",
+                target,
+                FLUID_ADVECT_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed two-source/optical-flow advect knob with a mapped
+/// value. `advect` may legally go negative (validate only requires finiteness
+/// — a reversed flow), so it takes the full pixel range; `reinject` mirrors
+/// validate's `[0, 1]`.
+pub fn apply_fluid_advect_two_source_modulation(
+    settings: &mut FluidAdvectTwoSourceSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "advect" => settings.advect = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "reinject" => settings.reinject = value.clamp(0.0, 1.0),
+        _ => {
+            return Err(unknown_target(
+                "fluid-advect-two-source",
+                target,
+                FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS,
             ))
         }
     }
@@ -596,6 +663,45 @@ mod tests {
         // structure_mode is deliberately not a target (backend-invalid variants).
         assert!(apply_flow_feedback_modulation(&mut feedback, "structure_mode", 1.0).is_err());
         assert!(apply_flow_feedback_modulation(&mut feedback, "iterations", 1.0).is_err());
+    }
+
+    #[test]
+    fn fluid_advect_targets_clamp_to_validate_ranges() {
+        let mut fluid = FluidAdvectSettings::default();
+        apply_fluid_advect_modulation(&mut fluid, "advect", -5.0).unwrap();
+        assert_eq!(fluid.advect, 0.0);
+        apply_fluid_advect_modulation(&mut fluid, "advect", 99999.0).unwrap();
+        assert_eq!(fluid.advect, 4096.0);
+        apply_fluid_advect_modulation(&mut fluid, "reinject", 1.5).unwrap();
+        assert_eq!(fluid.reinject, 1.0);
+        apply_fluid_advect_modulation(&mut fluid, "reinject", -0.5).unwrap();
+        assert_eq!(fluid.reinject, 0.0);
+        apply_fluid_advect_modulation(&mut fluid, "detail", -1.0).unwrap();
+        assert_eq!(fluid.detail, 0.0);
+        // Scale/speed only require finiteness — negatives pass through.
+        apply_fluid_advect_modulation(&mut fluid, "turbulence_scale", -0.02).unwrap();
+        assert_eq!(fluid.turbulence_scale, -0.02);
+        apply_fluid_advect_modulation(&mut fluid, "turbulence_speed", 0.25).unwrap();
+        assert_eq!(fluid.turbulence_speed, 0.25);
+        // Every clamped combination stays legal for the render.
+        fluid.validate().unwrap();
+        // seed is a structural field, not a knob.
+        assert!(apply_fluid_advect_modulation(&mut fluid, "seed", 1.0).is_err());
+
+        let mut two_source = FluidAdvectTwoSourceSettings::default();
+        // advect may legally go negative (a reversed flow).
+        apply_fluid_advect_two_source_modulation(&mut two_source, "advect", -2.5).unwrap();
+        assert_eq!(two_source.advect, -2.5);
+        apply_fluid_advect_two_source_modulation(&mut two_source, "advect", 99999.0).unwrap();
+        assert_eq!(two_source.advect, 4096.0);
+        apply_fluid_advect_two_source_modulation(&mut two_source, "reinject", 2.0).unwrap();
+        assert_eq!(two_source.reinject, 1.0);
+        two_source.validate().unwrap();
+        assert!(
+            apply_fluid_advect_two_source_modulation(&mut two_source, "turbulence_scale", 1.0)
+                .is_err(),
+            "single-source-only knobs are not two-source targets"
+        );
     }
 
     #[test]

@@ -341,6 +341,27 @@ pub(crate) enum Commands {
         /// Stop after writing one frame and a resumable float-state checkpoint.
         #[arg(long)]
         stop_after_frame: bool,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: amount, residual_gain, residual_decay, refresh_threshold.
+        /// Sources: audio-rms/audio-onset/audio-centroid (need --modulator-audio),
+        /// luma/flow (need --modulator-frames). Datamosh is stateful, so the routes
+        /// join the checkpoint contract: changing or dropping them refuses to
+        /// resume an existing output directory.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
     /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
@@ -503,6 +524,26 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: advect, turbulence_scale, turbulence_speed, detail, reinject.
+        /// Sources: audio-rms/audio-onset/audio-centroid (need --modulator-audio),
+        /// luma/flow (need --modulator-frames). Stateful: each frame's dye update
+        /// consumes that frame's routed knobs.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// Render the mutual two-source faux-fluid advection (experimental, deterministic):
     /// Source A's optical-flow motion advects Source B's colour as a continuous dye. Frame
@@ -529,6 +570,25 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: advect, reinject. Sources: audio-rms/audio-onset/audio-centroid
+        /// (need --modulator-audio), luma/flow (need --modulator-frames). Stateful:
+        /// each frame's dye update consumes that frame's routed knobs.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// Render the single-source optical-flow-driven advection (experimental, deterministic):
     /// the video is advected by its OWN motion. Each frame the source's Lucas-Kanade flow
@@ -555,6 +615,25 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: advect, reinject. Sources: audio-rms/audio-onset/audio-centroid
+        /// (need --modulator-audio), luma/flow (need --modulator-frames). Stateful:
+        /// each frame's dye update consumes that frame's routed knobs.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
     },
     /// Render the discrete-carrier particle advection (experimental, deterministic):
     /// a grid of coloured particles seeded from the source rides the shared steady-vortex

@@ -55,16 +55,19 @@ use morphogen_render::{
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 use morphogen_render::{
-    apply_channel_shift_modulation, apply_flow_feedback_modulation,
-    apply_palette_quantize_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
-    ModulationRoute, ModulationSampling,
+    apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
+    apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
+    apply_pixel_sort_modulation, apply_retro_static_modulation, ModulationRoute,
+    ModulationSampling,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::args::*;
 use crate::error::CliError;
 use crate::imaging::*;
-use crate::modulate::{build_modulation_plan, ModulationPlan, ModulationRequest};
+use crate::modulate::{
+    apply_datamosh_modulation, build_modulation_plan, ModulationPlan, ModulationRequest,
+};
 /// The shared `--modulate` argument bundle carried by modulatable sequence
 /// requests; resolved into a `ModulationPlan` by the handler.
 #[derive(Default)]
@@ -485,6 +488,7 @@ pub(crate) struct DatamoshSequenceRequest<'a> {
     pub(crate) job_id: &'a str,
     pub(crate) provenance: Option<&'a RenderJobProvenance>,
     pub(crate) stop_after_frame: bool,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 pub(crate) const DATAMOSH_RENDER_CONTRACT_VERSION: u32 = 1;
@@ -497,6 +501,12 @@ pub(crate) struct DatamoshSequenceContract {
     carrier: FeedbackSequenceSourceFingerprint,
     settings: DatamoshSequenceSettings,
     backend: RenderBackend,
+    /// Modulation routes join the sequence contract (milestone doc, "Stateful
+    /// targets"): frame N's state depends on the whole knob history, so a
+    /// changed/dropped route must refuse to resume. Serde-defaulted so
+    /// pre-slice checkpoints stay resumable unmodulated.
+    #[serde(default)]
+    modulation: Option<FeedbackModulationContract>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -567,6 +577,20 @@ pub(crate) fn render_datamosh_sequence(
             "max-frames must be greater than zero".to_string(),
         ));
     }
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        // Dry-run at frame 0 so an unknown target fails before any frame or
+        // checkpoint state exists. Routes apply on top of the resolved preset.
+        let mut probe = settings.clone();
+        for (target, value) in plan.frame_values(0) {
+            apply_datamosh_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+    let modulation_contract = modulation_plan
+        .as_ref()
+        .map(|plan| feedback_modulation_contract(plan, &request.modulation))
+        .transpose()?;
 
     let modulator_frames = collect_image_frames(request.modulator_dir)?;
     let carrier_frames = collect_image_frames(request.carrier_dir)?;
@@ -591,6 +615,7 @@ pub(crate) fn render_datamosh_sequence(
         carrier: feedback_source_fingerprint(request.carrier_dir, &carrier_frames)?,
         settings: settings.clone(),
         backend: request.backend,
+        modulation: modulation_contract,
     };
     let provenance = request.provenance.cloned().unwrap_or_else(|| {
         datamosh_sequence_provenance(
@@ -604,19 +629,6 @@ pub(crate) fn render_datamosh_sequence(
     if let Some(cache_root) = request.flow_cache_dir {
         fs::create_dir_all(cache_root)?;
     }
-
-    // Residual accumulation is active only with a positive gain over coarse
-    // blocks; otherwise the loop uses the plain block-quantize path (gain 0 ⇒
-    // byte-identical block tier, by construction).
-    let residual_active = settings.residual_gain > 0.0 && settings.block_size >= 2;
-    // Per-block keep/drop refresh is active only with a positive threshold over
-    // coarse blocks (threshold 0 ⇒ byte-identical to the block/residual path).
-    let refresh_active = settings.refresh_threshold > 0.0 && settings.block_size >= 2;
-    // Vector remix permutes the block-MV grid before advection; active only with a
-    // non-None mode over coarse blocks (None ⇒ byte-identical to the block path). It
-    // computes `effective` itself, so it takes precedence over residual.
-    let remix_active =
-        settings.vector_remix_mode() != VectorRemixMode::None && settings.block_size >= 2;
 
     let (start_frame, mut previous_output, mut accumulated_residual) = load_datamosh_resume_state(
         request.output_dir,
@@ -644,9 +656,40 @@ pub(crate) fn render_datamosh_sequence(
     let mut metal_flow_validated = false;
     let flow_cache_algorithm = optical_flow_cache_algorithm(request.backend);
     for index in start_frame..frame_count {
+        // Per-frame settings copy, overwritten at the top of each frame's
+        // state update (milestone doc, "Stateful targets"): frame N's state
+        // depends on the whole knob history, which is why the routes live in
+        // the sequence contract.
+        let mut frame_settings = settings.clone();
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_datamosh_modulation(&mut frame_settings, target, value)?;
+            }
+        }
+        // Tier activation is re-evaluated from the frame's (possibly routed)
+        // knobs, so a gain/threshold envelope can enable its tier per frame.
+        // Without routes these equal the base flags every frame — the exact
+        // unmodulated path. A zero-gain frame takes the plain block path and
+        // holds the residual accumulator untouched (neither decays nor
+        // injects) until the tier re-activates or a keyframe clears it.
+        //
+        // Residual accumulation is active only with a positive gain over coarse
+        // blocks; otherwise the loop uses the plain block-quantize path (gain 0 ⇒
+        // byte-identical block tier, by construction).
+        let residual_active = frame_settings.residual_gain > 0.0 && frame_settings.block_size >= 2;
+        // Per-block keep/drop refresh is active only with a positive threshold over
+        // coarse blocks (threshold 0 ⇒ byte-identical to the block/residual path).
+        let refresh_active =
+            frame_settings.refresh_threshold > 0.0 && frame_settings.block_size >= 2;
+        // Vector remix permutes the block-MV grid before advection; active only with a
+        // non-None mode over coarse blocks (None ⇒ byte-identical to the block path). It
+        // computes `effective` itself, so it takes precedence over residual.
+        let remix_active = frame_settings.vector_remix_mode() != VectorRemixMode::None
+            && frame_settings.block_size >= 2;
+
         let carrier = load_image_f32(&carrier_frames[index])?;
         let modulator = load_image_f32(&modulator_frames[index])?;
-        let is_keyframe = is_datamosh_keyframe(index, settings.keyframe_interval);
+        let is_keyframe = is_datamosh_keyframe(index, frame_settings.keyframe_interval);
 
         let rendered = match previous_output.as_ref() {
             // P-frame delta: advect the held previous output by A's flow. The
@@ -717,9 +760,9 @@ pub(crate) fn render_datamosh_sequence(
                     // A pure flow→flow transform like quantize, so Metal stays free.
                     remix_block_vectors(
                         &flow,
-                        settings.block_size,
-                        settings.vector_remix_mode(),
-                        settings.remix_seed,
+                        frame_settings.block_size,
+                        frame_settings.vector_remix_mode(),
+                        frame_settings.remix_seed,
                     )?
                 } else if residual_active {
                     let accum = accumulated_residual
@@ -728,19 +771,19 @@ pub(crate) fn render_datamosh_sequence(
                     let (effective, new_accum) = datamosh_residual_flow(
                         &flow,
                         &accum,
-                        settings.block_size,
-                        settings.residual_gain,
-                        settings.residual_decay,
+                        frame_settings.block_size,
+                        frame_settings.residual_gain,
+                        frame_settings.residual_decay,
                     )?;
                     accumulated_residual = Some(new_accum);
                     effective
                 } else {
-                    quantize_flow_to_blocks(&flow, settings.block_size)?
+                    quantize_flow_to_blocks(&flow, frame_settings.block_size)?
                 };
                 let advected = render_datamosh_advect_frame(
                     previous,
                     &effective,
-                    settings.amount,
+                    frame_settings.amount,
                     request.backend,
                 )?;
                 // Per-block keep/drop: macroblocks whose mean motion is below the
@@ -749,25 +792,25 @@ pub(crate) fn render_datamosh_sequence(
                 // gated displace output, so Metal stays free; refreshed blocks also
                 // clear their residual accumulator (matching the keyframe reset).
                 let refreshed = if refresh_active {
-                    let block_means = quantize_flow_to_blocks(&flow, settings.block_size)?;
+                    let block_means = quantize_flow_to_blocks(&flow, frame_settings.block_size)?;
                     let composed = datamosh_block_refresh_composite(
                         &advected,
                         &carrier,
                         &block_means,
-                        settings.refresh_threshold,
+                        frame_settings.refresh_threshold,
                     )?;
                     if let Some(accum) = accumulated_residual.take() {
                         accumulated_residual = Some(reset_residual_in_refreshed_blocks(
                             &accum,
                             &block_means,
-                            settings.refresh_threshold,
+                            frame_settings.refresh_threshold,
                         )?);
                     }
                     composed
                 } else {
                     advected
                 };
-                let post_scanline = if settings.scanline_smear {
+                let post_scanline = if frame_settings.scanline_smear {
                     let frame_index = u32::try_from(index).map_err(|_| {
                         CliError::Message(
                             "frame sequence contains more than u32::MAX frames".to_string(),
@@ -777,16 +820,16 @@ pub(crate) fn render_datamosh_sequence(
                         &refreshed,
                         &effective,
                         frame_index,
-                        if settings.codec_engrave {
-                            datamosh_codec_scanline_smear_settings(settings.remix_seed)
+                        if frame_settings.codec_engrave {
+                            datamosh_codec_scanline_smear_settings(frame_settings.remix_seed)
                         } else {
-                            datamosh_scanline_smear_settings(settings.remix_seed)
+                            datamosh_scanline_smear_settings(frame_settings.remix_seed)
                         },
                     )?
                 } else {
                     refreshed
                 };
-                if settings.codec_engrave {
+                if frame_settings.codec_engrave {
                     let frame_index = u32::try_from(index).map_err(|_| {
                         CliError::Message(
                             "frame sequence contains more than u32::MAX frames".to_string(),
@@ -797,7 +840,7 @@ pub(crate) fn render_datamosh_sequence(
                         &carrier,
                         &effective,
                         frame_index,
-                        datamosh_codec_engrave_settings(settings.remix_seed),
+                        datamosh_codec_engrave_settings(frame_settings.remix_seed),
                     )?
                 } else {
                     post_scanline
@@ -1926,6 +1969,7 @@ pub(crate) struct FluidAdvectSequenceRequest<'a> {
     pub(crate) settings: FluidAdvectSettings,
     pub(crate) frames: usize,
     pub(crate) backend: RenderBackend,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the faux-fluid dye advection. The source is treated as a continuous dye:
@@ -1949,17 +1993,36 @@ pub(crate) fn render_fluid_advect_sequence(
             "fluid advect requires at least one PNG frame in the source directory".to_string(),
         ));
     }
+    // Stateful per-frame application (milestone doc, "Stateful targets"):
+    // each frame's dye update consumes that frame's knobs. This command has no
+    // checkpoint/resume path, so the routes are run provenance (printed), not
+    // a persisted contract.
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        // Dry-run at frame 0 so an unknown target fails before any frame exists.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_fluid_advect_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
 
     fs::create_dir_all(request.output_dir)?;
 
     let mut previous_output: Option<ImageBufferF32> = None;
     for index in 0..request.frames {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_fluid_advect_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let source = load_image_f32(&source_frames[index % source_frames.len()])?;
         let rendered = render_fluid_advect_frame(
             &source,
             previous_output.as_ref(),
             index as u32,
-            request.settings,
+            frame_settings,
             request.backend,
         )?;
         save_png(
@@ -1992,6 +2055,7 @@ pub(crate) struct FluidAdvectTwoSourceSequenceRequest<'a> {
     pub(crate) settings: FluidAdvectTwoSourceSettings,
     pub(crate) frames: usize,
     pub(crate) backend: RenderBackend,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the mutual two-source faux-fluid advection: Source A (modulator) supplies the
@@ -2020,12 +2084,29 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
     }
     let available = a_frames.len().min(b_frames.len());
     let frame_count = request.frames.min(available);
+    // Stateful per-frame application (milestone doc, "Stateful targets"); no
+    // checkpoint path here, so routes are printed provenance only.
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        // Dry-run at frame 0 so an unknown target fails before any frame exists.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_fluid_advect_two_source_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
 
     fs::create_dir_all(request.output_dir)?;
 
     let mut previous_output: Option<ImageBufferF32> = None;
     let mut previous_a: Option<ImageBufferF32> = None;
     for index in 0..frame_count {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_fluid_advect_two_source_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let carrier_b = load_image_f32(&b_frames[index])?;
         let modulator_a = load_image_f32(&a_frames[index])?;
 
@@ -2044,7 +2125,7 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
                     &carrier_b,
                     previous,
                     &flow,
-                    request.settings,
+                    frame_settings,
                     request.backend,
                 )?
             }
@@ -2138,6 +2219,7 @@ pub(crate) struct OpticalFlowAdvectSequenceRequest<'a> {
     pub(crate) settings: FluidAdvectTwoSourceSettings,
     pub(crate) frames: usize,
     pub(crate) backend: RenderBackend,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the single-source optical-flow-driven advection: the video is advected by its own
@@ -2164,12 +2246,29 @@ pub(crate) fn render_optical_flow_advect_sequence(
         ));
     }
     let frame_count = request.frames.min(source_frames.len());
+    // Stateful per-frame application (milestone doc, "Stateful targets"); no
+    // checkpoint path here, so routes are printed provenance only.
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        // Dry-run at frame 0 so an unknown target fails before any frame exists.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_fluid_advect_two_source_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
 
     fs::create_dir_all(request.output_dir)?;
 
     let mut previous_output: Option<ImageBufferF32> = None;
     let mut previous_source: Option<ImageBufferF32> = None;
     for (index, source_path) in source_frames.iter().enumerate().take(frame_count) {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_fluid_advect_two_source_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let source = load_image_f32(source_path)?;
 
         let rendered = match (previous_output.as_ref(), previous_source.as_ref()) {
@@ -2187,7 +2286,7 @@ pub(crate) fn render_optical_flow_advect_sequence(
                     &source,
                     previous,
                     &flow,
-                    request.settings,
+                    frame_settings,
                     request.backend,
                 )?
             }

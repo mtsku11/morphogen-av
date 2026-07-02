@@ -1535,6 +1535,9 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
             settings,
             frames: frames as usize,
             backend,
+            // Fluid-advect routes are direct-CLI only for now (milestone:
+            // queue/SwiftUI exposure deferred); queued jobs stay unmodulated.
+            modulation: ModulationCliArgs::default(),
         })?;
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -1616,6 +1619,8 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
                 settings,
                 frames: frames as usize,
                 backend,
+                // Routes are direct-CLI only for now; queued jobs stay unmodulated.
+                modulation: ModulationCliArgs::default(),
             })?;
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -1693,6 +1698,8 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
                 settings,
                 frames: frames as usize,
                 backend,
+                // Routes are direct-CLI only for now; queued jobs stay unmodulated.
+                modulation: ModulationCliArgs::default(),
             })?;
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -3580,6 +3587,9 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
             job_id: &job_id,
             provenance: provenance.as_ref(),
             stop_after_frame: false,
+            // Datamosh routes are direct-CLI only for now (milestone:
+            // queue/SwiftUI exposure deferred); pre-slice jobs stay unmodulated.
+            modulation: ModulationCliArgs::default(),
         };
         let resolved_settings = resolve_datamosh_settings(&render_request);
         let render_result = render_datamosh_sequence(render_request)?;

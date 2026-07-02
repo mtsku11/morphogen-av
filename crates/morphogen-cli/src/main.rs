@@ -306,6 +306,11 @@ fn run() -> Result<(), CliError> {
             backend,
             max_frames,
             stop_after_frame,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_datamosh_sequence(DatamoshSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -325,6 +330,13 @@ fn run() -> Result<(), CliError> {
             job_id: "direct-datamosh",
             provenance: None,
             stop_after_frame,
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::DatamoshBitstream {
@@ -425,6 +437,11 @@ fn run() -> Result<(), CliError> {
             reinject,
             seed,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_fluid_advect_sequence(FluidAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -438,6 +455,13 @@ fn run() -> Result<(), CliError> {
             },
             frames,
             backend: backend.into(),
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::RenderFluidAdvectTwoSourceSequence {
@@ -448,6 +472,11 @@ fn run() -> Result<(), CliError> {
             advect,
             reinject,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_fluid_advect_two_source_sequence(FluidAdvectTwoSourceSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -455,6 +484,13 @@ fn run() -> Result<(), CliError> {
             settings: FluidAdvectTwoSourceSettings { advect, reinject },
             frames,
             backend: backend.into(),
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::RenderOpticalFlowAdvectSequence {
@@ -464,12 +500,24 @@ fn run() -> Result<(), CliError> {
             advect,
             reinject,
             backend,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
         } => render_optical_flow_advect_sequence(OpticalFlowAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
             settings: FluidAdvectTwoSourceSettings { advect, reinject },
             frames,
             backend: backend.into(),
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+            },
         })
         .map(|_| ()),
         Commands::RenderFieldParticlesSequence {

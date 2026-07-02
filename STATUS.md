@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **451 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **456 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **75 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,46 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — stateful targets slice 7: datamosh + fluid advect
+  (direct CLI).** The two deferred stateful effects gain routes.
+  **Datamosh** (`render-datamosh-sequence`): targets `amount` /
+  `residual_gain` / `residual_decay` / `refresh_threshold`, all clamped
+  `[0, 4096]` mirroring the command's own validation; the apply fn lives
+  **CLI-side in `modulate.rs`** (the answer to the recorded placement
+  question — `DatamoshSequenceSettings` is a CLI struct). The checkpoint
+  contract gains the same serde-defaulted `modulation` block as feedback
+  (reused `FeedbackModulationContract`), so changed/dropped routes refuse
+  resume and legacy checkpoints stay resumable unmodulated. **Tier activation
+  (residual/refresh/remix) is now re-evaluated per frame** from the routed
+  knobs — an envelope can pulse the residual tier on a plain block base; a
+  zero-gain frame holds the accumulator untouched; without routes the flags
+  equal the base flags (exact off path). Excluded: `keyframe_interval`,
+  `block_size`, remix/seed/preset/smear/engrave (structural). **Fluid advect**
+  (all three commands): stateful per-frame application only — **no checkpoint
+  path exists**, so routes are printed provenance. Single-source targets
+  `advect`/`turbulence_scale`/`turbulence_speed`/`detail`/`reinject`;
+  two-source + optical-flow share `advect` (may go negative = reversed flow) /
+  `reinject`; `seed` excluded. All three commands sample envelopes against
+  `--modulation-fps` (stateless default 12 — none has a `--frame-rate`).
+  Queue/showcase call sites pass the default (unmodulated) bundle. Contract:
+  `docs/MODULATION_MATRIX_MILESTONE.md` ("Stateful targets"). **Verified:**
+  workspace 451 → **456**, 0 failing (+2 unit: fluid clamp rules incl.
+  validate-legality, datamosh clamp + 7 structural exclusions; +3 smoke:
+  datamosh full checkpoint-contract acceptance on a translating-texture
+  fixture — ON≠OFF, modulation block pinned, changed/dropped routes refuse,
+  resume byte-identical 3/3, legacy compat; fluid + optical-flow continuity
+  identities `scale 0, offset K` byte-identical to the constant knob, route ≠
+  default, unknown-target rejection); clippy `-D warnings` + fmt clean.
+  **Readout** (12-frame 192×144 testsrc2 + RMS ramp, `dm-cross-delta.py`):
+  datamosh `amount=audio-rms:3,0` OFF-vs-ON **0.000 → 21.5/255** monotone;
+  optical-flow `advect=audio-rms:6,0` **0.000 → 21.9/255** monotone; fluid
+  advect `advect=audio-rms:24,0` **non-monotone 0 → 30.5 → dip 9.1 (frame 7)
+  → 30.9** — the dip is where the rising envelope drives advect *through* the
+  OFF constant 12, itself proof the route tracks the envelope. Frames Read:
+  datamosh ON = heavy accumulated melt vs OFF mild smear; fluid ON =
+  deeper-wrapped spirals; optical-flow ON = bars dissolved along own motion.
+  Remaining: queue/SwiftUI exposure of stateful-effect routes.
 
 - **Modulation matrix — stateful targets (slice 6, flow feedback, direct
   CLI).** The last deferred target class opens: `render-feedback-sequence`

@@ -179,6 +179,7 @@ pub(crate) fn render_showcase(request: ShowcaseRenderRequest<'_>) -> Result<(), 
         job_id: "showcase-datamosh",
         provenance: None,
         stop_after_frame: false,
+        modulation: ModulationCliArgs::default(),
     })?;
 
     let feedback_frames_dir = feedback_dir.join("frames");

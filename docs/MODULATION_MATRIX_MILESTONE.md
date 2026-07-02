@@ -178,9 +178,58 @@ CLI). Targets and clamps:
 | `decay` | `max(0)` | one-sided, mirrors validate |
 | `structure_mix` | `max(0)` | one-sided, mirrors validate |
 
-Deferred: datamosh targets (`DatamoshSequenceSettings` is CLI-side, needs its
-apply fn placed first), fluid-advect targets, queue/SwiftUI exposure of
-feedback routes.
+**Datamosh** (`render-datamosh-sequence`, direct CLI) follows the same
+checkpoint-contract rules (its contract gains the identical serde-defaulted
+`modulation` block). Its apply function lives CLI-side (`modulate.rs`) because
+`DatamoshSequenceSettings` is itself a CLI-side struct — that placement is the
+contract answer to the deferred "apply fn placement" question. Targets, all
+clamped `[0, 4096]` (mirroring the command's own finite/non-negative
+validation; the upper bound keeps a runaway `scale·envelope` finite):
+
+| Target | Notes |
+|---|---|
+| `amount` | per-step flow gain (0 freezes the held frame) |
+| `residual_gain` | fine-motion haze injection |
+| `residual_decay` | residual accumulator decay |
+| `refresh_threshold` | per-block keep/drop threshold |
+
+Two datamosh-specific rules:
+
+- **Tier activation is re-evaluated per frame** from the routed knobs
+  (`residual_gain > 0`, `refresh_threshold > 0`, each with `block_size >= 2`),
+  so an envelope can enable its tier per frame — e.g. a residual haze that
+  pulses with audio over a plain block base. A zero-gain frame takes the plain
+  block path and **holds** the residual accumulator untouched (neither decays
+  nor injects) until the tier re-activates or a keyframe clears it. Without
+  routes the per-frame flags equal the base flags — the exact unmodulated path.
+- **Excluded knobs:** `keyframe_interval` (restructures the sequence),
+  `block_size` (selects the bloom-vs-macroblock code path and the tier state
+  topology), `vector_remix`/`remix_seed`/`preset`/`scanline_smear`/
+  `codec_engrave` (structural mode/seed selections).
+
+**Fluid advect** (`render-fluid-advect-sequence`,
+`render-fluid-advect-two-source-sequence`,
+`render-optical-flow-advect-sequence`, direct CLI) is stateful — each frame's
+dye update consumes that frame's knobs — but has **no checkpoint/resume path**,
+so only the per-frame application rule applies; the resolved routes are printed
+provenance, not a persisted contract. The two-source and optical-flow commands
+share one settings struct and apply function. Targets (clamps mirror validate;
+where validate only requires finiteness the shared `[-4096, 4096]` range
+bounds the value):
+
+| Command | Targets |
+|---|---|
+| single-source | `advect` `[0,4096]`, `turbulence_scale` `[±4096]`, `turbulence_speed` `[±4096]`, `detail` `[0,4096]`, `reinject` `[0,1]` |
+| two-source / optical-flow | `advect` `[±4096]` (negative = reversed flow), `reinject` `[0,1]` |
+
+`seed` is excluded (structural, like `remix_seed`).
+
+All three effects sample envelopes against `--modulation-fps` (the stateless
+default, 12) — unlike feedback, none of these commands has a `--frame-rate` of
+its own.
+
+Deferred: queue/SwiftUI exposure of the stateful-effect routes (feedback,
+datamosh, fluid advect).
 
 ## Determinism & continuity
 
