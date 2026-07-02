@@ -1606,6 +1606,20 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: strength. Persisted on the job; envelope times sample against
+        /// the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
@@ -2002,6 +2016,20 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Targets: threshold_low, threshold_high. Persisted on the job; envelope
+        /// times sample against the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
     },
     QueueRunPixelSortSequence {
         queue_path: PathBuf,

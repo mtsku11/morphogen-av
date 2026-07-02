@@ -128,9 +128,23 @@ mirror the core type so the graph model stays the single long-term home
    unit tests, `--modulate` wiring on the three commands above, off-vs-on
    readout. Core serde mirrors are *not* added yet (house precedent: core
    mirrors land with the queue slice).
-2. **Queue.** Persist routes on the three `frame_sequence_*` tasks (serde-default
-   empty = old jobs keep meaning), manifest records routes + envelope
-   provenance, add→run byte-identity smoke.
+2. **Queue — LANDED.** Routes persist on `frame_sequence_retro_static` and
+   `frame_sequence_pixel_sort` as `modulation_routes` (a flat
+   `RenderJobModulationRoute` in core, serde-default empty so pre-slice jobs
+   keep their meaning) plus `modulator_audio_path` / `modulator_frames_directory`
+   / `modulation_sampling`; envelope times sample against the job's
+   `frame_rate` (no separate fps knob on the queue path).
+   `queue-add-…` gains the same `--modulate` flags and **fails fast** — route
+   grammar, duplicate/unknown targets, and missing modulator flags are all
+   rejected before the job persists. `queue-run` reconstructs the CLI route
+   specs from the persisted routes (`f32` `Display` round-trips exactly) so it
+   shares the direct render's code path byte-for-byte; the manifest gains a
+   `modulation` block (routes, modulator paths, sampling, fps) **only when
+   routes exist**, so unmodulated manifests keep the pre-slice format.
+   Verified: add→run byte-identical to the direct modulated render + manifest
+   assertions (smoke), pre-slice job JSON deserializes unmodulated (core test).
+   *Channel-shift has no queue task at all yet — adding one (with routes) is
+   its own vertical slice, not part of route persistence.*
 3. **SwiftUI.** Route editor on the render panel (target picker filtered by
    effect, source picker, scale/offset steppers).
 4. **Later:** integer/enum targets, stateful-effect targets, per-route sampling,

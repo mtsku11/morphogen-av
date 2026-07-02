@@ -61,8 +61,11 @@ contracts live in the `*_MILESTONE.md` docs.
   <target>=<source>[:<scale>[,<offset>]]` routes normalized analysis envelopes
   (audio RMS/onset/centroid, video luma/flow) onto float knobs of the
   retro-static, pixel-sort, and channel-shift sequence commands. Contract:
-  `docs/MODULATION_MATRIX_MILESTONE.md`. Deferred slices: queue persistence,
-  SwiftUI route editor, integer/enum/stateful targets.
+  `docs/MODULATION_MATRIX_MILESTONE.md`.
+- Modulation matrix slice 2 (queue): routes persist on the retro-static and
+  pixel-sort queue jobs (serde-default empty; add-time validation; queue-run
+  byte-identical to direct; manifest `modulation` block). Deferred: SwiftUI
+  route editor, a channel-shift queue task, integer/enum/stateful targets.
 
 ## Next
 

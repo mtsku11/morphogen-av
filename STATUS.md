@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **442 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **445 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **64 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,26 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — slice 2 (queue persistence).** `--modulate` routes now
+  persist on the `frame_sequence_retro_static` and `frame_sequence_pixel_sort`
+  queue jobs: core gained `RenderJobModulationRoute` + `ModulationSource`/
+  `ModulationSampling` mirrors (the flat route documents itself as the two-node
+  degenerate case of graph.rs's `ModulationRoute`), all fields serde-default so
+  pre-slice jobs deserialize unmodulated (core test pins it). `queue-add-…`
+  takes the same `--modulate`/`--modulator-audio`/`--modulator-frames`/
+  `--modulation-sampling` flags and **fails fast before persisting** (grammar,
+  duplicate/unknown targets, missing modulator flags — smoke-tested, no queue
+  file written on rejection); envelope times sample against the job's
+  `frame_rate`. `queue-run` reconstructs the route specs from the persisted
+  form (`f32` `Display` round-trips exactly) so it shares the direct render's
+  exact code path — smoke test pins add→run **byte-identical** to the direct
+  modulated render and the manifest's `modulation` block (routes, modulator
+  paths, sampling, fps; the key is omitted for unmodulated jobs so old
+  manifests keep their format). Workspace 442 → **445**, clippy/fmt clean.
+  *Note:* channel-shift has no queue task at all — adding one is its own
+  vertical slice. Remaining: SwiftUI route editor (slice 3), integer/enum/
+  stateful targets.
 
 - **Modulation matrix — slice 1 (CPU + CLI).** The first generic typed-signal
   routing layer toward the modular-synth goal: `--modulate

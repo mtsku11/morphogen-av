@@ -1359,6 +1359,10 @@ fn run() -> Result<(), CliError> {
             strength,
             backend,
             project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => queue_add_retro_static_sequence(QueueAddRetroStaticSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -1371,6 +1375,10 @@ fn run() -> Result<(), CliError> {
             strength,
             backend: backend.into(),
             project_path: project_path.as_deref(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
         }),
         Commands::QueueAddBlockCollageSequence {
             queue_path,
@@ -1779,6 +1787,10 @@ fn run() -> Result<(), CliError> {
             flow_radius,
             backend,
             project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
         } => queue_add_pixel_sort_sequence(QueueAddPixelSortSequenceRequest {
             queue_path: &queue_path,
             source_a_dir: &source_a_dir,
@@ -1796,6 +1808,10 @@ fn run() -> Result<(), CliError> {
             frames,
             frame_rate,
             project_path: project_path.as_deref(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
         }),
         Commands::QueueRunPixelSortSequence { queue_path } => {
             queue_run_pixel_sort_sequence(&queue_path)

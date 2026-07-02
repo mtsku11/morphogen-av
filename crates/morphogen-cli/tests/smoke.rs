@@ -4271,3 +4271,181 @@ fn pixel_sort_metal_parity_real_footage() {
         worst_pos.0, worst_pos.1, worst_gpu, worst_cpu, worst_diff
     );
 }
+
+#[test]
+fn queue_retro_static_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    // Three identical gradient frames; the modulation variation comes from the
+    // WAV's RMS ramp, not the frames.
+    let source_dir = temp_dir.path().join("source-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    // A 0.75 s quiet→loud amplitude ramp at 8192 Hz: the RMS envelope rises
+    // across the three output frames (fps 4), so the routed strength varies.
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+    let route = "strength=audio-rms:0.9,0.05";
+
+    // Direct render with the route; --modulation-fps must equal the queued
+    // job's --frame-rate for identical envelope sampling.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-retro-static-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "3",
+            "--backend",
+            "cpu",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+            "--modulation-fps",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    // Queue add + run with the same knobs.
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-retro-static-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "3",
+            "--frame-rate",
+            "4",
+            "--backend",
+            "cpu",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-retro-static-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render is byte-identical to the direct render (path-independent).
+    for frame_name in ["frame_000000.png", "frame_000001.png", "frame_000002.png"] {
+        let direct_frame = direct_dir.join(frame_name);
+        let queued_frame = output_root.join("job-0001/frames").join(frame_name);
+        assert_eq!(
+            fs::read(&queued_frame).expect("read queued frame"),
+            fs::read(&direct_frame).expect("read direct frame"),
+            "queue render must be byte-identical to direct render ({frame_name})"
+        );
+    }
+
+    // The manifest records the persisted routes + envelope provenance.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_retro_static");
+    let modulation = &manifest["retro_static"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "strength");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+    assert_eq!(modulation["routes"][0]["scale"], 0.9f32 as f64);
+    assert_eq!(modulation["routes"][0]["offset"], 0.05f32 as f64);
+    assert_eq!(modulation["sampling"], "hold");
+    assert_eq!(modulation["fps"], 4.0);
+    assert_eq!(modulation["modulator_audio"], wav_arg.as_str());
+
+    // The routed strength actually varied: the queued frames differ from each
+    // other despite identical source frames.
+    let f0 = fs::read(output_root.join("job-0001/frames/frame_000000.png")).expect("f0");
+    let f2 = fs::read(output_root.join("job-0001/frames/frame_000002.png")).expect("f2");
+    assert_ne!(
+        f0, f2,
+        "RMS ramp must vary the routed strength across frames"
+    );
+}
+
+#[test]
+fn queue_add_rejects_bad_modulation_routes_before_persisting() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let frame_arg = source_dir
+        .join("frame_000001.png")
+        .to_string_lossy()
+        .to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["render-test", frame_arg.as_str()])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let output_root_arg = temp_dir.path().join("out").to_string_lossy().to_string();
+
+    // Unknown target for the effect fails at add time…
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-retro-static-sequence",
+            queue_path.to_string_lossy().as_ref(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--modulate",
+            "real_bpp=audio-rms",
+            "--modulator-audio",
+            "/tmp/unused.wav",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unknown retro-static modulation target",
+        ));
+
+    // …as does an audio route without --modulator-audio.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-retro-static-sequence",
+            queue_path.to_string_lossy().as_ref(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--modulate",
+            "strength=audio-rms",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires --modulator-audio"));
+
+    // Neither failure persisted a job.
+    assert!(
+        !queue_path.exists(),
+        "rejected queue-add must not write a queue file"
+    );
+}

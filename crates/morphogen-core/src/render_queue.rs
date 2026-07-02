@@ -65,9 +65,9 @@ impl RenderQueue {
 mod tests {
     use super::*;
     use crate::{
-        AnalysisKind, ExportFormat, RenderBackend, RenderJobAnalysisCacheProvenance,
-        RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask,
-        RenderQuality, RenderSettings, SourceRole,
+        AnalysisKind, ExportFormat, ModulationSampling, RenderBackend,
+        RenderJobAnalysisCacheProvenance, RenderJobProvenance, RenderJobSourceProvenance,
+        RenderJobStatus, RenderJobTask, RenderQuality, RenderSettings, SourceRole,
     };
 
     #[test]
@@ -133,6 +133,41 @@ mod tests {
         assert!(queue.jobs[0].output.is_none());
         assert_eq!(queue.jobs[0].task, RenderJobTask::TestRender);
         assert!(queue.jobs[0].provenance.is_none());
+    }
+
+    #[test]
+    fn retro_static_job_written_before_modulation_routes_deserializes_unmodulated() {
+        let json = r#"
+        {
+          "type": "frame_sequence_retro_static",
+          "source_frame_directory": "/tmp/source-frames",
+          "output_directory": "/tmp/out/job-0001",
+          "frames": 24,
+          "frame_rate": 12.0,
+          "real_bpp": 4,
+          "assumed_bpp": 3,
+          "filter": "paeth",
+          "strength": 1.0,
+          "backend": "cpu"
+        }
+        "#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize pre-slice job");
+
+        let RenderJobTask::FrameSequenceRetroStatic {
+            modulation_routes,
+            modulator_audio_path,
+            modulator_frames_directory,
+            modulation_sampling,
+            ..
+        } = task
+        else {
+            panic!("expected a retro-static task");
+        };
+        assert!(modulation_routes.is_empty());
+        assert!(modulator_audio_path.is_none());
+        assert!(modulator_frames_directory.is_none());
+        assert_eq!(modulation_sampling, ModulationSampling::Hold);
     }
 
     #[test]

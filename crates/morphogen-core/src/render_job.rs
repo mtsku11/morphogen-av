@@ -325,6 +325,17 @@ pub enum RenderJobTask {
         strength: f32,
         #[serde(default)]
         backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
     },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
@@ -376,6 +387,17 @@ pub enum RenderJobTask {
         /// Render backend. Metal is self-mask only; cross-synth modes are CPU-only.
         #[serde(default)]
         backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty and keep their meaning). Envelope times are
+        /// sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
@@ -969,6 +991,60 @@ pub enum PixelSortMaskSource {
     ALuma,
     AEdge,
     AFlow,
+}
+
+/// Which analysis descriptor drives a persisted modulation route.
+/// Mirrors `morphogen_render::ModulationSource` for queue-job serialisation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModulationSource {
+    AudioRms,
+    AudioOnset,
+    AudioCentroid,
+    Luma,
+    Flow,
+}
+
+impl ModulationSource {
+    /// The CLI route-grammar spelling (`audio-rms`, …).
+    pub fn name(self) -> &'static str {
+        match self {
+            ModulationSource::AudioRms => "audio-rms",
+            ModulationSource::AudioOnset => "audio-onset",
+            ModulationSource::AudioCentroid => "audio-centroid",
+            ModulationSource::Luma => "luma",
+            ModulationSource::Flow => "flow",
+        }
+    }
+}
+
+/// How a persisted modulation envelope is evaluated at each output frame.
+/// Mirrors `morphogen_render::ModulationSampling`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModulationSampling {
+    #[default]
+    Hold,
+    Smooth,
+}
+
+/// One flat modulation route persisted on a render job: the two-node degenerate
+/// case of the node graph's [`ModulationRoute`](crate::graph::ModulationRoute)
+/// (the modulator media is the implicit from-node, `source` its output, the
+/// job's effect the implicit to-node, `target` its parameter, and `amount` is
+/// generalized to `scale`/`offset`). See `docs/MODULATION_MATRIX_MILESTONE.md`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RenderJobModulationRoute {
+    pub target: String,
+    pub source: ModulationSource,
+    #[serde(default = "default_modulation_scale")]
+    pub scale: f32,
+    #[serde(default)]
+    pub offset: f32,
+}
+
+fn default_modulation_scale() -> f32 {
+    1.0
 }
 
 /// Named deterministic datamosh presets for the flow-reuse path. Bitstream

@@ -7,18 +7,21 @@ use morphogen_audio::{save_wav_f32, AudioBufferF32};
 use morphogen_core::{
     AnalysisKind, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
     ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, KernelMode,
+    ModulationSampling as CoreModulationSampling, ModulationSource as CoreModulationSource,
     PixelSortAxis, PixelSortDirection, PixelSortKey, PixelSortMaskSource, RenderBackend, RenderJob,
-    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobOutputMetadata,
-    RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality,
-    RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode,
-    VideoVocoderMode,
+    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobModulationRoute,
+    RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
+    RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
+    VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
-    flow_displace_cpu, BlendMode, BlockCollageSettings, CascadeCollageSettings, CascadeFieldType,
-    CascadeTrailSettings, ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings,
-    FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource,
-    PixelSortSettings, RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection, SortKey,
-    StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM,
+    apply_pixel_sort_modulation, apply_retro_static_modulation, flow_displace_cpu,
+    parse_modulation_route, validate_route_targets, BlendMode, BlockCollageSettings,
+    CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings, ConvolutionBlendSettings,
+    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
+    GranularMosaicSettings, MaskSource, ModulationSampling, ModulationSource, PixelSortSettings,
+    RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection, SortKey, StructureMode,
+    VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM,
     CASCADE_TRAIL_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
     FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PIXEL_SORT_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
     POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
@@ -1919,6 +1922,10 @@ pub(crate) struct QueueAddRetroStaticSequenceRequest<'a> {
     pub(crate) strength: f32,
     pub(crate) backend: RenderBackend,
     pub(crate) project_path: Option<&'a Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
 }
 
 pub(crate) fn queue_add_retro_static_sequence(
@@ -1932,6 +1939,16 @@ pub(crate) fn queue_add_retro_static_sequence(
         strength: request.strength,
     };
     settings.validate()?;
+
+    let modulation_routes = parse_queue_modulation_routes(
+        request.modulate,
+        request.modulator_audio,
+        request.modulator_frames,
+        |target| {
+            let mut probe = settings;
+            apply_retro_static_modulation(&mut probe, target, 0.0)
+        },
+    )?;
 
     let mut queue = load_or_default_queue(request.queue_path)?;
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
@@ -1953,6 +1970,14 @@ pub(crate) fn queue_add_retro_static_sequence(
             filter: scanline_filter_label(request.filter),
             strength: request.strength,
             backend: request.backend,
+            modulation_routes,
+            modulator_audio_path: request
+                .modulator_audio
+                .map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: request
+                .modulator_frames
+                .map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(request.modulation_sampling),
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -2001,6 +2026,10 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
         filter,
         strength,
         backend,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulation_sampling,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2017,6 +2046,7 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
         filter: parse_scanline_filter(&filter),
         strength,
     };
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_retro_static_sequence(RetroStaticSequenceRequest {
@@ -2025,9 +2055,29 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
             settings,
             frames,
             backend,
-            // Queued jobs don't carry modulation routes yet (milestone slice 2).
-            modulation: ModulationCliArgs::default(),
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(Path::new),
+                modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                // The job's frame_rate is the sequence time base.
+                fps: frame_rate,
+            },
         })?;
+        let mut effect = serde_json::json!({
+            "algorithm": RETRO_STATIC_ALGORITHM,
+            "settings": settings,
+            "backend": format!("{backend:?}")
+        });
+        if let Some(modulation) = modulation_manifest_json(
+            &modulation_routes,
+            modulator_audio_path.as_deref(),
+            modulator_frames_directory.as_deref(),
+            modulation_sampling,
+            frame_rate,
+        ) {
+            effect["modulation"] = modulation;
+        }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
             output_dir: &output_dir,
@@ -2035,11 +2085,7 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
             frame_rate,
             task: "frame_sequence_retro_static",
             effect_key: "retro_static",
-            effect: serde_json::json!({
-                "algorithm": RETRO_STATIC_ALGORITHM,
-                "settings": settings,
-                "backend": format!("{backend:?}")
-            }),
+            effect,
             provenance: provenance.as_ref(),
         })
     })();
@@ -4434,6 +4480,119 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+// --- Modulation-route persistence bridges (core ↔ render are both foreign,
+// so free helpers per the orphan-rule precedent) ---
+
+fn core_modulation_source(source: ModulationSource) -> CoreModulationSource {
+    match source {
+        ModulationSource::AudioRms => CoreModulationSource::AudioRms,
+        ModulationSource::AudioOnset => CoreModulationSource::AudioOnset,
+        ModulationSource::AudioCentroid => CoreModulationSource::AudioCentroid,
+        ModulationSource::Luma => CoreModulationSource::Luma,
+        ModulationSource::Flow => CoreModulationSource::Flow,
+    }
+}
+
+fn core_modulation_sampling(sampling: ModulationSampling) -> CoreModulationSampling {
+    match sampling {
+        ModulationSampling::Hold => CoreModulationSampling::Hold,
+        ModulationSampling::Smooth => CoreModulationSampling::Smooth,
+    }
+}
+
+fn render_modulation_sampling(sampling: CoreModulationSampling) -> ModulationSampling {
+    match sampling {
+        CoreModulationSampling::Hold => ModulationSampling::Hold,
+        CoreModulationSampling::Smooth => ModulationSampling::Smooth,
+    }
+}
+
+fn modulation_sampling_label(sampling: CoreModulationSampling) -> &'static str {
+    match sampling {
+        CoreModulationSampling::Hold => "hold",
+        CoreModulationSampling::Smooth => "smooth",
+    }
+}
+
+/// Parse and validate `--modulate` specs at queue-add time — grammar, duplicate
+/// targets, modulator-flag requirements, and (via `probe`, the effect's apply
+/// function on a scratch settings copy) unknown targets all fail here, before
+/// the job persists.
+fn parse_queue_modulation_routes(
+    specs: &[String],
+    modulator_audio: Option<&Path>,
+    modulator_frames: Option<&Path>,
+    mut probe: impl FnMut(&str) -> Result<(), morphogen_render::RenderError>,
+) -> Result<Vec<RenderJobModulationRoute>, CliError> {
+    let routes = specs
+        .iter()
+        .map(|spec| parse_modulation_route(spec))
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_route_targets(&routes)?;
+    for route in &routes {
+        probe(&route.target)?;
+        if route.source.needs_audio() && modulator_audio.is_none() {
+            return Err(CliError::Message(format!(
+                "modulation source '{}' requires --modulator-audio <wav>",
+                route.source.name()
+            )));
+        }
+        if route.source.needs_frames() && modulator_frames.is_none() {
+            return Err(CliError::Message(format!(
+                "modulation source '{}' requires --modulator-frames <dir>",
+                route.source.name()
+            )));
+        }
+    }
+    Ok(routes
+        .into_iter()
+        .map(|route| RenderJobModulationRoute {
+            target: route.target,
+            source: core_modulation_source(route.source),
+            scale: route.scale,
+            offset: route.offset,
+        })
+        .collect())
+}
+
+/// Reconstruct the CLI route specs from persisted routes so queue-run shares
+/// the direct render's exact code path. `f32`'s `Display` prints the shortest
+/// round-tripping decimal, so `parse(format(x)) == x` bit-for-bit.
+fn modulation_specs_from_routes(routes: &[RenderJobModulationRoute]) -> Vec<String> {
+    routes
+        .iter()
+        .map(|route| {
+            format!(
+                "{}={}:{},{}",
+                route.target,
+                route.source.name(),
+                route.scale,
+                route.offset
+            )
+        })
+        .collect()
+}
+
+/// The manifest's `modulation` block; `None` (key omitted) for unmodulated
+/// jobs so their manifests stay byte-identical to the pre-slice format.
+fn modulation_manifest_json(
+    routes: &[RenderJobModulationRoute],
+    modulator_audio: Option<&str>,
+    modulator_frames: Option<&str>,
+    sampling: CoreModulationSampling,
+    frame_rate: f64,
+) -> Option<serde_json::Value> {
+    (!routes.is_empty()).then(|| {
+        serde_json::json!({
+            "routes": routes,
+            "modulator_audio": modulator_audio,
+            "modulator_frames": modulator_frames,
+            "sampling": modulation_sampling_label(sampling),
+            "fps": frame_rate,
+        })
+    })
+}
+
 // --- Core↔render enum bridges for pixel sort ---
 
 fn render_pixel_sort_axis(axis: PixelSortAxis) -> SortAxis {
@@ -4487,6 +4646,10 @@ pub(crate) struct QueueAddPixelSortSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
     pub(crate) project_path: Option<&'a std::path::Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a std::path::Path>,
+    pub(crate) modulator_frames: Option<&'a std::path::Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
 }
 
 pub(crate) fn queue_add_pixel_sort_sequence(
@@ -4509,8 +4672,18 @@ pub(crate) fn queue_add_pixel_sort_sequence(
         frames,
         frame_rate,
         project_path,
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        modulation_sampling,
     } = request;
     validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let modulation_routes =
+        parse_queue_modulation_routes(modulate, modulator_audio, modulator_frames, |target| {
+            let mut probe = PixelSortSettings::default();
+            apply_pixel_sort_modulation(&mut probe, target, 0.0)
+        })?;
 
     let mut queue = load_or_default_queue(queue_path)?;
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
@@ -4535,6 +4708,10 @@ pub(crate) fn queue_add_pixel_sort_sequence(
             mask_source,
             flow_radius,
             backend,
+            modulation_routes,
+            modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: modulator_frames.map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(modulation_sampling),
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -4584,6 +4761,10 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
         mask_source,
         flow_radius,
         backend,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulation_sampling,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -4608,6 +4789,7 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
         _ => PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
     };
     let backend_label = format!("{backend:?}");
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_pixel_sort_sequence(PixelSortSequenceRequest {
@@ -4618,9 +4800,31 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
             frames,
             backend,
             flow_radius,
-            // Queued jobs don't carry modulation routes yet (milestone slice 2).
-            modulation: ModulationCliArgs::default(),
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(std::path::Path::new),
+                modulator_frames: modulator_frames_directory
+                    .as_deref()
+                    .map(std::path::Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                // The job's frame_rate is the sequence time base.
+                fps: frame_rate,
+            },
         })?;
+        let mut effect = serde_json::json!({
+            "algorithm": algorithm,
+            "settings": settings,
+            "backend": backend_label,
+        });
+        if let Some(modulation) = modulation_manifest_json(
+            &modulation_routes,
+            modulator_audio_path.as_deref(),
+            modulator_frames_directory.as_deref(),
+            modulation_sampling,
+            frame_rate,
+        ) {
+            effect["modulation"] = modulation;
+        }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
             output_dir: &output_dir,
@@ -4628,11 +4832,7 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
             frame_rate,
             task: "frame_sequence_pixel_sort",
             effect_key: "pixel_sort",
-            effect: serde_json::json!({
-                "algorithm": algorithm,
-                "settings": settings,
-                "backend": backend_label,
-            }),
+            effect,
             provenance: provenance.as_ref(),
         })
     })();
