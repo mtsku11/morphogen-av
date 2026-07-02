@@ -752,6 +752,68 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Palette Quantize — Posterize / Neon Palette")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Picker("Backend", selection: $state.paletteQuantizeBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+            .help("Metal covers both modes and is parity-gated against the CPU reference per frame.")
+
+            Picker("Mode", selection: $state.paletteQuantizeMode) {
+              ForEach(PaletteQuantizeModeOption.allCases) { mode in
+                Text(mode.rawValue).tag(mode)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 240)
+            .help("Posterize snaps each channel to uniform steps; Neon Palette maps to the built-in magenta/orange/teal/black set.")
+
+            if state.paletteQuantizeMode == .posterize {
+              Stepper(value: $state.paletteQuantizeLevels, in: 2...256, step: 1) {
+                Text("Levels \(state.paletteQuantizeLevels)")
+              }
+              .frame(width: 150, alignment: .leading)
+              .help("Discrete steps per channel; 2 is the harshest collapse, 256 is the byte-identical passthrough.")
+            }
+          }
+
+          ModulationSlotRow(
+            label: "Levels",
+            source: $state.paletteQuantizeModLevelsSource,
+            scale: $state.paletteQuantizeModLevelsScale,
+            offset: $state.paletteQuantizeModLevelsOffset,
+            scaleRange: -254...254, scaleStep: 8, offsetRange: -256...256, offsetStep: 8
+          )
+
+          ModulationMediaRow(
+            sources: [state.paletteQuantizeModLevelsSource],
+            audioURL: state.paletteQuantizeModulatorAudioURL,
+            framesURL: state.paletteQuantizeModulatorFramesURL,
+            sampling: $state.paletteQuantizeModSampling,
+            chooseAudio: { state.choosePaletteQuantizeModulatorWAV() },
+            chooseFrames: { state.choosePaletteQuantizeModulatorFrames() }
+          )
+
+          Text(state.paletteQuantizeSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runPaletteQuantizeSequenceRender()
+          } label: {
+            Label("Run Palette Quantize", systemImage: "paintpalette")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Granular Mosaic — Temporal Pool (Joint-AV)")
             .font(.subheadline.weight(.semibold))
 

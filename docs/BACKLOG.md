@@ -99,6 +99,12 @@ contracts live in the `*_MILESTONE.md` docs.
   precedent — add-time route validation, `mode` persisted as a string label,
   add→run byte-identical smoke-tested with integer + enum routes). Deferred:
   SwiftUI palette-quantize panel section, stateful modulation targets.
+- Palette-quantize SwiftUI panel: sticky Metal-default backend picker,
+  posterize/palette mode picker, posterize-only levels stepper, and a mod
+  slot on the integer `levels` target (wide step-8 ranges); bridge emits the
+  `--modulate` flag set on queue-add, validates levels app-side only in
+  posterize mode. Deferred: enum mod slots (`mode` has no slot), stateful
+  modulation targets.
 
 ## Next
 

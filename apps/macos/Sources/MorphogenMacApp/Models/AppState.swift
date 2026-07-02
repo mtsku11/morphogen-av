@@ -168,6 +168,23 @@ final class AppState: ObservableObject {
   @Published var channelShiftModulatorAudioURL: URL?
   @Published var channelShiftModulatorFramesURL: URL?
   @Published var channelShiftModSampling = ModulationSamplingOption.hold
+  // Palette Quantize — posterize levels / neon-palette colour collapse.
+  // Levels default 8 (visible posterize) rather than the CLI's 256 passthrough
+  // so the first Run shows the effect; 256 stays reachable as the off case.
+  @Published var paletteQuantizeMode = PaletteQuantizeModeOption.posterize
+  @Published var paletteQuantizeLevels = 8
+  @Published var paletteQuantizeBackend = AppState.stickyBackend("backend.paletteQuantize", default: .metal) {
+    didSet { AppState.persistBackend("backend.paletteQuantize", paletteQuantizeBackend) }
+  }
+  @Published var paletteQuantizeSummary = "No palette-quantize sequence rendered"
+  // Mod slot for the integer `levels` target only — `mode` is an enum target
+  // and enum mod slots are deferred (need an enum-aware presentation).
+  @Published var paletteQuantizeModLevelsSource = ModulationSourceOption.off
+  @Published var paletteQuantizeModLevelsScale = 1.0
+  @Published var paletteQuantizeModLevelsOffset = 0.0
+  @Published var paletteQuantizeModulatorAudioURL: URL?
+  @Published var paletteQuantizeModulatorFramesURL: URL?
+  @Published var paletteQuantizeModSampling = ModulationSamplingOption.hold
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -1439,6 +1456,30 @@ final class AppState: ObservableObject {
     statusMessage = "Channel-shift modulator frames selected: \(url.lastPathComponent)"
   }
 
+  func choosePaletteQuantizeModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    paletteQuantizeModulatorAudioURL = url
+    statusMessage = "Palette-quantize modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func choosePaletteQuantizeModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    paletteQuantizeModulatorFramesURL = url
+    statusMessage = "Palette-quantize modulator frames selected: \(url.lastPathComponent)"
+  }
+
   func choosePixelSortModulatorWAV() {
     guard let url = MediaFilePicker.chooseWAVFile(
       title: "Choose Modulator WAV",
@@ -1593,6 +1634,72 @@ final class AppState: ObservableObject {
           self.failPreviewIfNeeded(message: error.localizedDescription)
           self.channelShiftSummary = "Channel shift render failed: \(error.localizedDescription)"
           self.statusMessage = "Channel shift render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runPaletteQuantizeSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering palette quantize."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
+      statusMessage = "Choose a frame sequence output directory before rendering palette quantize."
+      return
+    }
+    guard let routes = modulationRoutes(
+      slots: [(
+        "levels", paletteQuantizeModLevelsSource,
+        paletteQuantizeModLevelsScale, paletteQuantizeModLevelsOffset
+      )],
+      modulatorAudioURL: paletteQuantizeModulatorAudioURL,
+      modulatorFramesURL: paletteQuantizeModulatorFramesURL,
+      effectLabel: "palette quantize"
+    ) else { return }
+
+    let request = PaletteQuantizeSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultPaletteQuantizeSequenceRenderQueueURL(),
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent(
+        "palette-quantize", isDirectory: true
+      ),
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
+      frameRate: proResFrameRate.framesPerSecond,
+      mode: paletteQuantizeMode,
+      levels: paletteQuantizeLevels,
+      backend: paletteQuantizeBackend,
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: paletteQuantizeModulatorAudioURL,
+      modulatorFramesURL: paletteQuantizeModulatorFramesURL,
+      modulationSampling: paletteQuantizeModSampling
+    )
+
+    statusMessage = "Queueing palette quantize through morphogen-cli..."
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedPaletteQuantizeSequenceRender(
+          request: request
+        )
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.paletteQuantizeSummary =
+            "\(bundle.frameCount) palette-quantize frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary =
+            "Queued palette quantize sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Palette quantize render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.paletteQuantizeSummary =
+            "Palette quantize render failed: \(error.localizedDescription)"
+          self.statusMessage = "Palette quantize render failed: \(error.localizedDescription)"
         }
       }
     }
@@ -2729,6 +2836,22 @@ enum RetroStaticFilterOption: String, CaseIterable, Identifiable {
       return "average"
     case .paeth:
       return "paeth"
+    }
+  }
+}
+
+enum PaletteQuantizeModeOption: String, CaseIterable, Identifiable {
+  case posterize = "Posterize"
+  case palette = "Neon Palette"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .posterize:
+      return "posterize"
+    case .palette:
+      return "palette"
     }
   }
 }

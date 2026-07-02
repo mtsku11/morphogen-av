@@ -172,6 +172,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultPaletteQuantizeSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-palette-quantize-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -2014,6 +2020,88 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  static func runQueuedPaletteQuantizeSequenceRender(
+    request: PaletteQuantizeSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddPaletteQuantizeSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "--release",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-palette-quantize-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddPaletteQuantizeSequenceArguments(
+    request: PaletteQuantizeSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    if request.mode == .posterize {
+      guard (2...256).contains(request.levels) else {
+        throw RustBridgeError.invalidFrameSequenceRequest("levels must be in [2, 256]")
+      }
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "--release",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-palette-quantize-sequence",
+      request.queueURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--mode",
+      request.mode.cliValue,
+      "--levels",
+      String(request.levels),
+      "--backend",
+      request.backend.cliValue
+    ]
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
+    return arguments
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -3141,6 +3229,25 @@ struct ChannelShiftSequenceRenderQueueCommandRequest {
   let sourceADirectoryURL: URL?
   let flowGain: Double
   let flowRadius: Int
+  let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating slice 3
+  // keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+}
+
+struct PaletteQuantizeSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let mode: PaletteQuantizeModeOption
+  /// Discrete steps per channel for posterize mode (2–256; 256 = passthrough).
+  let levels: Int
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
   // Modulation-matrix routes; defaulted off so call sites predating slice 3

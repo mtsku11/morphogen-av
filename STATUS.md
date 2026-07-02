@@ -10,7 +10,7 @@ _Last updated: 2026-07-02_
 
 - `cargo test --workspace`: **449 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **70 passing, 0 failing.**
+- `swift test`: **73 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,28 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Palette-quantize SwiftUI panel.** RenderPanelView gains a "Palette
+  Quantize — Posterize / Neon Palette" section next to channel-shift: sticky
+  backend picker (defaults **Metal**, retro-static precedent — both modes are
+  parity-gated, no CPU-only mode), posterize/palette mode picker, a levels
+  stepper shown only in posterize mode (2–256; app default **8** so the first
+  Run is visible, the CLI's 256 passthrough stays reachable), and a slice-3
+  mod slot on the integer `levels` target with ±254/±256 step-8 ranges (enum
+  `mode` gets **no** slot — enum mod-slot presentation is still the deferred
+  design). Bridge: `runQueuedPaletteQuantizeSequenceRender` +
+  `queueAddPaletteQuantizeSequenceArguments` on the channel-shift template;
+  app-side validation rejects out-of-range levels only in posterize mode
+  (palette ignores levels). **Verified:** `swift build` clean, `swift test`
+  70 → **73** (args include mode/levels/backend/no-`--modulate` when slots
+  are off; routes + smooth sampling carried; levels 1 rejected in posterize,
+  accepted in palette). Bridge arg shape proven end-to-end against the real
+  CLI: queue-add with the bridge-emitted flags (`levels=luma:-254,256` route)
+  → run → manifest records algorithm/settings/route; levels sweeps 256→2 on
+  the gray-ramp modulator with frame 0 **pixel-exact passthrough** (0.000/255
+  vs carrier via `dm-cross-delta.py` — file-level `cmp` is the known
+  RGB↔RGBA false-negative) rising to 16.17/255 at levels 2, frames Read
+  (final frame collapses to pure primaries).
 
 - **Palette-quantize queue task.** `frame_sequence_palette_quantize` core
   render-job task + `queue-add`/`queue-run-palette-quantize-sequence` CLI,

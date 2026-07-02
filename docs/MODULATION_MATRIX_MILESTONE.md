@@ -213,11 +213,16 @@ mirror the core type so the graph model stays the single long-term home
    apply function (nothing persists on rejection), `mode` persisted as a
    string label like retro-static's `filter`, queue-run rebuilds spec strings
    so it shares the direct code path (add→run byte-identical, smoke-tested
-   with a `levels` + `mode` route pair). SwiftUI palette-quantize section is
-   its own later slice.
-7. **Later:** stateful-effect targets, SwiftUI enum mod slots +
-   palette-quantize panel section, per-route sampling, envelope caching
-   as analysis sidecars, multiple modulators per render.
+   with a `levels` + `mode` route pair).
+7. **Palette-quantize SwiftUI panel — LANDED.** Backend picker (sticky,
+   Metal default — both modes parity-gated, no CPU-only mode), mode picker,
+   posterize-only levels stepper, and a slice-3 mod slot on the integer
+   `levels` target with wide ranges. The enum `mode` target deliberately has
+   **no** mod slot — the enum-aware slot presentation is still the deferred
+   design decision.
+8. **Later:** stateful-effect targets, SwiftUI enum mod slots, per-route
+   sampling, envelope caching as analysis sidecars, multiple modulators per
+   render.
 
 ## Acceptance criteria (slice 1)
 

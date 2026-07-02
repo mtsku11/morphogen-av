@@ -763,6 +763,122 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedPaletteQuantizeSequenceArgumentsIncludeModeAndLevels() throws {
+    let request = PaletteQuantizeSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/palette-quantize-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(
+        fileURLWithPath: "/tmp/output-root/palette-quantize", isDirectory: true
+      ),
+      frames: 96,
+      frameRate: 24.0,
+      mode: .posterize,
+      levels: 8,
+      backend: .metal,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddPaletteQuantizeSequenceArguments(
+      request: request
+    )
+
+    XCTAssertEqual(
+      arguments.prefix(8),
+      [
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+        "queue-add-palette-quantize-sequence"
+      ]
+    )
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+    guard let modeIndex = arguments.firstIndex(of: "--mode") else {
+      return XCTFail("expected a --mode flag")
+    }
+    XCTAssertEqual(arguments[modeIndex + 1], "posterize")
+    guard let levelsIndex = arguments.firstIndex(of: "--levels") else {
+      return XCTFail("expected a --levels flag")
+    }
+    XCTAssertEqual(arguments[levelsIndex + 1], "8")
+    XCTAssertTrue(arguments.contains("--backend"))
+    XCTAssertTrue(arguments.contains("metal"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+    // No active mod slot ⇒ the exact unmodulated CLI path.
+    XCTAssertFalse(arguments.contains("--modulate"))
+    XCTAssertFalse(arguments.contains("--modulation-sampling"))
+  }
+
+  func testQueuedPaletteQuantizeSequenceArgumentsCarryModulationRoutes() throws {
+    var request = PaletteQuantizeSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/palette-quantize-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(
+        fileURLWithPath: "/tmp/output-root/palette-quantize", isDirectory: true
+      ),
+      frames: 96,
+      frameRate: 24.0,
+      mode: .palette,
+      levels: 256,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "levels", source: "audio-rms", scale: -254, offset: 256)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulationSampling = .smooth
+
+    let arguments = try RustBridgePlaceholder.queueAddPaletteQuantizeSequenceArguments(
+      request: request
+    )
+
+    guard let modeIndex = arguments.firstIndex(of: "--mode") else {
+      return XCTFail("expected a --mode flag")
+    }
+    XCTAssertEqual(arguments[modeIndex + 1], "palette")
+    XCTAssertTrue(arguments.contains("levels=audio-rms:-254,256"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    guard let samplingIndex = arguments.firstIndex(of: "--modulation-sampling") else {
+      return XCTFail("expected a --modulation-sampling flag")
+    }
+    XCTAssertEqual(arguments[samplingIndex + 1], "smooth")
+  }
+
+  func testQueuedPaletteQuantizeSequenceArgumentsRejectInvalidLevels() {
+    let invalid = PaletteQuantizeSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/palette-quantize-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(
+        fileURLWithPath: "/tmp/output-root/palette-quantize", isDirectory: true
+      ),
+      frames: 96,
+      frameRate: 24.0,
+      mode: .posterize,
+      levels: 1,
+      backend: .cpu,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddPaletteQuantizeSequenceArguments(request: invalid)
+    )
+
+    // Palette mode ignores levels, so an out-of-range value is not rejected there.
+    let paletteMode = PaletteQuantizeSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/palette-quantize-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(
+        fileURLWithPath: "/tmp/output-root/palette-quantize", isDirectory: true
+      ),
+      frames: 96,
+      frameRate: 24.0,
+      mode: .palette,
+      levels: 1,
+      backend: .cpu,
+      projectURL: nil
+    )
+    XCTAssertNoThrow(
+      try RustBridgePlaceholder.queueAddPaletteQuantizeSequenceArguments(request: paletteMode)
+    )
+  }
+
   func testQueuedRetroStaticSequenceArgumentsRejectInvalidValues() {
     let invalid = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
