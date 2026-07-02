@@ -220,9 +220,18 @@ mirror the core type so the graph model stays the single long-term home
    `levels` target with wide ranges. The enum `mode` target deliberately has
    **no** mod slot — the enum-aware slot presentation is still the deferred
    design decision.
-8. **Later:** stateful-effect targets, SwiftUI enum mod slots, per-route
-   sampling, envelope caching as analysis sidecars, multiple modulators per
-   render.
+8. **SwiftUI enum mod slots — LANDED.** `EnumModulationSlotRow` presents an
+   enum knob's slot as **From → To variant pickers** instead of scale/offset
+   steppers: envelope 0 selects From, envelope 1 selects To, and
+   `enumModulationMapping` emits the equivalent affine route
+   (`offset = fromIndex`, `scale = toIndex − fromIndex`) over the option
+   enum's declared case order — which must mirror the contract variant table
+   (pinned by a test). From == To emits `scale 0` (constant override =
+   continuity identity); reversed and partial sweeps fall out naturally.
+   Slots: retro-static `filter`, pixel-sort `direction`/`axis`,
+   palette-quantize `mode`.
+9. **Later:** stateful-effect targets, per-route sampling, envelope caching
+   as analysis sidecars, multiple modulators per render.
 
 ## Acceptance criteria (slice 1)
 

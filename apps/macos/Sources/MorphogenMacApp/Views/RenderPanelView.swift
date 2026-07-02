@@ -590,8 +590,15 @@ struct RenderPanelView: View {
             offset: $state.retroStaticModStrengthOffset
           )
 
+          EnumModulationSlotRow(
+            label: "Filter",
+            source: $state.retroStaticModFilterSource,
+            from: $state.retroStaticModFilterFrom,
+            to: $state.retroStaticModFilterTo
+          )
+
           ModulationMediaRow(
-            sources: [state.retroStaticModStrengthSource],
+            sources: [state.retroStaticModStrengthSource, state.retroStaticModFilterSource],
             audioURL: state.retroStaticModulatorAudioURL,
             framesURL: state.retroStaticModulatorFramesURL,
             sampling: $state.retroStaticModSampling,
@@ -791,8 +798,15 @@ struct RenderPanelView: View {
             scaleRange: -254...254, scaleStep: 8, offsetRange: -256...256, offsetStep: 8
           )
 
+          EnumModulationSlotRow(
+            label: "Mode",
+            source: $state.paletteQuantizeModModeSource,
+            from: $state.paletteQuantizeModModeFrom,
+            to: $state.paletteQuantizeModModeTo
+          )
+
           ModulationMediaRow(
-            sources: [state.paletteQuantizeModLevelsSource],
+            sources: [state.paletteQuantizeModLevelsSource, state.paletteQuantizeModModeSource],
             audioURL: state.paletteQuantizeModulatorAudioURL,
             framesURL: state.paletteQuantizeModulatorFramesURL,
             sampling: $state.paletteQuantizeModSampling,
@@ -1618,8 +1632,25 @@ struct RenderPanelView: View {
             offset: $state.pixelSortModHighOffset
           )
 
+          EnumModulationSlotRow(
+            label: "Direction",
+            source: $state.pixelSortModDirectionSource,
+            from: $state.pixelSortModDirectionFrom,
+            to: $state.pixelSortModDirectionTo
+          )
+
+          EnumModulationSlotRow(
+            label: "Axis",
+            source: $state.pixelSortModAxisSource,
+            from: $state.pixelSortModAxisFrom,
+            to: $state.pixelSortModAxisTo
+          )
+
           ModulationMediaRow(
-            sources: [state.pixelSortModLowSource, state.pixelSortModHighSource],
+            sources: [
+              state.pixelSortModLowSource, state.pixelSortModHighSource,
+              state.pixelSortModDirectionSource, state.pixelSortModAxisSource,
+            ],
             audioURL: state.pixelSortModulatorAudioURL,
             framesURL: state.pixelSortModulatorFramesURL,
             sampling: $state.pixelSortModSampling,
@@ -1705,6 +1736,55 @@ private struct ModulationSlotRow: View {
           Text("Offset \(offset, specifier: "%.2f")")
         }
         .frame(width: 160, alignment: .leading)
+      }
+    }
+  }
+}
+
+/// Mod slot for an enum knob: instead of opaque scale/offset steppers, two
+/// variant pickers — envelope 0 selects **From**, envelope 1 selects **To**
+/// (`enumModulationMapping` emits the equivalent affine route). From == To is
+/// legal and holds the knob at that variant (the continuity identity).
+private struct EnumModulationSlotRow<Option>: View
+where
+  Option: CaseIterable & Identifiable & Hashable & RawRepresentable,
+  Option.RawValue == String,
+  Option.AllCases: RandomAccessCollection
+{
+  let label: String
+  @Binding var source: ModulationSourceOption
+  @Binding var from: Option
+  @Binding var to: Option
+
+  var body: some View {
+    HStack(spacing: 16) {
+      Picker("Mod \(label)", selection: $source) {
+        ForEach(ModulationSourceOption.allCases) { option in
+          Text(option.rawValue).tag(option)
+        }
+      }
+      .frame(width: 280)
+      .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
+
+      if source != .off {
+        Picker("From", selection: $from) {
+          ForEach(Option.allCases) { option in
+            Text(option.rawValue).tag(option)
+          }
+        }
+        .frame(width: 170)
+        .help("Variant selected when the envelope is at 0.")
+
+        Text("→")
+          .foregroundStyle(.secondary)
+
+        Picker("To", selection: $to) {
+          ForEach(Option.allCases) { option in
+            Text(option.rawValue).tag(option)
+          }
+        }
+        .frame(width: 150)
+        .help("Variant selected when the envelope is at 1; in between, the envelope steps through the variants From→To.")
       }
     }
   }

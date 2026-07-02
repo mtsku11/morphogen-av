@@ -129,6 +129,11 @@ final class AppState: ObservableObject {
   @Published var retroStaticModStrengthSource = ModulationSourceOption.off
   @Published var retroStaticModStrengthScale = 1.0
   @Published var retroStaticModStrengthOffset = 0.0
+  // Enum slot (From→To variant pickers): envelope 0 → From, envelope 1 → To.
+  // Defaults span the full variant list so activating the slot sweeps it all.
+  @Published var retroStaticModFilterSource = ModulationSourceOption.off
+  @Published var retroStaticModFilterFrom = RetroStaticFilterOption.none
+  @Published var retroStaticModFilterTo = RetroStaticFilterOption.paeth
   @Published var retroStaticModulatorAudioURL: URL?
   @Published var retroStaticModulatorFramesURL: URL?
   @Published var retroStaticModSampling = ModulationSamplingOption.hold
@@ -177,11 +182,13 @@ final class AppState: ObservableObject {
     didSet { AppState.persistBackend("backend.paletteQuantize", paletteQuantizeBackend) }
   }
   @Published var paletteQuantizeSummary = "No palette-quantize sequence rendered"
-  // Mod slot for the integer `levels` target only — `mode` is an enum target
-  // and enum mod slots are deferred (need an enum-aware presentation).
   @Published var paletteQuantizeModLevelsSource = ModulationSourceOption.off
   @Published var paletteQuantizeModLevelsScale = 1.0
   @Published var paletteQuantizeModLevelsOffset = 0.0
+  // Enum slot (From→To variant pickers): envelope 0 → From, envelope 1 → To.
+  @Published var paletteQuantizeModModeSource = ModulationSourceOption.off
+  @Published var paletteQuantizeModModeFrom = PaletteQuantizeModeOption.posterize
+  @Published var paletteQuantizeModModeTo = PaletteQuantizeModeOption.palette
   @Published var paletteQuantizeModulatorAudioURL: URL?
   @Published var paletteQuantizeModulatorFramesURL: URL?
   @Published var paletteQuantizeModSampling = ModulationSamplingOption.hold
@@ -324,6 +331,13 @@ final class AppState: ObservableObject {
   @Published var pixelSortModHighSource = ModulationSourceOption.off
   @Published var pixelSortModHighScale = 1.0
   @Published var pixelSortModHighOffset = 0.0
+  // Enum slots (From→To variant pickers): envelope 0 → From, envelope 1 → To.
+  @Published var pixelSortModDirectionSource = ModulationSourceOption.off
+  @Published var pixelSortModDirectionFrom = PixelSortDirectionOption.asc
+  @Published var pixelSortModDirectionTo = PixelSortDirectionOption.desc
+  @Published var pixelSortModAxisSource = ModulationSourceOption.off
+  @Published var pixelSortModAxisFrom = PixelSortAxisOption.row
+  @Published var pixelSortModAxisTo = PixelSortAxisOption.col
   @Published var pixelSortModulatorAudioURL: URL?
   @Published var pixelSortModulatorFramesURL: URL?
   @Published var pixelSortModSampling = ModulationSamplingOption.hold
@@ -1513,11 +1527,17 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering retro static."
       return
     }
+    let filterMapping = enumModulationMapping(
+      from: retroStaticModFilterFrom, to: retroStaticModFilterTo
+    )
     guard let routes = modulationRoutes(
-      slots: [(
-        "strength", retroStaticModStrengthSource,
-        retroStaticModStrengthScale, retroStaticModStrengthOffset
-      )],
+      slots: [
+        (
+          "strength", retroStaticModStrengthSource,
+          retroStaticModStrengthScale, retroStaticModStrengthOffset
+        ),
+        ("filter", retroStaticModFilterSource, filterMapping.scale, filterMapping.offset),
+      ],
       modulatorAudioURL: retroStaticModulatorAudioURL,
       modulatorFramesURL: retroStaticModulatorFramesURL,
       effectLabel: "retro static"
@@ -1648,11 +1668,17 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering palette quantize."
       return
     }
+    let modeMapping = enumModulationMapping(
+      from: paletteQuantizeModModeFrom, to: paletteQuantizeModModeTo
+    )
     guard let routes = modulationRoutes(
-      slots: [(
-        "levels", paletteQuantizeModLevelsSource,
-        paletteQuantizeModLevelsScale, paletteQuantizeModLevelsOffset
-      )],
+      slots: [
+        (
+          "levels", paletteQuantizeModLevelsSource,
+          paletteQuantizeModLevelsScale, paletteQuantizeModLevelsOffset
+        ),
+        ("mode", paletteQuantizeModModeSource, modeMapping.scale, modeMapping.offset),
+      ],
       modulatorAudioURL: paletteQuantizeModulatorAudioURL,
       modulatorFramesURL: paletteQuantizeModulatorFramesURL,
       effectLabel: "palette quantize"
@@ -2310,10 +2336,18 @@ final class AppState: ObservableObject {
       statusMessage = "Choose an output directory before rendering pixel sort."
       return
     }
+    let directionMapping = enumModulationMapping(
+      from: pixelSortModDirectionFrom, to: pixelSortModDirectionTo
+    )
+    let axisMapping = enumModulationMapping(
+      from: pixelSortModAxisFrom, to: pixelSortModAxisTo
+    )
     guard let routes = modulationRoutes(
       slots: [
         ("threshold_low", pixelSortModLowSource, pixelSortModLowScale, pixelSortModLowOffset),
         ("threshold_high", pixelSortModHighSource, pixelSortModHighScale, pixelSortModHighOffset),
+        ("direction", pixelSortModDirectionSource, directionMapping.scale, directionMapping.offset),
+        ("axis", pixelSortModAxisSource, axisMapping.scale, axisMapping.offset),
       ],
       modulatorAudioURL: pixelSortModulatorAudioURL,
       modulatorFramesURL: pixelSortModulatorFramesURL,
@@ -2838,6 +2872,21 @@ enum RetroStaticFilterOption: String, CaseIterable, Identifiable {
       return "paeth"
     }
   }
+}
+
+/// From→To enum mod-slot mapping: envelope 0 selects `from`, envelope 1
+/// selects `to`, so the emitted affine route is `offset = fromIndex`,
+/// `scale = toIndex − fromIndex` over the option enum's declared case order —
+/// which mirrors the engine's contract variant order (milestone table).
+/// `from == to` emits `scale 0` = the continuity identity (a constant
+/// override of the static knob).
+func enumModulationMapping<Option: CaseIterable & Equatable>(
+  from: Option, to: Option
+) -> (scale: Double, offset: Double) {
+  let all = Array(Option.allCases)
+  let fromIndex = all.firstIndex(of: from) ?? 0
+  let toIndex = all.firstIndex(of: to) ?? 0
+  return (Double(toIndex - fromIndex), Double(fromIndex))
 }
 
 enum PaletteQuantizeModeOption: String, CaseIterable, Identifiable {

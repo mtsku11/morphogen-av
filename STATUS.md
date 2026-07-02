@@ -10,7 +10,7 @@ _Last updated: 2026-07-02_
 
 - `cargo test --workspace`: **449 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **73 passing, 0 failing.**
+- `swift test`: **75 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,26 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **SwiftUI enum mod slots (From→To variant pickers).** The deferred
+  enum-slot design is resolved: `EnumModulationSlotRow` shows two variant
+  pickers instead of scale/offset steppers — envelope 0 selects **From**,
+  envelope 1 selects **To**; `enumModulationMapping` (AppState.swift) emits
+  the equivalent affine route (`offset = fromIndex`,
+  `scale = toIndex − fromIndex`) over the option enum's declared case order.
+  From == To emits `scale 0` = a constant variant override (continuity
+  identity); reversed and partial sweeps fall out of the same two pickers.
+  Slots added: retro-static `filter` (None→Paeth default), pixel-sort
+  `direction` (Asc→Desc) + `axis` (Row→Col), palette-quantize `mode`
+  (Posterize→Palette); all four option enums' case order is **pinned by
+  test** against the contract variant tables so a reorder can't silently
+  remap envelopes. **Verified:** `swift build` clean, `swift test` 73 →
+  **75** (mapping unit test: full/reversed/partial/constant sweeps on all
+  four enums; case-order pin). End-to-end against the real CLI: the
+  filter slot's full-sweep route `filter=luma:4,0` queued via
+  `queue-add-retro-static-sequence` on the gray-ramp modulator renders
+  8 frames that **byte-match** the direct constant-filter renders in the
+  contracted order none, sub, sub, up, up, average, average, paeth.
 
 - **Palette-quantize SwiftUI panel.** RenderPanelView gains a "Palette
   Quantize — Posterize / Neon Palette" section next to channel-shift: sticky

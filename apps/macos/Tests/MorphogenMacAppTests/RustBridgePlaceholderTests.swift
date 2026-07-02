@@ -1827,3 +1827,63 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("stft=/tmp/proxy/source-a/analysis/stft.json"))
   }
 }
+
+final class EnumModulationMappingTests: XCTestCase {
+  func testFromToMappingSpansPartialAndReversedRanges() {
+    // Full sweep over the 5-variant filter: scale N−1, offset 0.
+    var mapping = enumModulationMapping(
+      from: RetroStaticFilterOption.none, to: RetroStaticFilterOption.paeth
+    )
+    XCTAssertEqual(mapping.scale, 4)
+    XCTAssertEqual(mapping.offset, 0)
+
+    // Reversed sweep: negative scale, offset at the high end.
+    mapping = enumModulationMapping(
+      from: RetroStaticFilterOption.paeth, to: RetroStaticFilterOption.none
+    )
+    XCTAssertEqual(mapping.scale, -4)
+    XCTAssertEqual(mapping.offset, 4)
+
+    // Partial range: sub (1) → average (3).
+    mapping = enumModulationMapping(
+      from: RetroStaticFilterOption.sub, to: RetroStaticFilterOption.average
+    )
+    XCTAssertEqual(mapping.scale, 2)
+    XCTAssertEqual(mapping.offset, 1)
+
+    // From == To is the continuity identity: scale 0 holds the variant.
+    mapping = enumModulationMapping(
+      from: PixelSortDirectionOption.desc, to: PixelSortDirectionOption.desc
+    )
+    XCTAssertEqual(mapping.scale, 0)
+    XCTAssertEqual(mapping.offset, 1)
+
+    // Two-variant knobs: the full sweep is scale 1, offset 0.
+    mapping = enumModulationMapping(
+      from: PixelSortAxisOption.row, to: PixelSortAxisOption.col
+    )
+    XCTAssertEqual(mapping.scale, 1)
+    XCTAssertEqual(mapping.offset, 0)
+
+    mapping = enumModulationMapping(
+      from: PaletteQuantizeModeOption.posterize, to: PaletteQuantizeModeOption.palette
+    )
+    XCTAssertEqual(mapping.scale, 1)
+    XCTAssertEqual(mapping.offset, 0)
+  }
+
+  func testOptionEnumCaseOrderMatchesTheContractVariantTables() {
+    // The mapping indexes `allCases`, so each option enum's declared order
+    // must mirror the engine's contract variant order (milestone table).
+    XCTAssertEqual(
+      RetroStaticFilterOption.allCases.map(\.cliValue),
+      ["none", "sub", "up", "average", "paeth"]
+    )
+    XCTAssertEqual(PixelSortDirectionOption.allCases.map(\.cliValue), ["asc", "desc"])
+    XCTAssertEqual(PixelSortAxisOption.allCases.map(\.cliValue), ["row", "col"])
+    XCTAssertEqual(
+      PaletteQuantizeModeOption.allCases.map(\.cliValue),
+      ["posterize", "palette"]
+    )
+  }
+}

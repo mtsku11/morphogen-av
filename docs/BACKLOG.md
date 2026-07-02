@@ -105,6 +105,12 @@ contracts live in the `*_MILESTONE.md` docs.
   `--modulate` flag set on queue-add, validates levels app-side only in
   posterize mode. Deferred: enum mod slots (`mode` has no slot), stateful
   modulation targets.
+- SwiftUI enum mod slots: `EnumModulationSlotRow` From→To variant pickers
+  (envelope 0 → From, envelope 1 → To; `enumModulationMapping` emits the
+  affine route over the option enums' case order, pinned by test against the
+  contract variant tables). Slots on retro-static `filter`, pixel-sort
+  `direction`/`axis`, palette-quantize `mode`. Deferred: stateful modulation
+  targets.
 
 ## Next
 
