@@ -101,20 +101,43 @@ pub struct ModulationRoute {
     pub scale: f32,
     #[serde(default)]
     pub offset: f32,
+    /// Per-route sampling override (`@hold` / `@smooth` in the CLI grammar);
+    /// `None` inherits the render-level sampling. Skipped when unset so
+    /// pre-slice checkpoints and manifests stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<ModulationSampling>,
 }
 
 fn default_scale() -> f32 {
     1.0
 }
 
-/// Parse the CLI route grammar `<target>=<source>[:<scale>[,<offset>]]`.
+/// Parse the CLI route grammar
+/// `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]`.
 pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError> {
     let bad = |detail: &str| {
         RenderError::InvalidModulationRoute(format!(
-            "'{spec}': {detail} (expected <target>=<source>[:<scale>[,<offset>]])"
+            "'{spec}': {detail} (expected <target>=<source>[:<scale>[,<offset>]][@hold|@smooth])"
         ))
     };
-    let (target, rest) = spec.split_once('=').ok_or_else(|| bad("missing '='"))?;
+    // The optional per-route sampling suffix comes off first so the rest of
+    // the grammar is unchanged.
+    let (body, sampling) = match spec.rsplit_once('@') {
+        Some((body, suffix)) => {
+            let sampling = match suffix.trim() {
+                "hold" => ModulationSampling::Hold,
+                "smooth" => ModulationSampling::Smooth,
+                other => {
+                    return Err(bad(&format!(
+                        "unknown sampling '{other}' (available: hold, smooth)"
+                    )))
+                }
+            };
+            (body, Some(sampling))
+        }
+        None => (spec, None),
+    };
+    let (target, rest) = body.split_once('=').ok_or_else(|| bad("missing '='"))?;
     let target = target.trim();
     if target.is_empty() {
         return Err(bad("empty target"));
@@ -158,6 +181,7 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
         source,
         scale,
         offset,
+        sampling,
     })
 }
 
@@ -523,18 +547,50 @@ mod tests {
     #[test]
     fn parse_rejects_malformed_specs() {
         for spec in [
-            "strength",                 // no '='
-            "=audio-rms",               // empty target
-            "strength=woble",           // unknown source
-            "strength=audio-rms:x",     // bad scale
-            "strength=audio-rms:1,y",   // bad offset
-            "strength=audio-rms:inf,0", // non-finite
+            "strength",                  // no '='
+            "=audio-rms",                // empty target
+            "strength=woble",            // unknown source
+            "strength=audio-rms:x",      // bad scale
+            "strength=audio-rms:1,y",    // bad offset
+            "strength=audio-rms:inf,0",  // non-finite
+            "strength=audio-rms@linear", // unknown sampling suffix
+            "strength=audio-rms:1,0@",   // empty sampling suffix
+            "strength=audio-rms@hold@",  // suffix must be terminal
         ] {
             assert!(
                 parse_modulation_route(spec).is_err(),
                 "expected '{spec}' to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn parses_per_route_sampling_suffix() {
+        // No suffix inherits the render-level sampling (None).
+        let route = parse_modulation_route("strength=audio-rms:0.5,0.25").unwrap();
+        assert_eq!(route.sampling, None);
+
+        let route = parse_modulation_route("strength=audio-rms:0.5,0.25@smooth").unwrap();
+        assert_eq!(route.sampling, Some(ModulationSampling::Smooth));
+        assert_eq!(route.scale, 0.5);
+        assert_eq!(route.offset, 0.25);
+
+        // The suffix composes with the short forms too.
+        let route = parse_modulation_route("strength=audio-rms@hold").unwrap();
+        assert_eq!(route.sampling, Some(ModulationSampling::Hold));
+        assert_eq!(route.scale, 1.0);
+
+        let route = parse_modulation_route("strength=luma:2 @ smooth").unwrap();
+        assert_eq!(route.sampling, Some(ModulationSampling::Smooth));
+        assert_eq!(route.scale, 2.0);
+
+        // Unset sampling serializes to the pre-slice JSON shape (no key), so
+        // existing checkpoints and manifests stay byte-identical.
+        let unsuffixed = parse_modulation_route("strength=audio-rms:0.5,0.25").unwrap();
+        let json = serde_json::to_string(&unsuffixed).unwrap();
+        assert!(!json.contains("sampling"));
+        let decoded: ModulationRoute = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, unsuffixed);
     }
 
     #[test]

@@ -4925,6 +4925,124 @@ fn queue_retro_static_modulated_matches_direct_and_records_routes() {
 }
 
 #[test]
+fn per_route_sampling_overrides_global_and_round_trips_through_queue() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let render = |output_dir: &Path, route: &str| {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-retro-static-sequence",
+                source_arg.as_str(),
+                output_dir.to_string_lossy().as_ref(),
+                "--frames",
+                "3",
+                "--backend",
+                "cpu",
+                "--modulate",
+                route,
+                "--modulator-audio",
+                wav_arg.as_str(),
+                "--modulation-fps",
+                "3",
+            ])
+            .assert()
+            .success()
+    };
+
+    // `@hold` is the global default spelled per-route: byte-identical.
+    let plain_dir = temp_dir.path().join("plain");
+    render(&plain_dir, "strength=audio-rms:0.5,0.25");
+    let hold_dir = temp_dir.path().join("hold");
+    render(&hold_dir, "strength=audio-rms:0.5,0.25@hold");
+    assert_png_frames_identical(&plain_dir, &hold_dir, 3);
+
+    // `@smooth` interpolates the envelope, so the routed strength (and the
+    // frames) differ from the held evaluation.
+    let smooth_dir = temp_dir.path().join("smooth");
+    render(&smooth_dir, "strength=audio-rms:0.5,0.25@smooth");
+    assert_ne!(
+        fs::read(smooth_dir.join("frame_000001.png")).expect("smooth frame"),
+        fs::read(plain_dir.join("frame_000001.png")).expect("held frame"),
+        "@smooth must change the envelope evaluation"
+    );
+
+    // The suffix persists on the queue and round-trips through queue-run —
+    // byte-identical to the direct @smooth render, with the route's sampling
+    // recorded in the manifest.
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-retro-static-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--frame-rate",
+            "3",
+            "--backend",
+            "cpu",
+            "--modulate",
+            "strength=audio-rms:0.5,0.25@smooth",
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-retro-static-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+    assert_png_frames_identical(&smooth_dir, &output_root.join("job-0001/frames"), 3);
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let route = &manifest["retro_static"]["modulation"]["routes"][0];
+    assert_eq!(route["sampling"], "smooth");
+
+    // A bad suffix is rejected up front.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-retro-static-sequence",
+            source_arg.as_str(),
+            temp_dir.path().join("bad").to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--modulate",
+            "strength=audio-rms@linear",
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown sampling 'linear'"));
+}
+
+#[test]
 fn queue_add_rejects_bad_modulation_routes_before_persisting() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");

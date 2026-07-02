@@ -1177,6 +1177,10 @@ pub struct RenderJobModulationRoute {
     pub scale: f32,
     #[serde(default)]
     pub offset: f32,
+    /// Per-route sampling override; `None` inherits the job-level sampling.
+    /// Skipped when unset so pre-slice jobs/manifests stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<ModulationSampling>,
 }
 
 fn default_modulation_scale() -> f32 {

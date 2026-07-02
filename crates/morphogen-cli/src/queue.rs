@@ -5191,6 +5191,7 @@ fn parse_queue_modulation_routes(
             source: core_modulation_source(route.source),
             scale: route.scale,
             offset: route.offset,
+            sampling: route.sampling.map(core_modulation_sampling),
         })
         .collect())
 }
@@ -5202,8 +5203,12 @@ fn modulation_specs_from_routes(routes: &[RenderJobModulationRoute]) -> Vec<Stri
     routes
         .iter()
         .map(|route| {
+            let suffix = match route.sampling {
+                Some(sampling) => format!("@{}", modulation_sampling_label(sampling)),
+                None => String::new(),
+            };
             format!(
-                "{}={}:{},{}",
+                "{}={}:{},{}{suffix}",
                 route.target,
                 route.source.name(),
                 route.scale,

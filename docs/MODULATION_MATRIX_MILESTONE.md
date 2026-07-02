@@ -58,10 +58,10 @@ span quiet→loud / still→moving.
 ## Route grammar (CLI)
 
 ```
---modulate "<target>=<source>[:<scale>[,<offset>]]"     (repeatable)
+--modulate "<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]"   (repeatable)
 --modulator-audio <wav>        required iff any audio-* route is present
 --modulator-frames <dir>       required iff any luma/flow route is present
---modulation-sampling hold|smooth   (default hold, applies to all routes)
+--modulation-sampling hold|smooth   (default hold; the per-render default)
 ```
 
 Examples:
@@ -70,13 +70,24 @@ Examples:
 --modulate "strength=audio-rms"                  # retro-static breathes with loudness
 --modulate "threshold_high=audio-onset:0.6,0.3"  # sort bursts on onsets
 --modulate "shift_r_x=flow:24" --modulate "shift_b_x=flow:-24"   # RGB split tracks motion
+--modulate "feedback_mix=audio-rms:0.75@smooth"  # this route interpolates; others hold
 ```
 
 - `scale` defaults to `1`, `offset` to `0`; both accept negatives.
+- The optional terminal `@hold`/`@smooth` overrides `--modulation-sampling`
+  for that route only; no suffix inherits the render-level default (the exact
+  pre-suffix behaviour). The suffix is part of the route, so it persists on
+  queue jobs, round-trips through queue-run, and joins a stateful effect's
+  checkpoint contract like every other route field. An unknown suffix is a
+  hard error before rendering.
 - Two routes to the **same target** are a hard error (ambiguous intent), raised
   before any frame renders.
 - An unknown target name for the effect, an unknown source name, or a route
   whose required modulator flag is missing are hard errors before rendering.
+- **Readout trap:** hold and smooth are byte-identical when the output frame
+  times land exactly on the envelope's sample grid (e.g. fps 4 against the
+  62.5 ms RMS hop at 8192 Hz — 0.25 s is a multiple). Prove `@smooth` with a
+  frame rate that does not divide the hop grid.
 
 ## Targets (stateless effects)
 

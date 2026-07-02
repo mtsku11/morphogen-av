@@ -47,7 +47,9 @@ impl ModulationPlan {
         self.routes.iter().map(move |(route, samples)| {
             (
                 route.target.as_str(),
-                modulated_value(route, samples, t, self.sampling),
+                // A route's own sampling (`@hold`/`@smooth`) overrides the
+                // render-level default.
+                modulated_value(route, samples, t, route.sampling.unwrap_or(self.sampling)),
             )
         })
     }
@@ -58,8 +60,13 @@ impl ModulationPlan {
         self.routes
             .iter()
             .map(|(route, _)| {
+                let suffix = match route.sampling {
+                    Some(ModulationSampling::Hold) => "@hold",
+                    Some(ModulationSampling::Smooth) => "@smooth",
+                    None => "",
+                };
                 format!(
-                    "{}={}:{},{}",
+                    "{}={}:{},{}{suffix}",
                     route.target,
                     route.source.name(),
                     route.scale,

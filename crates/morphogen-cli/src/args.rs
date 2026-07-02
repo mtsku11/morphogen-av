@@ -341,7 +341,7 @@ pub(crate) enum Commands {
         /// Stop after writing one frame and a resumable float-state checkpoint.
         #[arg(long)]
         stop_after_frame: bool,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: amount, residual_gain, residual_decay, refresh_threshold.
         /// Sources: audio-rms/audio-onset/audio-centroid (need --modulator-audio),
         /// luma/flow (need --modulator-frames). Datamosh is stateful, so the routes
@@ -524,7 +524,7 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: advect, turbulence_scale, turbulence_speed, detail, reinject.
         /// Sources: audio-rms/audio-onset/audio-centroid (need --modulator-audio),
         /// luma/flow (need --modulator-frames). Stateful: each frame's dye update
@@ -570,7 +570,7 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: advect, reinject. Sources: audio-rms/audio-onset/audio-centroid
         /// (need --modulator-audio), luma/flow (need --modulator-frames). Stateful:
         /// each frame's dye update consumes that frame's routed knobs.
@@ -615,7 +615,7 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: advect, reinject. Sources: audio-rms/audio-onset/audio-centroid
         /// (need --modulator-audio), luma/flow (need --modulator-frames). Stateful:
         /// each frame's dye update consumes that frame's routed knobs.
@@ -882,7 +882,7 @@ pub(crate) enum Commands {
         /// Cross-synth mask modes are CPU-only regardless of this flag.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: threshold_low, threshold_high, direction (enum: asc/desc by
         /// index), axis (enum: row/col by index). Sources: audio-rms/audio-onset/
         /// audio-centroid (need --modulator-audio), luma/flow (need --modulator-frames).
@@ -944,7 +944,7 @@ pub(crate) enum Commands {
         /// (constant-offset mode only; A-flow mode is CPU-only).
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: shift_r_x, shift_r_y, shift_g_x, shift_g_y, shift_b_x, shift_b_y.
         /// Sources: audio-rms/audio-onset/audio-centroid (need --modulator-audio),
         /// luma/flow (need --modulator-frames).
@@ -993,7 +993,7 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: strength, filter (enum: none/sub/up/average/paeth by index —
         /// sweep needs scale 4). Sources: audio-rms/audio-onset/audio-centroid (need
         /// --modulator-audio), luma/flow (need --modulator-frames).
@@ -1032,7 +1032,7 @@ pub(crate) enum Commands {
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: levels (integer — clamped to [2, 256], then rounded to nearest,
         /// ties away from zero), mode (enum: posterize/palette by index; kmeans is
         /// excluded). Sources: audio-rms/audio-onset/audio-centroid (need
@@ -1434,7 +1434,7 @@ pub(crate) enum Commands {
         flow_source: CliFlowSource,
         #[arg(long)]
         stop_after_frame: bool,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: carrier_amount, feedback_amount, feedback_mix, decay,
         /// structure_mix. Sources: audio-rms/audio-onset/audio-centroid (need
         /// --modulator-audio), luma/flow (need --modulator-frames). Envelopes
@@ -1529,7 +1529,7 @@ pub(crate) enum Commands {
         flow_source: CliFlowSource,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: carrier_amount, feedback_amount, feedback_mix, decay,
         /// structure_mix. Persisted on the job (they join the render's checkpoint
         /// contract); envelope times sample against the job's --frame-rate.
@@ -1569,7 +1569,7 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: advect, turbulence_scale, turbulence_speed, detail, reinject.
         /// Persisted on the job; envelope times sample against the job's
         /// --frame-rate.
@@ -1602,7 +1602,7 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: advect, reinject. Persisted on the job; envelope times sample
         /// against the job's --frame-rate.
         #[arg(long = "modulate")]
@@ -1633,7 +1633,7 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: advect, reinject. Persisted on the job; envelope times sample
         /// against the job's --frame-rate.
         #[arg(long = "modulate")]
@@ -1783,7 +1783,7 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: strength, filter (enum: none/sub/up/average/paeth by index).
         /// Persisted on the job; envelope times sample against the job's
         /// --frame-rate.
@@ -1834,7 +1834,7 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: shift_r_x, shift_r_y, shift_g_x, shift_g_y, shift_b_x, shift_b_y.
         /// Persisted on the job; envelope times sample against the job's --frame-rate.
         #[arg(long = "modulate")]
@@ -1872,7 +1872,7 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: levels (integer — clamped to [2, 256], then rounded), mode
         /// (enum: posterize/palette by index). Persisted on the job; envelope
         /// times sample against the job's --frame-rate.
@@ -2143,7 +2143,7 @@ pub(crate) enum Commands {
         project_path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: amount, residual_gain, residual_decay, refresh_threshold.
         /// Persisted on the job (they join the render's checkpoint contract);
         /// envelope times sample against the job manifest's fixed 30 fps.
@@ -2301,7 +2301,7 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
-        /// Modulation route `<target>=<source>[:<scale>[,<offset>]]` (repeatable).
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: threshold_low, threshold_high, direction (enum: asc/desc by
         /// index), axis (enum: row/col by index). Persisted on the job; envelope
         /// times sample against the job's --frame-rate.
