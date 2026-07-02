@@ -589,6 +589,134 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--modulation-sampling"))
   }
 
+  func testQueuedFeedbackSequenceArgumentsCarryModulationRoutes() throws {
+    var request = FeedbackSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/feedback", isDirectory: true),
+      carrierAmount: 1.0,
+      feedbackAmount: 1.5,
+      feedbackMix: 0.68,
+      decay: 0.99,
+      iterations: 1,
+      structureMix: 0.0,
+      outputBitDepth: .png16,
+      temporalSupersampling: 1,
+      maxFrames: 48,
+      resetAtFrame: nil,
+      frameRate: 24.0,
+      writesFlowCache: false,
+      backend: .cpu,
+      flowSource: .opticalFlow,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "feedback_mix", source: "audio-rms", scale: 0.5, offset: 0.25)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+
+    let arguments = try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("feedback_mix=audio-rms:0.5,0.25"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertFalse(arguments.contains("--modulator-frames"))
+
+    // No routes ⇒ no modulation flags (the exact pre-slice command shape).
+    request.modulationRoutes = []
+    let unmodulated = try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request)
+    XCTAssertFalse(unmodulated.contains("--modulate"))
+    XCTAssertFalse(unmodulated.contains("--modulation-sampling"))
+  }
+
+  func testQueuedDatamoshSequenceArgumentsCarryModulationRoutes() throws {
+    var request = DatamoshSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/datamosh-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/datamosh", isDirectory: true),
+      keyframeInterval: 0,
+      amount: 1.0,
+      blockSize: 16,
+      residualGain: 0.5,
+      residualDecay: 0.8,
+      blockRefreshThreshold: 0.0,
+      vectorRemix: .none,
+      preset: .custom,
+      remixSeed: 0,
+      maxFrames: 48,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "amount", source: "audio-onset", scale: 2, offset: 0.5),
+      ModulationRouteSpec(target: "residual_gain", source: "luma", scale: 1, offset: 0),
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulatorFramesURL = URL(fileURLWithPath: "/tmp/modulator-frames", isDirectory: true)
+
+    let arguments = try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("amount=audio-onset:2,0.5"))
+    XCTAssertTrue(arguments.contains("residual_gain=luma:1,0"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("--modulator-frames"))
+
+    // A luma route without the modulator frame directory is rejected app-side.
+    request.modulatorFramesURL = nil
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: request)
+    )
+  }
+
+  func testQueuedFluidAdvectSequenceArgumentsCarryModulationRoutes() throws {
+    var request = FluidAdvectSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-advect-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/fluid", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      advect: 12.0,
+      turbulenceScale: 0.008,
+      turbulenceSpeed: 0.06,
+      detail: 0.1,
+      reinject: 0.05,
+      seed: 0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "reinject", source: "audio-rms", scale: 0.5, offset: 0.25)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+
+    let arguments = try RustBridgePlaceholder.queueAddFluidAdvectSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("reinject=audio-rms:0.5,0.25"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+
+    // The two-source / self-flow builders share the same emission path.
+    var motionRequest = OpticalFlowAdvectSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/optical-flow-advect-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/self-flow", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      advect: 1.0,
+      reinject: 0.08,
+      backend: .cpu,
+      projectURL: nil
+    )
+    motionRequest.modulationRoutes = [
+      ModulationRouteSpec(target: "advect", source: "flow", scale: 4, offset: 0)
+    ]
+    motionRequest.modulatorFramesURL = URL(fileURLWithPath: "/tmp/modulator-frames", isDirectory: true)
+    let motionArguments =
+      try RustBridgePlaceholder.queueAddOpticalFlowAdvectSequenceArguments(request: motionRequest)
+    XCTAssertTrue(motionArguments.contains("advect=flow:4,0"))
+    XCTAssertTrue(motionArguments.contains("--modulator-frames"))
+  }
+
   func testQueuedPixelSortSequenceArgumentsCarryModulationRoutesAndRequireMedia() throws {
     var request = PixelSortSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/pixel-sort-queue.json"),

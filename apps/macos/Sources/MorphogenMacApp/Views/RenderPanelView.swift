@@ -339,6 +339,56 @@ struct RenderPanelView: View {
             .frame(width: 165, alignment: .leading)
           }
 
+          ModulationSlotRow(
+            label: "Carrier",
+            source: $state.feedbackModCarrierAmountSource,
+            scale: $state.feedbackModCarrierAmountScale,
+            offset: $state.feedbackModCarrierAmountOffset,
+            scaleRange: -16...16, scaleStep: 0.25, offsetRange: -16...16, offsetStep: 0.25
+          )
+
+          ModulationSlotRow(
+            label: "Feedback",
+            source: $state.feedbackModAmountSource,
+            scale: $state.feedbackModAmountScale,
+            offset: $state.feedbackModAmountOffset,
+            scaleRange: -16...16, scaleStep: 0.25, offsetRange: -16...16, offsetStep: 0.25
+          )
+
+          ModulationSlotRow(
+            label: "Mix",
+            source: $state.feedbackModMixSource,
+            scale: $state.feedbackModMixScale,
+            offset: $state.feedbackModMixOffset
+          )
+
+          ModulationSlotRow(
+            label: "Decay",
+            source: $state.feedbackModDecaySource,
+            scale: $state.feedbackModDecayScale,
+            offset: $state.feedbackModDecayOffset
+          )
+
+          ModulationSlotRow(
+            label: "Structure",
+            source: $state.feedbackModStructureMixSource,
+            scale: $state.feedbackModStructureMixScale,
+            offset: $state.feedbackModStructureMixOffset
+          )
+
+          ModulationMediaRow(
+            sources: [
+              state.feedbackModCarrierAmountSource, state.feedbackModAmountSource,
+              state.feedbackModMixSource, state.feedbackModDecaySource,
+              state.feedbackModStructureMixSource
+            ],
+            audioURL: state.feedbackModulatorAudioURL,
+            framesURL: state.feedbackModulatorFramesURL,
+            sampling: $state.feedbackModSampling,
+            chooseAudio: { state.chooseFeedbackModulatorWAV() },
+            chooseFrames: { state.chooseFeedbackModulatorFrames() }
+          )
+
           HStack(spacing: 16) {
             Toggle("Write Flow Cache", isOn: $state.feedbackWritesFlowCache)
               .toggleStyle(.checkbox)
@@ -434,6 +484,68 @@ struct RenderPanelView: View {
             Toggle("Live Colour", isOn: $state.fieldParticleLiveColour)
               .toggleStyle(.checkbox)
           }
+
+          // Procedural Fluid consumes all six slots; A-to-B Fluid and
+          // Self-Flow consume only Flow Advect + Reinject (their commands
+          // have no turbulence targets). Particles has no routes yet.
+          ModulationSlotRow(
+            label: "Proc Advect",
+            source: $state.fluidModProceduralAdvectSource,
+            scale: $state.fluidModProceduralAdvectScale,
+            offset: $state.fluidModProceduralAdvectOffset,
+            scaleRange: -48...48, scaleStep: 1, offsetRange: -48...48, offsetStep: 1
+          )
+
+          ModulationSlotRow(
+            label: "Flow Advect",
+            source: $state.fluidModMotionAdvectSource,
+            scale: $state.fluidModMotionAdvectScale,
+            offset: $state.fluidModMotionAdvectOffset,
+            scaleRange: -8...8, scaleStep: 0.25, offsetRange: -8...8, offsetStep: 0.25
+          )
+
+          ModulationSlotRow(
+            label: "Turb Scale",
+            source: $state.fluidModTurbulenceScaleSource,
+            scale: $state.fluidModTurbulenceScaleScale,
+            offset: $state.fluidModTurbulenceScaleOffset,
+            scaleRange: -0.05...0.05, scaleStep: 0.002, offsetRange: -0.05...0.05, offsetStep: 0.002
+          )
+
+          ModulationSlotRow(
+            label: "Turb Speed",
+            source: $state.fluidModTurbulenceSpeedSource,
+            scale: $state.fluidModTurbulenceSpeedScale,
+            offset: $state.fluidModTurbulenceSpeedOffset,
+            scaleRange: -0.5...0.5, scaleStep: 0.01, offsetRange: -0.5...0.5, offsetStep: 0.01
+          )
+
+          ModulationSlotRow(
+            label: "Detail",
+            source: $state.fluidModDetailSource,
+            scale: $state.fluidModDetailScale,
+            offset: $state.fluidModDetailOffset
+          )
+
+          ModulationSlotRow(
+            label: "Reinject",
+            source: $state.fluidModReinjectSource,
+            scale: $state.fluidModReinjectScale,
+            offset: $state.fluidModReinjectOffset
+          )
+
+          ModulationMediaRow(
+            sources: [
+              state.fluidModProceduralAdvectSource, state.fluidModMotionAdvectSource,
+              state.fluidModTurbulenceScaleSource, state.fluidModTurbulenceSpeedSource,
+              state.fluidModDetailSource, state.fluidModReinjectSource
+            ],
+            audioURL: state.fluidModulatorAudioURL,
+            framesURL: state.fluidModulatorFramesURL,
+            sampling: $state.fluidModSampling,
+            chooseAudio: { state.chooseFluidModulatorWAV() },
+            chooseFrames: { state.chooseFluidModulatorFrames() }
+          )
 
           Text(state.fluidAdvectionSummary)
             .font(.caption)
@@ -1275,6 +1387,47 @@ struct RenderPanelView: View {
           .pickerStyle(.segmented)
           .frame(width: 200)
           .help("Metal is gated per-frame against the CPU reference.")
+
+          ModulationSlotRow(
+            label: "Amount",
+            source: $state.datamoshModAmountSource,
+            scale: $state.datamoshModAmountScale,
+            offset: $state.datamoshModAmountOffset
+          )
+
+          ModulationSlotRow(
+            label: "Res Gain",
+            source: $state.datamoshModResidualGainSource,
+            scale: $state.datamoshModResidualGainScale,
+            offset: $state.datamoshModResidualGainOffset
+          )
+
+          ModulationSlotRow(
+            label: "Res Decay",
+            source: $state.datamoshModResidualDecaySource,
+            scale: $state.datamoshModResidualDecayScale,
+            offset: $state.datamoshModResidualDecayOffset
+          )
+
+          ModulationSlotRow(
+            label: "Refresh",
+            source: $state.datamoshModRefreshThresholdSource,
+            scale: $state.datamoshModRefreshThresholdScale,
+            offset: $state.datamoshModRefreshThresholdOffset,
+            scaleRange: -8...8, scaleStep: 0.25, offsetRange: -8...8, offsetStep: 0.25
+          )
+
+          ModulationMediaRow(
+            sources: [
+              state.datamoshModAmountSource, state.datamoshModResidualGainSource,
+              state.datamoshModResidualDecaySource, state.datamoshModRefreshThresholdSource
+            ],
+            audioURL: state.datamoshModulatorAudioURL,
+            framesURL: state.datamoshModulatorFramesURL,
+            sampling: $state.datamoshModSampling,
+            chooseAudio: { state.chooseDatamoshModulatorWAV() },
+            chooseFrames: { state.chooseDatamoshModulatorFrames() }
+          )
 
           Text(state.datamoshSummary)
             .font(.caption)

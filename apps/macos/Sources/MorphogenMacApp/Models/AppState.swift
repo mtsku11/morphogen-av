@@ -76,6 +76,26 @@ final class AppState: ObservableObject {
   @Published var feedbackResetEnabled = false
   @Published var feedbackResetAtFrame = 48
   @Published var feedbackSummary = "No temporal flow-feedback sequence rendered"
+  // Feedback mod slots — stateful: the routes join the render's checkpoint
+  // contract, so a resumed job must keep them unchanged.
+  @Published var feedbackModCarrierAmountSource = ModulationSourceOption.off
+  @Published var feedbackModCarrierAmountScale = 1.0
+  @Published var feedbackModCarrierAmountOffset = 0.0
+  @Published var feedbackModAmountSource = ModulationSourceOption.off
+  @Published var feedbackModAmountScale = 1.0
+  @Published var feedbackModAmountOffset = 0.0
+  @Published var feedbackModMixSource = ModulationSourceOption.off
+  @Published var feedbackModMixScale = 1.0
+  @Published var feedbackModMixOffset = 0.0
+  @Published var feedbackModDecaySource = ModulationSourceOption.off
+  @Published var feedbackModDecayScale = 1.0
+  @Published var feedbackModDecayOffset = 0.0
+  @Published var feedbackModStructureMixSource = ModulationSourceOption.off
+  @Published var feedbackModStructureMixScale = 1.0
+  @Published var feedbackModStructureMixOffset = 0.0
+  @Published var feedbackModulatorAudioURL: URL?
+  @Published var feedbackModulatorFramesURL: URL?
+  @Published var feedbackModSampling = ModulationSamplingOption.hold
   @Published var fluidProceduralAdvect = 12.0
   @Published var fluidMotionAdvect = 1.0
   @Published var fluidReinject = 0.08
@@ -91,6 +111,31 @@ final class AppState: ObservableObject {
     didSet { AppState.persistBackend("backend.fluid", fluidBackend) }
   }
   @Published var fluidAdvectionSummary = "No fluid/advection sequence rendered"
+  // Fluid mod slots shared by the three advect runs. Procedural Fluid consumes
+  // the procedural-advect + turbulence/detail slots; A-to-B Fluid and Self-Flow
+  // consume only the flow-advect + reinject slots (their CLI commands have no
+  // turbulence targets).
+  @Published var fluidModProceduralAdvectSource = ModulationSourceOption.off
+  @Published var fluidModProceduralAdvectScale = 1.0
+  @Published var fluidModProceduralAdvectOffset = 0.0
+  @Published var fluidModMotionAdvectSource = ModulationSourceOption.off
+  @Published var fluidModMotionAdvectScale = 1.0
+  @Published var fluidModMotionAdvectOffset = 0.0
+  @Published var fluidModTurbulenceScaleSource = ModulationSourceOption.off
+  @Published var fluidModTurbulenceScaleScale = 0.008
+  @Published var fluidModTurbulenceScaleOffset = 0.0
+  @Published var fluidModTurbulenceSpeedSource = ModulationSourceOption.off
+  @Published var fluidModTurbulenceSpeedScale = 0.06
+  @Published var fluidModTurbulenceSpeedOffset = 0.0
+  @Published var fluidModDetailSource = ModulationSourceOption.off
+  @Published var fluidModDetailScale = 1.0
+  @Published var fluidModDetailOffset = 0.0
+  @Published var fluidModReinjectSource = ModulationSourceOption.off
+  @Published var fluidModReinjectScale = 1.0
+  @Published var fluidModReinjectOffset = 0.0
+  @Published var fluidModulatorAudioURL: URL?
+  @Published var fluidModulatorFramesURL: URL?
+  @Published var fluidModSampling = ModulationSamplingOption.hold
   // Trail Cascade — tuned sparse-ribbon defaults (the one-click preset).
   @Published var cascadeTileSize = 28
   @Published var cascadeGridSpacing = 60
@@ -275,6 +320,24 @@ final class AppState: ObservableObject {
   /// (which don't affect the flow) skips recomputing the dominant per-frame cost.
   @Published var datamoshReuseFlowCache = true
   @Published var datamoshSummary = "No datamosh rendered"
+  // Datamosh mod slots — stateful: the routes join the render's checkpoint
+  // contract. Tier activation follows the routed value per frame (a residual
+  // gain envelope pulses the residual tier over a plain block base).
+  @Published var datamoshModAmountSource = ModulationSourceOption.off
+  @Published var datamoshModAmountScale = 1.0
+  @Published var datamoshModAmountOffset = 0.0
+  @Published var datamoshModResidualGainSource = ModulationSourceOption.off
+  @Published var datamoshModResidualGainScale = 1.0
+  @Published var datamoshModResidualGainOffset = 0.0
+  @Published var datamoshModResidualDecaySource = ModulationSourceOption.off
+  @Published var datamoshModResidualDecayScale = 1.0
+  @Published var datamoshModResidualDecayOffset = 0.0
+  @Published var datamoshModRefreshThresholdSource = ModulationSourceOption.off
+  @Published var datamoshModRefreshThresholdScale = 1.0
+  @Published var datamoshModRefreshThresholdOffset = 0.0
+  @Published var datamoshModulatorAudioURL: URL?
+  @Published var datamoshModulatorFramesURL: URL?
+  @Published var datamoshModSampling = ModulationSamplingOption.hold
   @Published var bitstreamInputVideoURL: URL?
   @Published var bitstreamCarrierVideoURL: URL?
   @Published var bitstreamOutputURL: URL?
@@ -1065,6 +1128,24 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering flow feedback."
       return
     }
+    guard let routes = modulationRoutes(
+      slots: [
+        (
+          "carrier_amount", feedbackModCarrierAmountSource,
+          feedbackModCarrierAmountScale, feedbackModCarrierAmountOffset
+        ),
+        ("feedback_amount", feedbackModAmountSource, feedbackModAmountScale, feedbackModAmountOffset),
+        ("feedback_mix", feedbackModMixSource, feedbackModMixScale, feedbackModMixOffset),
+        ("decay", feedbackModDecaySource, feedbackModDecayScale, feedbackModDecayOffset),
+        (
+          "structure_mix", feedbackModStructureMixSource,
+          feedbackModStructureMixScale, feedbackModStructureMixOffset
+        )
+      ],
+      modulatorAudioURL: feedbackModulatorAudioURL,
+      modulatorFramesURL: feedbackModulatorFramesURL,
+      effectLabel: "flow feedback"
+    ) else { return }
 
     let request = FeedbackSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultFeedbackSequenceRenderQueueURL(),
@@ -1085,7 +1166,11 @@ final class AppState: ObservableObject {
       writesFlowCache: feedbackWritesFlowCache,
       backend: feedbackBackend,
       flowSource: feedbackFlowSource,
-      projectURL: projectURL
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: feedbackModulatorAudioURL,
+      modulatorFramesURL: feedbackModulatorFramesURL,
+      modulationSampling: feedbackModSampling
     )
 
     statusMessage = "Queueing temporal flow-feedback render through morphogen-cli..."
@@ -1173,6 +1258,27 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering procedural fluid advection."
       return
     }
+    guard let routes = modulationRoutes(
+      slots: [
+        (
+          "advect", fluidModProceduralAdvectSource,
+          fluidModProceduralAdvectScale, fluidModProceduralAdvectOffset
+        ),
+        (
+          "turbulence_scale", fluidModTurbulenceScaleSource,
+          fluidModTurbulenceScaleScale, fluidModTurbulenceScaleOffset
+        ),
+        (
+          "turbulence_speed", fluidModTurbulenceSpeedSource,
+          fluidModTurbulenceSpeedScale, fluidModTurbulenceSpeedOffset
+        ),
+        ("detail", fluidModDetailSource, fluidModDetailScale, fluidModDetailOffset),
+        ("reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset)
+      ],
+      modulatorAudioURL: fluidModulatorAudioURL,
+      modulatorFramesURL: fluidModulatorFramesURL,
+      effectLabel: "procedural fluid advection"
+    ) else { return }
 
     let request = FluidAdvectSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultFluidAdvectSequenceRenderQueueURL(),
@@ -1187,7 +1293,11 @@ final class AppState: ObservableObject {
       reinject: fluidReinject,
       seed: UInt64(max(0, fluidSeed)),
       backend: fluidBackend,
-      projectURL: projectURL
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: fluidModulatorAudioURL,
+      modulatorFramesURL: fluidModulatorFramesURL,
+      modulationSampling: fluidModSampling
     )
 
     runFluidAdvectionQueue(
@@ -1211,6 +1321,17 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering two-source fluid advection."
       return
     }
+    // Only the flow-advect + reinject slots apply — the flow-driven commands
+    // have no turbulence targets.
+    guard let routes = modulationRoutes(
+      slots: [
+        ("advect", fluidModMotionAdvectSource, fluidModMotionAdvectScale, fluidModMotionAdvectOffset),
+        ("reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset)
+      ],
+      modulatorAudioURL: fluidModulatorAudioURL,
+      modulatorFramesURL: fluidModulatorFramesURL,
+      effectLabel: "A-to-B fluid advection"
+    ) else { return }
 
     let request = FluidAdvectTwoSourceSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultFluidAdvectTwoSourceSequenceRenderQueueURL(),
@@ -1222,7 +1343,11 @@ final class AppState: ObservableObject {
       advect: fluidMotionAdvect,
       reinject: fluidReinject,
       backend: fluidBackend,
-      projectURL: projectURL
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: fluidModulatorAudioURL,
+      modulatorFramesURL: fluidModulatorFramesURL,
+      modulationSampling: fluidModSampling
     )
 
     runFluidAdvectionQueue(
@@ -1242,6 +1367,17 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering self-flow advection."
       return
     }
+    // Only the flow-advect + reinject slots apply — the flow-driven commands
+    // have no turbulence targets.
+    guard let routes = modulationRoutes(
+      slots: [
+        ("advect", fluidModMotionAdvectSource, fluidModMotionAdvectScale, fluidModMotionAdvectOffset),
+        ("reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset)
+      ],
+      modulatorAudioURL: fluidModulatorAudioURL,
+      modulatorFramesURL: fluidModulatorFramesURL,
+      effectLabel: "self-flow advection"
+    ) else { return }
 
     let request = OpticalFlowAdvectSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultOpticalFlowAdvectSequenceRenderQueueURL(),
@@ -1252,7 +1388,11 @@ final class AppState: ObservableObject {
       advect: fluidMotionAdvect,
       reinject: fluidReinject,
       backend: fluidBackend,
-      projectURL: projectURL
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: fluidModulatorAudioURL,
+      modulatorFramesURL: fluidModulatorFramesURL,
+      modulationSampling: fluidModSampling
     )
 
     runFluidAdvectionQueue(
@@ -1444,6 +1584,78 @@ final class AppState: ObservableObject {
     }
     retroStaticModulatorFramesURL = url
     statusMessage = "Retro-static modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func chooseFeedbackModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    feedbackModulatorAudioURL = url
+    statusMessage = "Feedback modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseFeedbackModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    feedbackModulatorFramesURL = url
+    statusMessage = "Feedback modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func chooseFluidModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    fluidModulatorAudioURL = url
+    statusMessage = "Fluid modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseFluidModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    fluidModulatorFramesURL = url
+    statusMessage = "Fluid modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func chooseDatamoshModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    datamoshModulatorAudioURL = url
+    statusMessage = "Datamosh modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseDatamoshModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knob."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    datamoshModulatorFramesURL = url
+    statusMessage = "Datamosh modulator frames selected: \(url.lastPathComponent)"
   }
 
   func chooseChannelShiftModulatorWAV() {
@@ -2059,6 +2271,26 @@ final class AppState: ObservableObject {
       statusMessage = "Choose an output directory before rendering the datamosh."
       return
     }
+    guard let routes = modulationRoutes(
+      slots: [
+        ("amount", datamoshModAmountSource, datamoshModAmountScale, datamoshModAmountOffset),
+        (
+          "residual_gain", datamoshModResidualGainSource,
+          datamoshModResidualGainScale, datamoshModResidualGainOffset
+        ),
+        (
+          "residual_decay", datamoshModResidualDecaySource,
+          datamoshModResidualDecayScale, datamoshModResidualDecayOffset
+        ),
+        (
+          "refresh_threshold", datamoshModRefreshThresholdSource,
+          datamoshModRefreshThresholdScale, datamoshModRefreshThresholdOffset
+        )
+      ],
+      modulatorAudioURL: datamoshModulatorAudioURL,
+      modulatorFramesURL: datamoshModulatorFramesURL,
+      effectLabel: "datamosh"
+    ) else { return }
 
     let request = DatamoshSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultDatamoshSequenceRenderQueueURL(),
@@ -2079,7 +2311,11 @@ final class AppState: ObservableObject {
       projectURL: projectURL,
       flowCacheDirectoryURL: datamoshReuseFlowCache
         ? RustBridgePlaceholder.defaultDatamoshFlowCacheRootURL()
-        : nil
+        : nil,
+      modulationRoutes: routes,
+      modulatorAudioURL: datamoshModulatorAudioURL,
+      modulatorFramesURL: datamoshModulatorFramesURL,
+      modulationSampling: datamoshModSampling
     )
 
     statusMessage = "Queueing datamosh render through morphogen-cli..."

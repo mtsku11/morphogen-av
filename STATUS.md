@@ -8,9 +8,9 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **456 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **460 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **75 passing, 0 failing.**
+- `swift test`: **78 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,36 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — queue/SwiftUI exposure of stateful-effect routes
+  (the milestone's last deferred slice).** All five stateful queue tasks
+  (flow feedback, datamosh, fluid advect ×3) persist modulation routes via
+  the same serde-defaulted core fields as the stateless tasks (pre-slice
+  jobs deserialize unmodulated, pinned by a core test); queue-add validates
+  routes BEFORE persisting (probe through each effect's apply fn — the
+  shared `parse_queue_modulation_routes` probe now returns `CliError` so
+  datamosh's CLI-side apply fn plugs in directly); queue-run rebuilds spec
+  strings so it shares the direct render's code path. Envelope time base =
+  the job's `frame_rate`; datamosh (no per-job rate) uses its manifest's
+  fixed 30 fps — a direct render matches with `--modulation-fps 30`.
+  Manifests gain the `modulation` block only when routes exist; the
+  feedback/datamosh **checkpoint contracts carry the routes through the
+  queue path** (queued-job checkpoint pinned by smoke test). SwiftUI: mod
+  slots on the Flow Feedback (5 targets), Datamosh (4), and Fluid/Advection
+  panels (6 slots shared across the three runs — Procedural consumes all,
+  A-to-B/Self-Flow only flow-advect+reinject since their commands have no
+  turbulence targets), each with shared modulator pickers + sampling; the
+  bridge appends the standard modulation flags on all five queue-add
+  commands (no routes ⇒ byte-identical pre-slice command shape,
+  test-pinned). **Verified:** workspace 456 → **460** (core serde-default
+  test + 3 add→run byte-identity smokes: feedback incl. queued-checkpoint
+  modulation block, datamosh incl. add-time rejection persisting nothing +
+  manifest block, fluid advect + manifest block); `swift test` 75 → **78**
+  (feedback/datamosh/fluid bridge arg tests incl. media-requirement
+  rejection and no-routes flag omission); clippy `-D warnings` + fmt clean;
+  swift build clean. Two local commits: queue slice `b1d8c38`, SwiftUI
+  slice (this entry). The modulation-matrix milestone's route surface is
+  now fully exposed across direct CLI, queue, and SwiftUI.
 
 - **Modulation matrix — stateful targets slice 7: datamosh + fluid advect
   (direct CLI).** The two deferred stateful effects gain routes.

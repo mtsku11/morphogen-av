@@ -228,8 +228,19 @@ All three effects sample envelopes against `--modulation-fps` (the stateless
 default, 12) — unlike feedback, none of these commands has a `--frame-rate` of
 its own.
 
-Deferred: queue/SwiftUI exposure of the stateful-effect routes (feedback,
-datamosh, fluid advect).
+**Queue/SwiftUI exposure (landed).** All five stateful queue tasks (feedback,
+datamosh, the three fluid-advect variants) persist routes via the same
+serde-defaulted core fields as the stateless tasks: queue-add validates before
+persisting (probe through the effect's apply fn), queue-run rebuilds the spec
+strings so it shares the direct code path (add→run byte-identical, smoke), and
+manifests gain the `modulation` block only when routes exist. The envelope time
+base on the queue path is the **job's `frame_rate`** — for datamosh, whose task
+has no frame rate, the manifest's fixed 30 fps (a direct render matches with
+`--modulation-fps 30`). The feedback/datamosh checkpoint contracts carry the
+routes through the queue path unchanged. SwiftUI panels follow the slice-3
+mod-slot pattern; the fluid panel shares one slot set across its three runs —
+Procedural Fluid consumes all six slots, A-to-B/Self-Flow only the flow-advect
+and reinject slots (their commands have no turbulence targets).
 
 ## Determinism & continuity
 

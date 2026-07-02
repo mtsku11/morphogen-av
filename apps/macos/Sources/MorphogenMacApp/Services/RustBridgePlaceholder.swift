@@ -788,6 +788,13 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
 
     return arguments
   }
@@ -830,6 +837,13 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
 
     return arguments
   }
@@ -871,6 +885,13 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
 
     return arguments
   }
@@ -1688,6 +1709,13 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
 
     return arguments
   }
@@ -2303,6 +2331,13 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling
+    )
 
     return arguments
   }
@@ -2827,6 +2862,12 @@ struct FeedbackSequenceRenderQueueCommandRequest {
   let backend: FeedbackRenderBackendOption
   let flowSource: FeedbackFlowSourceOption
   let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating the
+  // stateful exposure keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct FeedbackSequenceRenderQueueCommandResult {
@@ -2870,6 +2911,12 @@ struct FluidAdvectSequenceRenderQueueCommandRequest {
   let seed: UInt64
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating the
+  // stateful exposure keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct FluidAdvectTwoSourceSequenceRenderQueueCommandRequest {
@@ -2883,6 +2930,10 @@ struct FluidAdvectTwoSourceSequenceRenderQueueCommandRequest {
   let reinject: Double
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct OpticalFlowAdvectSequenceRenderQueueCommandRequest {
@@ -2895,6 +2946,10 @@ struct OpticalFlowAdvectSequenceRenderQueueCommandRequest {
   let reinject: Double
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct FieldParticlesSequenceRenderQueueCommandRequest {
@@ -3156,6 +3211,12 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   /// the flow) reuse the cached Lucas-Kanade flow instead of recomputing it, the
   /// dominant per-frame cost. Defaulted nil so existing call sites are unchanged.
   var flowCacheDirectoryURL: URL? = nil
+  // Modulation-matrix routes; defaulted off so call sites predating the
+  // stateful exposure keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
 }
 
 struct DatamoshSequenceRenderQueueCommandResult {
