@@ -8,7 +8,7 @@ _Last updated: 2026-07-02_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **460 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **466 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **78 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -18,6 +18,34 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Modulation matrix — the three nice-to-haves, one commit each.**
+  (1) **Per-route sampling** (`f51f5bd`): route grammar gains a terminal
+  `@hold`/`@smooth` that overrides `--modulation-sampling` for that route;
+  unset inherits the default (byte-identical, smoke-pinned); the suffix
+  persists on queue routes, round-trips through queue-run byte-identically,
+  and joins stateful checkpoint contracts. Serde skip-when-unset keeps all
+  pre-slice JSON byte-identical. **Readout trap recorded:** hold==smooth
+  when frame times land on the envelope sample grid (fps 4 × 62.5 ms RMS
+  hop) — the smoke test proves `@smooth` at fps 3.
+  (2) **Envelope sidecar cache** (`248f22b`): `--modulation-cache-dir` on
+  all 9 modulatable commands persists extracted **luma/flow** envelopes
+  (flow = per-pair Lucas-Kanade, the dominant cost) as sidecars keyed by
+  algorithm id + fps + content fingerprint; reuse only on a full match,
+  regenerate on any mismatch (content-change invalidation smoke-pinned);
+  a hit is byte-identical to fresh extraction (serde_json round-trips
+  floats exactly). Never part of a render's contract; queue jobs uncached.
+  (3) **Named modulators** (`d70fac3`): `<target>=<name>.<source>` routes
+  read media from repeatable `--named-modulator-audio/frames name=path`
+  flags; bare sources keep the default modulator (aliased-vs-unnamed
+  byte-identity smoke-pinned); envelopes extract once per (modulator,
+  source); stateful contracts gain a skip-when-empty named-fingerprint
+  list (rename/content change refuses resume, smoke-pinned); queue-add
+  rejects named routes ("direct-CLI only") persisting nothing.
+  **Verified:** workspace 460 → **466**, 0 failing (3 unit + 3 smoke);
+  clippy `-D warnings` + fmt clean; swift build/test unaffected (78).
+  Remaining ideas: queue/SwiftUI exposure of named modulators, per-route
+  sampling UI, field-particles/cascade modulation targets.
 
 - **Modulation matrix — queue/SwiftUI exposure of stateful-effect routes
   (the milestone's last deferred slice).** All five stateful queue tasks
