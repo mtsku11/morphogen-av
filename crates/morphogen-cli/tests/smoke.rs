@@ -5043,6 +5043,91 @@ fn per_route_sampling_overrides_global_and_round_trips_through_queue() {
 }
 
 #[test]
+fn modulation_envelope_sidecar_reuses_and_invalidates_on_content_change() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    write_texture_sequence(&modulator_dir, &[0, 2, 4]);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let cache_dir = temp_dir.path().join("envelope-cache");
+    let cache_arg = cache_dir.to_string_lossy().to_string();
+    let render = |output_dir: &Path, cached: bool| {
+        let mut args = vec![
+            "render-retro-static-sequence".to_string(),
+            source_arg.clone(),
+            output_dir.to_string_lossy().to_string(),
+            "--frames".to_string(),
+            "3".to_string(),
+            "--backend".to_string(),
+            "cpu".to_string(),
+            "--modulate".to_string(),
+            "strength=luma:0.5,0.25".to_string(),
+            "--modulator-frames".to_string(),
+            modulator_arg.clone(),
+            "--modulation-fps".to_string(),
+            "4".to_string(),
+        ];
+        if cached {
+            args.extend(["--modulation-cache-dir".to_string(), cache_arg.clone()]);
+        }
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+            .success()
+    };
+
+    // Uncached reference, then a cold-cache render generates the sidecar and
+    // a warm render reuses it — all three byte-identical.
+    let reference_dir = temp_dir.path().join("reference");
+    render(&reference_dir, false);
+    let cold_dir = temp_dir.path().join("cold");
+    render(&cold_dir, true).stdout(predicate::str::contains(
+        "generated modulation envelope sidecar for 'luma'",
+    ));
+    let warm_dir = temp_dir.path().join("warm");
+    render(&warm_dir, true).stdout(predicate::str::contains(
+        "reused modulation envelope sidecar for 'luma'",
+    ));
+    assert_png_frames_identical(&reference_dir, &cold_dir, 3);
+    assert_png_frames_identical(&reference_dir, &warm_dir, 3);
+
+    // The sidecar records the contract fields.
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(cache_dir.join("envelope_luma.json")).expect("read sidecar"),
+    )
+    .expect("parse sidecar");
+    assert_eq!(sidecar["algorithm"], "modulation_envelope_luma_v1");
+    assert_eq!(sidecar["fps"], 4.0);
+    assert!(sidecar["checksum"]
+        .as_str()
+        .expect("checksum")
+        .starts_with("fnv1a64:"));
+
+    // Changing the modulator content invalidates the sidecar: the next run
+    // regenerates instead of reusing, and still matches an uncached render
+    // of the new content.
+    write_translated_texture(&modulator_dir.join("frame_000002.png"), 24, 16, 9);
+    let fresh_reference_dir = temp_dir.path().join("fresh-reference");
+    render(&fresh_reference_dir, false);
+    let regenerated_dir = temp_dir.path().join("regenerated");
+    render(&regenerated_dir, true).stdout(predicate::str::contains(
+        "generated modulation envelope sidecar for 'luma'",
+    ));
+    assert_png_frames_identical(&fresh_reference_dir, &regenerated_dir, 3);
+}
+
+#[test]
 fn queue_add_rejects_bad_modulation_routes_before_persisting() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");

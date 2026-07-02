@@ -311,6 +311,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_datamosh_sequence(DatamoshSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -336,6 +337,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -442,6 +444,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_fluid_advect_sequence(FluidAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -461,6 +464,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -477,6 +481,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_fluid_advect_two_source_sequence(FluidAdvectTwoSourceSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -490,6 +495,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -505,6 +511,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_optical_flow_advect_sequence(OpticalFlowAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -517,6 +524,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -688,6 +696,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_pixel_sort_sequence(PixelSortSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -710,6 +719,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -732,6 +742,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_channel_shift_sequence(ChannelShiftSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -754,6 +765,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -771,6 +783,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_retro_static_sequence(RetroStaticSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -788,6 +801,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -803,6 +817,7 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             modulation_sampling,
             modulation_fps,
+            modulation_cache_dir,
         } => render_palette_quantize_sequence(PaletteQuantizeSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -818,6 +833,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),
@@ -1092,6 +1108,7 @@ fn run() -> Result<(), CliError> {
             modulator_audio,
             modulator_frames,
             modulation_sampling,
+            modulation_cache_dir,
         } => render_feedback_sequence(FeedbackSequenceRenderRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -1125,6 +1142,7 @@ fn run() -> Result<(), CliError> {
                 modulator_frames: modulator_frames.as_deref(),
                 sampling: modulation_sampling.into(),
                 fps: frame_rate,
+                cache_dir: modulation_cache_dir.as_deref(),
             },
         })
         .map(|_| ()),

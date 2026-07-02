@@ -89,6 +89,22 @@ Examples:
   62.5 ms RMS hop at 8192 Hz — 0.25 s is a multiple). Prove `@smooth` with a
   frame rate that does not divide the hop grid.
 
+### Envelope sidecars (`--modulation-cache-dir`)
+
+Extracted **luma/flow** envelopes are per-frame analysis over the whole
+modulator clip (flow runs Lucas-Kanade per consecutive pair — the dominant
+cost); audio envelopes are cheap and not cached. `--modulation-cache-dir <dir>`
+(direct CLI, every modulatable command) persists each extracted envelope as a
+reusable sidecar (`envelope_luma.json` / `envelope_flow.json`) carrying the
+algorithm id (`modulation_envelope_{luma,flow}_v1`), the sampling convention
+(fps + sample count), and the modulator-frames content fingerprint. A sidecar
+is reused only on a full algorithm/fps/fingerprint match; any mismatch
+regenerates and overwrites it. `serde_json` round-trips finite floats exactly,
+so a cache hit is byte-identical to a fresh extraction. Like the flow cache,
+the sidecar never joins a render's contract — it only skips recomputation —
+so resume/checkpoint semantics are unaffected. Queue jobs render uncached for
+now.
+
 ## Targets (stateless effects)
 
 | Effect command | Target keys | Clamp range |

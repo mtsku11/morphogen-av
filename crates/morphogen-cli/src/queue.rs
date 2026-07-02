@@ -1620,6 +1620,8 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
                 // The job's frame_rate is the envelope time base (a direct
                 // render matches with --modulation-fps <frame_rate>).
                 fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -1724,6 +1726,8 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
                     sampling: render_modulation_sampling(modulation_sampling),
                     // The job's frame_rate is the envelope time base.
                     fps: frame_rate,
+                    // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                    cache_dir: None,
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -1824,6 +1828,8 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
                     sampling: render_modulation_sampling(modulation_sampling),
                     // The job's frame_rate is the envelope time base.
                     fps: frame_rate,
+                    // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                    cache_dir: None,
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2207,6 +2213,8 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
                 sampling: render_modulation_sampling(modulation_sampling),
                 // The job's frame_rate is the sequence time base.
                 fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2446,6 +2454,8 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
                 sampling: render_modulation_sampling(modulation_sampling),
                 // The job's frame_rate is the sequence time base.
                 fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2630,6 +2640,8 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
                 sampling: render_modulation_sampling(modulation_sampling),
                 // The job's frame_rate is the sequence time base.
                 fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3769,6 +3781,8 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
                 sampling: render_modulation_sampling(modulation_sampling),
                 fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
             },
         };
         let resolved_settings = resolve_datamosh_settings(&render_request);
@@ -4505,6 +4519,8 @@ pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliEr
                 // convention as the direct CLI, which samples against
                 // --frame-rate.
                 fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
             },
         })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
@@ -5454,6 +5470,8 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
                 sampling: render_modulation_sampling(modulation_sampling),
                 // The job's frame_rate is the sequence time base.
                 fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
             },
         })?;
         let mut effect = serde_json::json!({

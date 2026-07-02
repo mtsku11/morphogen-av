@@ -77,6 +77,8 @@ pub(crate) struct ModulationCliArgs<'a> {
     pub(crate) modulator_frames: Option<&'a Path>,
     pub(crate) sampling: ModulationSampling,
     pub(crate) fps: f64,
+    /// Optional envelope-sidecar directory (luma/flow extraction reuse).
+    pub(crate) cache_dir: Option<&'a Path>,
 }
 
 impl ModulationCliArgs<'_> {
@@ -87,6 +89,7 @@ impl ModulationCliArgs<'_> {
             modulator_frames: self.modulator_frames,
             sampling: self.sampling,
             fps: self.fps,
+            cache_dir: self.cache_dir,
         })
     }
 }
@@ -4810,8 +4813,8 @@ pub(crate) struct FeedbackModulationContract {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct FeedbackModulationMediaFingerprint {
-    path: String,
-    checksum: String,
+    pub(crate) path: String,
+    pub(crate) checksum: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -5436,7 +5439,7 @@ fn feedback_modulation_audio_fingerprint(
     })
 }
 
-fn feedback_modulation_frames_fingerprint(
+pub(crate) fn feedback_modulation_frames_fingerprint(
     path: &Path,
 ) -> Result<FeedbackModulationMediaFingerprint, CliError> {
     let frames = collect_image_frames(path)?;

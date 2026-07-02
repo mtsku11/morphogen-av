@@ -362,6 +362,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
     /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
@@ -544,6 +548,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// Render the mutual two-source faux-fluid advection (experimental, deterministic):
     /// Source A's optical-flow motion advects Source B's colour as a continuous dye. Frame
@@ -589,6 +597,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// Render the single-source optical-flow-driven advection (experimental, deterministic):
     /// the video is advected by its OWN motion. Each frame the source's Lucas-Kanade flow
@@ -634,6 +646,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// Render the discrete-carrier particle advection (experimental, deterministic):
     /// a grid of coloured particles seeded from the source rides the shared steady-vortex
@@ -901,6 +917,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// Render a channel-shift (RGB-split / chromatic aberration) sequence. Each
     /// colour channel is sampled from B at an independently offset position. Alpha
@@ -963,6 +983,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// Render the retro-static glitch: deterministically simulate a PNG-style
     /// scanline filter, then deliberately misread it at the wrong bytes-per-pixel
@@ -1012,6 +1036,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).
@@ -1052,6 +1080,10 @@ pub(crate) enum Commands {
         /// (also the modulator frame timeline for luma/flow sources).
         #[arg(long, default_value_t = 12.0)]
         modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
@@ -1452,6 +1484,10 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
     },
     CacheSyntheticFlow {
         output_dir: PathBuf,

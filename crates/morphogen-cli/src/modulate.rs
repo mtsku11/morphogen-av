@@ -7,6 +7,7 @@
 //! `morphogen_render::modulation`; contract in
 //! `docs/MODULATION_MATRIX_MILESTONE.md`.
 
+use std::fs;
 use std::path::Path;
 
 use morphogen_audio::{
@@ -17,10 +18,11 @@ use morphogen_render::{
     modulated_value, parse_modulation_route, peak_normalize, validate_route_targets,
     ModulationRoute, ModulationSampling, ModulationSource,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::audio::{build_flow_magnitude_samples, build_luma_samples};
 use crate::error::CliError;
-use crate::render::DatamoshSequenceSettings;
+use crate::render::{feedback_modulation_frames_fingerprint, DatamoshSequenceSettings};
 
 /// Analysis defaults fixed by the milestone contract (recorded there, not knobs).
 const MODULATION_WINDOW: usize = 2048;
@@ -123,6 +125,11 @@ pub(crate) struct ModulationRequest<'a> {
     pub(crate) sampling: ModulationSampling,
     /// Maps output frame index → seconds; also the modulator frame timeline.
     pub(crate) fps: f64,
+    /// Optional sidecar directory for extracted luma/flow envelopes (the
+    /// per-frame extraction paths; audio envelopes are cheap and not cached).
+    /// Reuse only on a full algorithm/fps/content-fingerprint match — like
+    /// every analysis sidecar, it never joins a render's contract.
+    pub(crate) cache_dir: Option<&'a Path>,
 }
 
 /// Build the plan, or `None` when no routes are given (the exact off path).
@@ -218,16 +225,97 @@ fn extract_envelope(
         }
         ModulationSource::Luma => {
             let frames_dir = require_modulator_frames(source, request)?;
-            // Mean Rec.709 luma is already absolute [0, 1].
-            build_luma_samples(frames_dir, request.fps, None)
+            cached_frames_envelope(source, frames_dir, request, |dir| {
+                // Mean Rec.709 luma is already absolute [0, 1].
+                build_luma_samples(dir, request.fps, None)
+            })
         }
         ModulationSource::Flow => {
             let frames_dir = require_modulator_frames(source, request)?;
-            let mut samples = build_flow_magnitude_samples(frames_dir, request.fps, None)?;
-            peak_normalize(&mut samples);
-            Ok(samples)
+            cached_frames_envelope(source, frames_dir, request, |dir| {
+                let mut samples = build_flow_magnitude_samples(dir, request.fps, None)?;
+                peak_normalize(&mut samples);
+                Ok(samples)
+            })
         }
     }
+}
+
+/// Envelope-sidecar algorithm identifiers. Bump when the corresponding
+/// extraction changes so stale sidecars invalidate.
+fn envelope_cache_algorithm(source: ModulationSource) -> &'static str {
+    match source {
+        ModulationSource::Luma => "modulation_envelope_luma_v1",
+        ModulationSource::Flow => "modulation_envelope_flow_v1",
+        // Audio envelopes are not cached.
+        _ => unreachable!("only frames-based envelopes are cached"),
+    }
+}
+
+/// One extracted envelope persisted as a reusable analysis sidecar: algorithm
+/// id, the sampling convention (fps + sample count), and the modulator-frames
+/// content fingerprint. `samples` are the final normalized values —
+/// `serde_json` round-trips finite floats exactly, so a cache hit is
+/// byte-identical to a fresh extraction.
+#[derive(Serialize, Deserialize)]
+struct EnvelopeCacheSidecar {
+    algorithm: String,
+    fps: f64,
+    modulator_frames: String,
+    checksum: String,
+    frame_count: usize,
+    samples: Vec<(f64, f32)>,
+}
+
+/// Extract a frames-based envelope through the optional sidecar cache: a
+/// matching sidecar (algorithm + fps + content fingerprint) is reused; any
+/// mismatch or unreadable sidecar regenerates and overwrites it.
+fn cached_frames_envelope(
+    source: ModulationSource,
+    frames_dir: &Path,
+    request: &ModulationRequest<'_>,
+    extract: impl FnOnce(&Path) -> Result<Vec<(f64, f32)>, CliError>,
+) -> Result<Vec<(f64, f32)>, CliError> {
+    let Some(cache_dir) = request.cache_dir else {
+        return extract(frames_dir);
+    };
+    let algorithm = envelope_cache_algorithm(source);
+    let sidecar_path = cache_dir.join(format!("envelope_{}.json", source.name()));
+    let fingerprint = feedback_modulation_frames_fingerprint(frames_dir)?;
+
+    if let Ok(text) = fs::read_to_string(&sidecar_path) {
+        if let Ok(sidecar) = serde_json::from_str::<EnvelopeCacheSidecar>(&text) {
+            if sidecar.algorithm == algorithm
+                && sidecar.fps == request.fps
+                && sidecar.checksum == fingerprint.checksum
+            {
+                println!(
+                    "reused modulation envelope sidecar for '{}' from {}",
+                    source.name(),
+                    sidecar_path.display()
+                );
+                return Ok(sidecar.samples);
+            }
+        }
+    }
+
+    let samples = extract(frames_dir)?;
+    fs::create_dir_all(cache_dir)?;
+    let sidecar = EnvelopeCacheSidecar {
+        algorithm: algorithm.to_string(),
+        fps: request.fps,
+        modulator_frames: fingerprint.path,
+        checksum: fingerprint.checksum,
+        frame_count: samples.len(),
+        samples: samples.clone(),
+    };
+    fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)?;
+    println!(
+        "generated modulation envelope sidecar for '{}' at {}",
+        source.name(),
+        sidecar_path.display()
+    );
+    Ok(samples)
 }
 
 fn modulation_stft_config() -> StftConfig {
