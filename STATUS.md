@@ -4,13 +4,13 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-07-02_
+_Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **466 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **469 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **78 passing, 0 failing.**
+- `swift test`: **81 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,39 @@ _Last updated: 2026-07-02_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Direction recommendations doc + two exposure slices (this session).**
+  (0) **`docs/RECOMMENDATIONS.md`** (`2ff7612`) — strategic "where next / what
+  would take this to the next level" doc (underdeveloped areas ranked by
+  payoff÷effort: Rutt-Etra is the only empty roadmap slot, audio lags video,
+  exposure debt, uneven mod-target coverage; next-level: effect chaining, LFO/
+  drawn mod sources, realtime preview, edge/depth descriptors; explicit
+  *don't*-list: multiscale-morph exposure, FFglitch dep). Cross-linked from
+  `BACKLOG.md` + `EFFECTS_ROADMAP.md`.
+  (1) **Per-route sampling in the SwiftUI panels** (`da945f6`): every mod slot
+  (29 across all 7 panels) gains a Default/Hold/Smooth override picker;
+  `ModulationRouteSpec.sampling: ModulationSamplingOption?` + the bridge appends
+  `@hold`/`@smooth` to that route's `--modulate` spec, while the shared
+  `--modulation-sampling` default stays. `.default` ⇒ nil ⇒ no suffix ⇒
+  byte-identical arg array (regression-pinned). Queue/CLI already parsed the
+  suffix — pure UI-gap close. `swift test` 78 → **81**.
+  (2) **Named modulators on the queue path** (`a66a364`): reverses the
+  "direct-CLI only" queue-add rejection. `RenderJobModulationRoute` gains
+  skip-when-none `modulator`; the 9 modulatable tasks gain skip-when-empty
+  `named_modulator_audio`/`named_modulator_frames: Vec<NamedModulatorMedia>`
+  (pre-slice queue JSON byte-identical). `queue-add-*` gain
+  `--named-modulator-audio/-frames` and validate named-route media through the
+  **shared `resolve_modulator_media`** (error wording identical to direct);
+  `queue-run` rebuilds the `<name>.<source>` specs + flags from the persisted
+  vectors → queued named-modulator render **byte-identical** to direct
+  (smoke-pinned). Stateful checkpoint contracts carry the named fingerprints
+  through the queue for free. `cargo test` 466 → **469**. Contract:
+  `docs/MODULATION_MATRIX_MILESTONE.md` ("Queue exposure (landed)").
+  **Verified:** cargo 469 / swift 81, 0 failing; clippy `-D warnings` + fmt
+  clean (all gates re-run independently of the two Sonnet subagents used for
+  the build-out). **Remaining:** SwiftUI named-modulator panel UI (declare N
+  modulators + bind each slot to one) — the last modulation-matrix surface;
+  plus field-particles/cascade/dispersion modulation targets.
 
 - **Modulation matrix — the three nice-to-haves, one commit each.**
   (1) **Per-route sampling** (`f51f5bd`): route grammar gains a terminal
