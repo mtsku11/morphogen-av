@@ -1090,6 +1090,155 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  // Named-modulator threading across the swept panels. The `--named-modulator-*`
+  // emission itself is exercised in depth by the channel-shift tests; each panel
+  // test below only proves its own queue-add arg builder forwards
+  // `request.namedModulators` into the shared append (a prefixed route spec plus
+  // its `name=path` value token).
+
+  func testQueuedFeedbackSequenceArgumentsCarryNamedModulators() throws {
+    var request = FeedbackSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      carrierAmount: 1.0, feedbackAmount: 1.0, feedbackMix: 0.5, decay: 0.9,
+      iterations: 1, structureMix: 0.0, outputBitDepth: .png8, temporalSupersampling: 1,
+      maxFrames: nil, resetAtFrame: nil, frameRate: 24.0, writesFlowCache: false,
+      backend: .cpu, flowSource: .opticalFlow, projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "feedback_amount", source: "audio-rms", scale: 2, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddFeedbackSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("feedback_amount=bass.audio-rms:2,0"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
+  func testQueuedFluidAdvectSequenceArgumentsCarryNamedModulators() throws {
+    var request = FluidAdvectSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/fluid", isDirectory: true),
+      frames: 36, frameRate: 24.0, advect: 12.0, turbulenceScale: 0.008,
+      turbulenceSpeed: 0.06, detail: 0.1, reinject: 0.05, seed: 42, backend: .cpu, projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "advect", source: "audio-rms", scale: 8, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddFluidAdvectSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("advect=bass.audio-rms:8,0"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
+  func testQueuedRetroStaticSequenceArgumentsCarryNamedModulators() throws {
+    var request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 96, frameRate: 24.0, realBpp: 4, assumedBpp: 3, filter: .paeth, strength: 1.0,
+      backend: .cpu, projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "strength", source: "audio-rms", scale: 1, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("strength=bass.audio-rms:1,0"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
+  func testQueuedDatamoshSequenceArgumentsCarryNamedModulators() throws {
+    var request = DatamoshSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/datamosh-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      keyframeInterval: 4, amount: 0.75, blockSize: 16, residualGain: 0.5, residualDecay: 0.8,
+      blockRefreshThreshold: 1.5, vectorRemix: .none, preset: .custom, remixSeed: 0,
+      maxFrames: nil, backend: .cpu, projectURL: nil, flowCacheDirectoryURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "amount", source: "audio-rms", scale: 1, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddDatamoshSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("amount=bass.audio-rms:1,0"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
+  func testQueuedPixelSortSequenceArgumentsCarryNamedModulators() throws {
+    var request = PixelSortSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/pixel-sort-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/pixel-sort", isDirectory: true),
+      axis: .row, key: .luma, direction: .asc, thresholdLow: 0.25, thresholdHigh: 0.8,
+      maxSpan: 0, maskSource: .selfMask, flowRadius: 4, backend: .cpu, projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "threshold_low", source: "audio-rms", scale: 0.5, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddPixelSortSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("threshold_low=bass.audio-rms:0.5,0"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
+  func testQueuedPaletteQuantizeSequenceArgumentsCarryNamedModulators() throws {
+    var request = PaletteQuantizeSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/palette-quantize-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/palette-quantize", isDirectory: true),
+      frames: 96, frameRate: 24.0, mode: .posterize, levels: 8, backend: .cpu, projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "levels", source: "audio-rms", scale: 8, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddPaletteQuantizeSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("levels=bass.audio-rms:8,0"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
   func testQueuedPaletteQuantizeSequenceArgumentsIncludeModeAndLevels() throws {
     let request = PaletteQuantizeSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/palette-quantize-queue.json"),

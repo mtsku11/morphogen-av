@@ -82,25 +82,31 @@ final class AppState: ObservableObject {
   @Published var feedbackModCarrierAmountScale = 1.0
   @Published var feedbackModCarrierAmountOffset = 0.0
   @Published var feedbackModCarrierAmountSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var feedbackModCarrierAmountModulator = ""
   @Published var feedbackModAmountSource = ModulationSourceOption.off
   @Published var feedbackModAmountScale = 1.0
   @Published var feedbackModAmountOffset = 0.0
   @Published var feedbackModAmountSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var feedbackModAmountModulator = ""
   @Published var feedbackModMixSource = ModulationSourceOption.off
   @Published var feedbackModMixScale = 1.0
   @Published var feedbackModMixOffset = 0.0
   @Published var feedbackModMixSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var feedbackModMixModulator = ""
   @Published var feedbackModDecaySource = ModulationSourceOption.off
   @Published var feedbackModDecayScale = 1.0
   @Published var feedbackModDecayOffset = 0.0
   @Published var feedbackModDecaySamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var feedbackModDecayModulator = ""
   @Published var feedbackModStructureMixSource = ModulationSourceOption.off
   @Published var feedbackModStructureMixScale = 1.0
   @Published var feedbackModStructureMixOffset = 0.0
   @Published var feedbackModStructureMixSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var feedbackModStructureMixModulator = ""
   @Published var feedbackModulatorAudioURL: URL?
   @Published var feedbackModulatorFramesURL: URL?
   @Published var feedbackModSampling = ModulationSamplingOption.hold
+  @Published var feedbackNamedModulators: [NamedModulatorEntry] = []
   @Published var fluidProceduralAdvect = 12.0
   @Published var fluidMotionAdvect = 1.0
   @Published var fluidReinject = 0.08
@@ -124,29 +130,36 @@ final class AppState: ObservableObject {
   @Published var fluidModProceduralAdvectScale = 1.0
   @Published var fluidModProceduralAdvectOffset = 0.0
   @Published var fluidModProceduralAdvectSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var fluidModProceduralAdvectModulator = ""
   @Published var fluidModMotionAdvectSource = ModulationSourceOption.off
   @Published var fluidModMotionAdvectScale = 1.0
   @Published var fluidModMotionAdvectOffset = 0.0
   @Published var fluidModMotionAdvectSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var fluidModMotionAdvectModulator = ""
   @Published var fluidModTurbulenceScaleSource = ModulationSourceOption.off
   @Published var fluidModTurbulenceScaleScale = 0.008
   @Published var fluidModTurbulenceScaleOffset = 0.0
   @Published var fluidModTurbulenceScaleSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var fluidModTurbulenceScaleModulator = ""
   @Published var fluidModTurbulenceSpeedSource = ModulationSourceOption.off
   @Published var fluidModTurbulenceSpeedScale = 0.06
   @Published var fluidModTurbulenceSpeedOffset = 0.0
   @Published var fluidModTurbulenceSpeedSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var fluidModTurbulenceSpeedModulator = ""
   @Published var fluidModDetailSource = ModulationSourceOption.off
   @Published var fluidModDetailScale = 1.0
   @Published var fluidModDetailOffset = 0.0
   @Published var fluidModDetailSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var fluidModDetailModulator = ""
   @Published var fluidModReinjectSource = ModulationSourceOption.off
   @Published var fluidModReinjectScale = 1.0
   @Published var fluidModReinjectOffset = 0.0
   @Published var fluidModReinjectSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var fluidModReinjectModulator = ""
   @Published var fluidModulatorAudioURL: URL?
   @Published var fluidModulatorFramesURL: URL?
   @Published var fluidModSampling = ModulationSamplingOption.hold
+  @Published var fluidNamedModulators: [NamedModulatorEntry] = []
   // Trail Cascade — tuned sparse-ribbon defaults (the one-click preset).
   @Published var cascadeTileSize = 28
   @Published var cascadeGridSpacing = 60
@@ -186,15 +199,18 @@ final class AppState: ObservableObject {
   @Published var retroStaticModStrengthScale = 1.0
   @Published var retroStaticModStrengthOffset = 0.0
   @Published var retroStaticModStrengthSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var retroStaticModStrengthModulator = ""
   // Enum slot (From→To variant pickers): envelope 0 → From, envelope 1 → To.
   // Defaults span the full variant list so activating the slot sweeps it all.
   @Published var retroStaticModFilterSource = ModulationSourceOption.off
   @Published var retroStaticModFilterFrom = RetroStaticFilterOption.none
   @Published var retroStaticModFilterTo = RetroStaticFilterOption.paeth
   @Published var retroStaticModFilterSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var retroStaticModFilterModulator = ""
   @Published var retroStaticModulatorAudioURL: URL?
   @Published var retroStaticModulatorFramesURL: URL?
   @Published var retroStaticModSampling = ModulationSamplingOption.hold
+  @Published var retroStaticNamedModulators: [NamedModulatorEntry] = []
   // Channel Shift — constant per-channel RGB offsets + optional A-flow row shifts.
   @Published var channelShiftRX = 0.0
   @Published var channelShiftRY = 0.0
@@ -260,14 +276,17 @@ final class AppState: ObservableObject {
   @Published var paletteQuantizeModLevelsScale = 1.0
   @Published var paletteQuantizeModLevelsOffset = 0.0
   @Published var paletteQuantizeModLevelsSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var paletteQuantizeModLevelsModulator = ""
   // Enum slot (From→To variant pickers): envelope 0 → From, envelope 1 → To.
   @Published var paletteQuantizeModModeSource = ModulationSourceOption.off
   @Published var paletteQuantizeModModeFrom = PaletteQuantizeModeOption.posterize
   @Published var paletteQuantizeModModeTo = PaletteQuantizeModeOption.palette
   @Published var paletteQuantizeModModeSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var paletteQuantizeModModeModulator = ""
   @Published var paletteQuantizeModulatorAudioURL: URL?
   @Published var paletteQuantizeModulatorFramesURL: URL?
   @Published var paletteQuantizeModSampling = ModulationSamplingOption.hold
+  @Published var paletteQuantizeNamedModulators: [NamedModulatorEntry] = []
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -358,21 +377,26 @@ final class AppState: ObservableObject {
   @Published var datamoshModAmountScale = 1.0
   @Published var datamoshModAmountOffset = 0.0
   @Published var datamoshModAmountSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var datamoshModAmountModulator = ""
   @Published var datamoshModResidualGainSource = ModulationSourceOption.off
   @Published var datamoshModResidualGainScale = 1.0
   @Published var datamoshModResidualGainOffset = 0.0
   @Published var datamoshModResidualGainSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var datamoshModResidualGainModulator = ""
   @Published var datamoshModResidualDecaySource = ModulationSourceOption.off
   @Published var datamoshModResidualDecayScale = 1.0
   @Published var datamoshModResidualDecayOffset = 0.0
   @Published var datamoshModResidualDecaySamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var datamoshModResidualDecayModulator = ""
   @Published var datamoshModRefreshThresholdSource = ModulationSourceOption.off
   @Published var datamoshModRefreshThresholdScale = 1.0
   @Published var datamoshModRefreshThresholdOffset = 0.0
   @Published var datamoshModRefreshThresholdSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var datamoshModRefreshThresholdModulator = ""
   @Published var datamoshModulatorAudioURL: URL?
   @Published var datamoshModulatorFramesURL: URL?
   @Published var datamoshModSampling = ModulationSamplingOption.hold
+  @Published var datamoshNamedModulators: [NamedModulatorEntry] = []
   @Published var bitstreamInputVideoURL: URL?
   @Published var bitstreamCarrierVideoURL: URL?
   @Published var bitstreamOutputURL: URL?
@@ -427,22 +451,27 @@ final class AppState: ObservableObject {
   @Published var pixelSortModLowScale = 1.0
   @Published var pixelSortModLowOffset = 0.0
   @Published var pixelSortModLowSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var pixelSortModLowModulator = ""
   @Published var pixelSortModHighSource = ModulationSourceOption.off
   @Published var pixelSortModHighScale = 1.0
   @Published var pixelSortModHighOffset = 0.0
   @Published var pixelSortModHighSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var pixelSortModHighModulator = ""
   // Enum slots (From→To variant pickers): envelope 0 → From, envelope 1 → To.
   @Published var pixelSortModDirectionSource = ModulationSourceOption.off
   @Published var pixelSortModDirectionFrom = PixelSortDirectionOption.asc
   @Published var pixelSortModDirectionTo = PixelSortDirectionOption.desc
   @Published var pixelSortModDirectionSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var pixelSortModDirectionModulator = ""
   @Published var pixelSortModAxisSource = ModulationSourceOption.off
   @Published var pixelSortModAxisFrom = PixelSortAxisOption.row
   @Published var pixelSortModAxisTo = PixelSortAxisOption.col
   @Published var pixelSortModAxisSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var pixelSortModAxisModulator = ""
   @Published var pixelSortModulatorAudioURL: URL?
   @Published var pixelSortModulatorFramesURL: URL?
   @Published var pixelSortModSampling = ModulationSamplingOption.hold
+  @Published var pixelSortNamedModulators: [NamedModulatorEntry] = []
 
   @Published var mediaProxyOutputPath = RustBridgePlaceholder.defaultMediaProxyRootURL().path
   @Published var mediaProxySummary = "No source proxies extracted"
@@ -1194,6 +1223,12 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: feedbackModulatorAudioURL,
       modulatorFramesURL: feedbackModulatorFramesURL,
+      namedModulators: feedbackNamedModulators,
+      slotModulators: [
+        feedbackModCarrierAmountModulator, feedbackModAmountModulator,
+        feedbackModMixModulator, feedbackModDecayModulator,
+        feedbackModStructureMixModulator
+      ],
       effectLabel: "flow feedback"
     ) else { return }
 
@@ -1220,7 +1255,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: feedbackModulatorAudioURL,
       modulatorFramesURL: feedbackModulatorFramesURL,
-      modulationSampling: feedbackModSampling
+      modulationSampling: feedbackModSampling,
+      namedModulators: namedModulatorSpecs(feedbackNamedModulators)
     )
 
     statusMessage = "Queueing temporal flow-feedback render through morphogen-cli..."
@@ -1336,6 +1372,12 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
+      namedModulators: fluidNamedModulators,
+      slotModulators: [
+        fluidModProceduralAdvectModulator, fluidModTurbulenceScaleModulator,
+        fluidModTurbulenceSpeedModulator, fluidModDetailModulator,
+        fluidModReinjectModulator
+      ],
       effectLabel: "procedural fluid advection"
     ) else { return }
 
@@ -1356,7 +1398,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
-      modulationSampling: fluidModSampling
+      modulationSampling: fluidModSampling,
+      namedModulators: namedModulatorSpecs(fluidNamedModulators)
     )
 
     runFluidAdvectionQueue(
@@ -1395,6 +1438,8 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
+      namedModulators: fluidNamedModulators,
+      slotModulators: [fluidModMotionAdvectModulator, fluidModReinjectModulator],
       effectLabel: "A-to-B fluid advection"
     ) else { return }
 
@@ -1412,7 +1457,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
-      modulationSampling: fluidModSampling
+      modulationSampling: fluidModSampling,
+      namedModulators: namedModulatorSpecs(fluidNamedModulators)
     )
 
     runFluidAdvectionQueue(
@@ -1447,6 +1493,8 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
+      namedModulators: fluidNamedModulators,
+      slotModulators: [fluidModMotionAdvectModulator, fluidModReinjectModulator],
       effectLabel: "self-flow advection"
     ) else { return }
 
@@ -1463,7 +1511,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
-      modulationSampling: fluidModSampling
+      modulationSampling: fluidModSampling,
+      namedModulators: namedModulatorSpecs(fluidNamedModulators)
     )
 
     runFluidAdvectionQueue(
@@ -1669,6 +1718,50 @@ final class AppState: ObservableObject {
     }
   }
 
+  // Named-modulator list mutations shared by every panel's thin per-panel
+  // wrappers (channel-shift keeps its own inline copies as the prototype). The
+  // per-panel slot resets on removal stay in the wrappers since the slot fields
+  // are panel-specific.
+
+  /// Append a new named-modulator row to `list`, seeding a unique default name.
+  private func appendNamedModulator(to list: inout [NamedModulatorEntry]) {
+    let existing = Set(list.map(\.name))
+    var index = list.count + 1
+    var name = "mod\(index)"
+    while existing.contains(name) {
+      index += 1
+      name = "mod\(index)"
+    }
+    list.append(NamedModulatorEntry(name: name))
+    statusMessage = "Added named modulator \"\(name)\"."
+  }
+
+  private func pickNamedModulatorWAV(in list: inout [NamedModulatorEntry], id: UUID) {
+    guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Named Modulator WAV",
+      message: "Select the audio whose analysis envelope drives slots bound to this modulator."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    list[index].audioURL = url
+    statusMessage = "Named modulator \"\(list[index].name)\" WAV selected: \(url.lastPathComponent)"
+  }
+
+  private func pickNamedModulatorFrames(in list: inout [NamedModulatorEntry], id: UUID) {
+    guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Named Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives slots bound to this modulator."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    list[index].framesURL = url
+    statusMessage = "Named modulator \"\(list[index].name)\" frames selected: \(url.lastPathComponent)"
+  }
+
   func chooseRetroStaticModulatorWAV() {
     guard let url = MediaFilePicker.chooseWAVFile(
       title: "Choose Modulator WAV",
@@ -1849,6 +1942,106 @@ final class AppState: ObservableObject {
       "Named modulator \"\(channelShiftNamedModulators[index].name)\" frames selected: \(url.lastPathComponent)"
   }
 
+  // MARK: - Named modulators (swept panels)
+  // Each panel exposes the same four actions as channel-shift; add/choose
+  // delegate to the shared helpers, remove stays per-panel to reset its own
+  // slot Modulator bindings back to Default.
+
+  var feedbackDeclaredModulatorNames: [String] {
+    feedbackNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addFeedbackNamedModulator() { appendNamedModulator(to: &feedbackNamedModulators) }
+  func chooseFeedbackNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &feedbackNamedModulators, id: id) }
+  func chooseFeedbackNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &feedbackNamedModulators, id: id) }
+  func removeFeedbackNamedModulator(id: UUID) {
+    guard let entry = feedbackNamedModulators.first(where: { $0.id == id }) else { return }
+    feedbackNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if feedbackModCarrierAmountModulator == name { feedbackModCarrierAmountModulator = "" }
+    if feedbackModAmountModulator == name { feedbackModAmountModulator = "" }
+    if feedbackModMixModulator == name { feedbackModMixModulator = "" }
+    if feedbackModDecayModulator == name { feedbackModDecayModulator = "" }
+    if feedbackModStructureMixModulator == name { feedbackModStructureMixModulator = "" }
+  }
+
+  var fluidDeclaredModulatorNames: [String] {
+    fluidNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addFluidNamedModulator() { appendNamedModulator(to: &fluidNamedModulators) }
+  func chooseFluidNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &fluidNamedModulators, id: id) }
+  func chooseFluidNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &fluidNamedModulators, id: id) }
+  func removeFluidNamedModulator(id: UUID) {
+    guard let entry = fluidNamedModulators.first(where: { $0.id == id }) else { return }
+    fluidNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if fluidModProceduralAdvectModulator == name { fluidModProceduralAdvectModulator = "" }
+    if fluidModMotionAdvectModulator == name { fluidModMotionAdvectModulator = "" }
+    if fluidModTurbulenceScaleModulator == name { fluidModTurbulenceScaleModulator = "" }
+    if fluidModTurbulenceSpeedModulator == name { fluidModTurbulenceSpeedModulator = "" }
+    if fluidModDetailModulator == name { fluidModDetailModulator = "" }
+    if fluidModReinjectModulator == name { fluidModReinjectModulator = "" }
+  }
+
+  var retroStaticDeclaredModulatorNames: [String] {
+    retroStaticNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addRetroStaticNamedModulator() { appendNamedModulator(to: &retroStaticNamedModulators) }
+  func chooseRetroStaticNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &retroStaticNamedModulators, id: id) }
+  func chooseRetroStaticNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &retroStaticNamedModulators, id: id) }
+  func removeRetroStaticNamedModulator(id: UUID) {
+    guard let entry = retroStaticNamedModulators.first(where: { $0.id == id }) else { return }
+    retroStaticNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if retroStaticModStrengthModulator == name { retroStaticModStrengthModulator = "" }
+    if retroStaticModFilterModulator == name { retroStaticModFilterModulator = "" }
+  }
+
+  var paletteQuantizeDeclaredModulatorNames: [String] {
+    paletteQuantizeNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addPaletteQuantizeNamedModulator() { appendNamedModulator(to: &paletteQuantizeNamedModulators) }
+  func choosePaletteQuantizeNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &paletteQuantizeNamedModulators, id: id) }
+  func choosePaletteQuantizeNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &paletteQuantizeNamedModulators, id: id) }
+  func removePaletteQuantizeNamedModulator(id: UUID) {
+    guard let entry = paletteQuantizeNamedModulators.first(where: { $0.id == id }) else { return }
+    paletteQuantizeNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if paletteQuantizeModLevelsModulator == name { paletteQuantizeModLevelsModulator = "" }
+    if paletteQuantizeModModeModulator == name { paletteQuantizeModModeModulator = "" }
+  }
+
+  var datamoshDeclaredModulatorNames: [String] {
+    datamoshNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addDatamoshNamedModulator() { appendNamedModulator(to: &datamoshNamedModulators) }
+  func chooseDatamoshNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &datamoshNamedModulators, id: id) }
+  func chooseDatamoshNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &datamoshNamedModulators, id: id) }
+  func removeDatamoshNamedModulator(id: UUID) {
+    guard let entry = datamoshNamedModulators.first(where: { $0.id == id }) else { return }
+    datamoshNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if datamoshModAmountModulator == name { datamoshModAmountModulator = "" }
+    if datamoshModResidualGainModulator == name { datamoshModResidualGainModulator = "" }
+    if datamoshModResidualDecayModulator == name { datamoshModResidualDecayModulator = "" }
+    if datamoshModRefreshThresholdModulator == name { datamoshModRefreshThresholdModulator = "" }
+  }
+
+  var pixelSortDeclaredModulatorNames: [String] {
+    pixelSortNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addPixelSortNamedModulator() { appendNamedModulator(to: &pixelSortNamedModulators) }
+  func choosePixelSortNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &pixelSortNamedModulators, id: id) }
+  func choosePixelSortNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &pixelSortNamedModulators, id: id) }
+  func removePixelSortNamedModulator(id: UUID) {
+    guard let entry = pixelSortNamedModulators.first(where: { $0.id == id }) else { return }
+    pixelSortNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if pixelSortModLowModulator == name { pixelSortModLowModulator = "" }
+    if pixelSortModHighModulator == name { pixelSortModHighModulator = "" }
+    if pixelSortModDirectionModulator == name { pixelSortModDirectionModulator = "" }
+    if pixelSortModAxisModulator == name { pixelSortModAxisModulator = "" }
+  }
+
   func choosePaletteQuantizeModulatorWAV() {
     guard let url = MediaFilePicker.chooseWAVFile(
       title: "Choose Modulator WAV",
@@ -1923,6 +2116,8 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: retroStaticModulatorAudioURL,
       modulatorFramesURL: retroStaticModulatorFramesURL,
+      namedModulators: retroStaticNamedModulators,
+      slotModulators: [retroStaticModStrengthModulator, retroStaticModFilterModulator],
       effectLabel: "retro static"
     ) else { return }
 
@@ -1941,7 +2136,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: retroStaticModulatorAudioURL,
       modulatorFramesURL: retroStaticModulatorFramesURL,
-      modulationSampling: retroStaticModSampling
+      modulationSampling: retroStaticModSampling,
+      namedModulators: namedModulatorSpecs(retroStaticNamedModulators)
     )
 
     statusMessage = "Queueing retro static through morphogen-cli..."
@@ -2093,6 +2289,8 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: paletteQuantizeModulatorAudioURL,
       modulatorFramesURL: paletteQuantizeModulatorFramesURL,
+      namedModulators: paletteQuantizeNamedModulators,
+      slotModulators: [paletteQuantizeModLevelsModulator, paletteQuantizeModModeModulator],
       effectLabel: "palette quantize"
     ) else { return }
 
@@ -2111,7 +2309,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: paletteQuantizeModulatorAudioURL,
       modulatorFramesURL: paletteQuantizeModulatorFramesURL,
-      modulationSampling: paletteQuantizeModSampling
+      modulationSampling: paletteQuantizeModSampling,
+      namedModulators: namedModulatorSpecs(paletteQuantizeNamedModulators)
     )
 
     statusMessage = "Queueing palette quantize through morphogen-cli..."
@@ -2495,6 +2694,11 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: datamoshModulatorAudioURL,
       modulatorFramesURL: datamoshModulatorFramesURL,
+      namedModulators: datamoshNamedModulators,
+      slotModulators: [
+        datamoshModAmountModulator, datamoshModResidualGainModulator,
+        datamoshModResidualDecayModulator, datamoshModRefreshThresholdModulator
+      ],
       effectLabel: "datamosh"
     ) else { return }
 
@@ -2521,7 +2725,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: datamoshModulatorAudioURL,
       modulatorFramesURL: datamoshModulatorFramesURL,
-      modulationSampling: datamoshModSampling
+      modulationSampling: datamoshModSampling,
+      namedModulators: namedModulatorSpecs(datamoshNamedModulators)
     )
 
     statusMessage = "Queueing datamosh render through morphogen-cli..."
@@ -2805,6 +3010,11 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: pixelSortModulatorAudioURL,
       modulatorFramesURL: pixelSortModulatorFramesURL,
+      namedModulators: pixelSortNamedModulators,
+      slotModulators: [
+        pixelSortModLowModulator, pixelSortModHighModulator,
+        pixelSortModDirectionModulator, pixelSortModAxisModulator
+      ],
       effectLabel: "pixel sort"
     ) else { return }
 
@@ -2826,7 +3036,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: pixelSortModulatorAudioURL,
       modulatorFramesURL: pixelSortModulatorFramesURL,
-      modulationSampling: pixelSortModSampling
+      modulationSampling: pixelSortModSampling,
+      namedModulators: namedModulatorSpecs(pixelSortNamedModulators)
     )
 
     statusMessage = "Queueing pixel sort render through morphogen-cli..."

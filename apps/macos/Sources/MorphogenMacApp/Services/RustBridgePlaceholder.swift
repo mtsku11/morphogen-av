@@ -663,7 +663,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
     return arguments
   }
@@ -793,7 +794,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
 
     return arguments
@@ -842,7 +844,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
 
     return arguments
@@ -890,7 +893,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
 
     return arguments
@@ -1714,7 +1718,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
 
     return arguments
@@ -1926,7 +1931,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
 
     return arguments
@@ -2126,7 +2132,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
     return arguments
   }
@@ -2337,7 +2344,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
 
     return arguments
@@ -2906,6 +2914,7 @@ struct FeedbackSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct FeedbackSequenceRenderQueueCommandResult {
@@ -2955,6 +2964,7 @@ struct FluidAdvectSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct FluidAdvectTwoSourceSequenceRenderQueueCommandRequest {
@@ -2972,6 +2982,7 @@ struct FluidAdvectTwoSourceSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct OpticalFlowAdvectSequenceRenderQueueCommandRequest {
@@ -2988,6 +2999,7 @@ struct OpticalFlowAdvectSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct FieldParticlesSequenceRenderQueueCommandRequest {
@@ -3094,6 +3106,7 @@ struct RetroStaticSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct FluidAdvectionRenderQueueCommandResult {
@@ -3272,6 +3285,7 @@ struct DatamoshSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct DatamoshSequenceRenderQueueCommandResult {
@@ -3321,6 +3335,7 @@ struct PixelSortSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct PixelSortSequenceRenderQueueCommandResult {
@@ -3375,6 +3390,7 @@ struct PaletteQuantizeSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct ConvolutionalBlendSequenceRenderQueueCommandRequest {
