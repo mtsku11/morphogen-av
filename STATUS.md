@@ -8,7 +8,7 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **496 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **500 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
@@ -20,6 +20,22 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Effect chain — Slice 1 of 4** (`b53acc5`, contract
+  `docs/EFFECT_CHAIN_MILESTONE.md` at `5db26bb`; Sonnet subagent build,
+  orchestrator-verified): `render-chain <spec.json> <in> <out>` runs an
+  ordered list of stateless CPU stages (retro_static, channel_shift,
+  palette_quantize, rutt_etra) — whole-spec validation before any render,
+  `stage_<NN>_<effect>/` directories, one `chain-manifest.json` (version,
+  frame_count, ordered effect/algorithm/settings). Spec types are CLI-local
+  mirrors (deny_unknown_fields without touching shared serde); stages pass
+  `frames: u32::MAX` (handlers clamp to available frames). Anchors verified:
+  1-stage chain byte-identical to the direct render (`diff -r` empty on
+  stage_01 vs direct rutt-etra), two-run determinism, rejection cases leave
+  no output dir. Visual: rutt_etra → posterize-4 chain ≠ either single
+  (cross-deltas 2.65 / 111.7 per frame), composed scanlines+banding look
+  Read-confirmed. cargo 496 → **500**. **Next action:** Slice 2 — stateful
+  stages (feedback checkpoint scoped per stage-dir, stage-complete markers).
 
 - **LFO modulation sources — Slice 3 of 3, MILESTONE COMPLETE** (`b754a16`;
   built inline after the Sonnet agent hit its session limit before writing
