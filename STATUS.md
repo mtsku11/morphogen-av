@@ -8,7 +8,7 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **492 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **496 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
@@ -20,6 +20,21 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **LFO modulation sources — Slice 2 of 3** (`4892377`): core
+  `ModulationSource` mirror gains the Lfo variant (unit variants still
+  bare-string serde → pre-slice queue JSON byte-identical, test-pinned);
+  `core_modulation_source` back to infallible (Slice 1's interim rejection
+  replaced by the real mapping); `modulation_specs_from_routes` round-trips
+  `lfo(shape,rate,phase)` via `spec_text` (f32 Display). Smoke-pinned:
+  queue add→run byte-identical to direct (frames + manifest, rutt-etra,
+  zero `--modulator-*` flags; add-time unknown-target rejection persists
+  nothing) and flow feedback with an LFO route — checkpoint carries the
+  params on the route in the EXISTING modulation block (no new contract
+  fields), resume byte-identical, changed rate_hz/shape both refuse, legacy
+  checkpoint resumes. cargo 492 → **496**, swift 95 untouched (re-run:
+  95/0). **Next action:** Slice 3 — SwiftUI one-panel vertical (LFO slot
+  option on the Rutt-Etra panel).
 
 - **LFO modulation sources — Slice 1 of 3** (`118c697`, contract
   `docs/LFO_MODULATION_MILESTONE.md` committed as `84e427b`; Sonnet subagent
