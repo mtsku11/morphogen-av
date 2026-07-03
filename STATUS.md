@@ -10,7 +10,7 @@ _Last updated: 2026-07-03_
 
 - `cargo test --workspace`: **469 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **83 passing, 0 failing.**
+- `swift test`: **89 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,25 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Named-modulator panel UI — 6-panel sweep** (`c6f62af`). The named-modulator
+  UI now covers **every** mod panel: feedback, fluid, retro-static, palette-
+  quantize, datamosh, pixel-sort each gain a per-slot **Modulator** picker
+  (Default or a declared name) + a **Named Modulators** list (name + WAV/Frames,
+  add/remove). `EnumModulationSlotRow` got the same **optional** `modulator:
+  Binding<String>?` picker so the enum slots (retro Filter, palette Mode, pixel-
+  sort Direction/Axis) can bind too. Boilerplate collapse: add/choose delegate to
+  three shared `AppState` helpers (`appendNamedModulator` / `pickNamedModulator{WAV,
+  Frames}`); only the per-panel `remove*` stays inline (it resets that panel's own
+  slot bindings). Fluid feeds one declared list into **all three** advect commands
+  (procedural = 5 slots, two-source/self-flow = 2 slots, matched by slot order).
+  Bridge threads each panel request's `namedModulators` into the shared
+  `appendModulationArguments`. **No Rust changes** — the six queue tasks already
+  expose `--named-modulator-audio/-frames` (confirmed in `args.rs`). `swift test`
+  83 → **89** (+6, one threading test per panel: named route → prefixed spec +
+  `name=path` token). **Verified:** `swift build` clean, swift 89/0, CLI flag
+  presence confirmed per command. The modulation-matrix route surface is now
+  COMPLETE across CLI, queue, and SwiftUI.
 
 - **Named-modulator panel UI — channel-shift vertical slice** (`299281e`).
   The last modulation-matrix surface, started. A panel can now declare N named
@@ -36,9 +55,8 @@ _Last updated: 2026-07-03_
   rejection). **No Rust changes** — the bridge emits the exact token sequence
   the passing `queue_channel_shift_named_modulators_matches_direct_and_records_routes`
   smoke test already validates end-to-end. **Verified:** `swift build` clean,
-  swift 83/0, named-modulator smoke tests green. **Remaining:** sweep the other
-  6 panels (mechanical — per-slot Modulator string + list + choosers; plus the
-  same optional-picker addition on `EnumModulationSlotRow` for enum-slot panels).
+  swift 83/0, named-modulator smoke tests green. (The 6-panel sweep that this
+  slice deferred landed next — see above.)
 
 - **Direction recommendations doc + two exposure slices (prior session).**
   (0) **`docs/RECOMMENDATIONS.md`** (`2ff7612`) — strategic "where next / what
