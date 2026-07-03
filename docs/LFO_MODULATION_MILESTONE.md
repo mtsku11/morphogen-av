@@ -1,10 +1,14 @@
 # LFO Modulation Sources Milestone — internal deterministic modulators
 
-**Status: contract — build not started.** This doc is the acceptance contract
-(per the CLAUDE.md "contract first" workflow). Origin: `docs/RECOMMENDATIONS.md`
-Part 2 §B ("LFOs and drawn envelopes as modulation sources") — the cheapest
-"feels like a synthesizer" upgrade. Drawn breakpoint curves are **out of scope**
-(a later slice); this milestone is LFOs only.
+**Status: Slices 1–3 landed and verified** (engine + direct CLI `118c697`,
+queue + stateful contracts `4892377`, SwiftUI Rutt-Etra panel vertical
+`b754a16` — all acceptance criteria met; add→run byte-identity and the
+checkpoint refusal cases smoke-pinned). Only the Deferred section remains
+open. This doc is the acceptance contract (per the CLAUDE.md "contract first"
+workflow). Origin: `docs/RECOMMENDATIONS.md` Part 2 §B ("LFOs and drawn
+envelopes as modulation sources") — the cheapest "feels like a synthesizer"
+upgrade. Drawn breakpoint curves are **out of scope** (a later slice); this
+milestone is LFOs only.
 
 ## Origin & Goal
 

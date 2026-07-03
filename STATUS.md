@@ -12,7 +12,7 @@ _Last updated: 2026-07-03_
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
-- `swift test`: **95 passing, 0 failing.**
+- `swift test`: **98 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -20,6 +20,22 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **LFO modulation sources — Slice 3 of 3, MILESTONE COMPLETE** (`b754a16`;
+  built inline after the Sonnet agent hit its session limit before writing
+  anything): `ModulationSlotRow` gains an opt-in LFO capability (defaulted
+  bindings, the named-modulator precedent) — Rutt-Etra's three slots opt in,
+  showing shape/rate/phase controls; `EnumModulationSlotRow` and non-opted
+  rows filter the LFO source out so the other 6 panels are unchanged.
+  `modulationRoutes` gains a parallel `slotLfos` param; `lfoSourceSpec` free
+  fn validates (rate finite > 0, phase finite) and spells the source clause.
+  KEY: the bridge needed ZERO changes — its media-flag guards key off the
+  source string, which `lfo(...)` never matches. swift 95 → **98** (LFO
+  token sequence with no media flags, LFO+luma coexistence, spec
+  format/validation). End-to-end: bridge-shaped queue-add→run on the gradient
+  fixture — manifest records the lfo route object, within-on delta 20.340,
+  raked frames Read-confirmed. **Next action:** effect chaining
+  (RECOMMENDATIONS Part 2 §A) — write its milestone contract first.
 
 - **LFO modulation sources — Slice 2 of 3** (`4892377`): core
   `ModulationSource` mirror gains the Lfo variant (unit variants still

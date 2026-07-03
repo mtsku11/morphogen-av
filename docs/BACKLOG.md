@@ -124,14 +124,20 @@ take this to the next level" notes live in
   contract: Metal port (scatter-rasterization parity, field-particles splat
   precedent), two-source A→B, depth descriptor, HQ anti-aliased lines.
 
+- **LFO modulation sources (COMPLETE)** — `docs/LFO_MODULATION_MILESTONE.md`
+  slices 1–3: `lfo(shape,rate,phase)` as a media-free deterministic
+  `ModulationSource` (exact per-frame evaluation, no sidecar/fingerprint),
+  queue add→run byte-identical, params join the stateful checkpoint contracts
+  via the route list, SwiftUI LFO slot option on the Rutt-Etra panel.
+  Deferred: drawn breakpoint envelopes, the 6-panel LFO slot sweep, LFO-on-LFO.
+
 ## Next
 
-**LFO modulation sources** — contract in `docs/LFO_MODULATION_MILESTONE.md`
-(RECOMMENDATIONS Part 2 §B): `lfo(shape,rate,phase)` as a media-free
-deterministic `ModulationSource`, slices = engine+CLI → queue+stateful
-contracts → SwiftUI one-panel vertical. Then effect chaining (Part 2 §A).
-The Rutt-Etra deferred slices wait on the look being user-confirmed on real
-footage.
+**Effect chaining** (`docs/RECOMMENDATIONS.md` Part 2 §A — the biggest lever):
+a `render-chain` job running an ordered list of effect stages, each stage's
+output feeding the next, one reproducible chain manifest. Needs its own
+milestone contract first. The Rutt-Etra deferred slices and the LFO 6-panel
+sweep wait on the looks being user-confirmed on real footage.
 
 ### Flow Feedback and Advection Milestone
 
