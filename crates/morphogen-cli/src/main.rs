@@ -5,7 +5,7 @@ use morphogen_render::{
     ChannelShiftSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
     FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
     FluidMosaicSettings, GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
-    RetroStaticSettings, StructureMode, VideoVocoderSettings,
+    RetroStaticSettings, RuttEtraSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -831,6 +831,26 @@ fn run() -> Result<(), CliError> {
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
             },
+        })
+        .map(|_| ()),
+        Commands::RenderRuttEtraSequence {
+            source_b_dir,
+            output_dir,
+            frames,
+            line_pitch,
+            displacement_depth,
+            line_thickness,
+            mono,
+        } => render_rutt_etra_sequence(RuttEtraSequenceRequest {
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            settings: RuttEtraSettings {
+                line_pitch,
+                displacement_depth,
+                line_thickness,
+                mono,
+            },
+            frames,
         })
         .map(|_| ()),
         Commands::RenderPaletteQuantizeSequence {

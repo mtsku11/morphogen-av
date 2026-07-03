@@ -26,6 +26,7 @@ pub mod optical_flow;
 pub mod palette_quantize;
 pub mod pixel_sort;
 pub mod retro_static;
+pub mod rutt_etra;
 pub mod sampler;
 pub mod video_vocoder;
 pub mod vortex_field;
@@ -151,6 +152,7 @@ pub use pixel_sort::{
 pub use retro_static::{
     render_retro_static_frame, RetroStaticSettings, ScanlineFilter, RETRO_STATIC_ALGORITHM,
 };
+pub use rutt_etra::{render_rutt_etra_frame, RuttEtraSettings, RUTT_ETRA_ALGORITHM};
 pub use sampler::sample_bilinear_clamped;
 pub use video_vocoder::{
     analyze_luma_band_envelope_cpu, apply_tone_map_cpu, histogram_specification_cpu,

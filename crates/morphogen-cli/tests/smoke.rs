@@ -64,6 +64,61 @@ fn datamosh_bitstream_help_lists_keyframe_removal_operation() {
 }
 
 #[test]
+fn render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let output_dir = temp_dir.path().join("rutt-etra-frames");
+    fs::create_dir_all(&source_dir).expect("create source frames");
+
+    for index in 0..2u32 {
+        let frame = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, value, value, u8::MAX])
+        });
+        frame
+            .save(source_dir.join(format!("frame_{index:06}.png")))
+            .expect("write source frame");
+    }
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "12.5",
+            "--line-thickness",
+            "2",
+            "--mono",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered rutt-etra scanline sequence with 2 frame(s)",
+        ));
+
+    for index in 0..2 {
+        assert!(
+            output_dir.join(format!("frame_{index:06}.png")).exists(),
+            "frame {index} must be written"
+        );
+    }
+
+    let manifest = read_json(&output_dir.join("manifest.json"));
+    assert_eq!(manifest["algorithm"], "rutt_etra_scanline_cpu_v1");
+    assert_eq!(manifest["line_pitch"], 4);
+    assert_eq!(manifest["displacement_depth"], 12.5);
+    assert_eq!(manifest["line_thickness"], 2);
+    assert_eq!(manifest["mono"], true);
+    assert_eq!(manifest["frame_count"], 2);
+}
+
+#[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_path = temp_dir.path().join("modulator.png");

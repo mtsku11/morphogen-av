@@ -1090,6 +1090,31 @@ pub(crate) enum Commands {
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
     },
+    /// Render the Rutt-Etra scanline look: the frame is re-rendered as a sparse
+    /// set of horizontal scanlines on black, each displaced vertically by its
+    /// own local luminance (CPU-only, deterministic; Metal is a later slice).
+    /// `--displacement-depth 0` is the off case (flat scanlines, byte-stable).
+    RenderRuttEtraSequence {
+        /// Source B frames (PNG sequence) — the carrier whose scanlines are drawn.
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Rows between scanlines (top row is always included).
+        #[arg(long, default_value_t = 8)]
+        line_pitch: u32,
+        /// Vertical displacement in px at luma 1.0; sign sets direction
+        /// (positive pushes up). `0` = flat scanlines (off case).
+        #[arg(long, default_value_t = 48.0)]
+        displacement_depth: f32,
+        /// Each filled cell extends downward by this many px.
+        #[arg(long, default_value_t = 1)]
+        line_thickness: u32,
+        /// Render every line white instead of the source colour.
+        #[arg(long, default_value_t = false)]
+        mono: bool,
+    },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).
     /// `--mode palette` maps to the built-in neon set (magenta/orange/teal/black).

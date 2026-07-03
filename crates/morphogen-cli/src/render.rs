@@ -33,9 +33,9 @@ use morphogen_render::{
     render_block_collage_frame, render_cascade_collage_frame, render_cascade_trails,
     render_channel_shift_frame, render_field_particles, render_fluid_mosaic,
     render_palette_quantize_frame, render_pixel_sort_frame, render_retro_static_frame,
-    reset_residual_in_refreshed_blocks, resort_fluid_mosaic_colors, select_grains_cpu,
-    select_grains_from_pool_cpu, select_grains_multimodal_cpu, synthesize_turbulence_flow,
-    uniform_displacement_field, video_vocoder_cpu, write_flow_cache,
+    render_rutt_etra_frame, reset_residual_in_refreshed_blocks, resort_fluid_mosaic_colors,
+    select_grains_cpu, select_grains_from_pool_cpu, select_grains_multimodal_cpu,
+    synthesize_turbulence_flow, uniform_displacement_field, video_vocoder_cpu, write_flow_cache,
     write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
     write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, zero_flow, AntiRepeat,
@@ -46,13 +46,13 @@ use morphogen_render::{
     FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor,
     GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, MaskSource,
     PaletteQuantizeSettings, ParticleField, PixelSortSettings, PoolSelectionWindow, QuantizeMode,
-    RetroStaticSettings, RmsDisplacementEnvelope, ScanlineSmearSettings, TemporalCoherence,
-    VectorRemixMode, VideoVocoderSettings, DATAMOSH_CODEC_ENGRAVE_ALGORITHM,
+    RetroStaticSettings, RmsDisplacementEnvelope, RuttEtraSettings, ScanlineSmearSettings,
+    TemporalCoherence, VectorRemixMode, VideoVocoderSettings, DATAMOSH_CODEC_ENGRAVE_ALGORITHM,
     DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
     GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
-    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RUTT_ETRA_ALGORITHM,
 };
 use morphogen_render::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
@@ -6225,4 +6225,73 @@ pub(crate) fn render_palette_quantize_frame_metal(
     Err(CliError::Message(
         "the Metal backend is only available on macOS; use --backend cpu".to_string(),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Rutt-Etra scanline — Slice 1 (luma-displaced scanlines, CPU-only)
+// ---------------------------------------------------------------------------
+
+pub(crate) struct RuttEtraSequenceRequest<'a> {
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: RuttEtraSettings,
+    pub(crate) frames: u32,
+}
+
+pub(crate) fn render_rutt_etra_sequence(
+    request: RuttEtraSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "rutt-etra requires at least one PNG frame in the source B directory".to_string(),
+        ));
+    }
+
+    let frame_count = (request.frames as usize).min(source_b_frames.len());
+    fs::create_dir_all(request.output_dir)?;
+
+    for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let source_b = load_image_f32(frame_path)?;
+        let rendered = render_rutt_etra_frame(&source_b, &request.settings)?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    let manifest = serde_json::json!({
+        "algorithm": RUTT_ETRA_ALGORITHM,
+        "line_pitch": request.settings.line_pitch,
+        "displacement_depth": request.settings.displacement_depth,
+        "line_thickness": request.settings.line_thickness,
+        "mono": request.settings.mono,
+        "frame_count": frame_count,
+    });
+    fs::write(
+        request.output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+
+    println!(
+        "rendered rutt-etra scanline sequence with {} frame(s) \
+         (algorithm {}, line_pitch {}, displacement_depth {:.2}, line_thickness {}, mono {}) \
+         from {} to {}",
+        frame_count,
+        RUTT_ETRA_ALGORITHM,
+        request.settings.line_pitch,
+        request.settings.displacement_depth,
+        request.settings.line_thickness,
+        request.settings.mono,
+        request.source_b_dir.display(),
+        request.output_dir.display(),
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
 }
