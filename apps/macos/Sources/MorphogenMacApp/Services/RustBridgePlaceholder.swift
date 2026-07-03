@@ -2733,9 +2733,11 @@ enum RustBridgePlaceholder {
         )
       }
       arguments.append("--modulate")
-      arguments.append(
-        "\(route.target)=\(route.source):\(cliNumber(route.scale)),\(cliNumber(route.offset))"
-      )
+      var spec = "\(route.target)=\(route.source):\(cliNumber(route.scale)),\(cliNumber(route.offset))"
+      if let override = route.sampling {
+        spec += "@\(override.cliValue)"
+      }
+      arguments.append(spec)
     }
     if routes.contains(where: { $0.source.hasPrefix("audio-") }) {
       guard let audioURL = modulatorAudioURL else {
@@ -3019,6 +3021,10 @@ struct ModulationRouteSpec: Equatable {
   let source: String
   let scale: Double
   let offset: Double
+  // Per-route sampling override; nil inherits the panel-level
+  // `--modulation-sampling` default (no `@hold`/`@smooth` suffix emitted).
+  // Defaulted so call sites predating this override keep their meaning.
+  var sampling: ModulationSamplingOption? = nil
 }
 
 struct RetroStaticSequenceRenderQueueCommandRequest {

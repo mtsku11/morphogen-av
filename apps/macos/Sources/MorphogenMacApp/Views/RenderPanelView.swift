@@ -344,6 +344,7 @@ struct RenderPanelView: View {
             source: $state.feedbackModCarrierAmountSource,
             scale: $state.feedbackModCarrierAmountScale,
             offset: $state.feedbackModCarrierAmountOffset,
+            samplingOverride: $state.feedbackModCarrierAmountSamplingOverride,
             scaleRange: -16...16, scaleStep: 0.25, offsetRange: -16...16, offsetStep: 0.25
           )
 
@@ -352,6 +353,7 @@ struct RenderPanelView: View {
             source: $state.feedbackModAmountSource,
             scale: $state.feedbackModAmountScale,
             offset: $state.feedbackModAmountOffset,
+            samplingOverride: $state.feedbackModAmountSamplingOverride,
             scaleRange: -16...16, scaleStep: 0.25, offsetRange: -16...16, offsetStep: 0.25
           )
 
@@ -359,21 +361,24 @@ struct RenderPanelView: View {
             label: "Mix",
             source: $state.feedbackModMixSource,
             scale: $state.feedbackModMixScale,
-            offset: $state.feedbackModMixOffset
+            offset: $state.feedbackModMixOffset,
+            samplingOverride: $state.feedbackModMixSamplingOverride
           )
 
           ModulationSlotRow(
             label: "Decay",
             source: $state.feedbackModDecaySource,
             scale: $state.feedbackModDecayScale,
-            offset: $state.feedbackModDecayOffset
+            offset: $state.feedbackModDecayOffset,
+            samplingOverride: $state.feedbackModDecaySamplingOverride
           )
 
           ModulationSlotRow(
             label: "Structure",
             source: $state.feedbackModStructureMixSource,
             scale: $state.feedbackModStructureMixScale,
-            offset: $state.feedbackModStructureMixOffset
+            offset: $state.feedbackModStructureMixOffset,
+            samplingOverride: $state.feedbackModStructureMixSamplingOverride
           )
 
           ModulationMediaRow(
@@ -493,6 +498,7 @@ struct RenderPanelView: View {
             source: $state.fluidModProceduralAdvectSource,
             scale: $state.fluidModProceduralAdvectScale,
             offset: $state.fluidModProceduralAdvectOffset,
+            samplingOverride: $state.fluidModProceduralAdvectSamplingOverride,
             scaleRange: -48...48, scaleStep: 1, offsetRange: -48...48, offsetStep: 1
           )
 
@@ -501,6 +507,7 @@ struct RenderPanelView: View {
             source: $state.fluidModMotionAdvectSource,
             scale: $state.fluidModMotionAdvectScale,
             offset: $state.fluidModMotionAdvectOffset,
+            samplingOverride: $state.fluidModMotionAdvectSamplingOverride,
             scaleRange: -8...8, scaleStep: 0.25, offsetRange: -8...8, offsetStep: 0.25
           )
 
@@ -509,6 +516,7 @@ struct RenderPanelView: View {
             source: $state.fluidModTurbulenceScaleSource,
             scale: $state.fluidModTurbulenceScaleScale,
             offset: $state.fluidModTurbulenceScaleOffset,
+            samplingOverride: $state.fluidModTurbulenceScaleSamplingOverride,
             scaleRange: -0.05...0.05, scaleStep: 0.002, offsetRange: -0.05...0.05, offsetStep: 0.002
           )
 
@@ -517,6 +525,7 @@ struct RenderPanelView: View {
             source: $state.fluidModTurbulenceSpeedSource,
             scale: $state.fluidModTurbulenceSpeedScale,
             offset: $state.fluidModTurbulenceSpeedOffset,
+            samplingOverride: $state.fluidModTurbulenceSpeedSamplingOverride,
             scaleRange: -0.5...0.5, scaleStep: 0.01, offsetRange: -0.5...0.5, offsetStep: 0.01
           )
 
@@ -524,14 +533,16 @@ struct RenderPanelView: View {
             label: "Detail",
             source: $state.fluidModDetailSource,
             scale: $state.fluidModDetailScale,
-            offset: $state.fluidModDetailOffset
+            offset: $state.fluidModDetailOffset,
+            samplingOverride: $state.fluidModDetailSamplingOverride
           )
 
           ModulationSlotRow(
             label: "Reinject",
             source: $state.fluidModReinjectSource,
             scale: $state.fluidModReinjectScale,
-            offset: $state.fluidModReinjectOffset
+            offset: $state.fluidModReinjectOffset,
+            samplingOverride: $state.fluidModReinjectSamplingOverride
           )
 
           ModulationMediaRow(
@@ -699,14 +710,16 @@ struct RenderPanelView: View {
             label: "Strength",
             source: $state.retroStaticModStrengthSource,
             scale: $state.retroStaticModStrengthScale,
-            offset: $state.retroStaticModStrengthOffset
+            offset: $state.retroStaticModStrengthOffset,
+            samplingOverride: $state.retroStaticModStrengthSamplingOverride
           )
 
           EnumModulationSlotRow(
             label: "Filter",
             source: $state.retroStaticModFilterSource,
             from: $state.retroStaticModFilterFrom,
-            to: $state.retroStaticModFilterTo
+            to: $state.retroStaticModFilterTo,
+            samplingOverride: $state.retroStaticModFilterSamplingOverride
           )
 
           ModulationMediaRow(
@@ -801,6 +814,7 @@ struct RenderPanelView: View {
             source: $state.channelShiftModRXSource,
             scale: $state.channelShiftModRXScale,
             offset: $state.channelShiftModRXOffset,
+            samplingOverride: $state.channelShiftModRXSamplingOverride,
             scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
           )
 
@@ -809,6 +823,7 @@ struct RenderPanelView: View {
             source: $state.channelShiftModRYSource,
             scale: $state.channelShiftModRYScale,
             offset: $state.channelShiftModRYOffset,
+            samplingOverride: $state.channelShiftModRYSamplingOverride,
             scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
           )
 
@@ -817,6 +832,7 @@ struct RenderPanelView: View {
             source: $state.channelShiftModGXSource,
             scale: $state.channelShiftModGXScale,
             offset: $state.channelShiftModGXOffset,
+            samplingOverride: $state.channelShiftModGXSamplingOverride,
             scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
           )
 
@@ -825,6 +841,7 @@ struct RenderPanelView: View {
             source: $state.channelShiftModGYSource,
             scale: $state.channelShiftModGYScale,
             offset: $state.channelShiftModGYOffset,
+            samplingOverride: $state.channelShiftModGYSamplingOverride,
             scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
           )
 
@@ -833,6 +850,7 @@ struct RenderPanelView: View {
             source: $state.channelShiftModBXSource,
             scale: $state.channelShiftModBXScale,
             offset: $state.channelShiftModBXOffset,
+            samplingOverride: $state.channelShiftModBXSamplingOverride,
             scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
           )
 
@@ -841,6 +859,7 @@ struct RenderPanelView: View {
             source: $state.channelShiftModBYSource,
             scale: $state.channelShiftModBYScale,
             offset: $state.channelShiftModBYOffset,
+            samplingOverride: $state.channelShiftModBYSamplingOverride,
             scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
           )
 
@@ -907,6 +926,7 @@ struct RenderPanelView: View {
             source: $state.paletteQuantizeModLevelsSource,
             scale: $state.paletteQuantizeModLevelsScale,
             offset: $state.paletteQuantizeModLevelsOffset,
+            samplingOverride: $state.paletteQuantizeModLevelsSamplingOverride,
             scaleRange: -254...254, scaleStep: 8, offsetRange: -256...256, offsetStep: 8
           )
 
@@ -914,7 +934,8 @@ struct RenderPanelView: View {
             label: "Mode",
             source: $state.paletteQuantizeModModeSource,
             from: $state.paletteQuantizeModModeFrom,
-            to: $state.paletteQuantizeModModeTo
+            to: $state.paletteQuantizeModModeTo,
+            samplingOverride: $state.paletteQuantizeModModeSamplingOverride
           )
 
           ModulationMediaRow(
@@ -1392,21 +1413,24 @@ struct RenderPanelView: View {
             label: "Amount",
             source: $state.datamoshModAmountSource,
             scale: $state.datamoshModAmountScale,
-            offset: $state.datamoshModAmountOffset
+            offset: $state.datamoshModAmountOffset,
+            samplingOverride: $state.datamoshModAmountSamplingOverride
           )
 
           ModulationSlotRow(
             label: "Res Gain",
             source: $state.datamoshModResidualGainSource,
             scale: $state.datamoshModResidualGainScale,
-            offset: $state.datamoshModResidualGainOffset
+            offset: $state.datamoshModResidualGainOffset,
+            samplingOverride: $state.datamoshModResidualGainSamplingOverride
           )
 
           ModulationSlotRow(
             label: "Res Decay",
             source: $state.datamoshModResidualDecaySource,
             scale: $state.datamoshModResidualDecayScale,
-            offset: $state.datamoshModResidualDecayOffset
+            offset: $state.datamoshModResidualDecayOffset,
+            samplingOverride: $state.datamoshModResidualDecaySamplingOverride
           )
 
           ModulationSlotRow(
@@ -1414,6 +1438,7 @@ struct RenderPanelView: View {
             source: $state.datamoshModRefreshThresholdSource,
             scale: $state.datamoshModRefreshThresholdScale,
             offset: $state.datamoshModRefreshThresholdOffset,
+            samplingOverride: $state.datamoshModRefreshThresholdSamplingOverride,
             scaleRange: -8...8, scaleStep: 0.25, offsetRange: -8...8, offsetStep: 0.25
           )
 
@@ -1775,28 +1800,32 @@ struct RenderPanelView: View {
             label: "Low",
             source: $state.pixelSortModLowSource,
             scale: $state.pixelSortModLowScale,
-            offset: $state.pixelSortModLowOffset
+            offset: $state.pixelSortModLowOffset,
+            samplingOverride: $state.pixelSortModLowSamplingOverride
           )
 
           ModulationSlotRow(
             label: "High",
             source: $state.pixelSortModHighSource,
             scale: $state.pixelSortModHighScale,
-            offset: $state.pixelSortModHighOffset
+            offset: $state.pixelSortModHighOffset,
+            samplingOverride: $state.pixelSortModHighSamplingOverride
           )
 
           EnumModulationSlotRow(
             label: "Direction",
             source: $state.pixelSortModDirectionSource,
             from: $state.pixelSortModDirectionFrom,
-            to: $state.pixelSortModDirectionTo
+            to: $state.pixelSortModDirectionTo,
+            samplingOverride: $state.pixelSortModDirectionSamplingOverride
           )
 
           EnumModulationSlotRow(
             label: "Axis",
             source: $state.pixelSortModAxisSource,
             from: $state.pixelSortModAxisFrom,
-            to: $state.pixelSortModAxisTo
+            to: $state.pixelSortModAxisTo,
+            samplingOverride: $state.pixelSortModAxisSamplingOverride
           )
 
           ModulationMediaRow(
@@ -1861,6 +1890,7 @@ private struct ModulationSlotRow: View {
   @Binding var source: ModulationSourceOption
   @Binding var scale: Double
   @Binding var offset: Double
+  @Binding var samplingOverride: ModulationSamplingOverrideOption
   // Defaults suit [0, 1] knobs; pixel-unit targets (channel-shift offsets)
   // pass wider ranges so the envelope can span a visible shift.
   var scaleRange: ClosedRange<Double> = -8...8
@@ -1889,6 +1919,14 @@ private struct ModulationSlotRow: View {
           Text("Offset \(offset, specifier: "%.2f")")
         }
         .frame(width: 160, alignment: .leading)
+
+        Picker("Sampling", selection: $samplingOverride) {
+          ForEach(ModulationSamplingOverrideOption.allCases) { option in
+            Text(option.rawValue).tag(option)
+          }
+        }
+        .frame(width: 180)
+        .help("Overrides this route's sampling; Default inherits the panel Sampling picker.")
       }
     }
   }
@@ -1908,6 +1946,7 @@ where
   @Binding var source: ModulationSourceOption
   @Binding var from: Option
   @Binding var to: Option
+  @Binding var samplingOverride: ModulationSamplingOverrideOption
 
   var body: some View {
     HStack(spacing: 16) {
@@ -1938,6 +1977,14 @@ where
         }
         .frame(width: 150)
         .help("Variant selected when the envelope is at 1; in between, the envelope steps through the variants From→To.")
+
+        Picker("Sampling", selection: $samplingOverride) {
+          ForEach(ModulationSamplingOverrideOption.allCases) { option in
+            Text(option.rawValue).tag(option)
+          }
+        }
+        .frame(width: 180)
+        .help("Overrides this route's sampling; Default inherits the panel Sampling picker.")
       }
     }
   }

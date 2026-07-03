@@ -589,6 +589,107 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--modulation-sampling"))
   }
 
+  func testQueuedRetroStaticSequenceArgumentsCarryPerRouteSmoothOverride() throws {
+    var request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      realBpp: 4,
+      assumedBpp: 3,
+      filter: .paeth,
+      strength: 1.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(
+        target: "strength", source: "audio-rms", scale: 0.9, offset: 0.05, sampling: .smooth
+      )
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    // Panel-level default stays Hold; only the route overrides to Smooth.
+    request.modulationSampling = .hold
+
+    let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
+
+    guard let modulateIndex = arguments.firstIndex(of: "--modulate") else {
+      return XCTFail("expected a --modulate flag")
+    }
+    XCTAssertEqual(arguments[modulateIndex + 1], "strength=audio-rms:0.9,0.05@smooth")
+    guard let samplingIndex = arguments.firstIndex(of: "--modulation-sampling") else {
+      return XCTFail("expected the shared --modulation-sampling flag to remain present")
+    }
+    XCTAssertEqual(arguments[samplingIndex + 1], "hold")
+  }
+
+  func testQueuedRetroStaticSequenceArgumentsCarryPerRouteHoldOverride() throws {
+    var request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      realBpp: 4,
+      assumedBpp: 3,
+      filter: .paeth,
+      strength: 1.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(
+        target: "strength", source: "audio-rms", scale: 0.9, offset: 0.05, sampling: .hold
+      )
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    // Panel-level default stays Smooth; only the route overrides to Hold.
+    request.modulationSampling = .smooth
+
+    let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
+
+    guard let modulateIndex = arguments.firstIndex(of: "--modulate") else {
+      return XCTFail("expected a --modulate flag")
+    }
+    XCTAssertEqual(arguments[modulateIndex + 1], "strength=audio-rms:0.9,0.05@hold")
+    guard let samplingIndex = arguments.firstIndex(of: "--modulation-sampling") else {
+      return XCTFail("expected the shared --modulation-sampling flag to remain present")
+    }
+    XCTAssertEqual(arguments[samplingIndex + 1], "smooth")
+  }
+
+  func testQueuedRetroStaticSequenceArgumentsOmitPerRouteSuffixWithoutOverride() throws {
+    // Regression guard for the byte-identical invariant: a route with no
+    // per-route override (`sampling == nil`) must emit the spec exactly as
+    // before this slice — no `@hold`/`@smooth` suffix.
+    var request = RetroStaticSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/retro-static", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      realBpp: 4,
+      assumedBpp: 3,
+      filter: .paeth,
+      strength: 1.0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "strength", source: "audio-rms", scale: 0.9, offset: 0.05)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulationSampling = .smooth
+
+    let arguments = try RustBridgePlaceholder.queueAddRetroStaticSequenceArguments(request: request)
+
+    guard let modulateIndex = arguments.firstIndex(of: "--modulate") else {
+      return XCTFail("expected a --modulate flag")
+    }
+    XCTAssertEqual(arguments[modulateIndex + 1], "strength=audio-rms:0.9,0.05")
+  }
+
   func testQueuedFeedbackSequenceArgumentsCarryModulationRoutes() throws {
     var request = FeedbackSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/feedback-queue.json"),

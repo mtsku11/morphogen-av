@@ -81,18 +81,23 @@ final class AppState: ObservableObject {
   @Published var feedbackModCarrierAmountSource = ModulationSourceOption.off
   @Published var feedbackModCarrierAmountScale = 1.0
   @Published var feedbackModCarrierAmountOffset = 0.0
+  @Published var feedbackModCarrierAmountSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var feedbackModAmountSource = ModulationSourceOption.off
   @Published var feedbackModAmountScale = 1.0
   @Published var feedbackModAmountOffset = 0.0
+  @Published var feedbackModAmountSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var feedbackModMixSource = ModulationSourceOption.off
   @Published var feedbackModMixScale = 1.0
   @Published var feedbackModMixOffset = 0.0
+  @Published var feedbackModMixSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var feedbackModDecaySource = ModulationSourceOption.off
   @Published var feedbackModDecayScale = 1.0
   @Published var feedbackModDecayOffset = 0.0
+  @Published var feedbackModDecaySamplingOverride = ModulationSamplingOverrideOption.default
   @Published var feedbackModStructureMixSource = ModulationSourceOption.off
   @Published var feedbackModStructureMixScale = 1.0
   @Published var feedbackModStructureMixOffset = 0.0
+  @Published var feedbackModStructureMixSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var feedbackModulatorAudioURL: URL?
   @Published var feedbackModulatorFramesURL: URL?
   @Published var feedbackModSampling = ModulationSamplingOption.hold
@@ -118,21 +123,27 @@ final class AppState: ObservableObject {
   @Published var fluidModProceduralAdvectSource = ModulationSourceOption.off
   @Published var fluidModProceduralAdvectScale = 1.0
   @Published var fluidModProceduralAdvectOffset = 0.0
+  @Published var fluidModProceduralAdvectSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var fluidModMotionAdvectSource = ModulationSourceOption.off
   @Published var fluidModMotionAdvectScale = 1.0
   @Published var fluidModMotionAdvectOffset = 0.0
+  @Published var fluidModMotionAdvectSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var fluidModTurbulenceScaleSource = ModulationSourceOption.off
   @Published var fluidModTurbulenceScaleScale = 0.008
   @Published var fluidModTurbulenceScaleOffset = 0.0
+  @Published var fluidModTurbulenceScaleSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var fluidModTurbulenceSpeedSource = ModulationSourceOption.off
   @Published var fluidModTurbulenceSpeedScale = 0.06
   @Published var fluidModTurbulenceSpeedOffset = 0.0
+  @Published var fluidModTurbulenceSpeedSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var fluidModDetailSource = ModulationSourceOption.off
   @Published var fluidModDetailScale = 1.0
   @Published var fluidModDetailOffset = 0.0
+  @Published var fluidModDetailSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var fluidModReinjectSource = ModulationSourceOption.off
   @Published var fluidModReinjectScale = 1.0
   @Published var fluidModReinjectOffset = 0.0
+  @Published var fluidModReinjectSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var fluidModulatorAudioURL: URL?
   @Published var fluidModulatorFramesURL: URL?
   @Published var fluidModSampling = ModulationSamplingOption.hold
@@ -174,11 +185,13 @@ final class AppState: ObservableObject {
   @Published var retroStaticModStrengthSource = ModulationSourceOption.off
   @Published var retroStaticModStrengthScale = 1.0
   @Published var retroStaticModStrengthOffset = 0.0
+  @Published var retroStaticModStrengthSamplingOverride = ModulationSamplingOverrideOption.default
   // Enum slot (From→To variant pickers): envelope 0 → From, envelope 1 → To.
   // Defaults span the full variant list so activating the slot sweeps it all.
   @Published var retroStaticModFilterSource = ModulationSourceOption.off
   @Published var retroStaticModFilterFrom = RetroStaticFilterOption.none
   @Published var retroStaticModFilterTo = RetroStaticFilterOption.paeth
+  @Published var retroStaticModFilterSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var retroStaticModulatorAudioURL: URL?
   @Published var retroStaticModulatorFramesURL: URL?
   @Published var retroStaticModSampling = ModulationSamplingOption.hold
@@ -200,21 +213,27 @@ final class AppState: ObservableObject {
   @Published var channelShiftModRXSource = ModulationSourceOption.off
   @Published var channelShiftModRXScale = 1.0
   @Published var channelShiftModRXOffset = 0.0
+  @Published var channelShiftModRXSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var channelShiftModRYSource = ModulationSourceOption.off
   @Published var channelShiftModRYScale = 1.0
   @Published var channelShiftModRYOffset = 0.0
+  @Published var channelShiftModRYSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var channelShiftModGXSource = ModulationSourceOption.off
   @Published var channelShiftModGXScale = 1.0
   @Published var channelShiftModGXOffset = 0.0
+  @Published var channelShiftModGXSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var channelShiftModGYSource = ModulationSourceOption.off
   @Published var channelShiftModGYScale = 1.0
   @Published var channelShiftModGYOffset = 0.0
+  @Published var channelShiftModGYSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var channelShiftModBXSource = ModulationSourceOption.off
   @Published var channelShiftModBXScale = 1.0
   @Published var channelShiftModBXOffset = 0.0
+  @Published var channelShiftModBXSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var channelShiftModBYSource = ModulationSourceOption.off
   @Published var channelShiftModBYScale = 1.0
   @Published var channelShiftModBYOffset = 0.0
+  @Published var channelShiftModBYSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var channelShiftModulatorAudioURL: URL?
   @Published var channelShiftModulatorFramesURL: URL?
   @Published var channelShiftModSampling = ModulationSamplingOption.hold
@@ -230,10 +249,12 @@ final class AppState: ObservableObject {
   @Published var paletteQuantizeModLevelsSource = ModulationSourceOption.off
   @Published var paletteQuantizeModLevelsScale = 1.0
   @Published var paletteQuantizeModLevelsOffset = 0.0
+  @Published var paletteQuantizeModLevelsSamplingOverride = ModulationSamplingOverrideOption.default
   // Enum slot (From→To variant pickers): envelope 0 → From, envelope 1 → To.
   @Published var paletteQuantizeModModeSource = ModulationSourceOption.off
   @Published var paletteQuantizeModModeFrom = PaletteQuantizeModeOption.posterize
   @Published var paletteQuantizeModModeTo = PaletteQuantizeModeOption.palette
+  @Published var paletteQuantizeModModeSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var paletteQuantizeModulatorAudioURL: URL?
   @Published var paletteQuantizeModulatorFramesURL: URL?
   @Published var paletteQuantizeModSampling = ModulationSamplingOption.hold
@@ -326,15 +347,19 @@ final class AppState: ObservableObject {
   @Published var datamoshModAmountSource = ModulationSourceOption.off
   @Published var datamoshModAmountScale = 1.0
   @Published var datamoshModAmountOffset = 0.0
+  @Published var datamoshModAmountSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var datamoshModResidualGainSource = ModulationSourceOption.off
   @Published var datamoshModResidualGainScale = 1.0
   @Published var datamoshModResidualGainOffset = 0.0
+  @Published var datamoshModResidualGainSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var datamoshModResidualDecaySource = ModulationSourceOption.off
   @Published var datamoshModResidualDecayScale = 1.0
   @Published var datamoshModResidualDecayOffset = 0.0
+  @Published var datamoshModResidualDecaySamplingOverride = ModulationSamplingOverrideOption.default
   @Published var datamoshModRefreshThresholdSource = ModulationSourceOption.off
   @Published var datamoshModRefreshThresholdScale = 1.0
   @Published var datamoshModRefreshThresholdOffset = 0.0
+  @Published var datamoshModRefreshThresholdSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var datamoshModulatorAudioURL: URL?
   @Published var datamoshModulatorFramesURL: URL?
   @Published var datamoshModSampling = ModulationSamplingOption.hold
@@ -391,16 +416,20 @@ final class AppState: ObservableObject {
   @Published var pixelSortModLowSource = ModulationSourceOption.off
   @Published var pixelSortModLowScale = 1.0
   @Published var pixelSortModLowOffset = 0.0
+  @Published var pixelSortModLowSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var pixelSortModHighSource = ModulationSourceOption.off
   @Published var pixelSortModHighScale = 1.0
   @Published var pixelSortModHighOffset = 0.0
+  @Published var pixelSortModHighSamplingOverride = ModulationSamplingOverrideOption.default
   // Enum slots (From→To variant pickers): envelope 0 → From, envelope 1 → To.
   @Published var pixelSortModDirectionSource = ModulationSourceOption.off
   @Published var pixelSortModDirectionFrom = PixelSortDirectionOption.asc
   @Published var pixelSortModDirectionTo = PixelSortDirectionOption.desc
+  @Published var pixelSortModDirectionSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var pixelSortModAxisSource = ModulationSourceOption.off
   @Published var pixelSortModAxisFrom = PixelSortAxisOption.row
   @Published var pixelSortModAxisTo = PixelSortAxisOption.col
+  @Published var pixelSortModAxisSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var pixelSortModulatorAudioURL: URL?
   @Published var pixelSortModulatorFramesURL: URL?
   @Published var pixelSortModSampling = ModulationSamplingOption.hold
@@ -1132,14 +1161,25 @@ final class AppState: ObservableObject {
       slots: [
         (
           "carrier_amount", feedbackModCarrierAmountSource,
-          feedbackModCarrierAmountScale, feedbackModCarrierAmountOffset
+          feedbackModCarrierAmountScale, feedbackModCarrierAmountOffset,
+          feedbackModCarrierAmountSamplingOverride
         ),
-        ("feedback_amount", feedbackModAmountSource, feedbackModAmountScale, feedbackModAmountOffset),
-        ("feedback_mix", feedbackModMixSource, feedbackModMixScale, feedbackModMixOffset),
-        ("decay", feedbackModDecaySource, feedbackModDecayScale, feedbackModDecayOffset),
+        (
+          "feedback_amount", feedbackModAmountSource, feedbackModAmountScale, feedbackModAmountOffset,
+          feedbackModAmountSamplingOverride
+        ),
+        (
+          "feedback_mix", feedbackModMixSource, feedbackModMixScale, feedbackModMixOffset,
+          feedbackModMixSamplingOverride
+        ),
+        (
+          "decay", feedbackModDecaySource, feedbackModDecayScale, feedbackModDecayOffset,
+          feedbackModDecaySamplingOverride
+        ),
         (
           "structure_mix", feedbackModStructureMixSource,
-          feedbackModStructureMixScale, feedbackModStructureMixOffset
+          feedbackModStructureMixScale, feedbackModStructureMixOffset,
+          feedbackModStructureMixSamplingOverride
         )
       ],
       modulatorAudioURL: feedbackModulatorAudioURL,
@@ -1262,18 +1302,27 @@ final class AppState: ObservableObject {
       slots: [
         (
           "advect", fluidModProceduralAdvectSource,
-          fluidModProceduralAdvectScale, fluidModProceduralAdvectOffset
+          fluidModProceduralAdvectScale, fluidModProceduralAdvectOffset,
+          fluidModProceduralAdvectSamplingOverride
         ),
         (
           "turbulence_scale", fluidModTurbulenceScaleSource,
-          fluidModTurbulenceScaleScale, fluidModTurbulenceScaleOffset
+          fluidModTurbulenceScaleScale, fluidModTurbulenceScaleOffset,
+          fluidModTurbulenceScaleSamplingOverride
         ),
         (
           "turbulence_speed", fluidModTurbulenceSpeedSource,
-          fluidModTurbulenceSpeedScale, fluidModTurbulenceSpeedOffset
+          fluidModTurbulenceSpeedScale, fluidModTurbulenceSpeedOffset,
+          fluidModTurbulenceSpeedSamplingOverride
         ),
-        ("detail", fluidModDetailSource, fluidModDetailScale, fluidModDetailOffset),
-        ("reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset)
+        (
+          "detail", fluidModDetailSource, fluidModDetailScale, fluidModDetailOffset,
+          fluidModDetailSamplingOverride
+        ),
+        (
+          "reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset,
+          fluidModReinjectSamplingOverride
+        )
       ],
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
@@ -1325,8 +1374,14 @@ final class AppState: ObservableObject {
     // have no turbulence targets.
     guard let routes = modulationRoutes(
       slots: [
-        ("advect", fluidModMotionAdvectSource, fluidModMotionAdvectScale, fluidModMotionAdvectOffset),
-        ("reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset)
+        (
+          "advect", fluidModMotionAdvectSource, fluidModMotionAdvectScale, fluidModMotionAdvectOffset,
+          fluidModMotionAdvectSamplingOverride
+        ),
+        (
+          "reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset,
+          fluidModReinjectSamplingOverride
+        )
       ],
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
@@ -1371,8 +1426,14 @@ final class AppState: ObservableObject {
     // have no turbulence targets.
     guard let routes = modulationRoutes(
       slots: [
-        ("advect", fluidModMotionAdvectSource, fluidModMotionAdvectScale, fluidModMotionAdvectOffset),
-        ("reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset)
+        (
+          "advect", fluidModMotionAdvectSource, fluidModMotionAdvectScale, fluidModMotionAdvectOffset,
+          fluidModMotionAdvectSamplingOverride
+        ),
+        (
+          "reinject", fluidModReinjectSource, fluidModReinjectScale, fluidModReinjectOffset,
+          fluidModReinjectSamplingOverride
+        )
       ],
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
@@ -1536,7 +1597,10 @@ final class AppState: ObservableObject {
   /// sources have their modulator media picked. Returns `nil` (with a status
   /// message) when a required modulator is missing.
   private func modulationRoutes(
-    slots: [(target: String, source: ModulationSourceOption, scale: Double, offset: Double)],
+    slots: [(
+      target: String, source: ModulationSourceOption, scale: Double, offset: Double,
+      sampling: ModulationSamplingOverrideOption
+    )],
     modulatorAudioURL: URL?,
     modulatorFramesURL: URL?,
     effectLabel: String
@@ -1555,7 +1619,8 @@ final class AppState: ObservableObject {
       }
       routes.append(
         ModulationRouteSpec(
-          target: slot.target, source: source, scale: slot.scale, offset: slot.offset
+          target: slot.target, source: source, scale: slot.scale, offset: slot.offset,
+          sampling: slot.sampling.spec
         )
       )
     }
@@ -1746,9 +1811,13 @@ final class AppState: ObservableObject {
       slots: [
         (
           "strength", retroStaticModStrengthSource,
-          retroStaticModStrengthScale, retroStaticModStrengthOffset
+          retroStaticModStrengthScale, retroStaticModStrengthOffset,
+          retroStaticModStrengthSamplingOverride
         ),
-        ("filter", retroStaticModFilterSource, filterMapping.scale, filterMapping.offset),
+        (
+          "filter", retroStaticModFilterSource, filterMapping.scale, filterMapping.offset,
+          retroStaticModFilterSamplingOverride
+        ),
       ],
       modulatorAudioURL: retroStaticModulatorAudioURL,
       modulatorFramesURL: retroStaticModulatorFramesURL,
@@ -1812,12 +1881,30 @@ final class AppState: ObservableObject {
     }
     guard let routes = modulationRoutes(
       slots: [
-        ("shift_r_x", channelShiftModRXSource, channelShiftModRXScale, channelShiftModRXOffset),
-        ("shift_r_y", channelShiftModRYSource, channelShiftModRYScale, channelShiftModRYOffset),
-        ("shift_g_x", channelShiftModGXSource, channelShiftModGXScale, channelShiftModGXOffset),
-        ("shift_g_y", channelShiftModGYSource, channelShiftModGYScale, channelShiftModGYOffset),
-        ("shift_b_x", channelShiftModBXSource, channelShiftModBXScale, channelShiftModBXOffset),
-        ("shift_b_y", channelShiftModBYSource, channelShiftModBYScale, channelShiftModBYOffset)
+        (
+          "shift_r_x", channelShiftModRXSource, channelShiftModRXScale, channelShiftModRXOffset,
+          channelShiftModRXSamplingOverride
+        ),
+        (
+          "shift_r_y", channelShiftModRYSource, channelShiftModRYScale, channelShiftModRYOffset,
+          channelShiftModRYSamplingOverride
+        ),
+        (
+          "shift_g_x", channelShiftModGXSource, channelShiftModGXScale, channelShiftModGXOffset,
+          channelShiftModGXSamplingOverride
+        ),
+        (
+          "shift_g_y", channelShiftModGYSource, channelShiftModGYScale, channelShiftModGYOffset,
+          channelShiftModGYSamplingOverride
+        ),
+        (
+          "shift_b_x", channelShiftModBXSource, channelShiftModBXScale, channelShiftModBXOffset,
+          channelShiftModBXSamplingOverride
+        ),
+        (
+          "shift_b_y", channelShiftModBYSource, channelShiftModBYScale, channelShiftModBYOffset,
+          channelShiftModBYSamplingOverride
+        )
       ],
       modulatorAudioURL: channelShiftModulatorAudioURL,
       modulatorFramesURL: channelShiftModulatorFramesURL,
@@ -1887,9 +1974,13 @@ final class AppState: ObservableObject {
       slots: [
         (
           "levels", paletteQuantizeModLevelsSource,
-          paletteQuantizeModLevelsScale, paletteQuantizeModLevelsOffset
+          paletteQuantizeModLevelsScale, paletteQuantizeModLevelsOffset,
+          paletteQuantizeModLevelsSamplingOverride
         ),
-        ("mode", paletteQuantizeModModeSource, modeMapping.scale, modeMapping.offset),
+        (
+          "mode", paletteQuantizeModModeSource, modeMapping.scale, modeMapping.offset,
+          paletteQuantizeModModeSamplingOverride
+        ),
       ],
       modulatorAudioURL: paletteQuantizeModulatorAudioURL,
       modulatorFramesURL: paletteQuantizeModulatorFramesURL,
@@ -2273,18 +2364,24 @@ final class AppState: ObservableObject {
     }
     guard let routes = modulationRoutes(
       slots: [
-        ("amount", datamoshModAmountSource, datamoshModAmountScale, datamoshModAmountOffset),
+        (
+          "amount", datamoshModAmountSource, datamoshModAmountScale, datamoshModAmountOffset,
+          datamoshModAmountSamplingOverride
+        ),
         (
           "residual_gain", datamoshModResidualGainSource,
-          datamoshModResidualGainScale, datamoshModResidualGainOffset
+          datamoshModResidualGainScale, datamoshModResidualGainOffset,
+          datamoshModResidualGainSamplingOverride
         ),
         (
           "residual_decay", datamoshModResidualDecaySource,
-          datamoshModResidualDecayScale, datamoshModResidualDecayOffset
+          datamoshModResidualDecayScale, datamoshModResidualDecayOffset,
+          datamoshModResidualDecaySamplingOverride
         ),
         (
           "refresh_threshold", datamoshModRefreshThresholdSource,
-          datamoshModRefreshThresholdScale, datamoshModRefreshThresholdOffset
+          datamoshModRefreshThresholdScale, datamoshModRefreshThresholdOffset,
+          datamoshModRefreshThresholdSamplingOverride
         )
       ],
       modulatorAudioURL: datamoshModulatorAudioURL,
@@ -2580,10 +2677,22 @@ final class AppState: ObservableObject {
     )
     guard let routes = modulationRoutes(
       slots: [
-        ("threshold_low", pixelSortModLowSource, pixelSortModLowScale, pixelSortModLowOffset),
-        ("threshold_high", pixelSortModHighSource, pixelSortModHighScale, pixelSortModHighOffset),
-        ("direction", pixelSortModDirectionSource, directionMapping.scale, directionMapping.offset),
-        ("axis", pixelSortModAxisSource, axisMapping.scale, axisMapping.offset),
+        (
+          "threshold_low", pixelSortModLowSource, pixelSortModLowScale, pixelSortModLowOffset,
+          pixelSortModLowSamplingOverride
+        ),
+        (
+          "threshold_high", pixelSortModHighSource, pixelSortModHighScale, pixelSortModHighOffset,
+          pixelSortModHighSamplingOverride
+        ),
+        (
+          "direction", pixelSortModDirectionSource, directionMapping.scale, directionMapping.offset,
+          pixelSortModDirectionSamplingOverride
+        ),
+        (
+          "axis", pixelSortModAxisSource, axisMapping.scale, axisMapping.offset,
+          pixelSortModAxisSamplingOverride
+        ),
       ],
       modulatorAudioURL: pixelSortModulatorAudioURL,
       modulatorFramesURL: pixelSortModulatorFramesURL,
@@ -3081,6 +3190,27 @@ enum ModulationSamplingOption: String, CaseIterable, Identifiable {
       return "hold"
     case .smooth:
       return "smooth"
+    }
+  }
+}
+
+/// Per-slot override of a route's sampling; `.default` inherits the panel-level
+/// `ModulationSamplingOption` picker (no `@hold`/`@smooth` suffix emitted).
+enum ModulationSamplingOverrideOption: String, CaseIterable, Identifiable {
+  case `default` = "Default"
+  case hold = "Hold"
+  case smooth = "Smooth"
+
+  var id: String { rawValue }
+
+  var spec: ModulationSamplingOption? {
+    switch self {
+    case .default:
+      return nil
+    case .hold:
+      return .hold
+    case .smooth:
+      return .smooth
     }
   }
 }
