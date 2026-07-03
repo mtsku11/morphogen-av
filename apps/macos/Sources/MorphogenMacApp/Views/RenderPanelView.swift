@@ -1078,7 +1078,10 @@ struct RenderPanelView: View {
             samplingOverride: $state.ruttEtraModDepthSamplingOverride,
             scaleRange: -256...256, scaleStep: 8, offsetRange: -256...256, offsetStep: 8,
             modulator: $state.ruttEtraModDepthModulator,
-            modulatorNames: state.ruttEtraDeclaredModulatorNames
+            modulatorNames: state.ruttEtraDeclaredModulatorNames,
+            lfoShape: $state.ruttEtraModDepthLfoShape,
+            lfoRate: $state.ruttEtraModDepthLfoRate,
+            lfoPhase: $state.ruttEtraModDepthLfoPhase
           )
 
           ModulationSlotRow(
@@ -1089,7 +1092,10 @@ struct RenderPanelView: View {
             samplingOverride: $state.ruttEtraModPitchSamplingOverride,
             scaleRange: -255...255, scaleStep: 1, offsetRange: -256...256, offsetStep: 1,
             modulator: $state.ruttEtraModPitchModulator,
-            modulatorNames: state.ruttEtraDeclaredModulatorNames
+            modulatorNames: state.ruttEtraDeclaredModulatorNames,
+            lfoShape: $state.ruttEtraModPitchLfoShape,
+            lfoRate: $state.ruttEtraModPitchLfoRate,
+            lfoPhase: $state.ruttEtraModPitchLfoPhase
           )
 
           ModulationSlotRow(
@@ -1100,7 +1106,10 @@ struct RenderPanelView: View {
             samplingOverride: $state.ruttEtraModThicknessSamplingOverride,
             scaleRange: -63...63, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
             modulator: $state.ruttEtraModThicknessModulator,
-            modulatorNames: state.ruttEtraDeclaredModulatorNames
+            modulatorNames: state.ruttEtraDeclaredModulatorNames,
+            lfoShape: $state.ruttEtraModThicknessLfoShape,
+            lfoRate: $state.ruttEtraModThicknessLfoRate,
+            lfoPhase: $state.ruttEtraModThicknessLfoPhase
           )
 
           ModulationMediaRow(
@@ -2110,11 +2119,16 @@ private struct ModulationSlotRow: View {
   // least one named modulator is declared (`modulatorNames` non-empty).
   var modulator: Binding<String>? = nil
   var modulatorNames: [String] = []
+  // LFO opt-in; nil (the default) omits LFO from the source picker so call
+  // sites predating LFO are unchanged. Mirrors the named-modulator binding.
+  var lfoShape: Binding<LfoShapeOption>? = nil
+  var lfoRate: Binding<Double>? = nil
+  var lfoPhase: Binding<Double>? = nil
 
   var body: some View {
     HStack(spacing: 16) {
       Picker("Mod \(label)", selection: $source) {
-        ForEach(ModulationSourceOption.allCases) { option in
+        ForEach(ModulationSourceOption.allCases.filter { $0 != .lfo || lfoShape != nil }) { option in
           Text(option.rawValue).tag(option)
         }
       }
@@ -2122,7 +2136,27 @@ private struct ModulationSlotRow: View {
       .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
 
       if source != .off {
-        if let modulator, !modulatorNames.isEmpty {
+        if source == .lfo, let lfoShape, let lfoRate, let lfoPhase {
+          Picker("Shape", selection: lfoShape) {
+            ForEach(LfoShapeOption.allCases) { option in
+              Text(option.rawValue).tag(option)
+            }
+          }
+          .frame(width: 160)
+          .help("LFO waveform; every shape spans [0, 1] and starts at 0.")
+
+          Stepper(value: lfoRate, in: 0.05...60, step: 0.05) {
+            Text("Rate \(lfoRate.wrappedValue, specifier: "%.2f") Hz")
+          }
+          .frame(width: 160, alignment: .leading)
+          .help("Cycles per second on the render's timeline.")
+
+          Stepper(value: lfoPhase, in: 0...1, step: 0.05) {
+            Text("Phase \(lfoPhase.wrappedValue, specifier: "%.2f")")
+          }
+          .frame(width: 150, alignment: .leading)
+          .help("Phase offset in cycles (0.25 = a quarter cycle).")
+        } else if let modulator, !modulatorNames.isEmpty {
           Picker("Modulator", selection: modulator) {
             Text("Default").tag("")
             ForEach(modulatorNames, id: \.self) { name in
@@ -2178,8 +2212,9 @@ where
 
   var body: some View {
     HStack(spacing: 16) {
+      // Enum slots don't opt in to LFO (this slice), so filter it out.
       Picker("Mod \(label)", selection: $source) {
-        ForEach(ModulationSourceOption.allCases) { option in
+        ForEach(ModulationSourceOption.allCases.filter { $0 != .lfo }) { option in
           Text(option.rawValue).tag(option)
         }
       }

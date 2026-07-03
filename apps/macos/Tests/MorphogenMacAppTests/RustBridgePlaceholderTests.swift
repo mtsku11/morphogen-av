@@ -1528,6 +1528,61 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedRuttEtraSequenceArgumentsCarryLfoRouteWithoutMediaFlags() throws {
+    var request = makeRuttEtraRequest()
+    // A pure-LFO route set needs no modulator media at all — the point of the
+    // milestone (docs/LFO_MODULATION_MILESTONE.md, criterion 9).
+    request.modulationRoutes = [
+      ModulationRouteSpec(
+        target: "displacement_depth", source: "lfo(sine,0.5,0.25)", scale: 64, offset: -16),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--modulate"))
+    XCTAssertTrue(arguments.contains("displacement_depth=lfo(sine,0.5,0.25):64,-16"))
+    XCTAssertFalse(arguments.contains("--modulator-audio"))
+    XCTAssertFalse(arguments.contains("--modulator-frames"))
+    XCTAssertFalse(arguments.contains("--named-modulator-audio"))
+    XCTAssertFalse(arguments.contains("--named-modulator-frames"))
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsCarryLfoAndMediaRoutesCoexisting() throws {
+    var request = makeRuttEtraRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(
+        target: "displacement_depth", source: "lfo(saw,2,0)", scale: 96, offset: 0),
+      ModulationRouteSpec(target: "line_pitch", source: "luma", scale: 8, offset: 4),
+    ]
+    request.modulatorFramesURL = URL(fileURLWithPath: "/tmp/modulator-frames", isDirectory: true)
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("displacement_depth=lfo(saw,2,0):96,0"))
+    XCTAssertTrue(arguments.contains("line_pitch=luma:8,4"))
+    // Media flags cover the luma route only; the LFO route demands nothing.
+    guard let framesIndex = arguments.firstIndex(of: "--modulator-frames") else {
+      return XCTFail("expected a --modulator-frames flag for the luma route")
+    }
+    XCTAssertEqual(arguments[framesIndex + 1], "/tmp/modulator-frames")
+    XCTAssertFalse(arguments.contains("--modulator-audio"))
+  }
+
+  func testLfoSourceSpecFormatsAndValidates() {
+    // Valid params spell the exact route-grammar clause.
+    XCTAssertEqual(
+      lfoSourceSpec(shape: .saw, rate: 0.5, phase: 0.25), "lfo(saw,0.5,0.25)")
+    XCTAssertEqual(lfoSourceSpec(shape: .sine, rate: 1.0, phase: 0.0), "lfo(sine,1,0)")
+    XCTAssertEqual(
+      lfoSourceSpec(shape: .triangle, rate: 2.0, phase: 0.5), "lfo(triangle,2,0.5)")
+    // Invalid rate/phase mirror the CLI parse rules (rate finite > 0,
+    // phase finite) — rejected app-side before any launch.
+    XCTAssertNil(lfoSourceSpec(shape: .sine, rate: 0, phase: 0))
+    XCTAssertNil(lfoSourceSpec(shape: .sine, rate: -1, phase: 0))
+    XCTAssertNil(lfoSourceSpec(shape: .sine, rate: .infinity, phase: 0))
+    XCTAssertNil(lfoSourceSpec(shape: .sine, rate: 1, phase: .nan))
+  }
+
   func testQueuedRuttEtraSequenceArgumentsRejectInvalidKnobs() {
     let invalidPitch = RuttEtraSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/rutt-etra-queue.json"),

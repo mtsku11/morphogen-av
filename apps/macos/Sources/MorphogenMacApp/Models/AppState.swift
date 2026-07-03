@@ -299,16 +299,25 @@ final class AppState: ObservableObject {
   @Published var ruttEtraModDepthOffset = 0.0
   @Published var ruttEtraModDepthSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var ruttEtraModDepthModulator = ""
+  @Published var ruttEtraModDepthLfoShape = LfoShapeOption.sine
+  @Published var ruttEtraModDepthLfoRate = 1.0
+  @Published var ruttEtraModDepthLfoPhase = 0.0
   @Published var ruttEtraModPitchSource = ModulationSourceOption.off
   @Published var ruttEtraModPitchScale = 1.0
   @Published var ruttEtraModPitchOffset = 0.0
   @Published var ruttEtraModPitchSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var ruttEtraModPitchModulator = ""
+  @Published var ruttEtraModPitchLfoShape = LfoShapeOption.sine
+  @Published var ruttEtraModPitchLfoRate = 1.0
+  @Published var ruttEtraModPitchLfoPhase = 0.0
   @Published var ruttEtraModThicknessSource = ModulationSourceOption.off
   @Published var ruttEtraModThicknessScale = 1.0
   @Published var ruttEtraModThicknessOffset = 0.0
   @Published var ruttEtraModThicknessSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var ruttEtraModThicknessModulator = ""
+  @Published var ruttEtraModThicknessLfoShape = LfoShapeOption.sine
+  @Published var ruttEtraModThicknessLfoRate = 1.0
+  @Published var ruttEtraModThicknessLfoPhase = 0.0
   @Published var ruttEtraModulatorAudioURL: URL?
   @Published var ruttEtraModulatorFramesURL: URL?
   @Published var ruttEtraModSampling = ModulationSamplingOption.hold
@@ -1693,10 +1702,34 @@ final class AppState: ObservableObject {
     // Empty (the default) leaves every slot on the default modulator, so callers
     // predating named modulators need no change.
     slotModulators: [String] = [],
+    // Parallel to `slots`: the LFO params for a slot whose source is `.lfo`.
+    // Empty (the default) leaves every slot media-sourced, so callers whose
+    // panels don't opt in to LFO need no change.
+    slotLfos: [(shape: LfoShapeOption, rate: Double, phase: Double)?] = [],
     effectLabel: String
   ) -> [ModulationRouteSpec]? {
     var routes: [ModulationRouteSpec] = []
     for (index, slot) in slots.enumerated() {
+      if slot.source == .lfo {
+        // No media, no modulator name — the params live in the source clause.
+        guard let lfo = index < slotLfos.count ? slotLfos[index] : nil else {
+          statusMessage = "LFO is not available on the \(effectLabel) \(slot.target) slot."
+          return nil
+        }
+        guard let source = lfoSourceSpec(shape: lfo.shape, rate: lfo.rate, phase: lfo.phase) else {
+          statusMessage =
+            "LFO rate must be finite and greater than 0 (and phase finite) on the \(effectLabel) \(slot.target) slot."
+          return nil
+        }
+        routes.append(
+          ModulationRouteSpec(
+            target: slot.target, source: source, scale: slot.scale, offset: slot.offset,
+            sampling: slot.sampling.spec,
+            modulator: nil
+          )
+        )
+        continue
+      }
       guard let source = slot.source.cliValue else { continue }
       let modulator = index < slotModulators.count ? slotModulators[index] : ""
       // Resolve the media this slot reads: the default modulator (empty name)
@@ -2439,6 +2472,14 @@ final class AppState: ObservableObject {
       namedModulators: ruttEtraNamedModulators,
       slotModulators: [
         ruttEtraModDepthModulator, ruttEtraModPitchModulator, ruttEtraModThicknessModulator,
+      ],
+      slotLfos: [
+        (ruttEtraModDepthLfoShape, ruttEtraModDepthLfoRate, ruttEtraModDepthLfoPhase),
+        (ruttEtraModPitchLfoShape, ruttEtraModPitchLfoRate, ruttEtraModPitchLfoPhase),
+        (
+          ruttEtraModThicknessLfoShape, ruttEtraModThicknessLfoRate,
+          ruttEtraModThicknessLfoPhase
+        ),
       ],
       effectLabel: "rutt-etra"
     ) else { return }
@@ -3618,10 +3659,15 @@ enum ModulationSourceOption: String, CaseIterable, Identifiable {
   case audioCentroid = "Audio Centroid"
   case luma = "Luma"
   case flow = "Flow"
+  /// Internal deterministic modulator — no media. Only slot rows that opt in
+  /// (pass LFO bindings) offer it; `modulationRoutes` spells it per-slot via
+  /// `lfoSourceSpec`, so it never goes through `cliValue`.
+  case lfo = "LFO"
 
   var id: String { rawValue }
 
-  /// CLI route-grammar spelling; `nil` for `off`.
+  /// CLI route-grammar spelling; `nil` for `off` (and for `lfo`, whose
+  /// spelling is per-slot — see `lfoSourceSpec`).
   var cliValue: String? {
     switch self {
     case .off:
@@ -3636,6 +3682,8 @@ enum ModulationSourceOption: String, CaseIterable, Identifiable {
       return "luma"
     case .flow:
       return "flow"
+    case .lfo:
+      return nil
     }
   }
 
@@ -3728,6 +3776,42 @@ func enumModulationMapping<Option: CaseIterable & Equatable>(
   let fromIndex = all.firstIndex(of: from) ?? 0
   let toIndex = all.firstIndex(of: to) ?? 0
   return (Double(toIndex - fromIndex), Double(fromIndex))
+}
+
+/// LFO waveform for an LFO mod slot. Case order mirrors the engine's
+/// `LfoShape` declaration; `cliValue` is the route-grammar spelling.
+enum LfoShapeOption: String, CaseIterable, Identifiable {
+  case sine = "Sine"
+  case triangle = "Triangle"
+  case square = "Square"
+  case saw = "Saw"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .sine:
+      return "sine"
+    case .triangle:
+      return "triangle"
+    case .square:
+      return "square"
+    case .saw:
+      return "saw"
+    }
+  }
+}
+
+/// The exact `lfo(<shape>,<rate_hz>,<phase>)` source clause for the CLI route
+/// grammar, or `nil` when the params are invalid (mirrors the CLI parse
+/// rules: rate finite and > 0, phase finite). Free function for testability,
+/// the `enumModulationMapping` precedent.
+func lfoSourceSpec(shape: LfoShapeOption, rate: Double, phase: Double) -> String? {
+  guard rate.isFinite, rate > 0, phase.isFinite else { return nil }
+  func number(_ value: Double) -> String {
+    String(format: "%.6g", locale: Locale(identifier: "en_US_POSIX"), value)
+  }
+  return "lfo(\(shape.cliValue),\(number(rate)),\(number(phase)))"
 }
 
 enum PaletteQuantizeModeOption: String, CaseIterable, Identifiable {
