@@ -1038,6 +1038,195 @@ fn render_feedback_sequence_modulated_routes_join_checkpoint_contract() {
 }
 
 #[test]
+fn render_feedback_sequence_lfo_route_joins_checkpoint_contract() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    // Three identical source frames; the per-frame variation comes from the
+    // LFO alone — no modulator media of any kind exists in this test.
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        for dir in [&modulator_dir, &carrier_dir] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    // saw at 1 Hz, phase 0.25, fps 4: p = 0.25, 0.5, 0.75 across the three
+    // frames — a distinct routed feedback_mix per frame, so frame N's state
+    // consumed frames 0..N's values (what resume must reproduce). All
+    // literals are exactly representable in f32.
+    let route = "feedback_mix=lfo(saw,1,0.25):0.5,0.25";
+    let base_args = |output_dir: &str| {
+        vec![
+            "render-feedback-sequence".to_string(),
+            modulator_arg.clone(),
+            carrier_arg.clone(),
+            output_dir.to_string(),
+            "--carrier-amount".to_string(),
+            "8".to_string(),
+            "--feedback-amount".to_string(),
+            "12".to_string(),
+            "--feedback-mix".to_string(),
+            "0.7".to_string(),
+            "--decay".to_string(),
+            "0.95".to_string(),
+            "--max-frames".to_string(),
+            "3".to_string(),
+            "--frame-rate".to_string(),
+            "4".to_string(),
+            "--flow-source".to_string(),
+            "luminance".to_string(),
+        ]
+    };
+    let modulated_args = |output_dir: &str| {
+        let mut args = base_args(output_dir);
+        args.extend(["--modulate".to_string(), route.to_string()]);
+        args
+    };
+
+    // Unmodulated reference (the off case) and the uninterrupted modulated
+    // render the resumed one must match.
+    let off_dir = temp_dir.path().join("off-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&off_dir.to_string_lossy()))
+        .assert()
+        .success();
+    let uninterrupted_dir = temp_dir.path().join("uninterrupted-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(modulated_args(&uninterrupted_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "modulation routes: feedback_mix=lfo(saw,1,0.25):0.5,0.25",
+        ));
+
+    // The route actually drives the state evolution.
+    assert_ne!(
+        fs::read(uninterrupted_dir.join("frames/frame_000002.png")).expect("modulated frame"),
+        fs::read(off_dir.join("frames/frame_000002.png")).expect("unmodulated frame"),
+        "routed LFO feedback_mix must change the rendered sequence"
+    );
+
+    // Interrupt after frame 0, then resume with identical arguments.
+    let resumed_dir = temp_dir.path().join("resumed-output");
+    let resumed_args = modulated_args(&resumed_dir.to_string_lossy());
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed flow-feedback sequence after frame 0",
+        ));
+
+    // The LFO params ride the route inside the checkpoint's modulation block
+    // (no new contract fields); no media fingerprints exist to record.
+    let checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_dir.join("checkpoint.json")).expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "feedback_mix");
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["shape"], "saw");
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["rate_hz"], 1.0);
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["phase"], 0.25);
+    assert_eq!(modulation["routes"][0]["scale"], 0.5);
+    assert_eq!(modulation["routes"][0]["offset"], 0.25);
+    assert_eq!(modulation["fps"], 4.0);
+    assert!(modulation["modulator_audio"].is_null());
+    assert!(modulation["modulator_frames"].is_null());
+
+    // A changed rate_hz must refuse to resume — the knob history would
+    // differ (the existing contract-equality path, no new fields).
+    let mut changed_rate_args = base_args(&resumed_dir.to_string_lossy());
+    changed_rate_args.extend([
+        "--modulate".to_string(),
+        "feedback_mix=lfo(saw,2,0.25):0.5,0.25".to_string(),
+    ]);
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&changed_rate_args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+    // A changed shape must refuse for the same reason.
+    let mut changed_shape_args = base_args(&resumed_dir.to_string_lossy());
+    changed_shape_args.extend([
+        "--modulate".to_string(),
+        "feedback_mix=lfo(sine,1,0.25):0.5,0.25".to_string(),
+    ]);
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&changed_shape_args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+
+    // Identical arguments resume to byte-identity with uninterrupted.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered flow-feedback sequence with 3 frame(s)",
+        ));
+    for frame_name in ["frame_000000.png", "frame_000001.png", "frame_000002.png"] {
+        assert_eq!(
+            fs::read(resumed_dir.join("frames").join(frame_name)).expect("resumed frame"),
+            fs::read(uninterrupted_dir.join("frames").join(frame_name))
+                .expect("uninterrupted frame"),
+            "resumed LFO-modulated render must be byte-identical ({frame_name})"
+        );
+    }
+
+    // A legacy checkpoint (no modulation block at all) still deserializes
+    // and resumes after the Lfo variant landed on the route source type.
+    let legacy_dir = temp_dir.path().join("legacy-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+    let checkpoint_path = legacy_dir.join("checkpoint.json");
+    let mut legacy_checkpoint: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).expect("read legacy"))
+            .expect("parse legacy");
+    let contract = legacy_checkpoint["contract"]
+        .as_object_mut()
+        .expect("contract object");
+    assert!(contract.remove("modulation").is_some());
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_string(&legacy_checkpoint).expect("serialize legacy"),
+    )
+    .expect("write legacy checkpoint");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered flow-feedback sequence with 3 frame(s)",
+        ));
+}
+
+#[test]
 fn render_datamosh_sequence_reuses_flow_sidecars_and_resumes() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_dir = temp_dir.path().join("modulator-frames");
@@ -6439,4 +6628,133 @@ fn queue_rutt_etra_modulated_matches_direct_and_records_routes() {
     assert_eq!(modulation["routes"][0]["offset"], 2.0);
     assert_eq!(modulation["fps"], 4.0);
     assert_eq!(modulation["modulator_frames"], source_arg.as_str());
+}
+
+#[test]
+fn queue_rutt_etra_lfo_modulated_matches_direct_without_media() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        write_horizontal_carrier(&source_dir.join(frame_name), 24, 16);
+    }
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    // saw at 0.5 Hz, phase 0.25, fps 4: p = 0.25, 0.375 — a distinct depth
+    // per frame. All literals exactly representable in f32, so the queue's
+    // spec_text reconstruction round-trips bit-for-bit.
+    let depth_route = "displacement_depth=lfo(saw,0.5,0.25):64,-16";
+
+    // An unknown target on an LFO route still fails at add time and
+    // persists nothing.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-rutt-etra-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--modulate",
+            "mono=lfo(sine)",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unknown rutt-etra modulation target",
+        ));
+    assert!(
+        !queue_path.exists(),
+        "rejected queue-add must not write a queue file"
+    );
+
+    // Direct render: the LFO route needs NO --modulator-* flags at all.
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "2",
+            "--line-pitch",
+            "4",
+            "--modulate",
+            depth_route,
+            "--modulation-fps",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    // Queue-add likewise accepts the LFO route without modulator media.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-rutt-etra-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "4",
+            "--line-pitch",
+            "4",
+            "--modulate",
+            depth_route,
+        ])
+        .assert()
+        .success();
+
+    // Persisted job JSON: the LFO source is an object on the existing route
+    // field (no new task fields); no modulator media paths were demanded.
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue");
+    let task = &queue_json["jobs"][0]["task"];
+    assert_eq!(task["type"], "frame_sequence_rutt_etra");
+    let route = &task["modulation_routes"][0];
+    assert_eq!(route["target"], "displacement_depth");
+    assert_eq!(route["source"]["lfo"]["shape"], "saw");
+    assert_eq!(route["source"]["lfo"]["rate_hz"], 0.5);
+    assert_eq!(route["source"]["lfo"]["phase"], 0.25);
+    assert_eq!(route["scale"], 64.0);
+    assert_eq!(route["offset"], -16.0);
+    assert!(task["modulator_audio_path"].is_null());
+    assert!(task["modulator_frames_directory"].is_null());
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-rutt-etra-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render is byte-identical to the direct render (the spec
+    // reconstruction round-trips `lfo(...)` exactly), frames AND manifest.
+    for file_name in ["frame_000000.png", "frame_000001.png", "manifest.json"] {
+        assert_eq!(
+            fs::read(output_root.join("job-0001/frames").join(file_name)).expect("queued file"),
+            fs::read(direct_dir.join(file_name)).expect("direct file"),
+            "queue render must be byte-identical to direct render ({file_name})"
+        );
+    }
+
+    // Job manifest records the LFO route with no modulator media.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let modulation = &manifest["rutt_etra"]["modulation"];
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["shape"], "saw");
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["rate_hz"], 0.5);
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["phase"], 0.25);
+    assert_eq!(modulation["fps"], 4.0);
+    assert!(modulation["modulator_audio"].is_null());
+    assert!(modulation["modulator_frames"].is_null());
 }

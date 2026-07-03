@@ -7,12 +7,13 @@ use morphogen_audio::{save_wav_f32, AudioBufferF32};
 use morphogen_core::{
     AnalysisKind, DatamoshBitstreamOperation, DatamoshBitstreamPreset, DatamoshPreset,
     ExportFormat, FlowSource, GrainSelectionMode, GranularAudioModulation, KernelMode,
-    ModulationSampling as CoreModulationSampling, ModulationSource as CoreModulationSource,
-    NamedModulatorMedia, PixelSortAxis, PixelSortDirection, PixelSortKey, PixelSortMaskSource,
-    RenderBackend, RenderJob, RenderJobAnalysisCacheProvenance, RenderJobFailure,
-    RenderJobModulationRoute, RenderJobOutputMetadata, RenderJobProvenance,
-    RenderJobSourceProvenance, RenderJobStatus, RenderJobTask, RenderQuality, RenderQueue,
-    RenderSettings, RenderTimingMetadata, SourceRole, VectorRemixMode, VideoVocoderMode,
+    LfoShape as CoreLfoShape, ModulationSampling as CoreModulationSampling,
+    ModulationSource as CoreModulationSource, NamedModulatorMedia, PixelSortAxis,
+    PixelSortDirection, PixelSortKey, PixelSortMaskSource, RenderBackend, RenderJob,
+    RenderJobAnalysisCacheProvenance, RenderJobFailure, RenderJobModulationRoute,
+    RenderJobOutputMetadata, RenderJobProvenance, RenderJobSourceProvenance, RenderJobStatus,
+    RenderJobTask, RenderQuality, RenderQueue, RenderSettings, RenderTimingMetadata, SourceRole,
+    VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
@@ -21,15 +22,15 @@ use morphogen_render::{
     flow_displace_cpu, parse_modulation_route, validate_route_targets, BlendMode,
     BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
     ChannelShiftSettings, ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings,
-    FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource,
-    ModulationSampling, ModulationSource, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
-    RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection, SortKey,
-    StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM,
-    CASCADE_TRAIL_ALGORITHM, CHANNEL_SHIFT_ALGORITHM, CHANNEL_SHIFT_FLOW_ALGORITHM,
-    FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
-    PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
-    POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
-    RUTT_ETRA_ALGORITHM,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings, LfoShape,
+    MaskSource, ModulationSampling, ModulationSource, PaletteQuantizeSettings, PixelSortSettings,
+    QuantizeMode, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
+    SortKey, StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM,
+    CASCADE_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM, CHANNEL_SHIFT_ALGORITHM,
+    CHANNEL_SHIFT_FLOW_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
+    FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM, RUTT_ETRA_ALGORITHM,
 };
 
 use crate::args::*;
@@ -5458,20 +5459,31 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
 // --- Modulation-route persistence bridges (core ↔ render are both foreign,
 // so free helpers per the orphan-rule precedent) ---
 
-/// `Lfo` has no core-side mirror variant yet (queue support is a later
-/// slice of `docs/LFO_MODULATION_MILESTONE.md`); reject it here with a clear
-/// error rather than silently dropping it, so the enum stays exhaustive.
-fn core_modulation_source(source: ModulationSource) -> Result<CoreModulationSource, CliError> {
+fn core_lfo_shape(shape: LfoShape) -> CoreLfoShape {
+    match shape {
+        LfoShape::Sine => CoreLfoShape::Sine,
+        LfoShape::Triangle => CoreLfoShape::Triangle,
+        LfoShape::Square => CoreLfoShape::Square,
+        LfoShape::Saw => CoreLfoShape::Saw,
+    }
+}
+
+fn core_modulation_source(source: ModulationSource) -> CoreModulationSource {
     match source {
-        ModulationSource::AudioRms => Ok(CoreModulationSource::AudioRms),
-        ModulationSource::AudioOnset => Ok(CoreModulationSource::AudioOnset),
-        ModulationSource::AudioCentroid => Ok(CoreModulationSource::AudioCentroid),
-        ModulationSource::Luma => Ok(CoreModulationSource::Luma),
-        ModulationSource::Flow => Ok(CoreModulationSource::Flow),
-        ModulationSource::Lfo { .. } => Err(CliError::Message(
-            "lfo modulation sources are not yet supported on queued renders (use the direct CLI)"
-                .to_string(),
-        )),
+        ModulationSource::AudioRms => CoreModulationSource::AudioRms,
+        ModulationSource::AudioOnset => CoreModulationSource::AudioOnset,
+        ModulationSource::AudioCentroid => CoreModulationSource::AudioCentroid,
+        ModulationSource::Luma => CoreModulationSource::Luma,
+        ModulationSource::Flow => CoreModulationSource::Flow,
+        ModulationSource::Lfo {
+            shape,
+            rate_hz,
+            phase,
+        } => CoreModulationSource::Lfo {
+            shape: core_lfo_shape(shape),
+            rate_hz,
+            phase,
+        },
     }
 }
 
@@ -5553,17 +5565,15 @@ fn parse_queue_modulation_routes(
     }
     let routes = routes
         .into_iter()
-        .map(|route| {
-            Ok(RenderJobModulationRoute {
-                target: route.target,
-                source: core_modulation_source(route.source)?,
-                scale: route.scale,
-                offset: route.offset,
-                sampling: route.sampling.map(core_modulation_sampling),
-                modulator: route.modulator,
-            })
+        .map(|route| RenderJobModulationRoute {
+            target: route.target,
+            source: core_modulation_source(route.source),
+            scale: route.scale,
+            offset: route.offset,
+            sampling: route.sampling.map(core_modulation_sampling),
+            modulator: route.modulator,
         })
-        .collect::<Result<Vec<_>, CliError>>()?;
+        .collect();
     let to_named_media = |named: Vec<(String, PathBuf)>| -> Vec<NamedModulatorMedia> {
         named
             .into_iter()
@@ -5600,7 +5610,7 @@ fn modulation_specs_from_routes(routes: &[RenderJobModulationRoute]) -> Vec<Stri
             format!(
                 "{}={modulator}{}:{},{}{suffix}",
                 route.target,
-                route.source.name(),
+                route.source.spec_text(),
                 route.scale,
                 route.offset
             )

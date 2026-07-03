@@ -1221,9 +1221,36 @@ pub enum PixelSortMaskSource {
     AFlow,
 }
 
+/// An LFO waveform shape on a persisted modulation route.
+/// Mirrors `morphogen_render::LfoShape` for queue-job serialisation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LfoShape {
+    Sine,
+    Triangle,
+    Square,
+    Saw,
+}
+
+impl LfoShape {
+    /// The CLI route-grammar spelling (`sine`, `triangle`, `square`, `saw`).
+    pub fn name(self) -> &'static str {
+        match self {
+            LfoShape::Sine => "sine",
+            LfoShape::Triangle => "triangle",
+            LfoShape::Square => "square",
+            LfoShape::Saw => "saw",
+        }
+    }
+}
+
 /// Which analysis descriptor drives a persisted modulation route.
 /// Mirrors `morphogen_render::ModulationSource` for queue-job serialisation.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// The `f32` fields on `Lfo` force dropping the `Eq` derive (keep `Copy`,
+/// `PartialEq`); nothing in this crate requires `Eq` — the containing
+/// route/task types are themselves `PartialEq` only.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModulationSource {
     AudioRms,
@@ -1231,10 +1258,20 @@ pub enum ModulationSource {
     AudioCentroid,
     Luma,
     Flow,
+    /// Internal deterministic modulator — a pure function of
+    /// `(frame_time, params)`; no media, no sidecar, no fingerprint.
+    Lfo {
+        shape: LfoShape,
+        rate_hz: f32,
+        phase: f32,
+    },
 }
 
 impl ModulationSource {
-    /// The CLI route-grammar spelling (`audio-rms`, …).
+    /// The CLI route-grammar spelling (`audio-rms`, …). The LFO source's
+    /// spelling is dynamic (shape/rate/phase), so this returns a generic
+    /// `"lfo"` tag for it — use [`ModulationSource::spec_text`] for the
+    /// round-trippable spelling.
     pub fn name(self) -> &'static str {
         match self {
             ModulationSource::AudioRms => "audio-rms",
@@ -1242,6 +1279,22 @@ impl ModulationSource {
             ModulationSource::AudioCentroid => "audio-centroid",
             ModulationSource::Luma => "luma",
             ModulationSource::Flow => "flow",
+            ModulationSource::Lfo { .. } => "lfo",
+        }
+    }
+
+    /// The exact round-trippable spelling for the CLI route grammar's source
+    /// clause: media variants keep their `name()` spelling; the LFO variant
+    /// spells `lfo(<shape>,<rate_hz>,<phase>)` with `f32`'s `Display` (exact
+    /// round-trip, the established queue-identity mechanism).
+    pub fn spec_text(self) -> String {
+        match self {
+            ModulationSource::Lfo {
+                shape,
+                rate_hz,
+                phase,
+            } => format!("lfo({},{},{})", shape.name(), rate_hz, phase),
+            other => other.name().to_string(),
         }
     }
 }
@@ -1433,6 +1486,44 @@ impl RenderJobStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modulation_source_unit_variants_serialize_as_bare_strings() {
+        // Pre-slice queue JSON must stay byte-identical after the Lfo
+        // variant lands: unit variants are still plain kebab-case strings.
+        for (source, expected) in [
+            (ModulationSource::AudioRms, "\"audio-rms\""),
+            (ModulationSource::AudioOnset, "\"audio-onset\""),
+            (ModulationSource::AudioCentroid, "\"audio-centroid\""),
+            (ModulationSource::Luma, "\"luma\""),
+            (ModulationSource::Flow, "\"flow\""),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&source).expect("serialize source"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn lfo_modulation_source_serializes_as_an_object_with_exact_literals() {
+        // 0.5/0.25-style literals: exactly representable in f32, so the JSON
+        // round-trip compares clean (the established f32 JSON trap rule).
+        let source = ModulationSource::Lfo {
+            shape: LfoShape::Saw,
+            rate_hz: 0.5,
+            phase: 0.25,
+        };
+        let json = serde_json::to_string(&source).expect("serialize lfo source");
+        assert_eq!(
+            json,
+            r#"{"lfo":{"shape":"saw","rate_hz":0.5,"phase":0.25}}"#
+        );
+        let decoded: ModulationSource = serde_json::from_str(&json).expect("deserialize lfo");
+        assert_eq!(decoded, source);
+        assert_eq!(source.spec_text(), "lfo(saw,0.5,0.25)");
+        assert_eq!(source.name(), "lfo");
+    }
 
     #[test]
     fn frame_sequence_task_without_backend_field_defaults_to_cpu() {
