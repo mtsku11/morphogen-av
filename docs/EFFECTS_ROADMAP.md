@@ -159,6 +159,10 @@
 
 ## Scanline / Rutt-Etra Style Carrier Modulation
 
+> **Not yet started** — the only roadmap effect with no code landed. Flagged in
+> [RECOMMENDATIONS.md](RECOMMENDATIONS.md) as the highest payoff-per-effort next
+> effect (iconic look, cheap CPU MVP, instant modulation-matrix showcase).
+
 - Modulator input: Source A luminance, depth, or audio envelope.
 - Carrier input: Source B frame or generated scanline mesh.
 - Output: displaced scanline geometry or rasterized carrier.

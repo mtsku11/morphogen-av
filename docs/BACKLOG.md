@@ -2,7 +2,9 @@
 
 Shared, ordered follow-up backlog (history + next steps). Agent-neutral.
 The high-level plan lives in [EFFECTS_ROADMAP.md](EFFECTS_ROADMAP.md); per-effect
-contracts live in the `*_MILESTONE.md` docs.
+contracts live in the `*_MILESTONE.md` docs. Strategic "where next / what would
+take this to the next level" notes live in
+[RECOMMENDATIONS.md](RECOMMENDATIONS.md).
 
 ## Completed
 
