@@ -23,8 +23,68 @@ use crate::{
     RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
 };
 
-/// Which analysis descriptor drives a route.
+/// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
+/// `[0,1]` and is `0.0` at `p = 0` (square is low-first).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LfoShape {
+    Sine,
+    Triangle,
+    Square,
+    Saw,
+}
+
+impl LfoShape {
+    /// The CLI spelling (`sine`, `triangle`, `square`, `saw`).
+    pub fn name(self) -> &'static str {
+        match self {
+            LfoShape::Sine => "sine",
+            LfoShape::Triangle => "triangle",
+            LfoShape::Square => "square",
+            LfoShape::Saw => "saw",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "sine" => Some(LfoShape::Sine),
+            "triangle" => Some(LfoShape::Triangle),
+            "square" => Some(LfoShape::Square),
+            "saw" => Some(LfoShape::Saw),
+            _ => None,
+        }
+    }
+
+    /// Evaluate the shape at phase-fraction `p ∈ [0,1)`. Pinned formulas —
+    /// changing any changes rendered frames (milestone doc, "Semantics").
+    pub fn evaluate(self, p: f64) -> f64 {
+        match self {
+            LfoShape::Sine => 0.5 - 0.5 * (2.0 * std::f64::consts::PI * p).cos(),
+            LfoShape::Triangle => {
+                if p < 0.5 {
+                    2.0 * p
+                } else {
+                    2.0 - 2.0 * p
+                }
+            }
+            LfoShape::Saw => p,
+            LfoShape::Square => {
+                if p < 0.5 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+        }
+    }
+}
+
+/// Which analysis descriptor drives a route.
+///
+/// The `f32` fields on `Lfo` force dropping the `Eq` derive (keep `Copy`,
+/// `PartialEq`); nothing requires `Eq` — `EnvelopeKey` comparisons are `==`
+/// in a `Vec`, there are no map keys.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModulationSource {
     /// Peak-normalized RMS envelope of the modulator WAV (**relative**).
@@ -37,11 +97,21 @@ pub enum ModulationSource {
     Luma,
     /// Peak-normalized mean temporal optical-flow magnitude (**relative**).
     Flow,
+    /// A pure function of `(frame_time, params)` — no media, no sidecar, no
+    /// fingerprint. `rate_hz` is cycles/second on the envelope timeline;
+    /// `phase` is a phase offset in cycles (`fract` applied at eval time).
+    Lfo {
+        shape: LfoShape,
+        rate_hz: f32,
+        phase: f32,
+    },
 }
 
 impl ModulationSource {
     /// The CLI spelling (`audio-rms`, `audio-onset`, `audio-centroid`,
-    /// `luma`, `flow`).
+    /// `luma`, `flow`). The LFO source's spelling is dynamic (shape/rate/
+    /// phase), so this returns a generic `"lfo"` tag for it — use
+    /// [`ModulationSource::spec_text`] for the round-trippable spelling.
     pub fn name(self) -> &'static str {
         match self {
             ModulationSource::AudioRms => "audio-rms",
@@ -49,6 +119,22 @@ impl ModulationSource {
             ModulationSource::AudioCentroid => "audio-centroid",
             ModulationSource::Luma => "luma",
             ModulationSource::Flow => "flow",
+            ModulationSource::Lfo { .. } => "lfo",
+        }
+    }
+
+    /// The exact round-trippable spelling for the CLI grammar's source
+    /// clause: media variants keep their `name()` spelling; the LFO variant
+    /// spells `lfo(<shape>,<rate_hz>,<phase>)` with `f32`'s `Display` (exact
+    /// round-trip, the established queue-identity mechanism).
+    pub fn spec_text(self) -> String {
+        match self {
+            ModulationSource::Lfo {
+                shape,
+                rate_hz,
+                phase,
+            } => format!("lfo({},{},{})", shape.name(), rate_hz, phase),
+            other => other.name().to_string(),
         }
     }
 
@@ -154,23 +240,40 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
         None => (rest, None),
     };
     // An optional `<name>.` prefix selects a named modulator; the source
-    // names themselves contain no '.', so the first dot is unambiguous.
-    let (modulator, source_name) = match source_name.split_once('.') {
-        Some((name, source_name)) => {
-            let name = name.trim();
-            if name.is_empty() {
-                return Err(bad("empty modulator name"));
+    // names themselves contain no '.', so the first dot is unambiguous —
+    // except `lfo(...)`, whose parens may themselves contain a '.'
+    // (`lfo(sine,0.5)`). An `lfo(...)` body never takes a named-modulator
+    // prefix (no media to name), so the dot-split must not run on it; a real
+    // prefix ahead of one (`wob.lfo(sine)`) is a distinct, explicit error.
+    let (modulator, source_name) = if source_name.trim().starts_with("lfo(") {
+        (None, source_name)
+    } else {
+        match source_name.split_once('.') {
+            Some((name, inner)) => {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Err(bad("empty modulator name"));
+                }
+                if inner.trim().starts_with("lfo(") {
+                    return Err(bad(
+                        "a named modulator prefix is not allowed on an lfo source (lfo needs no media)",
+                    ));
+                }
+                (Some(name.to_string()), inner)
             }
-            (Some(name.to_string()), source_name)
+            None => (None, source_name),
         }
-        None => (None, source_name),
     };
     let source_name = source_name.trim();
-    let source = ModulationSource::parse(source_name).ok_or_else(|| {
-        bad(&format!(
-            "unknown source '{source_name}' (available: audio-rms, audio-onset, audio-centroid, luma, flow)"
-        ))
-    })?;
+    let source = if source_name.starts_with("lfo(") {
+        parse_lfo_source(source_name, &bad)?
+    } else {
+        ModulationSource::parse(source_name).ok_or_else(|| {
+            bad(&format!(
+                "unknown source '{source_name}' (available: audio-rms, audio-onset, audio-centroid, luma, flow, lfo)"
+            ))
+        })?
+    };
     let (scale, offset) = match params {
         None => (1.0, 0.0),
         Some(params) => {
@@ -202,6 +305,54 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
         offset,
         sampling,
         modulator,
+    })
+}
+
+/// Parse the `lfo(<shape>[,<rate_hz>[,<phase>]])` source body (parens
+/// included, already trimmed). `bad` is the caller's spec-scoped error
+/// constructor (milestone doc, "Grammar").
+fn parse_lfo_source(
+    text: &str,
+    bad: &dyn Fn(&str) -> RenderError,
+) -> Result<ModulationSource, RenderError> {
+    let inner = text
+        .strip_prefix("lfo(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| bad(&format!("malformed lfo(...) source '{text}'")))?;
+    let mut parts = inner.split(',');
+    let shape_text = parts.next().unwrap_or("").trim();
+    let shape = LfoShape::parse(shape_text).ok_or_else(|| {
+        bad(&format!(
+            "unknown lfo shape '{shape_text}' (available: sine, triangle, square, saw)"
+        ))
+    })?;
+    let rate_hz: f32 = match parts.next() {
+        None => 1.0,
+        Some(text) => text
+            .trim()
+            .parse()
+            .map_err(|_| bad(&format!("invalid lfo rate_hz '{}'", text.trim())))?,
+    };
+    if !rate_hz.is_finite() || rate_hz <= 0.0 {
+        return Err(bad("lfo rate_hz must be finite and greater than 0"));
+    }
+    let phase: f32 = match parts.next() {
+        None => 0.0,
+        Some(text) => text
+            .trim()
+            .parse()
+            .map_err(|_| bad(&format!("invalid lfo phase '{}'", text.trim())))?,
+    };
+    if !phase.is_finite() {
+        return Err(bad("lfo phase must be finite"));
+    }
+    if parts.next().is_some() {
+        return Err(bad("lfo(...) accepts at most shape, rate_hz, phase"));
+    }
+    Ok(ModulationSource::Lfo {
+        shape,
+        rate_hz,
+        phase,
     })
 }
 
@@ -277,6 +428,21 @@ pub fn modulated_value(
     t: f64,
     sampling: ModulationSampling,
 ) -> f32 {
+    if let ModulationSource::Lfo {
+        shape,
+        rate_hz,
+        phase,
+    } = route.source
+    {
+        // LFO routes bypass envelope extraction and sampling entirely — a
+        // pure function of `(t, params)`. `sampling` (`@hold`/`@smooth`) is a
+        // documented no-op here (nothing sparse to sample). All math in f64,
+        // cast to f32 at the end (milestone doc, "Semantics").
+        let x = rate_hz as f64 * t + phase as f64;
+        let p = x - x.floor(); // fract(x) = x - x.floor(), so p ∈ [0,1)
+        let raw = shape.evaluate(p);
+        return (raw * route.scale as f64 + route.offset as f64) as f32;
+    }
     sample_envelope(samples, t, sampling) * route.scale + route.offset
 }
 
@@ -962,6 +1128,174 @@ mod tests {
         ] {
             assert_ne!(source.needs_audio(), source.needs_frames());
             assert_eq!(ModulationSource::parse(source.name()), Some(source));
+        }
+    }
+
+    #[test]
+    fn lfo_needs_no_media() {
+        let source = ModulationSource::Lfo {
+            shape: LfoShape::Square,
+            rate_hz: 2.0,
+            phase: 0.0,
+        };
+        assert!(!source.needs_audio());
+        assert!(!source.needs_frames());
+    }
+
+    #[test]
+    fn lfo_shape_formulas_are_pinned_at_quarter_points() {
+        // milestone doc, "Semantics" — changing any of these changes rendered
+        // frames.
+        let cases: [(LfoShape, [f64; 4]); 4] = [
+            (LfoShape::Sine, [0.0, 0.5, 1.0, 0.5]),
+            (LfoShape::Triangle, [0.0, 0.5, 1.0, 0.5]),
+            (LfoShape::Saw, [0.0, 0.25, 0.5, 0.75]),
+            (LfoShape::Square, [0.0, 0.0, 1.0, 1.0]),
+        ];
+        for (shape, expected) in cases {
+            for (p, want) in [0.0, 0.25, 0.5, 0.75].into_iter().zip(expected) {
+                let got = shape.evaluate(p);
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "{shape:?} at p={p}: got {got}, want {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lfo_phase_wraps_via_floor_based_fract() {
+        // phase 1.25 must behave identically to phase 0.25 (fract(x) =
+        // x - x.floor()) at every t.
+        let wrapped = parse_modulation_route("depth=lfo(saw,1,1.25)").unwrap();
+        let base = parse_modulation_route("depth=lfo(saw,1,0.25)").unwrap();
+        for t in [0.0, 0.5, 1.0, 3.3] {
+            let a = modulated_value(&wrapped, &[], t, ModulationSampling::Hold);
+            let b = modulated_value(&base, &[], t, ModulationSampling::Hold);
+            assert_eq!(a, b, "phase 1.25 must equal phase 0.25 at t={t}");
+        }
+    }
+
+    #[test]
+    fn parses_lfo_source_full_grammar_and_defaults() {
+        let route = parse_modulation_route("displacement_depth=lfo(sine)").unwrap();
+        assert_eq!(
+            route.source,
+            ModulationSource::Lfo {
+                shape: LfoShape::Sine,
+                rate_hz: 1.0,
+                phase: 0.0,
+            }
+        );
+        assert_eq!(route.scale, 1.0);
+        assert_eq!(route.offset, 0.0);
+        assert_eq!(route.modulator, None);
+
+        let route = parse_modulation_route("depth=lfo(saw,0.5,0.25):64,-32@smooth").unwrap();
+        assert_eq!(
+            route.source,
+            ModulationSource::Lfo {
+                shape: LfoShape::Saw,
+                rate_hz: 0.5,
+                phase: 0.25,
+            }
+        );
+        assert_eq!(route.scale, 64.0);
+        assert_eq!(route.offset, -32.0);
+        assert_eq!(route.sampling, Some(ModulationSampling::Smooth));
+
+        // Round trip: spec_text() composes with target/scale/offset/suffix
+        // through the exact same parser (the milestone's Trap 2 pin).
+        let respec = format!("depth={}:64,-32@smooth", route.source.spec_text());
+        assert_eq!(respec, "depth=lfo(saw,0.5,0.25):64,-32@smooth");
+        let reparsed = parse_modulation_route(&respec).unwrap();
+        assert_eq!(reparsed, route);
+    }
+
+    #[test]
+    fn parses_lfo_source_with_named_modulator_dot_unambiguously() {
+        // Trap 1: the named-modulator dot-split must not eat the '.' inside
+        // `lfo(sine,0.5)`.
+        let route = parse_modulation_route("depth=lfo(sine,0.5)").unwrap();
+        assert_eq!(route.modulator, None);
+        assert_eq!(
+            route.source,
+            ModulationSource::Lfo {
+                shape: LfoShape::Sine,
+                rate_hz: 0.5,
+                phase: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_malformed_lfo_specs() {
+        for spec in [
+            "depth=lfo(wobble)",     // unknown shape
+            "depth=lfo(sine,0)",     // rate must be > 0
+            "depth=lfo(sine,-1)",    // negative rate
+            "depth=lfo(sine,inf)",   // non-finite rate
+            "depth=lfo(sine,1,nan)", // non-finite phase
+            "depth=lfo(sine,1,2,3)", // too many params
+            "depth=lfo(sine",        // malformed (no closing paren)
+            "depth=wob.lfo(sine)",   // named prefix on an lfo source
+        ] {
+            assert!(
+                parse_modulation_route(spec).is_err(),
+                "expected '{spec}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn lfo_sampling_suffix_is_a_documented_no_op() {
+        let unsuffixed = parse_modulation_route("depth=lfo(sine,0.5):64,-32").unwrap();
+        let held = parse_modulation_route("depth=lfo(sine,0.5):64,-32@hold").unwrap();
+        let smoothed = parse_modulation_route("depth=lfo(sine,0.5):64,-32@smooth").unwrap();
+        for t in [0.0, 0.3, 0.77, 1.5] {
+            let a = modulated_value(&unsuffixed, &[], t, ModulationSampling::Hold);
+            let b = modulated_value(&held, &[], t, ModulationSampling::Smooth);
+            let c = modulated_value(&smoothed, &[], t, ModulationSampling::Hold);
+            assert_eq!(a, b, "@hold must equal unsuffixed, byte-equal, at t={t}");
+            assert_eq!(a, c, "@smooth must equal unsuffixed, byte-equal, at t={t}");
+        }
+    }
+
+    #[test]
+    fn lfo_source_serializes_as_an_object_with_exact_literals() {
+        let source = ModulationSource::Lfo {
+            shape: LfoShape::Sine,
+            rate_hz: 0.5,
+            phase: 0.25,
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        assert_eq!(
+            json,
+            r#"{"lfo":{"shape":"sine","rate_hz":0.5,"phase":0.25}}"#
+        );
+        let decoded: ModulationSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, source);
+
+        // Pre-slice unit variants stay bare strings — byte-identical
+        // checkpoints/manifests/queue JSON.
+        assert_eq!(
+            serde_json::to_string(&ModulationSource::AudioRms).unwrap(),
+            "\"audio-rms\""
+        );
+    }
+
+    #[test]
+    fn lfo_scale_zero_offset_k_is_continuity_identity_with_a_constant() {
+        // milestone doc, acceptance criterion 2: target=lfo(sine,1):0,K byte-
+        // identical to passing constant K directly, on rutt-etra
+        // displacement_depth.
+        let route = parse_modulation_route("displacement_depth=lfo(sine,1):0,150").unwrap();
+        let mut rutt = RuttEtraSettings::default();
+        for t in [0.0, 0.1, 0.37, 5.5] {
+            let value = modulated_value(&route, &[], t, ModulationSampling::Hold);
+            assert_eq!(value, 150.0, "scale 0 must ignore t entirely, t={t}");
+            apply_rutt_etra_modulation(&mut rutt, "displacement_depth", value).unwrap();
+            assert_eq!(rutt.displacement_depth, 150.0);
         }
     }
 }

@@ -78,7 +78,7 @@ impl ModulationPlan {
                 format!(
                     "{}={modulator}{}:{},{}{suffix}",
                     route.target,
-                    route.source.name(),
+                    route.source.spec_text(),
                     route.scale,
                     route.offset
                 )
@@ -282,6 +282,10 @@ fn extract_envelope(
         )
     };
     match source {
+        // A pure function of (frame_time, params) — no media, no sidecar, no
+        // fingerprint. `modulated_value` computes the value directly from
+        // the route; this envelope is never consulted.
+        ModulationSource::Lfo { .. } => Ok(Vec::new()),
         ModulationSource::AudioRms => {
             let buffer = load_wav_f32(resolve_audio()?)?;
             let frames = rms_envelope(&buffer, MODULATION_WINDOW, MODULATION_HOP)?;
@@ -476,5 +480,42 @@ mod tests {
                 "'{excluded}' must not be a modulation target"
             );
         }
+    }
+
+    #[test]
+    fn pure_lfo_route_builds_a_plan_without_modulator_media() {
+        // Acceptance criterion 3: a pure-LFO route with no --modulator-*
+        // flags renders — the no-media-needed point of the milestone.
+        let request = ModulationRequest {
+            specs: &["displacement_depth=lfo(sine,0.5):100".to_string()],
+            modulator_audio: None,
+            modulator_frames: None,
+            sampling: ModulationSampling::Hold,
+            fps: 30.0,
+            cache_dir: None,
+            named_modulator_audio: &[],
+            named_modulator_frames: &[],
+        };
+        let plan = build_modulation_plan(request)
+            .unwrap()
+            .expect("a non-empty spec list must build a plan");
+        let values: Vec<(&str, f32)> = plan.frame_values(0).collect();
+        assert_eq!(values, vec![("displacement_depth", 0.0)]);
+        assert_eq!(plan.describe(), "displacement_depth=lfo(sine,0.5,0):100,0");
+    }
+
+    #[test]
+    fn zero_routes_stays_the_exact_unmodulated_path() {
+        let request = ModulationRequest {
+            specs: &[],
+            modulator_audio: None,
+            modulator_frames: None,
+            sampling: ModulationSampling::Hold,
+            fps: 30.0,
+            cache_dir: None,
+            named_modulator_audio: &[],
+            named_modulator_frames: &[],
+        };
+        assert!(build_modulation_plan(request).unwrap().is_none());
     }
 }

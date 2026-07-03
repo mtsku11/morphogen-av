@@ -129,7 +129,7 @@ pub use modulation::{
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
     apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
     modulated_value, parse_modulation_route, peak_normalize, sample_envelope,
-    validate_route_targets, ModulationRoute, ModulationSampling, ModulationSource,
+    validate_route_targets, LfoShape, ModulationRoute, ModulationSampling, ModulationSource,
     CHANNEL_SHIFT_MODULATION_TARGETS, FLOW_FEEDBACK_MODULATION_TARGETS,
     FLUID_ADVECT_MODULATION_TARGETS, FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS,
     PALETTE_QUANTIZE_MODULATION_TARGETS, PIXEL_SORT_MODULATION_TARGETS,

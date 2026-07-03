@@ -5458,13 +5458,20 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
 // --- Modulation-route persistence bridges (core ↔ render are both foreign,
 // so free helpers per the orphan-rule precedent) ---
 
-fn core_modulation_source(source: ModulationSource) -> CoreModulationSource {
+/// `Lfo` has no core-side mirror variant yet (queue support is a later
+/// slice of `docs/LFO_MODULATION_MILESTONE.md`); reject it here with a clear
+/// error rather than silently dropping it, so the enum stays exhaustive.
+fn core_modulation_source(source: ModulationSource) -> Result<CoreModulationSource, CliError> {
     match source {
-        ModulationSource::AudioRms => CoreModulationSource::AudioRms,
-        ModulationSource::AudioOnset => CoreModulationSource::AudioOnset,
-        ModulationSource::AudioCentroid => CoreModulationSource::AudioCentroid,
-        ModulationSource::Luma => CoreModulationSource::Luma,
-        ModulationSource::Flow => CoreModulationSource::Flow,
+        ModulationSource::AudioRms => Ok(CoreModulationSource::AudioRms),
+        ModulationSource::AudioOnset => Ok(CoreModulationSource::AudioOnset),
+        ModulationSource::AudioCentroid => Ok(CoreModulationSource::AudioCentroid),
+        ModulationSource::Luma => Ok(CoreModulationSource::Luma),
+        ModulationSource::Flow => Ok(CoreModulationSource::Flow),
+        ModulationSource::Lfo { .. } => Err(CliError::Message(
+            "lfo modulation sources are not yet supported on queued renders (use the direct CLI)"
+                .to_string(),
+        )),
     }
 }
 
@@ -5546,15 +5553,17 @@ fn parse_queue_modulation_routes(
     }
     let routes = routes
         .into_iter()
-        .map(|route| RenderJobModulationRoute {
-            target: route.target,
-            source: core_modulation_source(route.source),
-            scale: route.scale,
-            offset: route.offset,
-            sampling: route.sampling.map(core_modulation_sampling),
-            modulator: route.modulator,
+        .map(|route| {
+            Ok(RenderJobModulationRoute {
+                target: route.target,
+                source: core_modulation_source(route.source)?,
+                scale: route.scale,
+                offset: route.offset,
+                sampling: route.sampling.map(core_modulation_sampling),
+                modulator: route.modulator,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, CliError>>()?;
     let to_named_media = |named: Vec<(String, PathBuf)>| -> Vec<NamedModulatorMedia> {
         named
             .into_iter()
