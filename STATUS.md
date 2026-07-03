@@ -10,7 +10,7 @@ _Last updated: 2026-07-03_
 
 - `cargo test --workspace`: **469 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **89 passing, 0 failing.**
+- `swift test`: **90 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,21 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Post-`2ff7612` audit + follow-up fixes; Rutt-Etra contract written**
+  (`b5d3ef0` + docs). Audited the 7 commits after `2ff7612` (sampling UI,
+  named-modulator queue path, panel UI ×2, STATUS ×3): gates re-run fresh
+  (cargo 469/0, swift 89/0, clippy clean), slot↔binding alignment cross-checked
+  programmatically at all 9 call sites, all 29 view slot rows stem-consistent,
+  all 7 remove fns reset their full slot set, queue-run reconstruction
+  symmetric. Two findings, both fixed: the milestone doc's stale "SwiftUI still
+  emits unnamed routes" claim (replaced with the landed panel-UI paragraph) and
+  a duplicate-declared-name rename collision (bridge now refuses a route bound
+  to a name declared more than once, before the CLI's blunter duplicate-flag
+  error; unreferenced duplicates stay harmless). `swift test` 89 → **90**.
+  **Next action:** build the Rutt-Etra scanline MVP — the contract + build
+  handoff is `docs/RUTT_ETRA_MILESTONE.md`, slice plan in `docs/BACKLOG.md`
+  "Next" (slice 1 = CPU reference + CLI + gradient-fixture visual proof).
 
 - **Named-modulator panel UI — 6-panel sweep** (`c6f62af`). The named-modulator
   UI now covers **every** mod panel: feedback, fluid, retro-static, palette-

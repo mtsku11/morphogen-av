@@ -116,6 +116,24 @@ take this to the next level" notes live in
 
 ## Next
 
+### Rutt-Etra Scanline Milestone
+
+The next new effect: luma-displaced scanline rendering, the only
+`EFFECTS_ROADMAP.md` entry with no code landed and the top
+payoff-per-effort pick in `RECOMMENDATIONS.md`. The authoritative contract,
+acceptance criteria, and build handoff are in `docs/RUTT_ETRA_MILESTONE.md`.
+
+1. Slice 1: deterministic CPU reference (`rutt_etra_scanline_cpu_v1`) +
+   `render-rutt-etra-sequence` CLI, depth-0 identity anchor, gradient-fixture
+   visual proof with a frame-delta number.
+2. Slice 2: modulation targets (`displacement_depth`, `line_pitch`,
+   `line_thickness`) via the standard clamp-never-error apply fn; audio-RMS
+   route readout against a static carrier.
+3. Slice 3: queue add/run (byte-identical to direct) + SwiftUI panel on the
+   palette-quantize pattern, mod slots + named modulators included.
+4. Deferred: Metal port (scatter-rasterization parity, field-particles splat
+   precedent), two-source A→B, depth descriptor, HQ anti-aliased lines.
+
 ### Flow Feedback and Advection Milestone
 
 The next effect is not another independent processor. It is a stateful temporal render primitive that the later datamosh, optical-flow, and video-vocoder work can reuse. The authoritative contract and acceptance criteria are in `docs/FLOW_FEEDBACK_MILESTONE.md`.
