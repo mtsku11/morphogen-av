@@ -126,8 +126,10 @@ take this to the next level" notes live in
 
 ## Next
 
-Pick from `docs/RECOMMENDATIONS.md` — next in its recommended ordering is
-**LFO modulation sources** (Part 2 §B), then effect chaining (Part 2 §A).
+**LFO modulation sources** — contract in `docs/LFO_MODULATION_MILESTONE.md`
+(RECOMMENDATIONS Part 2 §B): `lfo(shape,rate,phase)` as a media-free
+deterministic `ModulationSource`, slices = engine+CLI → queue+stateful
+contracts → SwiftUI one-panel vertical. Then effect chaining (Part 2 §A).
 The Rutt-Etra deferred slices wait on the look being user-confirmed on real
 footage.
 
