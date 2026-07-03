@@ -1198,6 +1198,21 @@ pub(crate) enum Commands {
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
     },
+    /// Run an ordered list of stateless single-source effect stages from a JSON
+    /// spec (see docs/EFFECT_CHAIN_MILESTONE.md). Stage 1 reads `input_dir`;
+    /// each later stage reads the previous stage's output directory
+    /// (`<output_dir>/stage_<NN>_<effect>/`). Writes
+    /// `<output_dir>/chain-manifest.json` recording each stage's algorithm id
+    /// and resolved settings. The whole spec is validated before any stage
+    /// renders. Slice 1: CPU-only, stateless stages
+    /// (retro_static/channel_shift/palette_quantize/rutt_etra), no modulation.
+    RenderChain {
+        /// Chain spec JSON (`{"version": 1, "stages": [...]}`).
+        spec_path: PathBuf,
+        /// Input frames (PNG sequence) read by stage 1.
+        input_dir: PathBuf,
+        output_dir: PathBuf,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains

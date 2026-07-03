@@ -10,6 +10,7 @@ use morphogen_render::{
 
 mod args;
 mod audio;
+mod chain;
 mod error;
 mod imaging;
 mod modulate;
@@ -19,6 +20,7 @@ mod render;
 mod showcase;
 use args::*;
 use audio::*;
+use chain::*;
 use error::CliError;
 use project::*;
 use queue::*;
@@ -907,6 +909,11 @@ fn run() -> Result<(), CliError> {
             },
         })
         .map(|_| ()),
+        Commands::RenderChain {
+            spec_path,
+            input_dir,
+            output_dir,
+        } => render_chain(&spec_path, &input_dir, &output_dir),
         Commands::RenderFluidMosaicSequence {
             source_a_dir,
             source_b_dir,

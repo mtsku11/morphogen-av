@@ -51,7 +51,7 @@ impl Default for PaletteQuantizeSettings {
 }
 
 impl PaletteQuantizeSettings {
-    fn validate(&self) -> Result<(), RenderError> {
+    pub fn validate(&self) -> Result<(), RenderError> {
         if matches!(self.mode, QuantizeMode::Posterize) && self.levels < 2 {
             return Err(RenderError::InvalidPaletteQuantizeSettings(
                 "levels must be >= 2 for posterize mode".into(),

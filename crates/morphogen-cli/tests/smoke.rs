@@ -191,6 +191,237 @@ fn render_rutt_etra_sequence_modulation_continuity_identity() {
     ));
 }
 
+fn write_chain_spec(path: &Path, spec_json: &str) {
+    fs::write(path, spec_json).expect("write chain spec");
+}
+
+#[test]
+fn render_chain_spec_round_trips_and_writes_manifest_shape() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(
+        &spec_path,
+        r#"{
+            "version": 1,
+            "stages": [
+                { "effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false },
+                { "effect": "palette_quantize", "mode": "posterize", "levels": 4 }
+            ]
+        }"#,
+    );
+    let output_dir = temp_dir.path().join("chain-out");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-chain",
+            spec_path.to_string_lossy().as_ref(),
+            source_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rendered chain with 2 stage(s)"))
+        .stdout(predicate::str::contains(
+            output_dir
+                .join("stage_02_palette_quantize")
+                .display()
+                .to_string(),
+        ));
+
+    // Stage directory names/order are the contracted shape.
+    assert!(output_dir
+        .join("stage_01_rutt_etra/frame_000000.png")
+        .exists());
+    assert!(output_dir.join("stage_01_rutt_etra/manifest.json").exists());
+    assert!(output_dir
+        .join("stage_02_palette_quantize/frame_000000.png")
+        .exists());
+
+    let manifest = read_json(&output_dir.join("chain-manifest.json"));
+    assert_eq!(manifest["version"], 1);
+    assert_eq!(manifest["frame_count"], 2);
+    assert_eq!(manifest["stages"][0]["effect"], "rutt_etra");
+    assert_eq!(
+        manifest["stages"][0]["algorithm"],
+        "rutt_etra_scanline_cpu_v1"
+    );
+    assert_eq!(manifest["stages"][0]["settings"]["line_pitch"], 4);
+    assert_eq!(manifest["stages"][0]["settings"]["displacement_depth"], 6.0);
+    assert_eq!(manifest["stages"][1]["effect"], "palette_quantize");
+    assert_eq!(
+        manifest["stages"][1]["algorithm"],
+        "palette_quantize_posterize_cpu_v1"
+    );
+    assert_eq!(manifest["stages"][1]["settings"]["mode"], "posterize");
+    assert_eq!(manifest["stages"][1]["settings"]["levels"], 4);
+}
+
+#[test]
+fn render_chain_rejects_empty_stages_unknown_tag_unknown_field_and_bad_knob() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let run_case = |name: &str, spec_json: &str, expected_stderr: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, spec_json);
+        let output_dir = temp_dir.path().join(format!("{name}-out"));
+
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-chain",
+                spec_path.to_string_lossy().as_ref(),
+                source_arg.as_str(),
+                output_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected_stderr));
+
+        assert!(
+            !output_dir.exists(),
+            "{name}: nothing must be written to the output dir on rejection"
+        );
+    };
+
+    run_case(
+        "empty-stages",
+        r#"{"version": 1, "stages": []}"#,
+        "at least one stage",
+    );
+    run_case(
+        "unknown-tag",
+        r#"{"version": 1, "stages": [{"effect": "not_a_real_effect"}]}"#,
+        "unknown variant `not_a_real_effect`",
+    );
+    run_case(
+        "unknown-field",
+        r#"{"version": 1, "stages": [{"effect": "palette_quantize", "levels": 4, "bogus_field": true}]}"#,
+        "unknown field `bogus_field`",
+    );
+    run_case(
+        "bad-knob-palette",
+        r#"{"version": 1, "stages": [{"effect": "palette_quantize", "mode": "posterize", "levels": 1}]}"#,
+        "levels must be >= 2",
+    );
+    // Stage 2's typo must not leave stage 1's output on disk.
+    run_case(
+        "bad-knob-stage-2",
+        r#"{"version": 1, "stages": [
+            {"effect": "channel_shift"},
+            {"effect": "rutt_etra", "line_pitch": 0}
+        ]}"#,
+        "line_pitch must be >= 1",
+    );
+}
+
+#[test]
+fn render_chain_single_stage_is_byte_identical_to_direct_render() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(
+        &spec_path,
+        r#"{"version": 1, "stages": [
+            {"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false}
+        ]}"#,
+    );
+    let chain_output_dir = temp_dir.path().join("chain-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-chain",
+            spec_path.to_string_lossy().as_ref(),
+            source_arg.as_str(),
+            chain_output_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+
+    let direct_output_dir = temp_dir.path().join("direct-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_arg.as_str(),
+            direct_output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "6.0",
+            "--line-thickness",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    let chain_stage_dir = chain_output_dir.join("stage_01_rutt_etra");
+    assert_png_frames_identical(&direct_output_dir, &chain_stage_dir, 3);
+    assert_eq!(
+        fs::read(chain_stage_dir.join("manifest.json")).expect("chain stage manifest"),
+        fs::read(direct_output_dir.join("manifest.json")).expect("direct manifest"),
+        "chain stage-1 manifest.json must be byte-identical to the direct render's manifest.json"
+    );
+}
+
+#[test]
+fn render_chain_same_spec_twice_is_byte_identical() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(
+        &spec_path,
+        r#"{"version": 1, "stages": [
+            {"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false},
+            {"effect": "palette_quantize", "mode": "posterize", "levels": 4}
+        ]}"#,
+    );
+
+    let run_1_dir = temp_dir.path().join("run-1");
+    let run_2_dir = temp_dir.path().join("run-2");
+    for output_dir in [&run_1_dir, &run_2_dir] {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-chain",
+                spec_path.to_string_lossy().as_ref(),
+                source_arg.as_str(),
+                output_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .success();
+    }
+
+    for relative in [
+        "stage_01_rutt_etra/frame_000000.png",
+        "stage_01_rutt_etra/frame_000001.png",
+        "stage_01_rutt_etra/manifest.json",
+        "stage_02_palette_quantize/frame_000000.png",
+        "stage_02_palette_quantize/frame_000001.png",
+        "chain-manifest.json",
+    ] {
+        assert_eq!(
+            fs::read(run_1_dir.join(relative)).unwrap_or_else(|_| panic!("run 1 {relative}")),
+            fs::read(run_2_dir.join(relative)).unwrap_or_else(|_| panic!("run 2 {relative}")),
+            "two runs of the same chain spec must be byte-identical ({relative})"
+        );
+    }
+}
+
 #[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
