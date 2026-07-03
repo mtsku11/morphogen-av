@@ -8,9 +8,9 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **469 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **481 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **90 passing, 0 failing.**
+- `swift test`: **95 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -18,6 +18,29 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Rutt-Etra scanline MVP — all 3 slices** (`d736048`, `6efc990`, `e656d2c`;
+  built by a Sonnet subagent against `docs/RUTT_ETRA_MILESTONE.md`, each slice
+  independently verified before acceptance). Slice 1: deterministic CPU
+  reference `rutt_etra_scanline_cpu_v1` (Rec.709 luma → vertical scanline
+  displacement, adjacent-column spans, last-writer-wins) +
+  `render-rutt-etra-sequence` CLI with a knobs+algorithm manifest (the manifest
+  was the one audit catch — the agent initially mirrored palette-quantize's
+  stdout-only convention; the contract required a manifest.json). Gradient
+  fixture off-vs-on cross-delta **19.382/255**, frames Read-confirmed (flat
+  scanlines → left-to-right upward ramp). Slice 2: modulation targets
+  `displacement_depth` (clamp ±512) / `line_pitch` [1,256] / `line_thickness`
+  [1,64] via the standard apply fn; `displacement_depth=audio-rms:96` on a
+  static carrier: within-off 0.000, within-on 18.528, quiet frames flat, loud
+  frames steeply raked (Read-confirmed). Slice 3: queue add/run byte-identical
+  to direct (frames AND manifest, smoke-pinned) + SwiftUI panel on the
+  palette-quantize pattern (depth slot ±256/step 8, no backend picker —
+  CPU-only, 5 bridge arg tests). cargo 469 → **481**, swift 90 → **95**, clippy
+  + fmt clean. **Next action:** pick from `docs/RECOMMENDATIONS.md` — next in
+  its ordering is LFO modulation sources, or the Rutt-Etra deferred slices
+  (Metal port, two-source A→B) once the look is user-confirmed on real footage
+  (`swift run MorphogenMacApp` → Rutt-Etra panel, or
+  `cargo run -p morphogen-cli -- render-rutt-etra-sequence <frames> <out>`).
 
 - **Post-`2ff7612` audit + follow-up fixes; Rutt-Etra contract written**
   (`b5d3ef0` + docs). Audited the 7 commits after `2ff7612` (sampling UI,

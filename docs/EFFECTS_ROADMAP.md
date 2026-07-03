@@ -159,11 +159,11 @@
 
 ## Scanline / Rutt-Etra Style Carrier Modulation
 
-> **Contract written, build queued** — the acceptance contract and build
-> handoff live in [RUTT_ETRA_MILESTONE.md](RUTT_ETRA_MILESTONE.md); the slice
-> plan is in [BACKLOG.md](BACKLOG.md) "Next". Flagged in
-> [RECOMMENDATIONS.md](RECOMMENDATIONS.md) as the highest payoff-per-effort
-> next effect (iconic look, cheap CPU MVP, instant modulation-matrix showcase).
+> **MVP shipped (Slices 1–3)** — CPU reference `rutt_etra_scanline_cpu_v1`,
+> `render-rutt-etra-sequence` CLI with manifest, modulation targets, queue
+> task, SwiftUI panel; contract + acceptance evidence in
+> [RUTT_ETRA_MILESTONE.md](RUTT_ETRA_MILESTONE.md). Deferred: Metal port,
+> two-source A→B, depth descriptor, HQ anti-aliased lines.
 
 - Modulator input: Source A luminance, depth, or audio envelope.
 - Carrier input: Source B frame or generated scanline mesh.

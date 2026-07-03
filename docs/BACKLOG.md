@@ -114,25 +114,22 @@ take this to the next level" notes live in
   `direction`/`axis`, palette-quantize `mode`. Deferred: stateful modulation
   targets.
 
+- Rutt-Etra scanline MVP, all 3 slices per `docs/RUTT_ETRA_MILESTONE.md`:
+  deterministic CPU reference `rutt_etra_scanline_cpu_v1` +
+  `render-rutt-etra-sequence` CLI with a knobs+algorithm manifest; modulation
+  targets `displacement_depth`/`line_pitch`/`line_thickness` (clamp/integer
+  rules, audio-RMS static-carrier readout proven); queue add/run
+  byte-identical to direct (frames and manifest) + SwiftUI panel on the
+  palette-quantize pattern (CPU-only, no backend picker). Deferred per
+  contract: Metal port (scatter-rasterization parity, field-particles splat
+  precedent), two-source A→B, depth descriptor, HQ anti-aliased lines.
+
 ## Next
 
-### Rutt-Etra Scanline Milestone
-
-The next new effect: luma-displaced scanline rendering, the only
-`EFFECTS_ROADMAP.md` entry with no code landed and the top
-payoff-per-effort pick in `RECOMMENDATIONS.md`. The authoritative contract,
-acceptance criteria, and build handoff are in `docs/RUTT_ETRA_MILESTONE.md`.
-
-1. Slice 1: deterministic CPU reference (`rutt_etra_scanline_cpu_v1`) +
-   `render-rutt-etra-sequence` CLI, depth-0 identity anchor, gradient-fixture
-   visual proof with a frame-delta number.
-2. Slice 2: modulation targets (`displacement_depth`, `line_pitch`,
-   `line_thickness`) via the standard clamp-never-error apply fn; audio-RMS
-   route readout against a static carrier.
-3. Slice 3: queue add/run (byte-identical to direct) + SwiftUI panel on the
-   palette-quantize pattern, mod slots + named modulators included.
-4. Deferred: Metal port (scatter-rasterization parity, field-particles splat
-   precedent), two-source A→B, depth descriptor, HQ anti-aliased lines.
+Pick from `docs/RECOMMENDATIONS.md` — next in its recommended ordering is
+**LFO modulation sources** (Part 2 §B), then effect chaining (Part 2 §A).
+The Rutt-Etra deferred slices wait on the look being user-confirmed on real
+footage.
 
 ### Flow Feedback and Advection Milestone
 

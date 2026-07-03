@@ -1,11 +1,11 @@
 # Rutt-Etra Scanline Milestone — luma-displaced scanline rendering
 
-**Status: contract written, no code landed.** This doc is both the acceptance
-contract (per the CLAUDE.md "contract first" workflow) and the build handoff:
-a fresh session should be able to implement Slices 1–3 from this file plus the
-cited precedents alone. Origin: `docs/EFFECTS_ROADMAP.md` "Scanline /
-Rutt-Etra Style Carrier Modulation" (the only roadmap effect with no code) and
-`docs/RECOMMENDATIONS.md` Part 1 §1 (highest payoff ÷ effort).
+**Status: Slices 1–3 landed and verified** (CPU reference + CLI, modulation
+targets, queue + SwiftUI panel — all acceptance criteria met, add→run
+byte-identity smoke-pinned). Only the Deferred section remains open. This doc
+is the acceptance contract (per the CLAUDE.md "contract first" workflow).
+Origin: `docs/EFFECTS_ROADMAP.md` "Scanline / Rutt-Etra Style Carrier
+Modulation" and `docs/RECOMMENDATIONS.md` Part 1 §1 (highest payoff ÷ effort).
 
 ## Origin & Goal
 
