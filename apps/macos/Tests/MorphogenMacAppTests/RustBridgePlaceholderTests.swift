@@ -992,6 +992,104 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedChannelShiftSequenceArgumentsCarryNamedModulators() throws {
+    var request = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/channel-shift-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/channel-shift", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      shiftRX: 0,
+      shiftRY: 0,
+      shiftGX: 0,
+      shiftGY: 0,
+      shiftBX: 0,
+      shiftBY: 0,
+      sourceADirectoryURL: nil,
+      flowGain: 0,
+      flowRadius: 4,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      // A named-audio route, a named-frames route, and a default-media route.
+      ModulationRouteSpec(target: "shift_r_x", source: "audio-rms", scale: 8, offset: 0, modulator: "bass"),
+      ModulationRouteSpec(target: "shift_g_y", source: "luma", scale: 12, offset: 0, modulator: "cam"),
+      ModulationRouteSpec(target: "shift_b_y", source: "audio-onset", scale: -8, offset: 2),
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/default-modulator.wav")
+    request.namedModulators = [
+      NamedModulatorMediaSpec(
+        name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+      NamedModulatorMediaSpec(
+        name: "cam", audioURL: nil,
+        framesURL: URL(fileURLWithPath: "/tmp/cam-frames", isDirectory: true)),
+      // Declared but unreferenced — must NOT emit a flag (and must not error on nil media).
+      NamedModulatorMediaSpec(name: "unused", audioURL: nil, framesURL: nil),
+    ]
+    request.modulationSampling = .hold
+
+    let arguments = try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: request)
+
+    // Named routes gain the `name.` prefix; the default route stays bare.
+    XCTAssertTrue(arguments.contains("shift_r_x=bass.audio-rms:8,0"))
+    XCTAssertTrue(arguments.contains("shift_g_y=cam.luma:12,0"))
+    XCTAssertTrue(arguments.contains("shift_b_y=audio-onset:-8,2"))
+
+    // The default audio route still emits the default `--modulator-audio`.
+    guard let audioIndex = arguments.firstIndex(of: "--modulator-audio") else {
+      return XCTFail("expected the default --modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[audioIndex + 1], "/tmp/default-modulator.wav")
+    // No default frames flag — no unnamed luma/flow route uses it.
+    XCTAssertFalse(arguments.contains("--modulator-frames"))
+
+    // Referenced named modulators emit `name=path` value tokens.
+    guard let namedAudioIndex = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[namedAudioIndex + 1], "bass=/tmp/bass.wav")
+    guard let namedFramesIndex = arguments.firstIndex(of: "--named-modulator-frames") else {
+      return XCTFail("expected a --named-modulator-frames flag")
+    }
+    XCTAssertEqual(arguments[namedFramesIndex + 1], "cam=/tmp/cam-frames")
+
+    // The unreferenced modulator contributes nothing.
+    XCTAssertFalse(arguments.contains(where: { $0.hasPrefix("unused=") }))
+  }
+
+  func testQueuedChannelShiftSequenceArgumentsRejectNamedModulatorMissingMedia() {
+    var request = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/channel-shift-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/channel-shift", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      shiftRX: 0,
+      shiftRY: 0,
+      shiftGX: 0,
+      shiftGY: 0,
+      shiftBX: 0,
+      shiftBY: 0,
+      sourceADirectoryURL: nil,
+      flowGain: 0,
+      flowRadius: 4,
+      backend: .cpu,
+      projectURL: nil
+    )
+    // Route reads bass.audio-rms but the declared "bass" carries no WAV.
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "shift_r_x", source: "audio-rms", scale: 8, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: nil, framesURL: nil),
+    ]
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: request)
+    )
+  }
+
   func testQueuedPaletteQuantizeSequenceArgumentsIncludeModeAndLevels() throws {
     let request = PaletteQuantizeSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/palette-quantize-queue.json"),

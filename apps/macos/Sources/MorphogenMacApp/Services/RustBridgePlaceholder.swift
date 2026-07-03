@@ -2042,7 +2042,8 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
-      sampling: request.modulationSampling
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
     )
 
     return arguments
@@ -2723,7 +2724,8 @@ enum RustBridgePlaceholder {
     routes: [ModulationRouteSpec],
     modulatorAudioURL: URL?,
     modulatorFramesURL: URL?,
-    sampling: ModulationSamplingOption
+    sampling: ModulationSamplingOption,
+    namedModulators: [NamedModulatorMediaSpec] = []
   ) throws {
     guard !routes.isEmpty else { return }
     for route in routes {
@@ -2733,13 +2735,19 @@ enum RustBridgePlaceholder {
         )
       }
       arguments.append("--modulate")
-      var spec = "\(route.target)=\(route.source):\(cliNumber(route.scale)),\(cliNumber(route.offset))"
+      let prefix = route.modulator.flatMap { $0.isEmpty ? nil : "\($0)." } ?? ""
+      var spec = "\(route.target)=\(prefix)\(route.source):\(cliNumber(route.scale)),\(cliNumber(route.offset))"
       if let override = route.sampling {
         spec += "@\(override.cliValue)"
       }
       arguments.append(spec)
     }
-    if routes.contains(where: { $0.source.hasPrefix("audio-") }) {
+    // Default `--modulator-*` media only covers unnamed routes; a route bound
+    // to a named modulator draws from its own `--named-modulator-*` entry.
+    func isDefault(_ route: ModulationRouteSpec) -> Bool {
+      route.modulator.map { $0.isEmpty } ?? true
+    }
+    if routes.contains(where: { isDefault($0) && $0.source.hasPrefix("audio-") }) {
       guard let audioURL = modulatorAudioURL else {
         throw RustBridgeError.invalidFrameSequenceRequest(
           "audio-* modulation sources require a modulator WAV"
@@ -2748,7 +2756,7 @@ enum RustBridgePlaceholder {
       arguments.append("--modulator-audio")
       arguments.append(audioURL.path)
     }
-    if routes.contains(where: { $0.source == "luma" || $0.source == "flow" }) {
+    if routes.contains(where: { isDefault($0) && ($0.source == "luma" || $0.source == "flow") }) {
       guard let framesURL = modulatorFramesURL else {
         throw RustBridgeError.invalidFrameSequenceRequest(
           "luma/flow modulation sources require a modulator frame directory"
@@ -2756,6 +2764,34 @@ enum RustBridgePlaceholder {
       }
       arguments.append("--modulator-frames")
       arguments.append(framesURL.path)
+    }
+    // Emit `--named-modulator-*` only for names an actual route references,
+    // and only for the media kind that route needs.
+    for modulator in namedModulators where !modulator.name.isEmpty {
+      let usesAudio = routes.contains {
+        $0.modulator == modulator.name && $0.source.hasPrefix("audio-")
+      }
+      let usesFrames = routes.contains {
+        $0.modulator == modulator.name && ($0.source == "luma" || $0.source == "flow")
+      }
+      if usesAudio {
+        guard let audioURL = modulator.audioURL else {
+          throw RustBridgeError.invalidFrameSequenceRequest(
+            "named modulator '\(modulator.name)' is routed to an audio source but has no WAV selected"
+          )
+        }
+        arguments.append("--named-modulator-audio")
+        arguments.append("\(modulator.name)=\(audioURL.path)")
+      }
+      if usesFrames {
+        guard let framesURL = modulator.framesURL else {
+          throw RustBridgeError.invalidFrameSequenceRequest(
+            "named modulator '\(modulator.name)' is routed to a luma/flow source but has no frame directory selected"
+          )
+        }
+        arguments.append("--named-modulator-frames")
+        arguments.append("\(modulator.name)=\(framesURL.path)")
+      }
     }
     arguments.append("--modulation-sampling")
     arguments.append(sampling.cliValue)
@@ -3025,6 +3061,19 @@ struct ModulationRouteSpec: Equatable {
   // `--modulation-sampling` default (no `@hold`/`@smooth` suffix emitted).
   // Defaulted so call sites predating this override keep their meaning.
   var sampling: ModulationSamplingOption? = nil
+  // Named modulator this route reads from; nil/empty reads the default
+  // `--modulator-*` media and emits a bare `source` (no `name.` prefix).
+  // Defaulted so call sites predating named modulators keep their meaning.
+  var modulator: String? = nil
+}
+
+/// A declared named modulator: its `name` plus whichever media it carries.
+/// The bridge emits `--named-modulator-audio name=path` (and/or `-frames`)
+/// only for names that at least one route actually references.
+struct NamedModulatorMediaSpec: Equatable {
+  let name: String
+  let audioURL: URL?
+  let framesURL: URL?
 }
 
 struct RetroStaticSequenceRenderQueueCommandRequest {
@@ -3304,6 +3353,9 @@ struct ChannelShiftSequenceRenderQueueCommandRequest {
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
+  // Declared named modulators; defaulted empty so call sites predating the
+  // named-modulator UI keep their single-modulator meaning.
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct PaletteQuantizeSequenceRenderQueueCommandRequest {

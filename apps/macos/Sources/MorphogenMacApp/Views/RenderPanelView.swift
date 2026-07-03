@@ -815,7 +815,9 @@ struct RenderPanelView: View {
             scale: $state.channelShiftModRXScale,
             offset: $state.channelShiftModRXOffset,
             samplingOverride: $state.channelShiftModRXSamplingOverride,
-            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
+            modulator: $state.channelShiftModRXModulator,
+            modulatorNames: state.channelShiftDeclaredModulatorNames
           )
 
           ModulationSlotRow(
@@ -824,7 +826,9 @@ struct RenderPanelView: View {
             scale: $state.channelShiftModRYScale,
             offset: $state.channelShiftModRYOffset,
             samplingOverride: $state.channelShiftModRYSamplingOverride,
-            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
+            modulator: $state.channelShiftModRYModulator,
+            modulatorNames: state.channelShiftDeclaredModulatorNames
           )
 
           ModulationSlotRow(
@@ -833,7 +837,9 @@ struct RenderPanelView: View {
             scale: $state.channelShiftModGXScale,
             offset: $state.channelShiftModGXOffset,
             samplingOverride: $state.channelShiftModGXSamplingOverride,
-            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
+            modulator: $state.channelShiftModGXModulator,
+            modulatorNames: state.channelShiftDeclaredModulatorNames
           )
 
           ModulationSlotRow(
@@ -842,7 +848,9 @@ struct RenderPanelView: View {
             scale: $state.channelShiftModGYScale,
             offset: $state.channelShiftModGYOffset,
             samplingOverride: $state.channelShiftModGYSamplingOverride,
-            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
+            modulator: $state.channelShiftModGYModulator,
+            modulatorNames: state.channelShiftDeclaredModulatorNames
           )
 
           ModulationSlotRow(
@@ -851,7 +859,9 @@ struct RenderPanelView: View {
             scale: $state.channelShiftModBXScale,
             offset: $state.channelShiftModBXOffset,
             samplingOverride: $state.channelShiftModBXSamplingOverride,
-            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
+            modulator: $state.channelShiftModBXModulator,
+            modulatorNames: state.channelShiftDeclaredModulatorNames
           )
 
           ModulationSlotRow(
@@ -860,7 +870,9 @@ struct RenderPanelView: View {
             scale: $state.channelShiftModBYScale,
             offset: $state.channelShiftModBYOffset,
             samplingOverride: $state.channelShiftModBYSamplingOverride,
-            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1
+            scaleRange: -64...64, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
+            modulator: $state.channelShiftModBYModulator,
+            modulatorNames: state.channelShiftDeclaredModulatorNames
           )
 
           ModulationMediaRow(
@@ -874,6 +886,14 @@ struct RenderPanelView: View {
             sampling: $state.channelShiftModSampling,
             chooseAudio: { state.chooseChannelShiftModulatorWAV() },
             chooseFrames: { state.chooseChannelShiftModulatorFrames() }
+          )
+
+          NamedModulatorsSection(
+            modulators: $state.channelShiftNamedModulators,
+            onAdd: { state.addChannelShiftNamedModulator() },
+            onRemove: { state.removeChannelShiftNamedModulator(id: $0) },
+            chooseAudio: { state.chooseChannelShiftNamedModulatorWAV(id: $0) },
+            chooseFrames: { state.chooseChannelShiftNamedModulatorFrames(id: $0) }
           )
 
           Text(state.channelShiftSummary)
@@ -1897,6 +1917,11 @@ private struct ModulationSlotRow: View {
   var scaleStep = 0.1
   var offsetRange: ClosedRange<Double> = -1...1
   var offsetStep = 0.05
+  // Named-modulator binding; nil (the default) hides the picker so call sites
+  // predating named modulators are unchanged. The picker only shows once at
+  // least one named modulator is declared (`modulatorNames` non-empty).
+  var modulator: Binding<String>? = nil
+  var modulatorNames: [String] = []
 
   var body: some View {
     HStack(spacing: 16) {
@@ -1909,6 +1934,17 @@ private struct ModulationSlotRow: View {
       .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
 
       if source != .off {
+        if let modulator, !modulatorNames.isEmpty {
+          Picker("Modulator", selection: modulator) {
+            Text("Default").tag("")
+            ForEach(modulatorNames, id: \.self) { name in
+              Text(name).tag(name)
+            }
+          }
+          .frame(width: 180)
+          .help("Which modulator media this route reads; Default uses the panel's Modulator WAV/Frames.")
+        }
+
         Stepper(value: $scale, in: scaleRange, step: scaleStep) {
           Text("Scale \(scale, specifier: "%.2f")")
         }
@@ -2025,6 +2061,53 @@ private struct ModulationMediaRow: View {
         .pickerStyle(.segmented)
         .frame(width: 200)
         .help("Hold steps between envelope samples; Smooth interpolates linearly.")
+      }
+    }
+  }
+}
+
+/// Declares extra named modulators for a panel: a name field plus WAV/Frames
+/// pickers per row, and an Add button. A mod slot's Modulator picker binds to
+/// one of these by name; the panel's default `ModulationMediaRow` still covers
+/// unnamed slots.
+private struct NamedModulatorsSection: View {
+  @Binding var modulators: [NamedModulatorEntry]
+  let onAdd: () -> Void
+  let onRemove: (UUID) -> Void
+  let chooseAudio: (UUID) -> Void
+  let chooseFrames: (UUID) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        Text("Named Modulators")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Button("Add", action: onAdd)
+          .help("Declare another modulator so different slots can read different media.")
+      }
+
+      ForEach($modulators) { $entry in
+        HStack(spacing: 12) {
+          TextField("Name", text: $entry.name)
+            .frame(width: 120)
+            .help("Route grammar: target=name.source. Must be non-empty and unique.")
+
+          Button("WAV…") { chooseAudio(entry.id) }
+          Text(entry.audioURL?.lastPathComponent ?? "—")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button("Frames…") { chooseFrames(entry.id) }
+          Text(entry.framesURL?.lastPathComponent ?? "—")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button(role: .destructive) { onRemove(entry.id) } label: {
+            Image(systemName: "trash")
+          }
+          .help("Remove this modulator; slots bound to it reset to Default.")
+        }
       }
     }
   }

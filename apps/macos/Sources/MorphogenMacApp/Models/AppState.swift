@@ -214,29 +214,39 @@ final class AppState: ObservableObject {
   @Published var channelShiftModRXScale = 1.0
   @Published var channelShiftModRXOffset = 0.0
   @Published var channelShiftModRXSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var channelShiftModRXModulator = ""
   @Published var channelShiftModRYSource = ModulationSourceOption.off
   @Published var channelShiftModRYScale = 1.0
   @Published var channelShiftModRYOffset = 0.0
   @Published var channelShiftModRYSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var channelShiftModRYModulator = ""
   @Published var channelShiftModGXSource = ModulationSourceOption.off
   @Published var channelShiftModGXScale = 1.0
   @Published var channelShiftModGXOffset = 0.0
   @Published var channelShiftModGXSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var channelShiftModGXModulator = ""
   @Published var channelShiftModGYSource = ModulationSourceOption.off
   @Published var channelShiftModGYScale = 1.0
   @Published var channelShiftModGYOffset = 0.0
   @Published var channelShiftModGYSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var channelShiftModGYModulator = ""
   @Published var channelShiftModBXSource = ModulationSourceOption.off
   @Published var channelShiftModBXScale = 1.0
   @Published var channelShiftModBXOffset = 0.0
   @Published var channelShiftModBXSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var channelShiftModBXModulator = ""
   @Published var channelShiftModBYSource = ModulationSourceOption.off
   @Published var channelShiftModBYScale = 1.0
   @Published var channelShiftModBYOffset = 0.0
   @Published var channelShiftModBYSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var channelShiftModBYModulator = ""
   @Published var channelShiftModulatorAudioURL: URL?
   @Published var channelShiftModulatorFramesURL: URL?
   @Published var channelShiftModSampling = ModulationSamplingOption.hold
+  // Named modulators: extra modulator media a slot can bind to instead of the
+  // single default `channelShiftModulator*URL`. Empty = only the default is
+  // available (panels predating this stay visually unchanged).
+  @Published var channelShiftNamedModulators: [NamedModulatorEntry] = []
   // Palette Quantize — posterize levels / neon-palette colour collapse.
   // Levels default 8 (visible posterize) rather than the CLI's 256 passthrough
   // so the first Run shows the effect; 256 stays reachable as the off case.
@@ -1603,28 +1613,60 @@ final class AppState: ObservableObject {
     )],
     modulatorAudioURL: URL?,
     modulatorFramesURL: URL?,
+    namedModulators: [NamedModulatorEntry] = [],
+    // Parallel to `slots`: the named modulator each slot binds to ("" = default).
+    // Empty (the default) leaves every slot on the default modulator, so callers
+    // predating named modulators need no change.
+    slotModulators: [String] = [],
     effectLabel: String
   ) -> [ModulationRouteSpec]? {
     var routes: [ModulationRouteSpec] = []
-    for slot in slots {
+    for (index, slot) in slots.enumerated() {
       guard let source = slot.source.cliValue else { continue }
-      if slot.source.needsAudio && modulatorAudioURL == nil {
-        statusMessage = "Pick a modulator WAV before rendering \(effectLabel) with an audio source."
+      let modulator = index < slotModulators.count ? slotModulators[index] : ""
+      // Resolve the media this slot reads: the default modulator (empty name)
+      // or the same-named declared entry.
+      let audioURL: URL?
+      let framesURL: URL?
+      if modulator.isEmpty {
+        audioURL = modulatorAudioURL
+        framesURL = modulatorFramesURL
+      } else {
+        guard let entry = namedModulators.first(where: { $0.name == modulator }) else {
+          statusMessage =
+            "Declare a modulator named \"\(modulator)\" before rendering \(effectLabel)."
+          return nil
+        }
+        audioURL = entry.audioURL
+        framesURL = entry.framesURL
+      }
+      let mediaLabel = modulator.isEmpty ? effectLabel : "modulator \"\(modulator)\""
+      if slot.source.needsAudio && audioURL == nil {
+        statusMessage = "Pick a modulator WAV for \(mediaLabel) before rendering with an audio source."
         return nil
       }
-      if slot.source.needsFrames && modulatorFramesURL == nil {
+      if slot.source.needsFrames && framesURL == nil {
         statusMessage =
-          "Pick a modulator frame directory before rendering \(effectLabel) with a luma/flow source."
+          "Pick a modulator frame directory for \(mediaLabel) before rendering with a luma/flow source."
         return nil
       }
       routes.append(
         ModulationRouteSpec(
           target: slot.target, source: source, scale: slot.scale, offset: slot.offset,
-          sampling: slot.sampling.spec
+          sampling: slot.sampling.spec,
+          modulator: modulator.isEmpty ? nil : modulator
         )
       )
     }
     return routes
+  }
+
+  /// Declared named modulators mapped to the bridge's media spec. Empty-named
+  /// entries are dropped (they are indistinguishable from the default).
+  private func namedModulatorSpecs(_ entries: [NamedModulatorEntry]) -> [NamedModulatorMediaSpec] {
+    entries.filter { !$0.name.isEmpty }.map {
+      NamedModulatorMediaSpec(name: $0.name, audioURL: $0.audioURL, framesURL: $0.framesURL)
+    }
   }
 
   func chooseRetroStaticModulatorWAV() {
@@ -1745,6 +1787,66 @@ final class AppState: ObservableObject {
     }
     channelShiftModulatorFramesURL = url
     statusMessage = "Channel-shift modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  /// Non-empty declared names for the channel-shift slots' Modulator pickers.
+  var channelShiftDeclaredModulatorNames: [String] {
+    channelShiftNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+
+  /// Append a new named-modulator row, seeding a unique default name.
+  func addChannelShiftNamedModulator() {
+    let existing = Set(channelShiftNamedModulators.map(\.name))
+    var index = channelShiftNamedModulators.count + 1
+    var name = "mod\(index)"
+    while existing.contains(name) {
+      index += 1
+      name = "mod\(index)"
+    }
+    channelShiftNamedModulators.append(NamedModulatorEntry(name: name))
+    statusMessage = "Added named modulator \"\(name)\"."
+  }
+
+  /// Remove a named-modulator row, resetting any slot that bound to it back to
+  /// the default so no route dangles at render time.
+  func removeChannelShiftNamedModulator(id: UUID) {
+    guard let entry = channelShiftNamedModulators.first(where: { $0.id == id }) else { return }
+    channelShiftNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if channelShiftModRXModulator == name { channelShiftModRXModulator = "" }
+    if channelShiftModRYModulator == name { channelShiftModRYModulator = "" }
+    if channelShiftModGXModulator == name { channelShiftModGXModulator = "" }
+    if channelShiftModGYModulator == name { channelShiftModGYModulator = "" }
+    if channelShiftModBXModulator == name { channelShiftModBXModulator = "" }
+    if channelShiftModBYModulator == name { channelShiftModBYModulator = "" }
+  }
+
+  func chooseChannelShiftNamedModulatorWAV(id: UUID) {
+    guard let index = channelShiftNamedModulators.firstIndex(where: { $0.id == id }) else { return }
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Named Modulator WAV",
+      message: "Select the audio whose analysis envelope drives slots bound to this modulator."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    channelShiftNamedModulators[index].audioURL = url
+    statusMessage =
+      "Named modulator \"\(channelShiftNamedModulators[index].name)\" WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseChannelShiftNamedModulatorFrames(id: UUID) {
+    guard let index = channelShiftNamedModulators.firstIndex(where: { $0.id == id }) else { return }
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Named Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives slots bound to this modulator."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    channelShiftNamedModulators[index].framesURL = url
+    statusMessage =
+      "Named modulator \"\(channelShiftNamedModulators[index].name)\" frames selected: \(url.lastPathComponent)"
   }
 
   func choosePaletteQuantizeModulatorWAV() {
@@ -1908,6 +2010,12 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: channelShiftModulatorAudioURL,
       modulatorFramesURL: channelShiftModulatorFramesURL,
+      namedModulators: channelShiftNamedModulators,
+      slotModulators: [
+        channelShiftModRXModulator, channelShiftModRYModulator,
+        channelShiftModGXModulator, channelShiftModGYModulator,
+        channelShiftModBXModulator, channelShiftModBYModulator
+      ],
       effectLabel: "channel shift"
     ) else { return }
 
@@ -1931,7 +2039,8 @@ final class AppState: ObservableObject {
       modulationRoutes: routes,
       modulatorAudioURL: channelShiftModulatorAudioURL,
       modulatorFramesURL: channelShiftModulatorFramesURL,
-      modulationSampling: channelShiftModSampling
+      modulationSampling: channelShiftModSampling,
+      namedModulators: namedModulatorSpecs(channelShiftNamedModulators)
     )
 
     statusMessage = "Queueing channel shift through morphogen-cli..."
@@ -3136,6 +3245,16 @@ enum DatamoshPresetOption: String, CaseIterable, Identifiable {
 
 /// Modulation-matrix source choice for one knob's mod slot. `off` = the knob
 /// stays a constant (no route emitted).
+/// A user-declared named modulator: a `name` plus whichever media it carries.
+/// A mod slot binds to one by name (`target=name.source`); the default
+/// modulator stays the unnamed `channelShiftModulator*URL` pair.
+struct NamedModulatorEntry: Identifiable, Equatable {
+  let id = UUID()
+  var name: String = ""
+  var audioURL: URL? = nil
+  var framesURL: URL? = nil
+}
+
 enum ModulationSourceOption: String, CaseIterable, Identifiable {
   case off = "Off"
   case audioRms = "Audio RMS"
