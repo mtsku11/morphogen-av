@@ -229,7 +229,7 @@ pub(crate) fn parse_named_modulator_specs(
 /// unnamed route, or the same-named `--named-modulator-*` entry.
 /// `default_flag_hint` keeps the pre-slice error text for unnamed routes
 /// (e.g. `--modulator-audio <wav>`).
-fn resolve_modulator_media<'a>(
+pub(crate) fn resolve_modulator_media<'a>(
     route: &ModulationRoute,
     default_media: Option<&'a Path>,
     named: &'a [(String, PathBuf)],

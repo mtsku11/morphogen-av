@@ -5259,8 +5259,9 @@ fn named_modulators_drive_independent_routes() {
         "duplicate --named-modulator-audio",
     ));
 
-    // Named modulators stay direct-CLI only: queue-add rejects them and
-    // persists nothing.
+    // Named modulators are now also supported on the queue path (see
+    // `queue_named_modulators_*` tests below); a named route whose media flag
+    // is missing still fails up front and persists nothing, same as direct.
     let queue_path = temp_dir.path().join("queue.json");
     Command::cargo_bin("morphogen")
         .expect("morphogen binary")
@@ -5276,7 +5277,9 @@ fn named_modulators_drive_independent_routes() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("direct-CLI only"));
+        .stderr(predicate::str::contains(
+            "requires --named-modulator-audio a=<path>",
+        ));
     assert!(!queue_path.exists());
 }
 
@@ -5830,6 +5833,232 @@ fn queue_channel_shift_modulated_matches_direct_and_records_routes() {
     assert_eq!(modulation["routes"][0]["scale"], 12.0);
     assert_eq!(modulation["fps"], 4.0);
     assert_eq!(modulation["modulator_frames"], source_arg.as_str());
+}
+
+#[test]
+fn queue_channel_shift_named_modulators_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    // Two different envelopes: a rising and a falling amplitude ramp.
+    let rise_wav = temp_dir.path().join("rise.wav");
+    let rise: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&rise_wav, 8192, &rise);
+    let fall_wav = temp_dir.path().join("fall.wav");
+    let fall: Vec<f32> = (0..6144)
+        .map(|i| (1.0 - i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&fall_wav, 8192, &fall);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let rise_arg = rise_wav.to_string_lossy().to_string();
+    let fall_arg = fall_wav.to_string_lossy().to_string();
+
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-channel-shift-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "3",
+            "--modulate",
+            "shift_r_x=rise.audio-rms:12,0",
+            "--modulate",
+            "shift_b_y=fall.audio-rms:12,0",
+            "--named-modulator-audio",
+            &format!("rise={rise_arg}"),
+            "--named-modulator-audio",
+            &format!("fall={fall_arg}"),
+            "--modulation-fps",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-channel-shift-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "3",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            "shift_r_x=rise.audio-rms:12,0",
+            "--modulate",
+            "shift_b_y=fall.audio-rms:12,0",
+            "--named-modulator-audio",
+            &format!("rise={rise_arg}"),
+            "--named-modulator-audio",
+            &format!("fall={fall_arg}"),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-channel-shift-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Byte-identical add→run vs the direct render (path-independent).
+    assert_png_frames_identical(&direct_dir, &output_root.join("job-0001/frames"), 3);
+
+    // Manifest records both routes WITH their modulator names.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let modulation = &manifest["channel_shift"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "shift_r_x");
+    assert_eq!(modulation["routes"][0]["modulator"], "rise");
+    assert_eq!(modulation["routes"][1]["target"], "shift_b_y");
+    assert_eq!(modulation["routes"][1]["modulator"], "fall");
+
+    // The persisted job also records the named-modulator media itself, in
+    // given order.
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue json");
+    let task = &queue_json["jobs"][0]["task"];
+    assert_eq!(task["named_modulator_audio"][0]["name"], "rise");
+    assert_eq!(task["named_modulator_audio"][0]["path"], rise_arg.as_str());
+    assert_eq!(task["named_modulator_audio"][1]["name"], "fall");
+    assert_eq!(task["named_modulator_audio"][1]["path"], fall_arg.as_str());
+}
+
+#[test]
+fn queue_channel_shift_named_modulator_missing_media_rejects_at_add_and_persists_nothing() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    let frame_arg = source_dir
+        .join("frame_000001.png")
+        .to_string_lossy()
+        .to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["render-test", frame_arg.as_str()])
+        .assert()
+        .success();
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root_arg = temp_dir.path().join("out").to_string_lossy().to_string();
+    // "rise" is referenced by the route but never supplied via
+    // --named-modulator-audio: add-time validation must reject this before
+    // the job (or the queue file) is ever written.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-channel-shift-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "1",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            "shift_r_x=rise.audio-rms",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "requires --named-modulator-audio rise=<path>",
+        ));
+    assert!(!queue_path.exists());
+}
+
+#[test]
+fn modulation_route_and_task_named_fields_skip_serialization_when_unset() {
+    use morphogen_core::{
+        ModulationSampling as CoreModulationSampling, ModulationSource as CoreModulationSource,
+        NamedModulatorMedia, RenderBackend, RenderJobModulationRoute, RenderJobTask,
+    };
+
+    // An unset `modulator` on a route is skipped, not serialized as `null`,
+    // and round-trips exactly.
+    let route = RenderJobModulationRoute {
+        target: "shift_r_x".to_string(),
+        source: CoreModulationSource::AudioRms,
+        scale: 12.0,
+        offset: 0.0,
+        sampling: None,
+        modulator: None,
+    };
+    let route_json = serde_json::to_string(&route).expect("serialize route");
+    assert!(
+        !route_json.contains("modulator"),
+        "unset modulator must be skipped from the JSON: {route_json}"
+    );
+    let decoded_route: RenderJobModulationRoute =
+        serde_json::from_str(&route_json).expect("deserialize route");
+    assert_eq!(decoded_route, route);
+
+    // Empty named-modulator vectors on a task are likewise skipped, so
+    // pre-slice queue JSON/manifests stay byte-identical.
+    let task = RenderJobTask::FrameSequenceChannelShift {
+        carrier_frame_directory: "/tmp/car".to_string(),
+        output_directory: "/tmp/out".to_string(),
+        frames: 2,
+        frame_rate: 24.0,
+        shift_r_x: 0.0,
+        shift_r_y: 0.0,
+        shift_g_x: 0.0,
+        shift_g_y: 0.0,
+        shift_b_x: 0.0,
+        shift_b_y: 0.0,
+        flow_source_frame_directory: None,
+        flow_gain: 0.0,
+        flow_radius: 4,
+        backend: RenderBackend::Cpu,
+        modulation_routes: Vec::new(),
+        modulator_audio_path: None,
+        modulator_frames_directory: None,
+        modulation_sampling: CoreModulationSampling::Hold,
+        named_modulator_audio: Vec::new(),
+        named_modulator_frames: Vec::new(),
+    };
+    let task_json = serde_json::to_string(&task).expect("serialize task");
+    assert!(
+        !task_json.contains("named_modulator_audio")
+            && !task_json.contains("named_modulator_frames"),
+        "empty named-modulator vectors must be skipped from the JSON: {task_json}"
+    );
+    let decoded_task: RenderJobTask = serde_json::from_str(&task_json).expect("deserialize task");
+    assert_eq!(decoded_task, task);
+
+    // NamedModulatorMedia itself (used once a route names a modulator) round-trips.
+    let media = NamedModulatorMedia {
+        name: "rise".to_string(),
+        path: "/tmp/rise.wav".to_string(),
+    };
+    let media_json = serde_json::to_string(&media).expect("serialize media");
+    let decoded_media: NamedModulatorMedia =
+        serde_json::from_str(&media_json).expect("deserialize media");
+    assert_eq!(decoded_media, media);
 }
 
 #[test]

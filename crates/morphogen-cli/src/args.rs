@@ -1643,6 +1643,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueAddFluidAdvectSequence {
         queue_path: PathBuf,
@@ -1683,6 +1690,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueAddFluidAdvectTwoSourceSequence {
         queue_path: PathBuf,
@@ -1715,6 +1729,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueAddOpticalFlowAdvectSequence {
         queue_path: PathBuf,
@@ -1746,6 +1767,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueAddFieldParticlesSequence {
         queue_path: PathBuf,
@@ -1897,6 +1925,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Queue a channel-shift (RGB split) sequence job. Constant per-channel
     /// offsets, optional A-flow per-row shifts, and modulation-matrix routes.
@@ -1947,6 +1982,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueRunChannelShiftSequence {
         queue_path: PathBuf,
@@ -1986,6 +2028,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueRunPaletteQuantizeSequence {
         queue_path: PathBuf,
@@ -2257,6 +2306,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueRunDatamoshSequence {
         queue_path: PathBuf,
@@ -2415,6 +2471,13 @@ pub(crate) enum Commands {
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueRunPixelSortSequence {
         queue_path: PathBuf,

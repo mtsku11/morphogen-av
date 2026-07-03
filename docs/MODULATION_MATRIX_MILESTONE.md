@@ -116,8 +116,39 @@ stem while another tracks a second clip's motion:
   named media the routes consume; renaming a modulator or changing its content
   refuses to resume, and pre-slice checkpoints stay byte-identical.
 - Envelope sidecars are per modulator (`envelope_<name>.<source>.json`).
-- **Direct CLI only for now:** queue-add rejects named routes ("direct-CLI
-  only") before persisting; SwiftUI slots emit unnamed routes.
+
+#### Queue exposure (landed)
+
+Named modulators persist on the render queue. Each of the 9 modulatable task
+types gains two serde-defaulted, skip-when-empty fields —
+`named_modulator_audio` and `named_modulator_frames`, each a
+`Vec<NamedModulatorMedia { name, path }>` — beside the existing default
+`modulator_audio_path`/`modulator_frames_directory`; `RenderJobModulationRoute`
+gains a skip-when-none `modulator: Option<String>`. Because every new field is
+`#[serde(default, skip_serializing_if = …)]`, pre-slice queue JSON, manifests,
+and checkpoints stay **byte-identical** and still deserialize (an unmodulated or
+default-modulator job serializes exactly as before).
+
+- `queue-add-*` gains the repeatable `--named-modulator-audio <name>=<wav>` /
+  `--named-modulator-frames <name>=<dir>` flags (mirroring the direct commands)
+  and **no longer rejects named routes**. Add-time validation, before the job
+  persists: a named route whose referenced modulator has no matching media flag
+  (of the right kind) is a hard error — `modulation source '<name>.<source>'
+  requires --named-modulator-audio <name>=<path>` (frames sources name
+  `--named-modulator-frames`); the same `resolve_modulator_media` the direct
+  path uses enforces it, so the error wording matches exactly.
+  Duplicate/empty modulator names still fail in `parse_named_modulator_specs`.
+  Bare routes keep the existing default-media requirement checks.
+- `queue-run` reconstructs the `<name>.<source>` route specs and the
+  `--named-modulator-*` flags from the persisted vectors (given order preserved),
+  then shares the direct render's exact code path — so a queued named-modulator
+  render is **byte-identical** to the equivalent direct render (smoke-pinned).
+- The stateful feedback/datamosh **checkpoint contracts carry the named-media
+  fingerprints through the queue path for free** (queue-run passes the real
+  named specs into the same `ModulationCliArgs` that fingerprints them), so a
+  renamed modulator or changed content refuses to resume a queued job too.
+- **SwiftUI still emits unnamed routes** — the named-modulator panel UI (declare
+  N modulators, bind each slot to one) is the follow-up slice.
 
 ### Envelope sidecars (`--modulation-cache-dir`)
 

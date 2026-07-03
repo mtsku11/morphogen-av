@@ -199,6 +199,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     FrameSequenceFluidAdvect {
         source_frame_directory: String,
@@ -224,6 +230,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     FrameSequenceFluidAdvectTwoSource {
         modulator_frame_directory: String,
@@ -248,6 +260,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     FrameSequenceOpticalFlowAdvect {
         source_frame_directory: String,
@@ -269,6 +287,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     FrameSequenceFieldParticles {
         source_frame_directory: String,
@@ -385,6 +409,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     /// Channel shift (RGB split / chromatic aberration): each colour channel is
     /// sampled from the carrier at an independently offset position. Optional
@@ -429,6 +459,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     /// Palette quantize / posterize: collapse the carrier's colours to discrete
     /// per-channel levels (posterize) or the built-in neon palette. Stateless
@@ -458,6 +494,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
@@ -520,6 +562,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
@@ -716,6 +764,12 @@ pub enum RenderJobTask {
         modulator_frames_directory: Option<String>,
         #[serde(default)]
         modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     /// Real bitstream datamosh via AVI chunk surgery: ffmpeg encodes to MPEG-4,
     /// pure-Rust RIFF surgery duplicates/removes/splices chunks, ffmpeg decodes to
@@ -1181,6 +1235,21 @@ pub struct RenderJobModulationRoute {
     /// Skipped when unset so pre-slice jobs/manifests stay byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<ModulationSampling>,
+    /// Named-modulator prefix; `None` reads the default modulator media.
+    /// Skipped when unset so pre-slice jobs/manifests stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modulator: Option<String>,
+}
+
+/// One named modulator's media, persisted on a task alongside the default
+/// `modulator_audio_path`/`modulator_frames_directory`. A route's `<name>.`
+/// prefix (see [`RenderJobModulationRoute::modulator`]) resolves against the
+/// matching-kind vector on the same task. See
+/// `docs/MODULATION_MATRIX_MILESTONE.md` "Named modulators".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NamedModulatorMedia {
+    pub name: String,
+    pub path: String,
 }
 
 fn default_modulation_scale() -> f32 {
@@ -1357,6 +1426,8 @@ mod tests {
             modulator_audio_path: None,
             modulator_frames_directory: None,
             modulation_sampling: ModulationSampling::Hold,
+            named_modulator_audio: Vec::new(),
+            named_modulator_frames: Vec::new(),
         };
 
         let json = serde_json::to_string(&task).expect("serialize feedback task");
@@ -1414,6 +1485,8 @@ mod tests {
             modulator_audio_path: None,
             modulator_frames_directory: None,
             modulation_sampling: ModulationSampling::Hold,
+            named_modulator_audio: Vec::new(),
+            named_modulator_frames: Vec::new(),
         };
 
         let json = serde_json::to_string(&task).expect("serialize fluid task");
