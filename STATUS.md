@@ -8,8 +8,10 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **481 passing across 7 crates, 0 failing.**
-  One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
+- `cargo test --workspace`: **492 passing across 7 crates, 0 failing.**
+  One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
+  one pre-existing `items_after_test_module` clippy warning in
+  `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
 - `swift test`: **95 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
@@ -18,6 +20,24 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **LFO modulation sources — Slice 1 of 3** (`118c697`, contract
+  `docs/LFO_MODULATION_MILESTONE.md` committed as `84e427b`; Sonnet subagent
+  build, orchestrator-verified). `ModulationSource::Lfo{shape,rate_hz,phase}`
+  (sine/triangle/square/saw, pinned formulas, all emit [0,1], f64 math →
+  f32) parsed as `lfo(<shape>[,<rate_hz>[,<phase>]])` in the existing route
+  grammar — no media, no sidecar, exact per-frame evaluation in
+  `modulated_value` (`@hold`/`@smooth` are test-pinned no-ops). Works on all
+  modulatable commands via the shared plan. Proof:
+  `displacement_depth=lfo(sine,0.5):64` on a static gradient, within-off
+  **0.000**, within-on **20.546**, frames Read-confirmed flat → raked →
+  steepest at half-cycle → flat, and the on-render's LFO zero-crossing frames
+  (0, 24) are **byte-identical** to the off render. cargo 481 → **492**.
+  Compiler-forced deviation (accepted): `core_modulation_source` in queue.rs
+  now returns `Result` and rejects LFO at queue-add time with a clear
+  "not yet supported" error — full queue wiring is Slice 2. **Next action:**
+  Slice 2 (queue + stateful checkpoint verification), then Slice 3 (SwiftUI
+  one-panel vertical on the Rutt-Etra panel).
 
 - **Rutt-Etra scanline MVP — all 3 slices** (`d736048`, `6efc990`, `e656d2c`;
   built by a Sonnet subagent against `docs/RUTT_ETRA_MILESTONE.md`, each slice
