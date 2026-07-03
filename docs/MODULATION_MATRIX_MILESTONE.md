@@ -147,8 +147,15 @@ default-modulator job serializes exactly as before).
   fingerprints through the queue path for free** (queue-run passes the real
   named specs into the same `ModulationCliArgs` that fingerprints them), so a
   renamed modulator or changed content refuses to resume a queued job too.
-- **SwiftUI still emits unnamed routes** — the named-modulator panel UI (declare
-  N modulators, bind each slot to one) is the follow-up slice.
+- **SwiftUI panel UI (landed).** Every mod panel (channel shift, then the
+  6-panel sweep: feedback, fluid, retro static, palette quantize, datamosh,
+  pixel sort) declares N named modulators (name + WAV/frames choosers) and each
+  slot — enum slots included — binds to one via a per-slot Modulator picker
+  ("Default" = the panel-level modulator media, byte-identical to the unnamed
+  form). The bridge emits `--named-modulator-*` only for names an actual route
+  references, and only the media kind that route needs; missing media is a
+  hard error before the CLI runs. Removing a declared modulator resets any
+  slot bound to it back to Default.
 
 ### Envelope sidecars (`--modulation-cache-dir`)
 

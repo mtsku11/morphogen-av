@@ -2774,7 +2774,17 @@ enum RustBridgePlaceholder {
       arguments.append(framesURL.path)
     }
     // Emit `--named-modulator-*` only for names an actual route references,
-    // and only for the media kind that route needs.
+    // and only for the media kind that route needs. A referenced name must
+    // resolve to exactly one declared entry — duplicates would emit duplicate
+    // `--named-modulator-*` flags, which the CLI rejects.
+    for route in routes {
+      guard let name = route.modulator, !name.isEmpty else { continue }
+      if namedModulators.filter({ $0.name == name }).count > 1 {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "named modulator '\(name)' is declared more than once"
+        )
+      }
+    }
     for modulator in namedModulators where !modulator.name.isEmpty {
       let usesAudio = routes.contains {
         $0.modulator == modulator.name && $0.source.hasPrefix("audio-")

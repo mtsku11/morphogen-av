@@ -1090,6 +1090,52 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedChannelShiftSequenceArgumentsRejectDuplicateNamedModulator() {
+    var request = ChannelShiftSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/channel-shift-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/channel-shift", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      shiftRX: 0,
+      shiftRY: 0,
+      shiftGX: 0,
+      shiftGY: 0,
+      shiftBX: 0,
+      shiftBY: 0,
+      sourceADirectoryURL: nil,
+      flowGain: 0,
+      flowRadius: 4,
+      backend: .cpu,
+      projectURL: nil
+    )
+    // Two declared entries share the routed name "bass" (a UI rename collision);
+    // emitting both would produce duplicate --named-modulator-audio flags the
+    // CLI rejects, so the bridge refuses first with its own error.
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "shift_r_x", source: "audio-rms", scale: 8, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(
+        name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass-a.wav"), framesURL: nil),
+      NamedModulatorMediaSpec(
+        name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass-b.wav"), framesURL: nil),
+    ]
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: request)
+    )
+
+    // An unreferenced duplicate stays harmless — nothing is emitted for it.
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "shift_r_x", source: "audio-rms", scale: 8, offset: 0),
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/default-modulator.wav")
+    XCTAssertNoThrow(
+      try RustBridgePlaceholder.queueAddChannelShiftSequenceArguments(request: request)
+    )
+  }
+
   // Named-modulator threading across the swept panels. The `--named-modulator-*`
   // emission itself is exercised in depth by the channel-shift tests; each panel
   // test below only proves its own queue-add arg builder forwards
