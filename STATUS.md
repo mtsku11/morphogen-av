@@ -10,7 +10,7 @@ _Last updated: 2026-07-03_
 
 - `cargo test --workspace`: **469 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **81 passing, 0 failing.**
+- `swift test`: **83 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -19,7 +19,28 @@ _Last updated: 2026-07-03_
 
 ## What just landed
 
-- **Direction recommendations doc + two exposure slices (this session).**
+- **Named-modulator panel UI — channel-shift vertical slice** (`299281e`).
+  The last modulation-matrix surface, started. A panel can now declare N named
+  modulators (name + WAV/Frames, add/remove) and bind each mod slot to one,
+  emitting `target=name.source` + `--named-modulator-audio/frames name=path`.
+  Design forks confirmed via AskUserQuestion: **dynamic add/remove list** (not
+  fixed-N) and **one panel first** (not all 7). `ModulationSlotRow` gained an
+  **optional** `modulator: Binding<String>?` + `modulatorNames` — nil/empty
+  hides the picker, so the other 28 slots stay byte-identical. Churn-avoider:
+  the `modulationRoutes` helper takes a **parallel `slotModulators: [String]`**
+  (default empty) instead of growing its tuple, so the 6 other render fns are
+  untouched. Bridge scopes the default `--modulator-*` guards to unnamed routes
+  and emits `--named-modulator-*` (two-token `name=path`) only for referenced
+  names. `swift test` 81 → **83** (+2 bridge tests: named arg shape incl
+  default+named coexistence & unreferenced-skip, and named-missing-media
+  rejection). **No Rust changes** — the bridge emits the exact token sequence
+  the passing `queue_channel_shift_named_modulators_matches_direct_and_records_routes`
+  smoke test already validates end-to-end. **Verified:** `swift build` clean,
+  swift 83/0, named-modulator smoke tests green. **Remaining:** sweep the other
+  6 panels (mechanical — per-slot Modulator string + list + choosers; plus the
+  same optional-picker addition on `EnumModulationSlotRow` for enum-slot panels).
+
+- **Direction recommendations doc + two exposure slices (prior session).**
   (0) **`docs/RECOMMENDATIONS.md`** (`2ff7612`) — strategic "where next / what
   would take this to the next level" doc (underdeveloped areas ranked by
   payoff÷effort: Rutt-Etra is the only empty roadmap slot, audio lags video,
