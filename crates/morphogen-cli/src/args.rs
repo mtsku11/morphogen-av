@@ -1114,6 +1114,38 @@ pub(crate) enum Commands {
         /// Render every line white instead of the source colour.
         #[arg(long, default_value_t = false)]
         mono: bool,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
+        /// Targets: displacement_depth (clamped to [-512, 512]), line_pitch
+        /// (integer — clamped to [1, 256], then rounded to nearest, ties away
+        /// from zero), line_thickness (integer — clamped to [1, 64]). Sources:
+        /// audio-rms/audio-onset/audio-centroid (need --modulator-audio),
+        /// luma/flow (need --modulator-frames).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling
+        /// (also the modulator frame timeline for luma/flow sources).
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).

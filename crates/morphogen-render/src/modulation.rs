@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ChannelShiftSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
     PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RenderError, RetroStaticSettings,
-    ScanlineFilter, SortAxis, SortDirection,
+    RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// Which analysis descriptor drives a route.
@@ -297,6 +297,8 @@ pub const CHANNEL_SHIFT_MODULATION_TARGETS: &[&str] = &[
     "shift_b_y",
 ];
 pub const PALETTE_QUANTIZE_MODULATION_TARGETS: &[&str] = &["levels", "mode"];
+pub const RUTT_ETRA_MODULATION_TARGETS: &[&str] =
+    &["displacement_depth", "line_pitch", "line_thickness"];
 /// Flow feedback is the first **stateful** effect with modulation targets:
 /// each frame's state update consumes that frame's knobs, so frame N depends
 /// on the whole knob history (milestone doc, "Stateful targets").
@@ -329,6 +331,13 @@ pub const FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS: &[&str] = &["advect", "rei
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
 const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
+
+/// Rutt-Etra ranges (milestone doc, "Modulation targets"): depth is a signed
+/// pixel push (0 = the flat off case, deliberately reachable); pitch and
+/// thickness share the contracted integer rule.
+const DISPLACEMENT_DEPTH_RANGE: (f32, f32) = (-512.0, 512.0);
+const LINE_PITCH_RANGE: (f32, f32) = (1.0, 256.0);
+const LINE_THICKNESS_RANGE: (f32, f32) = (1.0, 64.0);
 
 // Enum-target variant orders (contract: milestone doc table). Unimplemented
 // variants are excluded — an envelope must not select an erroring variant
@@ -527,6 +536,33 @@ pub fn apply_palette_quantize_modulation(
                 "palette-quantize",
                 target,
                 PALETTE_QUANTIZE_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed rutt-etra knob with a mapped value. All three targets
+/// clamp (never error); `line_pitch` / `line_thickness` follow the contracted
+/// integer rule, so an envelope can never drive the render below the
+/// validate-legal minimum of 1.
+pub fn apply_rutt_etra_modulation(
+    settings: &mut RuttEtraSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "displacement_depth" => {
+            settings.displacement_depth =
+                value.clamp(DISPLACEMENT_DEPTH_RANGE.0, DISPLACEMENT_DEPTH_RANGE.1)
+        }
+        "line_pitch" => settings.line_pitch = integer_knob(value, LINE_PITCH_RANGE),
+        "line_thickness" => settings.line_thickness = integer_knob(value, LINE_THICKNESS_RANGE),
+        _ => {
+            return Err(unknown_target(
+                "rutt-etra",
+                target,
+                RUTT_ETRA_MODULATION_TARGETS,
             ))
         }
     }
@@ -874,6 +910,45 @@ mod tests {
         // Continuity identity in integer form: scale 0, offset K == --levels K.
         apply_palette_quantize_modulation(&mut quantize, "levels", 7.0).unwrap();
         assert_eq!(quantize.levels, 7);
+    }
+
+    #[test]
+    fn rutt_etra_targets_clamp_to_declared_ranges() {
+        let mut rutt = RuttEtraSettings::default();
+        // displacement_depth clamps at both ends of [-512, 512]; the flat off
+        // case (0) and negative (downward) pushes stay reachable.
+        apply_rutt_etra_modulation(&mut rutt, "displacement_depth", 9999.0).unwrap();
+        assert_eq!(rutt.displacement_depth, 512.0);
+        apply_rutt_etra_modulation(&mut rutt, "displacement_depth", -9999.0).unwrap();
+        assert_eq!(rutt.displacement_depth, -512.0);
+        apply_rutt_etra_modulation(&mut rutt, "displacement_depth", 0.0).unwrap();
+        assert_eq!(rutt.displacement_depth, 0.0);
+
+        // line_pitch: integer rule over [1, 256] — clamp at both ends, then
+        // round to nearest with ties away from zero.
+        apply_rutt_etra_modulation(&mut rutt, "line_pitch", -5.0).unwrap();
+        assert_eq!(rutt.line_pitch, 1);
+        apply_rutt_etra_modulation(&mut rutt, "line_pitch", 9999.0).unwrap();
+        assert_eq!(rutt.line_pitch, 256);
+        apply_rutt_etra_modulation(&mut rutt, "line_pitch", 8.4).unwrap();
+        assert_eq!(rutt.line_pitch, 8);
+        apply_rutt_etra_modulation(&mut rutt, "line_pitch", 8.5).unwrap();
+        assert_eq!(rutt.line_pitch, 9, "tie rounds away from zero");
+
+        // line_thickness: integer rule over [1, 64].
+        apply_rutt_etra_modulation(&mut rutt, "line_thickness", 0.0).unwrap();
+        assert_eq!(rutt.line_thickness, 1);
+        apply_rutt_etra_modulation(&mut rutt, "line_thickness", 9999.0).unwrap();
+        assert_eq!(rutt.line_thickness, 64);
+        apply_rutt_etra_modulation(&mut rutt, "line_thickness", 2.5).unwrap();
+        assert_eq!(rutt.line_thickness, 3, "tie rounds away from zero");
+
+        // Every clamped combination stays legal for the render.
+        rutt.validate().unwrap();
+
+        // mono is a flag, not a modulation target.
+        assert!(apply_rutt_etra_modulation(&mut rutt, "mono", 1.0).is_err());
+        assert!(apply_rutt_etra_modulation(&mut rutt, "depth", 1.0).is_err());
     }
 
     #[test]

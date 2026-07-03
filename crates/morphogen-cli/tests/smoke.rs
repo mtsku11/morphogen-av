@@ -119,6 +119,79 @@ fn render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs() {
 }
 
 #[test]
+fn render_rutt_etra_sequence_modulation_continuity_identity() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let run = |output_dir: &str, extra: &[&str]| {
+        let mut args = vec![
+            "render-rutt-etra-sequence",
+            source_arg.as_str(),
+            output_dir,
+            "--frames",
+            "3",
+        ];
+        args.extend_from_slice(extra);
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+    };
+
+    // Continuity identity: `scale 0, offset K` pins the knob to K — byte-
+    // identical to passing the constant directly (the zero-route settings-copy
+    // path leaves the unrouted knobs untouched).
+    let constant_dir = temp_dir.path().join("constant-output");
+    run(
+        &constant_dir.to_string_lossy(),
+        &["--displacement-depth", "6"],
+    )
+    .success();
+    let routed_dir = temp_dir.path().join("routed-output");
+    run(
+        &routed_dir.to_string_lossy(),
+        &[
+            "--modulate",
+            "displacement_depth=luma:0,6",
+            "--modulator-frames",
+            source_arg.as_str(),
+        ],
+    )
+    .success()
+    .stdout(predicate::str::contains(
+        "modulation routes: displacement_depth=luma:0,6",
+    ));
+    assert_png_frames_identical(&constant_dir, &routed_dir, 3);
+
+    // The route reaches the render: the pinned 6 differs from the default 48.
+    let default_dir = temp_dir.path().join("default-output");
+    run(&default_dir.to_string_lossy(), &[]).success();
+    assert_ne!(
+        fs::read(routed_dir.join("frame_000000.png")).expect("routed frame"),
+        fs::read(default_dir.join("frame_000000.png")).expect("default frame"),
+        "routed displacement_depth must change the rendered sequence"
+    );
+
+    // `mono` is a flag, not a modulation target.
+    let rejected_dir = temp_dir.path().join("rejected-output");
+    run(
+        &rejected_dir.to_string_lossy(),
+        &[
+            "--modulate",
+            "mono=luma",
+            "--modulator-frames",
+            source_arg.as_str(),
+        ],
+    )
+    .failure()
+    .stderr(predicate::str::contains(
+        "unknown rutt-etra modulation target",
+    ));
+}
+
+#[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_path = temp_dir.path().join("modulator.png");

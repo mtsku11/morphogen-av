@@ -57,8 +57,8 @@ use morphogen_render::{
 use morphogen_render::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
-    apply_pixel_sort_modulation, apply_retro_static_modulation, ModulationRoute,
-    ModulationSampling,
+    apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
+    ModulationRoute, ModulationSampling,
 };
 use serde::{Deserialize, Serialize};
 
@@ -6228,7 +6228,7 @@ pub(crate) fn render_palette_quantize_frame_metal(
 }
 
 // ---------------------------------------------------------------------------
-// Rutt-Etra scanline — Slice 1 (luma-displaced scanlines, CPU-only)
+// Rutt-Etra scanline — Slices 1–2 (luma-displaced scanlines, CPU-only)
 // ---------------------------------------------------------------------------
 
 pub(crate) struct RuttEtraSequenceRequest<'a> {
@@ -6236,6 +6236,7 @@ pub(crate) struct RuttEtraSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: RuttEtraSettings,
     pub(crate) frames: u32,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 pub(crate) fn render_rutt_etra_sequence(
@@ -6258,9 +6259,25 @@ pub(crate) fn render_rutt_etra_sequence(
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
+    let modulation = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation {
+        // Dry-run at frame 0 so an unknown target fails before any frame renders.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_rutt_etra_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation {
+            for (target, value) in plan.frame_values(index) {
+                apply_rutt_etra_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         let source_b = load_image_f32(frame_path)?;
-        let rendered = render_rutt_etra_frame(&source_b, &request.settings)?;
+        let rendered = render_rutt_etra_frame(&source_b, &frame_settings)?;
         save_png(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),

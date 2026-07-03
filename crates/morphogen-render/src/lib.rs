@@ -127,12 +127,13 @@ pub use luminance_flow::luminance_gradient_flow_cpu;
 pub use modulation::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
-    apply_pixel_sort_modulation, apply_retro_static_modulation, modulated_value,
-    parse_modulation_route, peak_normalize, sample_envelope, validate_route_targets,
-    ModulationRoute, ModulationSampling, ModulationSource, CHANNEL_SHIFT_MODULATION_TARGETS,
-    FLOW_FEEDBACK_MODULATION_TARGETS, FLUID_ADVECT_MODULATION_TARGETS,
-    FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS, PALETTE_QUANTIZE_MODULATION_TARGETS,
-    PIXEL_SORT_MODULATION_TARGETS, RETRO_STATIC_MODULATION_TARGETS,
+    apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
+    modulated_value, parse_modulation_route, peak_normalize, sample_envelope,
+    validate_route_targets, ModulationRoute, ModulationSampling, ModulationSource,
+    CHANNEL_SHIFT_MODULATION_TARGETS, FLOW_FEEDBACK_MODULATION_TARGETS,
+    FLUID_ADVECT_MODULATION_TARGETS, FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS,
+    PALETTE_QUANTIZE_MODULATION_TARGETS, PIXEL_SORT_MODULATION_TARGETS,
+    RETRO_STATIC_MODULATION_TARGETS, RUTT_ETRA_MODULATION_TARGETS,
 };
 pub use optical_flow::{
     lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu,
