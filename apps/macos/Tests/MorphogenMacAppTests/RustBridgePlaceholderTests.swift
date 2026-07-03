@@ -1401,6 +1401,167 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  private func makeRuttEtraRequest() -> RuttEtraSequenceRenderQueueCommandRequest {
+    RuttEtraSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/rutt-etra-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/rutt-etra", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      linePitch: 8,
+      displacementDepth: 48.0,
+      lineThickness: 1,
+      mono: false,
+      projectURL: nil
+    )
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsIncludeKnobs() throws {
+    let request = RuttEtraSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/rutt-etra-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/rutt-etra", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      linePitch: 4,
+      displacementDepth: -64.0,
+      lineThickness: 2,
+      mono: true,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    // Pin the exact unmodulated token sequence.
+    XCTAssertEqual(
+      arguments,
+      [
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+        "queue-add-rutt-etra-sequence",
+        "/tmp/rutt-etra-queue.json",
+        "/tmp/source-b-frames",
+        "/tmp/output-root/rutt-etra",
+        "--frames", "96",
+        "--frame-rate", "24",
+        "--line-pitch", "4",
+        "--displacement-depth=-64",
+        "--line-thickness", "2",
+        "--mono",
+        "--project-path", "/tmp/project.morphogen.json"
+      ]
+    )
+    // No active mod slot ⇒ the exact unmodulated CLI path.
+    XCTAssertFalse(arguments.contains("--modulate"))
+    XCTAssertFalse(arguments.contains("--modulation-sampling"))
+    XCTAssertFalse(arguments.contains("--backend"), "rutt-etra is CPU-only (no backend flag)")
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsCarryModulationRoutes() throws {
+    var request = makeRuttEtraRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "displacement_depth", source: "audio-rms", scale: 96, offset: -16),
+      ModulationRouteSpec(
+        target: "line_pitch", source: "luma", scale: 8, offset: 4,
+        sampling: ModulationSamplingOption.smooth
+      ),
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulatorFramesURL = URL(fileURLWithPath: "/tmp/modulator-frames", isDirectory: true)
+    request.modulationSampling = .smooth
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("displacement_depth=audio-rms:96,-16"))
+    // Per-route sampling override rides the route spec as an @suffix.
+    XCTAssertTrue(arguments.contains("line_pitch=luma:8,4@smooth"))
+    guard let audioIndex = arguments.firstIndex(of: "--modulator-audio") else {
+      return XCTFail("expected a --modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[audioIndex + 1], "/tmp/modulator.wav")
+    guard let framesIndex = arguments.firstIndex(of: "--modulator-frames") else {
+      return XCTFail("expected a --modulator-frames flag")
+    }
+    XCTAssertEqual(arguments[framesIndex + 1], "/tmp/modulator-frames")
+    guard let samplingIndex = arguments.firstIndex(of: "--modulation-sampling") else {
+      return XCTFail("expected a --modulation-sampling flag")
+    }
+    XCTAssertEqual(arguments[samplingIndex + 1], "smooth")
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsCarryNamedModulators() throws {
+    var request = makeRuttEtraRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(
+        target: "displacement_depth", source: "audio-rms", scale: 96, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(
+        name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil),
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("displacement_depth=bass.audio-rms:96,0"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsRejectDuplicateNamedModulator() {
+    var request = makeRuttEtraRequest()
+    // Two declared entries share the routed name "bass" (a UI rename collision);
+    // emitting both would produce duplicate --named-modulator-audio flags the
+    // CLI rejects, so the bridge refuses first with its own error.
+    request.modulationRoutes = [
+      ModulationRouteSpec(
+        target: "displacement_depth", source: "audio-rms", scale: 96, offset: 0, modulator: "bass"),
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(
+        name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass-a.wav"), framesURL: nil),
+      NamedModulatorMediaSpec(
+        name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass-b.wav"), framesURL: nil),
+    ]
+
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+    )
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsRejectInvalidKnobs() {
+    let invalidPitch = RuttEtraSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/rutt-etra-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/rutt-etra", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      linePitch: 0,
+      displacementDepth: 48.0,
+      lineThickness: 1,
+      mono: false,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: invalidPitch)
+    )
+
+    let invalidDepth = RuttEtraSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/rutt-etra-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/rutt-etra", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      linePitch: 8,
+      displacementDepth: .infinity,
+      lineThickness: 1,
+      mono: false,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: invalidDepth)
+    )
+  }
+
   func testQueuedRetroStaticSequenceArgumentsRejectInvalidValues() {
     let invalid = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),

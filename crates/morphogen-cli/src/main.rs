@@ -1688,6 +1688,46 @@ fn run() -> Result<(), CliError> {
         Commands::QueueRunPaletteQuantizeSequence { queue_path } => {
             queue_run_palette_quantize_sequence(&queue_path)
         }
+        Commands::QueueAddRuttEtraSequence {
+            queue_path,
+            source_b_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            line_pitch,
+            displacement_depth,
+            line_thickness,
+            mono,
+            project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            named_modulator_audio,
+            named_modulator_frames,
+        } => queue_add_rutt_etra_sequence(QueueAddRuttEtraSequenceRequest {
+            queue_path: &queue_path,
+            source_b_dir: &source_b_dir,
+            output_root_dir: &output_root_dir,
+            frames,
+            frame_rate,
+            settings: RuttEtraSettings {
+                line_pitch,
+                displacement_depth,
+                line_thickness,
+                mono,
+            },
+            project_path: project_path.as_deref(),
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
+            named_modulator_audio: &named_modulator_audio,
+            named_modulator_frames: &named_modulator_frames,
+        }),
+        Commands::QueueRunRuttEtraSequence { queue_path } => {
+            queue_run_rutt_etra_sequence(&queue_path)
+        }
         Commands::QueueAddBlockCollageSequence {
             queue_path,
             source_a_dir,

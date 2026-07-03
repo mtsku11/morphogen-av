@@ -2096,6 +2096,58 @@ pub(crate) enum Commands {
     QueueRunPaletteQuantizeSequence {
         queue_path: PathBuf,
     },
+    /// Queue a Rutt-Etra scanline sequence job (CPU-only) with optional
+    /// modulation-matrix routes.
+    QueueAddRuttEtraSequence {
+        queue_path: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        /// Rows between scanlines (top row is always included).
+        #[arg(long, default_value_t = 8)]
+        line_pitch: u32,
+        /// Vertical displacement in px at luma 1.0; sign sets direction
+        /// (positive pushes up). `0` = flat scanlines (off case).
+        #[arg(long, default_value_t = 48.0)]
+        displacement_depth: f32,
+        /// Each filled cell extends downward by this many px.
+        #[arg(long, default_value_t = 1)]
+        line_thickness: u32,
+        /// Render every line white instead of the source colour.
+        #[arg(long, default_value_t = false)]
+        mono: bool,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
+        /// Targets: displacement_depth (clamped to [-512, 512]), line_pitch
+        /// (integer — clamped to [1, 256], then rounded), line_thickness
+        /// (integer — clamped to [1, 64]). Persisted on the job; envelope
+        /// times sample against the job's --frame-rate.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
+    },
+    QueueRunRuttEtraSequence {
+        queue_path: PathBuf,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,

@@ -178,6 +178,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultRuttEtraSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-rutt-etra-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -2138,6 +2144,96 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  static func runQueuedRuttEtraSequenceRender(
+    request: RuttEtraSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddRuttEtraSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "--release",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-rutt-etra-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddRuttEtraSequenceArguments(
+    request: RuttEtraSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    guard request.linePitch >= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("line pitch must be >= 1")
+    }
+    guard request.lineThickness >= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("line thickness must be >= 1")
+    }
+    guard request.displacementDepth.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("displacement depth must be finite")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "--release",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-rutt-etra-sequence",
+      request.queueURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--line-pitch",
+      String(request.linePitch),
+      // `=`-joined so a negative depth is not mistaken for a flag (clap).
+      "--displacement-depth=\(cliNumber(request.displacementDepth))",
+      "--line-thickness",
+      String(request.lineThickness)
+    ]
+    if request.mono {
+      arguments.append("--mono")
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
+    return arguments
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -3393,6 +3489,30 @@ struct PaletteQuantizeSequenceRenderQueueCommandRequest {
   /// Discrete steps per channel for posterize mode (2–256; 256 = passthrough).
   let levels: Int
   let backend: FeedbackRenderBackendOption
+  let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating slice 3
+  // keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
+}
+
+struct RuttEtraSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  /// Rows between scanlines (top row always included; >= 1).
+  let linePitch: Int
+  /// Vertical displacement in px at luma 1.0; sign sets direction.
+  let displacementDepth: Double
+  /// Each filled cell extends downward by this many px (>= 1).
+  let lineThickness: Int
+  /// White lines instead of source colour.
+  let mono: Bool
   let projectURL: URL?
   // Modulation-matrix routes; defaulted off so call sites predating slice 3
   // keep their unmodulated meaning.

@@ -287,6 +287,32 @@ final class AppState: ObservableObject {
   @Published var paletteQuantizeModulatorFramesURL: URL?
   @Published var paletteQuantizeModSampling = ModulationSamplingOption.hold
   @Published var paletteQuantizeNamedModulators: [NamedModulatorEntry] = []
+  // Rutt-Etra — luma-displaced scanlines on black (CPU-only; no backend
+  // picker until the Metal slice lands).
+  @Published var ruttEtraLinePitch = 8
+  @Published var ruttEtraDisplacementDepth = 48.0
+  @Published var ruttEtraLineThickness = 1
+  @Published var ruttEtraMono = false
+  @Published var ruttEtraSummary = "No rutt-etra sequence rendered"
+  @Published var ruttEtraModDepthSource = ModulationSourceOption.off
+  @Published var ruttEtraModDepthScale = 48.0
+  @Published var ruttEtraModDepthOffset = 0.0
+  @Published var ruttEtraModDepthSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var ruttEtraModDepthModulator = ""
+  @Published var ruttEtraModPitchSource = ModulationSourceOption.off
+  @Published var ruttEtraModPitchScale = 1.0
+  @Published var ruttEtraModPitchOffset = 0.0
+  @Published var ruttEtraModPitchSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var ruttEtraModPitchModulator = ""
+  @Published var ruttEtraModThicknessSource = ModulationSourceOption.off
+  @Published var ruttEtraModThicknessScale = 1.0
+  @Published var ruttEtraModThicknessOffset = 0.0
+  @Published var ruttEtraModThicknessSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var ruttEtraModThicknessModulator = ""
+  @Published var ruttEtraModulatorAudioURL: URL?
+  @Published var ruttEtraModulatorFramesURL: URL?
+  @Published var ruttEtraModSampling = ModulationSamplingOption.hold
+  @Published var ruttEtraNamedModulators: [NamedModulatorEntry] = []
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -2010,6 +2036,21 @@ final class AppState: ObservableObject {
     if paletteQuantizeModModeModulator == name { paletteQuantizeModModeModulator = "" }
   }
 
+  var ruttEtraDeclaredModulatorNames: [String] {
+    ruttEtraNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addRuttEtraNamedModulator() { appendNamedModulator(to: &ruttEtraNamedModulators) }
+  func chooseRuttEtraNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &ruttEtraNamedModulators, id: id) }
+  func chooseRuttEtraNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &ruttEtraNamedModulators, id: id) }
+  func removeRuttEtraNamedModulator(id: UUID) {
+    guard let entry = ruttEtraNamedModulators.first(where: { $0.id == id }) else { return }
+    ruttEtraNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if ruttEtraModDepthModulator == name { ruttEtraModDepthModulator = "" }
+    if ruttEtraModPitchModulator == name { ruttEtraModPitchModulator = "" }
+    if ruttEtraModThicknessModulator == name { ruttEtraModThicknessModulator = "" }
+  }
+
   var datamoshDeclaredModulatorNames: [String] {
     datamoshNamedModulators.map(\.name).filter { !$0.isEmpty }
   }
@@ -2064,6 +2105,30 @@ final class AppState: ObservableObject {
     }
     paletteQuantizeModulatorFramesURL = url
     statusMessage = "Palette-quantize modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func chooseRuttEtraModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    ruttEtraModulatorAudioURL = url
+    statusMessage = "Rutt-etra modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseRuttEtraModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    ruttEtraModulatorFramesURL = url
+    statusMessage = "Rutt-etra modulator frames selected: \(url.lastPathComponent)"
   }
 
   func choosePixelSortModulatorWAV() {
@@ -2337,6 +2402,86 @@ final class AppState: ObservableObject {
           self.paletteQuantizeSummary =
             "Palette quantize render failed: \(error.localizedDescription)"
           self.statusMessage = "Palette quantize render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runRuttEtraSequenceRender() {
+    guard let carrierURL = frameSequenceCarrierURL else {
+      statusMessage = "Select Source B frame directory before rendering rutt-etra."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
+      statusMessage = "Choose a frame sequence output directory before rendering rutt-etra."
+      return
+    }
+    guard let routes = modulationRoutes(
+      slots: [
+        (
+          "displacement_depth", ruttEtraModDepthSource,
+          ruttEtraModDepthScale, ruttEtraModDepthOffset,
+          ruttEtraModDepthSamplingOverride
+        ),
+        (
+          "line_pitch", ruttEtraModPitchSource,
+          ruttEtraModPitchScale, ruttEtraModPitchOffset,
+          ruttEtraModPitchSamplingOverride
+        ),
+        (
+          "line_thickness", ruttEtraModThicknessSource,
+          ruttEtraModThicknessScale, ruttEtraModThicknessOffset,
+          ruttEtraModThicknessSamplingOverride
+        ),
+      ],
+      modulatorAudioURL: ruttEtraModulatorAudioURL,
+      modulatorFramesURL: ruttEtraModulatorFramesURL,
+      namedModulators: ruttEtraNamedModulators,
+      slotModulators: [
+        ruttEtraModDepthModulator, ruttEtraModPitchModulator, ruttEtraModThicknessModulator,
+      ],
+      effectLabel: "rutt-etra"
+    ) else { return }
+
+    let request = RuttEtraSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultRuttEtraSequenceRenderQueueURL(),
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("rutt-etra", isDirectory: true),
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
+      frameRate: proResFrameRate.framesPerSecond,
+      linePitch: ruttEtraLinePitch,
+      displacementDepth: ruttEtraDisplacementDepth,
+      lineThickness: ruttEtraLineThickness,
+      mono: ruttEtraMono,
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: ruttEtraModulatorAudioURL,
+      modulatorFramesURL: ruttEtraModulatorFramesURL,
+      modulationSampling: ruttEtraModSampling,
+      namedModulators: namedModulatorSpecs(ruttEtraNamedModulators)
+    )
+
+    statusMessage = "Queueing rutt-etra through morphogen-cli..."
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedRuttEtraSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.ruttEtraSummary =
+            "\(bundle.frameCount) rutt-etra frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary =
+            "Queued rutt-etra sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Rutt-etra render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.ruttEtraSummary = "Rutt-etra render failed: \(error.localizedDescription)"
+          self.statusMessage = "Rutt-etra render failed: \(error.localizedDescription)"
         }
       }
     }

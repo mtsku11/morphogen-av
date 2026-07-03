@@ -501,6 +501,44 @@ pub enum RenderJobTask {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
     },
+    /// Rutt-Etra scanline: re-render the carrier as sparse horizontal
+    /// scanlines on black, each displaced vertically by its own luminance.
+    /// Stateless single-source, CPU-only (no backend field until the Metal
+    /// slice lands).
+    FrameSequenceRuttEtra {
+        carrier_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        /// Rows between scanlines (top row always included).
+        #[serde(default = "default_rutt_etra_line_pitch")]
+        line_pitch: u32,
+        /// Vertical displacement in px at luma 1.0; sign sets direction.
+        #[serde(default = "default_rutt_etra_displacement_depth")]
+        displacement_depth: f32,
+        /// Each filled cell extends downward by this many px.
+        #[serde(default = "default_rutt_etra_line_thickness")]
+        line_thickness: u32,
+        /// White lines instead of source colour.
+        #[serde(default)]
+        mono: bool,
+        /// Persisted modulation routes (empty = unmodulated). Envelope times
+        /// are sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes; pre-slice jobs deserialize to empty).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
+    },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
     /// No blending — hard cuts at every tile boundary.
@@ -1266,6 +1304,18 @@ fn default_palette_quantize_mode() -> String {
 
 fn default_palette_quantize_levels() -> u32 {
     256
+}
+
+fn default_rutt_etra_line_pitch() -> u32 {
+    8
+}
+
+fn default_rutt_etra_displacement_depth() -> f32 {
+    48.0
+}
+
+fn default_rutt_etra_line_thickness() -> u32 {
+    1
 }
 
 /// Named deterministic datamosh presets for the flow-reuse path. Bitstream

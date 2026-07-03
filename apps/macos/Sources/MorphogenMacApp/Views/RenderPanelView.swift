@@ -1043,6 +1043,100 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Rutt-Etra — Luma-Displaced Scanlines (CPU)")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.ruttEtraLinePitch, in: 1...256, step: 1) {
+              Text("Pitch \(state.ruttEtraLinePitch)px")
+            }
+            .frame(width: 140, alignment: .leading)
+            .help("Rows between scanlines; smaller = denser wireframe.")
+
+            Stepper(value: $state.ruttEtraDisplacementDepth, in: -512...512, step: 8) {
+              Text("Depth \(state.ruttEtraDisplacementDepth, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Vertical push at full brightness; 0 = flat scanlines (off case), negative pushes down.")
+
+            Stepper(value: $state.ruttEtraLineThickness, in: 1...64, step: 1) {
+              Text("Thickness \(state.ruttEtraLineThickness)px")
+            }
+            .frame(width: 160, alignment: .leading)
+            .help("Each line extends downward by this many pixels.")
+
+            Toggle("Mono", isOn: $state.ruttEtraMono)
+              .toggleStyle(.checkbox)
+              .help("White lines instead of source colour — the classic monochrome CRT look.")
+          }
+
+          ModulationSlotRow(
+            label: "Depth",
+            source: $state.ruttEtraModDepthSource,
+            scale: $state.ruttEtraModDepthScale,
+            offset: $state.ruttEtraModDepthOffset,
+            samplingOverride: $state.ruttEtraModDepthSamplingOverride,
+            scaleRange: -256...256, scaleStep: 8, offsetRange: -256...256, offsetStep: 8,
+            modulator: $state.ruttEtraModDepthModulator,
+            modulatorNames: state.ruttEtraDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Pitch",
+            source: $state.ruttEtraModPitchSource,
+            scale: $state.ruttEtraModPitchScale,
+            offset: $state.ruttEtraModPitchOffset,
+            samplingOverride: $state.ruttEtraModPitchSamplingOverride,
+            scaleRange: -255...255, scaleStep: 1, offsetRange: -256...256, offsetStep: 1,
+            modulator: $state.ruttEtraModPitchModulator,
+            modulatorNames: state.ruttEtraDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Thickness",
+            source: $state.ruttEtraModThicknessSource,
+            scale: $state.ruttEtraModThicknessScale,
+            offset: $state.ruttEtraModThicknessOffset,
+            samplingOverride: $state.ruttEtraModThicknessSamplingOverride,
+            scaleRange: -63...63, scaleStep: 1, offsetRange: -64...64, offsetStep: 1,
+            modulator: $state.ruttEtraModThicknessModulator,
+            modulatorNames: state.ruttEtraDeclaredModulatorNames
+          )
+
+          ModulationMediaRow(
+            sources: [
+              state.ruttEtraModDepthSource, state.ruttEtraModPitchSource,
+              state.ruttEtraModThicknessSource,
+            ],
+            audioURL: state.ruttEtraModulatorAudioURL,
+            framesURL: state.ruttEtraModulatorFramesURL,
+            sampling: $state.ruttEtraModSampling,
+            chooseAudio: { state.chooseRuttEtraModulatorWAV() },
+            chooseFrames: { state.chooseRuttEtraModulatorFrames() }
+          )
+
+          NamedModulatorsSection(
+            modulators: $state.ruttEtraNamedModulators,
+            onAdd: { state.addRuttEtraNamedModulator() },
+            onRemove: { state.removeRuttEtraNamedModulator(id: $0) },
+            chooseAudio: { state.chooseRuttEtraNamedModulatorWAV(id: $0) },
+            chooseFrames: { state.chooseRuttEtraNamedModulatorFrames(id: $0) }
+          )
+
+          Text(state.ruttEtraSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runRuttEtraSequenceRender()
+          } label: {
+            Label("Run Rutt-Etra", systemImage: "waveform.path")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Granular Mosaic — Temporal Pool (Joint-AV)")
             .font(.subheadline.weight(.semibold))
 

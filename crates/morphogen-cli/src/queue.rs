@@ -17,18 +17,19 @@ use morphogen_core::{
 use morphogen_render::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
-    apply_pixel_sort_modulation, apply_retro_static_modulation, flow_displace_cpu,
-    parse_modulation_route, validate_route_targets, BlendMode, BlockCollageSettings,
-    CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings, ChannelShiftSettings,
-    ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource, ModulationSampling,
-    ModulationSource, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
-    RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection, SortKey, StructureMode,
-    VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM,
+    apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
+    flow_displace_cpu, parse_modulation_route, validate_route_targets, BlendMode,
+    BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
+    ChannelShiftSettings, ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings, MaskSource,
+    ModulationSampling, ModulationSource, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
+    RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection, SortKey,
+    StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM,
     CASCADE_TRAIL_ALGORITHM, CHANNEL_SHIFT_ALGORITHM, CHANNEL_SHIFT_FLOW_ALGORITHM,
     FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
     PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
     POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
+    RUTT_ETRA_ALGORITHM,
 };
 
 use crate::args::*;
@@ -2801,6 +2802,197 @@ fn parse_quantize_mode(s: &str) -> QuantizeMode {
     }
 }
 
+pub(crate) struct QueueAddRuttEtraSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) settings: RuttEtraSettings,
+    pub(crate) project_path: Option<&'a Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
+    pub(crate) named_modulator_audio: &'a [String],
+    pub(crate) named_modulator_frames: &'a [String],
+}
+
+pub(crate) fn queue_add_rutt_etra_sequence(
+    request: QueueAddRuttEtraSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    validate_queued_sequence_timing(request.frames, request.frame_rate)?;
+    request.settings.validate()?;
+
+    let modulation = parse_queue_modulation_routes(
+        request.modulate,
+        request.modulator_audio,
+        request.modulator_frames,
+        request.named_modulator_audio,
+        request.named_modulator_frames,
+        |target| {
+            let mut probe = request.settings;
+            apply_rutt_etra_modulation(&mut probe, target, 0.0).map_err(CliError::from)
+        },
+    )?;
+
+    let mut queue = load_or_default_queue(request.queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = request.output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: request
+            .project_path
+            .map(|p| p.to_string_lossy().to_string()),
+        settings: png_sequence_settings(request.frame_rate),
+        task: RenderJobTask::FrameSequenceRuttEtra {
+            carrier_frame_directory: request.source_b_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames: request.frames,
+            frame_rate: request.frame_rate,
+            line_pitch: request.settings.line_pitch,
+            displacement_depth: request.settings.displacement_depth,
+            line_thickness: request.settings.line_thickness,
+            mono: request.settings.mono,
+            modulation_routes: modulation.routes,
+            modulator_audio_path: request
+                .modulator_audio
+                .map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: request
+                .modulator_frames
+                .map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(request.modulation_sampling),
+            named_modulator_audio: modulation.named_audio,
+            named_modulator_frames: modulation.named_frames,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            request.source_b_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(request.queue_path)?;
+    println!(
+        "queued rutt-etra render job {job_id} in {}",
+        request.queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceRuttEtra { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message("render queue has no queued or running rutt-etra jobs".to_string())
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceRuttEtra {
+        carrier_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        line_pitch,
+        displacement_depth,
+        line_thickness,
+        mono,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a rutt-etra render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = RuttEtraSettings {
+        line_pitch,
+        displacement_depth,
+        line_thickness,
+        mono,
+    };
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
+    let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
+    let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_rutt_etra_sequence(RuttEtraSequenceRequest {
+            source_b_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            frames,
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(Path::new),
+                modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                // The job's frame_rate is the sequence time base.
+                fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
+                named_modulator_audio: &named_modulator_audio_specs,
+                named_modulator_frames: &named_modulator_frames_specs,
+            },
+        })?;
+        let mut effect = serde_json::json!({
+            "algorithm": RUTT_ETRA_ALGORITHM,
+            "settings": settings,
+        });
+        if let Some(modulation) = modulation_manifest_json(
+            &modulation_routes,
+            modulator_audio_path.as_deref(),
+            modulator_frames_directory.as_deref(),
+            modulation_sampling,
+            frame_rate,
+        ) {
+            effect["modulation"] = modulation;
+        }
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_rutt_etra",
+            effect_key: "rutt_etra",
+            effect,
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "rutt-etra",
+    )
+}
+
 pub(crate) struct QueueAddBlockCollageSequenceRequest<'a> {
     pub(crate) queue_path: &'a Path,
     pub(crate) source_a_dir: &'a Path,
@@ -5198,6 +5390,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceRetroStatic { .. } => "frame_sequence_retro_static",
             RenderJobTask::FrameSequenceChannelShift { .. } => "frame_sequence_channel_shift",
             RenderJobTask::FrameSequencePaletteQuantize { .. } => "frame_sequence_palette_quantize",
+            RenderJobTask::FrameSequenceRuttEtra { .. } => "frame_sequence_rutt_etra",
             RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
             RenderJobTask::FrameSequencePixelSort { .. } => "frame_sequence_pixel_sort",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",

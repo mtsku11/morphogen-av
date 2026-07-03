@@ -6299,3 +6299,144 @@ fn queue_palette_quantize_modulated_matches_direct_and_records_routes() {
     assert_eq!(modulation["fps"], 4.0);
     assert_eq!(modulation["modulator_frames"], source_arg.as_str());
 }
+
+#[test]
+fn queue_rutt_etra_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        write_horizontal_carrier(&source_dir.join(frame_name), 24, 16);
+    }
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    let depth_route = "displacement_depth=luma:6,2";
+
+    // Unknown target fails at add time and persists nothing.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-rutt-etra-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--modulate",
+            "mono=luma",
+            "--modulator-frames",
+            source_arg.as_str(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unknown rutt-etra modulation target",
+        ));
+    assert!(
+        !queue_path.exists(),
+        "rejected queue-add must not write a queue file"
+    );
+
+    // Direct render with the same knobs + route (fps 4 = the job frame rate).
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "2",
+            "--line-pitch",
+            "4",
+            "--modulate",
+            depth_route,
+            "--modulator-frames",
+            source_arg.as_str(),
+            "--modulation-fps",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-rutt-etra-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "4",
+            "--line-pitch",
+            "4",
+            "--modulate",
+            depth_route,
+            "--modulator-frames",
+            source_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    // Persisted job JSON shape: knobs + routes present, the named-modulator
+    // vectors absent when empty (pre-slice queue JSON stays byte-identical).
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue");
+    let task = &queue_json["jobs"][0]["task"];
+    assert_eq!(task["type"], "frame_sequence_rutt_etra");
+    assert_eq!(task["line_pitch"], 4);
+    assert_eq!(task["displacement_depth"], 48.0);
+    assert_eq!(task["line_thickness"], 1);
+    assert_eq!(task["mono"], false);
+    assert_eq!(task["modulation_routes"][0]["target"], "displacement_depth");
+    assert_eq!(task["modulation_routes"][0]["source"], "luma");
+    assert_eq!(task["modulation_routes"][0]["scale"], 6.0);
+    assert_eq!(task["modulation_routes"][0]["offset"], 2.0);
+    assert!(
+        task.get("named_modulator_audio").is_none(),
+        "empty named-modulator vectors must be skipped in the persisted JSON"
+    );
+    assert!(task.get("named_modulator_frames").is_none());
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-rutt-etra-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Queue render is byte-identical to the direct render (path-independent),
+    // frames AND the render manifest.
+    for file_name in ["frame_000000.png", "frame_000001.png", "manifest.json"] {
+        assert_eq!(
+            fs::read(output_root.join("job-0001/frames").join(file_name)).expect("queued file"),
+            fs::read(direct_dir.join(file_name)).expect("direct file"),
+            "queue render must be byte-identical to direct render ({file_name})"
+        );
+    }
+
+    // Job manifest records the rutt-etra algorithm, knobs, and the route.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["task"], "frame_sequence_rutt_etra");
+    let effect = &manifest["rutt_etra"];
+    assert_eq!(effect["algorithm"], "rutt_etra_scanline_cpu_v1");
+    assert_eq!(effect["settings"]["line_pitch"], 4);
+    assert_eq!(effect["settings"]["displacement_depth"], 48.0);
+    assert_eq!(effect["settings"]["line_thickness"], 1);
+    assert_eq!(effect["settings"]["mono"], false);
+    let modulation = &effect["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "displacement_depth");
+    assert_eq!(modulation["routes"][0]["source"], "luma");
+    assert_eq!(modulation["routes"][0]["scale"], 6.0);
+    assert_eq!(modulation["routes"][0]["offset"], 2.0);
+    assert_eq!(modulation["fps"], 4.0);
+    assert_eq!(modulation["modulator_frames"], source_arg.as_str());
+}
