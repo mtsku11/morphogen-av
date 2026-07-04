@@ -2146,12 +2146,17 @@ pub(crate) enum Commands {
     QueueRunPaletteQuantizeSequence {
         queue_path: PathBuf,
     },
-    /// Queue a Rutt-Etra scanline sequence job (CPU-only) with optional
-    /// modulation-matrix routes.
+    /// Queue a Rutt-Etra scanline sequence job with optional modulation-matrix
+    /// routes. With `--source-a-dir` it is two-source cross-synthesis (A's luma
+    /// displaces B's scanlines); otherwise single-source.
     QueueAddRuttEtraSequence {
         queue_path: PathBuf,
         source_b_dir: PathBuf,
         output_root_dir: PathBuf,
+        /// Optional Source A (modulator) frames — A's luma drives the
+        /// displacement while Source B supplies the colour. Absent = single-source.
+        #[arg(long)]
+        source_a_dir: Option<PathBuf>,
         #[arg(long, default_value_t = 120)]
         frames: u32,
         #[arg(long, default_value_t = 24.0)]

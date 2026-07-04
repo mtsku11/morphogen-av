@@ -1078,6 +1078,13 @@ struct RenderPanelView: View {
             .help("Metal runs the gather kernel and is parity-gated per-frame against the CPU reference.")
           }
 
+          Toggle("Two-Source (Source A drives displacement)", isOn: $state.ruttEtraUseTwoSource)
+            .toggleStyle(.checkbox)
+            .help(
+              "Cross-synthesis: Source A's luma displaces Source B's scanlines while Source B "
+              + "supplies the colour. Off = Source B displaces its own scanlines. Source A is the "
+              + "shared modulator frame directory.")
+
           ModulationSlotRow(
             label: "Depth",
             source: $state.ruttEtraModDepthSource,

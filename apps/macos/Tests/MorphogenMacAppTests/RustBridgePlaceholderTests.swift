@@ -1475,6 +1475,24 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(arguments[backendIdx + 1], "metal")
   }
 
+  func testQueuedRuttEtraSequenceOmitsSourceAWhenSingleSource() throws {
+    // Single-source (default nil Source A) must not emit `--source-a-dir`.
+    let request = makeRuttEtraRequest()
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+    XCTAssertFalse(arguments.contains("--source-a-dir"))
+  }
+
+  func testQueuedRuttEtraSequenceEmitsSourceADirWhenTwoSource() throws {
+    // Two-source: `--source-a-dir <path>` is emitted with the modulator directory.
+    var request = makeRuttEtraRequest()
+    request.sourceADirectoryURL = URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true)
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+    let idx = try XCTUnwrap(arguments.firstIndex(of: "--source-a-dir"))
+    XCTAssertEqual(arguments[idx + 1], "/tmp/source-a-frames")
+    // Source B (the carrier positional) is still present and distinct.
+    XCTAssertTrue(arguments.contains("/tmp/source-b-frames"))
+  }
+
   func testDownscaleFramesArgumentsPinTokenSequence() throws {
     // Preview-loop milestone Slice 3: the exact downscale token sequence.
     let arguments = try RustBridgePlaceholder.downscaleFramesArguments(

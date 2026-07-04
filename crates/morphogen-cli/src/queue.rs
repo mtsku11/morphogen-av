@@ -31,6 +31,7 @@ use morphogen_render::{
     FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM,
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM,
     RMS_DISPLACEMENT_ROUTE_ALGORITHM, RUTT_ETRA_ALGORITHM, RUTT_ETRA_METAL_ALGORITHM,
+    RUTT_ETRA_TWO_SOURCE_ALGORITHM, RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
 
 use crate::args::*;
@@ -2806,6 +2807,7 @@ fn parse_quantize_mode(s: &str) -> QuantizeMode {
 pub(crate) struct QueueAddRuttEtraSequenceRequest<'a> {
     pub(crate) queue_path: &'a Path,
     pub(crate) source_b_dir: &'a Path,
+    pub(crate) source_a_dir: Option<&'a Path>,
     pub(crate) output_root_dir: &'a Path,
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
@@ -2851,6 +2853,9 @@ pub(crate) fn queue_add_rutt_etra_sequence(
         task: RenderJobTask::FrameSequenceRuttEtra {
             carrier_frame_directory: request.source_b_dir.to_string_lossy().to_string(),
             output_directory: job_output_dir.to_string_lossy().to_string(),
+            source_a_directory: request
+                .source_a_dir
+                .map(|p| p.to_string_lossy().to_string()),
             frames: request.frames,
             frame_rate: request.frame_rate,
             line_pitch: request.settings.line_pitch,
@@ -2909,6 +2914,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
     let RenderJobTask::FrameSequenceRuttEtra {
         carrier_frame_directory,
         output_directory,
+        source_a_directory,
         frames,
         frame_rate,
         line_pitch,
@@ -2946,7 +2952,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
         let render_result = render_rutt_etra_sequence(RuttEtraSequenceRequest {
             source_b_dir: Path::new(&carrier_frame_directory),
             output_dir: &output_dir.join("frames"),
-            source_a_dir: None,
+            source_a_dir: source_a_directory.as_deref().map(Path::new),
             settings,
             frames,
             backend,
@@ -2963,14 +2969,19 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
                 named_modulator_frames: &named_modulator_frames_specs,
             },
         })?;
-        let algorithm = match backend {
-            RenderBackend::Cpu => RUTT_ETRA_ALGORITHM,
-            RenderBackend::Metal => RUTT_ETRA_METAL_ALGORITHM,
+        let algorithm = match (source_a_directory.is_some(), backend) {
+            (true, RenderBackend::Cpu) => RUTT_ETRA_TWO_SOURCE_ALGORITHM,
+            (true, RenderBackend::Metal) => RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
+            (false, RenderBackend::Cpu) => RUTT_ETRA_ALGORITHM,
+            (false, RenderBackend::Metal) => RUTT_ETRA_METAL_ALGORITHM,
         };
         let mut effect = serde_json::json!({
             "algorithm": algorithm,
             "settings": settings,
         });
+        if let Some(source_a) = &source_a_directory {
+            effect["source_a"] = serde_json::json!(source_a);
+        }
         if let Some(modulation) = modulation_manifest_json(
             &modulation_routes,
             modulator_audio_path.as_deref(),

@@ -1725,6 +1725,7 @@ fn run() -> Result<(), CliError> {
             queue_path,
             source_b_dir,
             output_root_dir,
+            source_a_dir,
             frames,
             frame_rate,
             line_pitch,
@@ -1742,6 +1743,7 @@ fn run() -> Result<(), CliError> {
         } => queue_add_rutt_etra_sequence(QueueAddRuttEtraSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
+            source_a_dir: source_a_dir.as_deref(),
             output_root_dir: &output_root_dir,
             frames,
             frame_rate,

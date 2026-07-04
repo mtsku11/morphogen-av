@@ -449,6 +449,102 @@ fn queue_rutt_etra_metal_matches_direct_render() {
     }
 }
 
+/// Two-source queue add→run is byte-identical to the direct two-source render,
+/// the persisted task records `source_a_directory`, and the manifest carries the
+/// two-source algorithm id. CPU backend so this runs on every platform.
+#[test]
+fn queue_rutt_etra_two_source_matches_direct_render() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let b_dir = temp_dir.path().join("source-b");
+    let a_dir = temp_dir.path().join("source-a");
+    fs::create_dir_all(&b_dir).expect("create b frames");
+    fs::create_dir_all(&a_dir).expect("create a frames");
+
+    for index in 0..2u32 {
+        let b = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, 255 - value, value / 2, u8::MAX])
+        });
+        b.save(b_dir.join(format!("frame_{index:06}.png")))
+            .expect("write b frame");
+        let a = ImageBuffer::from_fn(16, 16, |_, y| {
+            let value = (y as u8).wrapping_mul(16);
+            Rgba([value, value, value, u8::MAX])
+        });
+        a.save(a_dir.join(format!("frame_{index:06}.png")))
+            .expect("write a frame");
+    }
+
+    let b_arg = b_dir.to_string_lossy().to_string();
+    let a_arg = a_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            b_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--source-a-dir",
+            a_arg.as_str(),
+            "--frames",
+            "2",
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "18.0",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-rutt-etra-sequence",
+            queue_arg.as_str(),
+            b_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--source-a-dir",
+            a_arg.as_str(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "4",
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "18.0",
+        ])
+        .assert()
+        .success();
+
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue");
+    assert_eq!(queue_json["jobs"][0]["task"]["source_a_directory"], a_arg);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-rutt-etra-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    for file_name in ["frame_000000.png", "frame_000001.png", "manifest.json"] {
+        assert_eq!(
+            fs::read(output_root.join("job-0001/frames").join(file_name)).expect("queued file"),
+            fs::read(direct_dir.join(file_name)).expect("direct file"),
+            "queued two-source render must be byte-identical to direct ({file_name})"
+        );
+    }
+
+    let manifest = read_json(&direct_dir.join("manifest.json"));
+    assert_eq!(manifest["algorithm"], "rutt_etra_two_source_cpu_v1");
+    assert_eq!(manifest["source_a"], a_arg);
+}
+
 #[test]
 fn render_rutt_etra_sequence_modulation_continuity_identity() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");

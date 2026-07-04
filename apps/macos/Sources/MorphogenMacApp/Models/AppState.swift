@@ -293,6 +293,14 @@ final class AppState: ObservableObject {
   @Published var ruttEtraDisplacementDepth = 48.0
   @Published var ruttEtraLineThickness = 1
   @Published var ruttEtraMono = false
+  /// When on, the shared Source A (modulator) drives the scanline displacement
+  /// while Source B supplies the colour — two-source cross-synthesis. Persisted
+  /// so the choice survives relaunch (the backend-picker precedent).
+  @Published var ruttEtraUseTwoSource =
+    UserDefaults.standard.bool(forKey: "ruttEtra.twoSource")
+  {
+    didSet { UserDefaults.standard.set(ruttEtraUseTwoSource, forKey: "ruttEtra.twoSource") }
+  }
   @Published var ruttEtraSummary = "No rutt-etra sequence rendered"
   @Published var ruttEtraModDepthSource = ModulationSourceOption.off
   @Published var ruttEtraModDepthScale = 48.0
@@ -2523,6 +2531,17 @@ final class AppState: ObservableObject {
       statusMessage = "Choose a frame sequence output directory before rendering rutt-etra."
       return
     }
+    // Two-source: Source A (the shared modulator directory) drives displacement.
+    var sourceADirectoryURL: URL? = nil
+    if ruttEtraUseTwoSource {
+      guard let modulatorURL = effectiveModulatorURL() else {
+        statusMessage =
+          "Select Source A frame directory (the modulator) for two-source rutt-etra, "
+          + "or turn off Two-Source."
+        return
+      }
+      sourceADirectoryURL = modulatorURL
+    }
     guard let routes = modulationRoutes(
       slots: [
         (
@@ -2576,6 +2595,7 @@ final class AppState: ObservableObject {
       namedModulators: namedModulatorSpecs(ruttEtraNamedModulators)
     )
     request.backend = ruttEtraBackend
+    request.sourceADirectoryURL = sourceADirectoryURL
 
     statusMessage = "Queueing rutt-etra through morphogen-cli..."
     DispatchQueue.global(qos: .userInitiated).async {

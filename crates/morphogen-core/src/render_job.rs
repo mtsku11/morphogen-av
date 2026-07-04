@@ -508,6 +508,12 @@ pub enum RenderJobTask {
     FrameSequenceRuttEtra {
         carrier_frame_directory: String,
         output_directory: String,
+        /// Optional Source A (modulator) frame directory. When present, A's luma
+        /// drives the displacement (two-source cross-synthesis) and B supplies
+        /// the colour; when absent, B displaces its own scanlines. Skip-when-none
+        /// so pre-two-source queue JSON stays byte-identical.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_a_directory: Option<String>,
         frames: u32,
         frame_rate: f64,
         /// Rows between scanlines (top row always included).

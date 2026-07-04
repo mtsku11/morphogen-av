@@ -2297,6 +2297,10 @@ enum RustBridgePlaceholder {
       "--line-thickness",
       String(request.lineThickness)
     ]
+    if let sourceADirectoryURL = request.sourceADirectoryURL {
+      arguments.append("--source-a-dir")
+      arguments.append(sourceADirectoryURL.path)
+    }
     if request.mono {
       arguments.append("--mono")
     }
@@ -3589,6 +3593,11 @@ struct RuttEtraSequenceRenderQueueCommandRequest {
   let queueURL: URL
   let carrierDirectoryURL: URL
   let outputRootDirectoryURL: URL
+  /// Optional Source A (modulator) frames. When set, A's luma drives the
+  /// displacement (two-source cross-synthesis) and Source B supplies the colour;
+  /// when nil, Source B displaces its own scanlines (single-source). Defaulted
+  /// nil so call sites predating the two-source slice keep their meaning.
+  var sourceADirectoryURL: URL? = nil
   let frames: Int
   let frameRate: Double
   /// Rows between scanlines (top row always included; >= 1).
