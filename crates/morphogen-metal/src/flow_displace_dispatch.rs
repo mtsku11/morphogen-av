@@ -182,6 +182,8 @@ pub enum MetalDispatchError {
     MissingRuttEtraKernelEntryPoint,
     #[error("rutt_etra_scanline.metal does not contain the expected texture and buffer bindings")]
     MissingRuttEtraBindingLayout,
+    #[error("invalid rutt-etra settings: {0}")]
+    InvalidRuttEtraSettings(String),
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -597,6 +599,16 @@ impl RuttEtraDispatchPlan {
         if !settings.displacement_depth.is_finite() {
             return Err(MetalDispatchError::NonFiniteAmount);
         }
+        if settings.line_pitch == 0 {
+            return Err(MetalDispatchError::InvalidRuttEtraSettings(
+                "line_pitch must be >= 1".to_string(),
+            ));
+        }
+        if settings.line_thickness == 0 {
+            return Err(MetalDispatchError::InvalidRuttEtraSettings(
+                "line_thickness must be >= 1".to_string(),
+            ));
+        }
 
         let threads_per_threadgroup = ThreadgroupSize {
             width: 16,
@@ -755,5 +767,23 @@ mod tests {
     #[test]
     fn rutt_etra_shader_has_expected_bindings() {
         validate_rutt_etra_shader_source().expect("rutt_etra_scanline shader preflight");
+    }
+
+    #[test]
+    fn rutt_etra_dispatch_plan_rejects_zero_line_pitch() {
+        let settings = RuttEtraSettings {
+            line_pitch: 0,
+            ..RuttEtraSettings::default()
+        };
+        assert!(RuttEtraDispatchPlan::new(&settings, 16, 16).is_err());
+    }
+
+    #[test]
+    fn rutt_etra_dispatch_plan_rejects_zero_line_thickness() {
+        let settings = RuttEtraSettings {
+            line_thickness: 0,
+            ..RuttEtraSettings::default()
+        };
+        assert!(RuttEtraDispatchPlan::new(&settings, 16, 16).is_err());
     }
 }

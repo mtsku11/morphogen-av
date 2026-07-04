@@ -124,23 +124,35 @@ Add to `lib.rs` export: `pub const RUTT_ETRA_METAL_ALGORITHM: &str = "rutt_etra_
 
 `RuttEtraSequenceRequest` gains `pub backend: RenderBackend` (CPU default).
 
-In `render_rutt_etra_sequence`, replace the unconditional `render_rutt_etra_frame`
-call with:
+Embed the parity gate **inside** `render_rutt_etra_frame_metal` (as every other
+`render_*_frame_metal` in `render.rs` does), using `max_channel_difference` +
+`METAL_CPU_PARITY_EPSILON` — **not** exact `!=` equality (a 1-ULP hardware
+rounding difference or a NaN pixel would spuriously disable the backend):
+
+```rust
+let gpu = morphogen_metal::rutt_etra_scanline_metal(source_b, settings)?;
+let cpu = render_rutt_etra_frame(source_b, settings)?;
+let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+    CliError::Message(
+        "Metal and CPU rutt-etra outputs have mismatched dimensions; cannot verify parity"
+            .to_string(),
+    )
+})?;
+if difference > METAL_CPU_PARITY_EPSILON {
+    return Err(CliError::Message(format!(
+        "Metal rutt-etra render diverged from CPU reference by {difference} \
+         (tolerance {METAL_CPU_PARITY_EPSILON})"
+    )));
+}
+Ok(gpu)
+```
+
+`render_rutt_etra_sequence` then just dispatches by backend with a plain call:
 
 ```rust
 let rendered = match request.backend {
     RenderBackend::Cpu => render_rutt_etra_frame(&source_b, &frame_settings)?,
-    RenderBackend::Metal => {
-        let metal_out = render_rutt_etra_frame_metal(&source_b, &frame_settings)?;
-        // parity gate (same as granular-mosaic-pool and flow-feedback Metal paths)
-        let cpu_ref = render_rutt_etra_frame(&source_b, &frame_settings)?;
-        if metal_out != cpu_ref {
-            return Err(CliError::Message(format!(
-                "Metal/CPU parity failure on frame {index}"
-            )));
-        }
-        metal_out
-    }
+    RenderBackend::Metal => render_rutt_etra_frame_metal(&source_b, &frame_settings)?,
 };
 ```
 

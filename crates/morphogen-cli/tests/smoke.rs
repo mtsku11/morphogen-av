@@ -118,6 +118,149 @@ fn render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs() {
     assert_eq!(manifest["frame_count"], 2);
 }
 
+/// AC 3: `--backend metal` renders byte-identical to `--backend cpu` on the
+/// gather kernel, and the Metal manifest records the Metal algorithm id.
+#[cfg(target_os = "macos")]
+#[test]
+fn render_rutt_etra_sequence_metal_matches_cpu_byte_identical() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let cpu_dir = temp_dir.path().join("cpu-frames");
+    let metal_dir = temp_dir.path().join("metal-frames");
+    fs::create_dir_all(&source_dir).expect("create source frames");
+
+    for index in 0..2u32 {
+        let frame = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, value, value, u8::MAX])
+        });
+        frame
+            .save(source_dir.join(format!("frame_{index:06}.png")))
+            .expect("write source frame");
+    }
+
+    for (backend, out_dir) in [("cpu", &cpu_dir), ("metal", &metal_dir)] {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-rutt-etra-sequence",
+                source_dir.to_string_lossy().as_ref(),
+                out_dir.to_string_lossy().as_ref(),
+                "--frames",
+                "2",
+                "--line-pitch",
+                "4",
+                "--displacement-depth",
+                "12.5",
+                "--line-thickness",
+                "2",
+                "--backend",
+                backend,
+            ])
+            .assert()
+            .success();
+    }
+
+    // The gather kernel is stateless and currently byte-identical on Apple
+    // silicon; if this ever fails while the epsilon parity gate passes, that is
+    // real hardware drift — loosen this to an epsilon comparison then, not now.
+    for index in 0..2 {
+        let file_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(cpu_dir.join(&file_name)).expect("cpu frame"),
+            fs::read(metal_dir.join(&file_name)).expect("metal frame"),
+            "metal render must be byte-identical to cpu render ({file_name})"
+        );
+    }
+
+    let manifest = read_json(&metal_dir.join("manifest.json"));
+    assert_eq!(manifest["algorithm"], "rutt_etra_scanline_metal_v1");
+    assert_eq!(manifest["line_pitch"], 4);
+    assert_eq!(manifest["displacement_depth"], 12.5);
+    assert_eq!(manifest["line_thickness"], 2);
+    assert_eq!(manifest["frame_count"], 2);
+}
+
+/// AC 4: a queued `--backend metal` render is byte-identical to the direct
+/// `--backend metal` CLI render, and the queue task JSON pins `backend: metal`.
+#[cfg(target_os = "macos")]
+#[test]
+fn queue_rutt_etra_metal_matches_direct_render() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    fs::create_dir_all(&source_dir).expect("create source frames");
+
+    for index in 0..2u32 {
+        let frame = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, value, value, u8::MAX])
+        });
+        frame
+            .save(source_dir.join(format!("frame_{index:06}.png")))
+            .expect("write source frame");
+    }
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--line-pitch",
+            "4",
+            "--backend",
+            "metal",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-rutt-etra-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "4",
+            "--line-pitch",
+            "4",
+            "--backend",
+            "metal",
+        ])
+        .assert()
+        .success();
+
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue");
+    assert_eq!(queue_json["jobs"][0]["task"]["backend"], "metal");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-rutt-etra-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    for file_name in ["frame_000000.png", "frame_000001.png", "manifest.json"] {
+        assert_eq!(
+            fs::read(output_root.join("job-0001/frames").join(file_name)).expect("queued file"),
+            fs::read(direct_dir.join(file_name)).expect("direct file"),
+            "queue render must be byte-identical to direct render ({file_name})"
+        );
+    }
+}
+
 #[test]
 fn render_rutt_etra_sequence_modulation_continuity_identity() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");

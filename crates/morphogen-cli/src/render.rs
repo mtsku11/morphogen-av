@@ -6163,9 +6163,21 @@ pub(crate) fn render_rutt_etra_frame_metal(
     source_b: &ImageBufferF32,
     settings: &RuttEtraSettings,
 ) -> Result<ImageBufferF32, CliError> {
-    Ok(morphogen_metal::rutt_etra_scanline_metal(
-        source_b, settings,
-    )?)
+    let gpu = morphogen_metal::rutt_etra_scanline_metal(source_b, settings)?;
+    let cpu = render_rutt_etra_frame(source_b, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU rutt-etra outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal rutt-etra render diverged from CPU reference by {difference} \
+             (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -6231,16 +6243,7 @@ pub(crate) fn render_rutt_etra_sequence(
         let source_b = load_image_f32(frame_path)?;
         let rendered = match request.backend {
             RenderBackend::Cpu => render_rutt_etra_frame(&source_b, &frame_settings)?,
-            RenderBackend::Metal => {
-                let metal = render_rutt_etra_frame_metal(&source_b, &frame_settings)?;
-                let cpu = render_rutt_etra_frame(&source_b, &frame_settings)?;
-                if metal != cpu {
-                    return Err(CliError::Message(format!(
-                        "Metal/CPU parity failure on frame {index}"
-                    )));
-                }
-                metal
-            }
+            RenderBackend::Metal => render_rutt_etra_frame_metal(&source_b, &frame_settings)?,
         };
         save_png(
             &rendered,
