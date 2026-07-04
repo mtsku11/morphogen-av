@@ -26,6 +26,8 @@ agent session picking one up cold. Compiled 2026-07-04 against the
    index first — most effects have a topic file with tuning numbers and traps.
 7. Items in **Tier 2 are user-gated**: ask (AskUserQuestion) before building.
    Tier 4 items need new evidence before they're worth building at all.
+   **Tier 5 items are proposals** — new strategic features, none user-approved
+   yet; present the menu and get a pick before writing a contract.
 
 ---
 
@@ -284,6 +286,205 @@ concrete use case overturns it:
   over ~400 stamps likely slower than CPU; scribble thresholds parity-fragile).
 - **Cascade collage torn seams / strata** — built, user rejected the look,
   reverted (v8 → v7). A new ask required before any retry.
+
+---
+
+## Tier 5 — League-elevating proposals (new, 2026-07-04; not yet user-approved)
+
+Unlike Tiers 1–4 (which finish existing arcs), these change what the app *is*:
+they complete the "audiovisual modular synthesizer" thesis rather than extend
+the effects catalog. None has a user green-light — **present the menu, let the
+user pick, then write the contract.** Ranked by payoff ÷ effort. Each respects
+the invariants by construction; the one that needs a carve-out says so.
+
+### 5.1 Modulation signal algebra (combinators on the mod bus)
+
+**What:** Every real synth's mod matrix has signal math; ours routes one
+source to one knob. Add combinator `ModulationSource` forms to the route
+grammar: `sum(a,b)`, `mul(a,b)`, `invert(x)`, `min/max(a,b)`,
+`lag(x,seconds)` (slew limiter), `gate(x,thresh)`. Suddenly
+`displacement_depth=mul(audio-rms,lfo(sine,0.25))` — an audio-gated LFO —
+exists for free on every registered target of every effect.
+
+**Why league-elevating:** multiplies the entire existing matrix (every source
+× every target × every effect) without touching a single effect. The cheapest
+"this is an instrument, not a filter pack" upgrade left.
+
+**Where:** `crates/morphogen-render/src/modulation.rs` (grammar + eval),
+`morphogen-cli/src/modulate.rs` (envelope resolution). Combinators evaluate
+over resolved child envelopes per frame — deterministic by construction.
+
+**Shape:** Slice 1: recursive source parser + eval + unit tests (the current
+parser is flat — see the `lfo(...)` dot trap in memory
+`lfo-modulation-sources`; nesting makes the grammar genuinely recursive, so
+contract the precedence/quoting rules first). `lag` is stateful across frames
+→ it joins stateful checkpoint contracts as part of the route spec (params on
+the route, the LFO precedent). Slice 2: queue (spec_text round-trip; leaf
+media fingerprints generalize — the contract already fingerprints "exactly
+the media the routed sources consume"). Slice 3: SwiftUI — a free-text route
+field per slot first (an expression editor is its own later design).
+
+**Effort:** small–medium. **Tension:** none — pure functions over envelopes.
+
+### 5.2 Deterministic video oscillator bank (source-less generators)
+
+**What:** A synth has oscillators; we make users bring footage. Add a
+`generate-frames <preset> <out-dir>` CLI: a bank of deterministic pattern
+oscillators (scan bars, radial/plasma via hash-noise, shape oscillators,
+gradients) with rate/phase/scale knobs, writing ordinary PNG frame dirs.
+
+**Why league-elevating:** the app becomes playable with zero footage — an
+oscillator driving Rutt-Etra displacement or feeding the fluid advect IS
+classic video synthesis. Every existing effect, mod route, and queue job
+consumes the output unchanged because it's just a frame dir.
+
+**Where:** new `crates/morphogen-render/src/generators.rs` (or per-preset
+fns); cascade collage is the proven source-less-generator precedent
+(`cascade_collage.rs` — splitmix64 hashing, continuity-identity discipline:
+all drift through explicit rate knobs, rate 0 ⇒ frame 0 forever, pinned).
+
+**Shape:** Slice 1: 3–4 presets + CLI + algorithm ids + the rate-0 identity
+tests + a Read-the-frames look check. Later: presets as a picker in the
+SwiftUI source panel (generate-to-proxy-dir behind the scenes). No Metal —
+generation is cheap and CPU determinism is the ground truth anyway.
+
+**Effort:** small for the MVP. **Tension:** none.
+
+### 5.3 MIDI file as a modulation source
+
+**What:** `--modulator-midi <file.mid>` + sources `midi-cc(<n>)`,
+`midi-velocity`, `midi-note-density`, `midi-pitch` — Standard MIDI File
+parsed to normalized envelopes, exactly like WAV→RMS today.
+
+**Why league-elevating:** musicians already sequence automation in a DAW;
+this lets a MIDI performance drive the video directly. File-based ⇒
+deterministic ⇒ no carve-out needed — the content fingerprint joins stateful
+checkpoint contracts exactly like audio media.
+
+**Where:** envelope extraction beside RMS/onset in
+`morphogen-cli/src/modulate.rs`; parsing in `morphogen-audio` (or a new tiny
+module). Parser: a minimal pure-Rust SMF reader is ~200 lines (the manual
+RIFF-parse precedent in memory `spectral-cross-synth-readout` — don't fight a
+format, read it directly); if a crate, it must be permissively licensed
+(no GPL, CLAUDE.md invariant).
+
+**Traps to contract up front:** the tempo map (Set Tempo meta events) →
+seconds conversion must be exact and pinned by test; define the sampling
+convention (CC curves are step functions — decide hold-until-next-event vs
+linear, and make `@hold`/`@smooth` behave sensibly); normalization is
+per-file relative (the peak-norm relativity trap from
+`video-audio-route-readout` applies — fixtures must span the full range).
+
+**Effort:** small–medium. **Tension:** none.
+
+### 5.4 Spatial modulation — analysis-derived mattes
+
+**What:** Today every route is one scalar per frame; the whole frame gets the
+same knob value. The elevating move: **per-pixel modulation scope**. MVP =
+matte blending: `--matte <source>` (A-luma, A-flow-magnitude, edge-density)
+computes a per-pixel [0,1] field from Source A and blends
+`out = matte·effect(B) + (1−matte)·B`. The effect strikes only where A says.
+
+**Why league-elevating:** it's the CV-to-pixel leap — effects become
+spatially composed by the modulator, which is the A-modulates-B thesis at
+per-pixel resolution. Composes multiplicatively with chains (different mattes
+per stage = collaged regions of different treatments).
+
+**Where:** effect-agnostic post-blend, so it can live once in the shared
+sequence-render path (`morphogen-cli/src/render.rs`) rather than per effect;
+field extraction reuses the luma/flow machinery in `modulate.rs`/
+`morphogen-render`. Metal: a trivial per-pixel blend kernel, parity-gated.
+
+**Shape:** Slice 1: CPU matte blend on 2–3 stateless commands + a readout
+(matte from a half-black/half-white A ⇒ the effect visibly gated to one half
+— the cleanest possible visual proof). Slice 2: Metal + queue. Slice 3: a
+chain-stage `matte_blend` form (this intersects the two-source-stage design
+in Tier 3.2 — flag it in the contract, don't solve the graph problem here).
+Stateful effects need care (does the matte gate the *state update* or only
+the composite? contract it — composite-only is the safe MVP).
+
+**Effort:** medium. **Tension:** none for stateless; stateful semantics must
+be contracted explicitly.
+
+### 5.5 Performance capture — play the preview, keep the render
+
+**What:** While the preview loop plays, the user scrubs a knob; the app
+records the gesture as (time, value) breakpoints and saves a drawn-envelope
+curve file; the offline render replays it via the `curve(path)` route —
+bit-exact, forever.
+
+**Why league-elevating:** it dissolves the app's central tension. Preview =
+play (improvised, hands-on); export = deterministic replay of exactly what
+you played. No other deterministic-first tool makes improvisation
+reproducible this cheaply. This is the feature that makes "instrument" true.
+
+**Depends on:** Tier 1.7 (drawn breakpoint envelopes) — the curve file format
+and `curve(path)` route ARE the render half; capture is then pure SwiftUI.
+Build 1.7 first regardless.
+
+**Where:** `PreviewPlayerModel` / `AppState` (the preview loop already tracks
+elapsed play time — `recompute-from-elapsed` in memory `preview-loop` — which
+is exactly the timestamp source the recorder needs); emit the curve JSON,
+attach it to the render request as a modulation route.
+
+**Shape:** Slice 1: record one knob during preview playback → curve file →
+verify the offline render byte-matches a hand-written curve of the same
+breakpoints. Slice 2: multi-knob capture + a re-record/overdub story (ask the
+user how much they want here before building it).
+
+**Effort:** medium (given 1.7). **Tension:** none — capture happens at play
+time; render stays a pure function of the saved file.
+
+### 5.6 Pro colour pipeline (16-bit intermediates + tagged output)
+
+**What:** The internal path is f32 end-to-end but most PNG I/O quantizes to
+8-bit between stages and export; feedback already has 16-bit PNG export.
+Extend: 16-bit PNG as an opt-in interchange format for all sequence renders
+(and chain stages), and explicit Rec.709 tagging on the ProRes export.
+
+**Why elevating:** chains quantize at every stage boundary today — an 8-bit
+round-trip per stage visibly bands gradients by stage 3. 16-bit interchange
+makes deep chains hold up on a grading monitor; colour tags make output
+land correctly in Resolve/FCP. This is what separates a toy from a tool for
+working artists.
+
+**Where:** PNG I/O in `morphogen-render` (`image_buffer.rs` / the load/save
+helpers), chain stage I/O in `morphogen-cli/src/chain.rs`, export tagging in
+the VideoToolbox path (`apps/macos`). Use context7 for current VideoToolbox
+colour-primaries API.
+
+**Traps:** stateful checkpoints already resume from unquantized RGBA32F —
+that invariant is untouched; this is about *inter-stage* and *export* fidelity
+only. Off case: 8-bit output stays byte-identical (pin it). A 16-bit stage
+output changes downstream-stage input ⇒ chain manifests must record the
+interchange depth (it's part of reproducibility).
+
+**Effort:** medium. **Tension:** none, but the manifest/schema surface is
+wide — contract the depth-recording rules first.
+
+### 5.7 The patcher canvas (the modular-synth face) — horizon item
+
+**What:** The endgame UI: sources, analysis nodes, effects, and mod routes as
+a patchable node canvas over the existing typed `NodeGraph` in
+`morphogen-core` (typed port compatibility already ships). The chain-builder
+panel (Tier 2.1) and the chain graph model (Tier 3.2) are this feature's
+stepping stones — build those first; the canvas is their payoff.
+
+**Why elevating:** it's the stated long-term target (CLAUDE.md: "audiovisual
+modular synthesizer"). Everything above feeds it: combinators are the mod
+bus, oscillators are sources, mattes are per-pixel patch cords, performance
+capture is the record button.
+
+**Effort:** large, multi-session, design-heavy — needs user commitment and
+its own milestone with UI mockups (AskUserQuestion previews) before a line of
+code. Do not start speculatively.
+
+### Suggested build order if the user wants this tier
+
+5.1 combinators → 5.2 oscillators → 1.7 drawn envelopes → 5.5 performance
+capture → 5.3 MIDI → 5.4 mattes → 5.6 colour → (2.1 → 3.2 →) 5.7 canvas.
+The first four form a coherent "it's a synth now" arc; each is independently
+shippable and verifiable.
 
 ---
 

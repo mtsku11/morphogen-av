@@ -12,6 +12,13 @@ Nothing here is committed work — it is a prioritized menu. When an item is
 picked up, promote it to a `*_MILESTONE.md` contract first (per the CLAUDE.md
 "contract first" workflow) and add a `BACKLOG.md` entry.
 
+**2026-07-04 update:** most of Part 1/2 has since landed (Rutt-Etra incl.
+two-source, LFOs, chaining, phase vocoder, preview loop). The living successor
+to this doc — every remaining deferred item plus a new tier of
+league-elevating proposals (mod-signal algebra, video oscillators, MIDI
+source, spatial mattes, performance capture, colour pipeline, patcher canvas)
+— is **[DEFERRED_WORK_HANDOFF.md](DEFERRED_WORK_HANDOFF.md)**.
+
 ---
 
 ## Part 1 — Underdeveloped areas (ranked by payoff ÷ effort)
