@@ -1,6 +1,10 @@
 # Realtime-ish Preview Loop Milestone — play the instrument
 
-**Status: contract — build not started.** This doc is the acceptance contract
+**Status: Slices 1–3 landed and verified — MILESTONE COMPLETE** (`4908712`
+box-downscale CLI, `bdd1a5f` playback, `7448c74` quarter-res fast path;
+end-to-end on a 720p fixture: flow feedback **13.4×** faster at quarter res,
+6.0 s → 0.4 s for 12 frames). Only the Deferred section remains open. This
+doc is the acceptance contract
 (per the CLAUDE.md "contract first" workflow). Origin: `docs/RECOMMENDATIONS.md`
 Part 2 §C — "render N seconds at quarter-res straight to the preview surface
 using the same engine." The invariant that keeps this tractable is

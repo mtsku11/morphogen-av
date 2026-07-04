@@ -148,15 +148,24 @@ take this to the next level" notes live in
   panel option, add→run byte-identical. Deferred: phase manipulation,
   cepstral envelopes, morphing, mod-matrix routes on vocode knobs.
 
+- **Realtime-ish preview loop (COMPLETE)** — `docs/PREVIEW_LOOP_MILESTONE.md`
+  slices 1–3: deterministic `downscale-frames` box average
+  (`box_downscale_cpu_v1`), looping preview playback (drift-free pure
+  stepping fn, play/pause, auto-loop on load), and the quarter-res fast
+  path (proxies downscaled once at preview start, inputs rerouted through
+  effective-URL helpers — same engine, only paths change; cap = seconds ×
+  fps; flow feedback 13.4× faster at quarter res). Deferred: live knob
+  scrubbing / streaming re-render, scrub bar, chain/audio previews.
+
 ## Next
 
 **SwiftUI chain-builder panel design** (the open half of
 `docs/EFFECT_CHAIN_MILESTONE.md` Slice 4) — needs user input on the UX
-(simple ordered stage list vs. something richer). The recommended-ordering
-list in `docs/RECOMMENDATIONS.md` is now fully landed; remaining menu items
-there (realtime-ish preview, edge-density/depth descriptors, audiovisual
-granular grains) plus the user-gated items: Rutt-Etra deferred slices and
-the LFO 6-panel sweep (wait on looks being user-confirmed on real footage).
+(simple ordered stage list vs. something richer). Remaining menu:
+edge-density/depth descriptors, audiovisual granular grains; user-gated:
+Rutt-Etra deferred slices and the LFO 6-panel sweep (wait on looks being
+user-confirmed on real footage), live preview scrubbing (streaming-engine
+milestone).
 
 ### Flow Feedback and Advection Milestone
 

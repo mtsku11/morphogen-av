@@ -12,7 +12,7 @@ _Last updated: 2026-07-03_
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
-- `swift test`: **108 passing, 0 failing.**
+- `swift test`: **113 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -20,6 +20,20 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Preview loop — Slice 3 of 3, MILESTONE COMPLETE** (`7448c74`; agent died
+  on session limit with work on disk — orchestrator fixed one compile error
+  in the token-diff test, added the missing pure-fn tests, verified,
+  landed): `beginEffectPreview` downscales the proxies once (scale picker
+  1/2/4/8, default 4; scale 1 = nil override = identity, pinned), every
+  render reads inputs via `effectiveCarrierURL()/effectiveModulatorURL()`
+  (argument assembly otherwise unchanged — token-diff pinned), cap =
+  seconds × fps (1–12 s stepper), session records fps for playback.
+  End-to-end 720p×48: rutt-etra 2.5×, flow feedback **13.4×** (6.0 s →
+  0.4 s). swift 108 → **113**, cargo untouched. **Next action:** user-
+  confirm the preview loop live (`swift run MorphogenMacApp`); remaining
+  menu: chain-builder panel UX (user-gated), edge-density/depth
+  descriptors, audiovisual granular grains.
 
 - **Preview loop — Slice 2 of 3** (`bdd1a5f`): the Workflow preview band
   now PLAYS — `PreviewPlayerModel` + pure `previewFrameIndex(elapsed,
