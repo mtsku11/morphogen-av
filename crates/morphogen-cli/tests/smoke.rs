@@ -834,7 +834,7 @@ fn render_chain_rejects_invalid_stage_modulation() {
     let source_dir = temp_dir.path().join("source-frames");
     write_texture_sequence(&source_dir, &[0, 2]);
 
-    let mut run_case = |name: &str, spec_json: &str, expected_error: &str| {
+    let run_case = |name: &str, spec_json: &str, expected_error: &str| {
         let spec_path = temp_dir.path().join(format!("chain-{name}.json"));
         write_chain_spec(&spec_path, spec_json);
         let output_dir = temp_dir.path().join(format!("out-{name}"));

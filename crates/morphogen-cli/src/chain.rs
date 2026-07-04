@@ -312,7 +312,7 @@ impl ChainStage {
 /// semantics. A nested object rather than flattened fields because serde's
 /// `deny_unknown_fields` does not compose with `flatten`. Skipped when
 /// absent so pre-slice markers, records, and manifests stay byte-identical.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct StageModulationSpec {
     /// `--modulate` route specs verbatim
@@ -334,20 +334,6 @@ pub(crate) struct StageModulationSpec {
     pub named_modulator_audio: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub named_modulator_frames: Vec<String>,
-}
-
-impl Default for StageModulationSpec {
-    fn default() -> Self {
-        Self {
-            routes: Vec::new(),
-            modulator_audio: None,
-            modulator_frames: None,
-            sampling: ModulationSampling::default(),
-            fps: None,
-            named_modulator_audio: Vec::new(),
-            named_modulator_frames: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
