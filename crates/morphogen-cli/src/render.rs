@@ -53,6 +53,7 @@ use morphogen_render::{
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RUTT_ETRA_ALGORITHM,
+    RUTT_ETRA_METAL_ALGORITHM,
 };
 use morphogen_render::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
@@ -6146,6 +6147,140 @@ pub(crate) fn render_palette_quantize_frame_metal(
     }
     Ok(gpu)
 }
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_palette_quantize_frame_metal(
+    _source_b: &ImageBufferF32,
+    _settings: &PaletteQuantizeSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_rutt_etra_frame_metal(
+    source_b: &ImageBufferF32,
+    settings: &RuttEtraSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Ok(morphogen_metal::rutt_etra_scanline_metal(
+        source_b, settings,
+    )?)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_rutt_etra_frame_metal(
+    _source_b: &ImageBufferF32,
+    _settings: &RuttEtraSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Rutt-Etra scanline — parity-gated Metal port
+// ---------------------------------------------------------------------------
+
+pub(crate) struct RuttEtraSequenceRequest<'a> {
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: RuttEtraSettings,
+    pub(crate) frames: u32,
+    pub(crate) backend: RenderBackend,
+    pub(crate) modulation: ModulationCliArgs<'a>,
+}
+
+pub(crate) fn render_rutt_etra_sequence(
+    request: RuttEtraSequenceRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let source_b_frames = collect_image_frames(request.source_b_dir)?;
+    if source_b_frames.is_empty() {
+        return Err(CliError::Message(
+            "rutt-etra requires at least one PNG frame in the source B directory".to_string(),
+        ));
+    }
+
+    let frame_count = (request.frames as usize).min(source_b_frames.len());
+    fs::create_dir_all(request.output_dir)?;
+
+    let modulation = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation {
+        // Dry-run at frame 0 so an unknown target fails before any frame renders.
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_rutt_etra_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
+    for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation {
+            for (target, value) in plan.frame_values(index) {
+                apply_rutt_etra_modulation(&mut frame_settings, target, value)?;
+            }
+        }
+        let source_b = load_image_f32(frame_path)?;
+        let rendered = match request.backend {
+            RenderBackend::Cpu => render_rutt_etra_frame(&source_b, &frame_settings)?,
+            RenderBackend::Metal => {
+                let metal = render_rutt_etra_frame_metal(&source_b, &frame_settings)?;
+                let cpu = render_rutt_etra_frame(&source_b, &frame_settings)?;
+                if metal != cpu {
+                    return Err(CliError::Message(format!(
+                        "Metal/CPU parity failure on frame {index}"
+                    )));
+                }
+                metal
+            }
+        };
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    let algorithm = match request.backend {
+        RenderBackend::Cpu => RUTT_ETRA_ALGORITHM,
+        RenderBackend::Metal => RUTT_ETRA_METAL_ALGORITHM,
+    };
+    let manifest = serde_json::json!({
+        "algorithm": algorithm,
+        "line_pitch": request.settings.line_pitch,
+        "displacement_depth": request.settings.displacement_depth,
+        "line_thickness": request.settings.line_thickness,
+        "mono": request.settings.mono,
+        "frame_count": frame_count,
+    });
+    fs::write(
+        request.output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+
+    println!(
+        "rendered rutt-etra scanline sequence with {} frame(s) \
+         (algorithm {}, line_pitch {}, displacement_depth {:.2}, line_thickness {}, mono {}) \
+         from {} to {}",
+        frame_count,
+        algorithm,
+        request.settings.line_pitch,
+        request.settings.displacement_depth,
+        request.settings.line_thickness,
+        request.settings.mono,
+        request.source_b_dir.display(),
+        request.output_dir.display(),
+    );
+    Ok(FrameSequenceRenderResult { frame_count })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6215,100 +6350,4 @@ mod tests {
         assert_eq!(first.rearrangement, 0.2);
         assert_eq!(second.rearrangement, 0.6);
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn render_palette_quantize_frame_metal(
-    _source_b: &ImageBufferF32,
-    _settings: &PaletteQuantizeSettings,
-) -> Result<ImageBufferF32, CliError> {
-    Err(CliError::Message(
-        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
-    ))
-}
-
-// ---------------------------------------------------------------------------
-// Rutt-Etra scanline — Slices 1–2 (luma-displaced scanlines, CPU-only)
-// ---------------------------------------------------------------------------
-
-pub(crate) struct RuttEtraSequenceRequest<'a> {
-    pub(crate) source_b_dir: &'a Path,
-    pub(crate) output_dir: &'a Path,
-    pub(crate) settings: RuttEtraSettings,
-    pub(crate) frames: u32,
-    pub(crate) modulation: ModulationCliArgs<'a>,
-}
-
-pub(crate) fn render_rutt_etra_sequence(
-    request: RuttEtraSequenceRequest<'_>,
-) -> Result<FrameSequenceRenderResult, CliError> {
-    request.settings.validate()?;
-    if request.frames == 0 {
-        return Err(CliError::Message(
-            "frames must be greater than zero".to_string(),
-        ));
-    }
-
-    let source_b_frames = collect_image_frames(request.source_b_dir)?;
-    if source_b_frames.is_empty() {
-        return Err(CliError::Message(
-            "rutt-etra requires at least one PNG frame in the source B directory".to_string(),
-        ));
-    }
-
-    let frame_count = (request.frames as usize).min(source_b_frames.len());
-    fs::create_dir_all(request.output_dir)?;
-
-    let modulation = request.modulation.build_plan()?;
-    if let Some(plan) = &modulation {
-        // Dry-run at frame 0 so an unknown target fails before any frame renders.
-        let mut probe = request.settings;
-        for (target, value) in plan.frame_values(0) {
-            apply_rutt_etra_modulation(&mut probe, target, value)?;
-        }
-        println!("modulation routes: {}", plan.describe());
-    }
-
-    for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
-        let mut frame_settings = request.settings;
-        if let Some(plan) = &modulation {
-            for (target, value) in plan.frame_values(index) {
-                apply_rutt_etra_modulation(&mut frame_settings, target, value)?;
-            }
-        }
-        let source_b = load_image_f32(frame_path)?;
-        let rendered = render_rutt_etra_frame(&source_b, &frame_settings)?;
-        save_png(
-            &rendered,
-            &request.output_dir.join(format!("frame_{index:06}.png")),
-        )?;
-    }
-
-    let manifest = serde_json::json!({
-        "algorithm": RUTT_ETRA_ALGORITHM,
-        "line_pitch": request.settings.line_pitch,
-        "displacement_depth": request.settings.displacement_depth,
-        "line_thickness": request.settings.line_thickness,
-        "mono": request.settings.mono,
-        "frame_count": frame_count,
-    });
-    fs::write(
-        request.output_dir.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest)?,
-    )?;
-
-    println!(
-        "rendered rutt-etra scanline sequence with {} frame(s) \
-         (algorithm {}, line_pitch {}, displacement_depth {:.2}, line_thickness {}, mono {}) \
-         from {} to {}",
-        frame_count,
-        RUTT_ETRA_ALGORITHM,
-        request.settings.line_pitch,
-        request.settings.displacement_depth,
-        request.settings.line_thickness,
-        request.settings.mono,
-        request.source_b_dir.display(),
-        request.output_dir.display(),
-    );
-    Ok(FrameSequenceRenderResult { frame_count })
 }

@@ -2300,6 +2300,8 @@ enum RustBridgePlaceholder {
     if request.mono {
       arguments.append("--mono")
     }
+    arguments.append("--backend")
+    arguments.append(request.backend.cliValue)
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -3598,6 +3600,8 @@ struct RuttEtraSequenceRenderQueueCommandRequest {
   /// White lines instead of source colour.
   let mono: Bool
   let projectURL: URL?
+  // Render backend; defaults to CPU for existing call sites.
+  var backend: FeedbackRenderBackendOption = .cpu
   // Modulation-matrix routes; defaulted off so call sites predating slice 3
   // keep their unmodulated meaning.
   var modulationRoutes: [ModulationRouteSpec] = []

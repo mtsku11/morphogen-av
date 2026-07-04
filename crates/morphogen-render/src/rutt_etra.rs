@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::{ImageBufferF32, RenderError};
 
 pub const RUTT_ETRA_ALGORITHM: &str = "rutt_etra_scanline_cpu_v1";
+pub const RUTT_ETRA_METAL_ALGORITHM: &str = "rutt_etra_scanline_metal_v1";
 
 /// Settings for the Rutt-Etra scanline effect.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

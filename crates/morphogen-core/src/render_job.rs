@@ -503,8 +503,8 @@ pub enum RenderJobTask {
     },
     /// Rutt-Etra scanline: re-render the carrier as sparse horizontal
     /// scanlines on black, each displaced vertically by its own luminance.
-    /// Stateless single-source, CPU-only (no backend field until the Metal
-    /// slice lands).
+    /// Stateless single-source; the Metal gather kernel is parity-gated
+    /// per-frame against the CPU reference.
     FrameSequenceRuttEtra {
         carrier_frame_directory: String,
         output_directory: String,
@@ -522,6 +522,10 @@ pub enum RenderJobTask {
         /// White lines instead of source colour.
         #[serde(default)]
         mono: bool,
+        /// Render backend; `#[serde(default)]` so pre-Metal queue JSON loads
+        /// as CPU without breaking existing jobs.
+        #[serde(default)]
+        backend: RenderBackend,
         /// Persisted modulation routes (empty = unmodulated). Envelope times
         /// are sampled against this job's `frame_rate`.
         #[serde(default)]

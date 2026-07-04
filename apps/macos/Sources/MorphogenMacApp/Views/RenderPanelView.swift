@@ -1043,7 +1043,7 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
-          Text("Rutt-Etra — Luma-Displaced Scanlines (CPU)")
+          Text("Rutt-Etra — Luma-Displaced Scanlines")
             .font(.subheadline.weight(.semibold))
 
           HStack(spacing: 16) {
@@ -1068,6 +1068,14 @@ struct RenderPanelView: View {
             Toggle("Mono", isOn: $state.ruttEtraMono)
               .toggleStyle(.checkbox)
               .help("White lines instead of source colour — the classic monochrome CRT look.")
+
+            Picker("Backend", selection: $state.ruttEtraBackend) {
+              ForEach(FeedbackRenderBackendOption.allCases) { backend in
+                Text(backend.rawValue).tag(backend)
+              }
+            }
+            .frame(width: 130)
+            .help("Metal runs the gather kernel and is parity-gated per-frame against the CPU reference.")
           }
 
           ModulationSlotRow(

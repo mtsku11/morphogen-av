@@ -1,3 +1,4 @@
+use morphogen_render::RuttEtraSettings;
 use thiserror::Error;
 
 pub const FLOW_DISPLACE_KERNEL_NAME: &str = "flow_displace";
@@ -39,6 +40,8 @@ pub const PALETTE_QUANTIZE_KERNEL_NAME: &str = "palette_quantize";
 pub const PALETTE_QUANTIZE_SHADER_SOURCE: &str = include_str!("../shaders/palette_quantize.metal");
 pub const RETRO_STATIC_KERNEL_NAME: &str = "retro_static";
 pub const RETRO_STATIC_SHADER_SOURCE: &str = include_str!("../shaders/retro_static.metal");
+pub const RUTT_ETRA_KERNEL_NAME: &str = "rutt_etra_scanline";
+pub const RUTT_ETRA_SHADER_SOURCE: &str = include_str!("../shaders/rutt_etra_scanline.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -175,6 +178,10 @@ pub enum MetalDispatchError {
     MissingPaletteQuantizeKernelEntryPoint,
     #[error("palette_quantize.metal does not contain the expected texture and buffer bindings")]
     MissingPaletteQuantizeBindingLayout,
+    #[error("rutt_etra_scanline.metal does not contain the expected kernel entry point")]
+    MissingRuttEtraKernelEntryPoint,
+    #[error("rutt_etra_scanline.metal does not contain the expected texture and buffer bindings")]
+    MissingRuttEtraBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -547,6 +554,78 @@ pub fn validate_palette_quantize_shader_source() -> Result<(), MetalDispatchErro
     Ok(())
 }
 
+pub fn validate_rutt_etra_shader_source() -> Result<(), MetalDispatchError> {
+    if !RUTT_ETRA_SHADER_SOURCE.contains("kernel void rutt_etra_scanline") {
+        return Err(MetalDispatchError::MissingRuttEtraKernelEntryPoint);
+    }
+    for expected in [
+        "texture2d<float, access::read>  source_b [[texture(0)]]",
+        "texture2d<float, access::write> output   [[texture(1)]]",
+        "constant RuttEtraParams&        params   [[buffer(0)]]",
+    ] {
+        if !RUTT_ETRA_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingRuttEtraBindingLayout);
+        }
+    }
+    Ok(())
+}
+
+/// Dispatch plan for the Rutt-Etra gather kernel. Stateless and single-source
+/// (analogous to `palette_quantize`): each output pixel gathers its colour by
+/// scanning scanlines in reverse order without any cross-thread coordination.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RuttEtraDispatchPlan {
+    pub width: u32,
+    pub height: u32,
+    pub line_pitch: u32,
+    pub displacement_depth: f32,
+    pub line_thickness: u32,
+    pub mono: bool,
+    pub threads_per_threadgroup: ThreadgroupSize,
+    pub threadgroups_per_grid: ThreadgroupSize,
+}
+
+impl RuttEtraDispatchPlan {
+    pub fn new(
+        settings: &RuttEtraSettings,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, MetalDispatchError> {
+        if width == 0 || height == 0 {
+            return Err(MetalDispatchError::EmptyDimensions);
+        }
+        if !settings.displacement_depth.is_finite() {
+            return Err(MetalDispatchError::NonFiniteAmount);
+        }
+
+        let threads_per_threadgroup = ThreadgroupSize {
+            width: 16,
+            height: 16,
+            depth: 1,
+        };
+        let threadgroups_per_grid = ThreadgroupSize {
+            width: div_ceil(width, threads_per_threadgroup.width),
+            height: div_ceil(height, threads_per_threadgroup.height),
+            depth: 1,
+        };
+
+        Ok(Self {
+            width,
+            height,
+            line_pitch: settings.line_pitch,
+            displacement_depth: settings.displacement_depth,
+            line_thickness: settings.line_thickness,
+            mono: settings.mono,
+            threads_per_threadgroup,
+            threadgroups_per_grid,
+        })
+    }
+
+    pub fn kernel_name(&self) -> &'static str {
+        RUTT_ETRA_KERNEL_NAME
+    }
+}
+
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value / divisor + u32::from(value % divisor != 0)
 }
@@ -671,5 +750,10 @@ mod tests {
     #[test]
     fn palette_quantize_shader_has_expected_bindings() {
         validate_palette_quantize_shader_source().expect("palette quantize shader preflight");
+    }
+
+    #[test]
+    fn rutt_etra_shader_has_expected_bindings() {
+        validate_rutt_etra_shader_source().expect("rutt_etra_scanline shader preflight");
     }
 }

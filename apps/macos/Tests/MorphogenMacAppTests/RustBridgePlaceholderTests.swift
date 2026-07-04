@@ -1432,7 +1432,7 @@ final class RustBridgePlaceholderTests: XCTestCase {
 
     let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
 
-    // Pin the exact unmodulated token sequence.
+    // Pin the exact unmodulated token sequence (default backend = cpu).
     XCTAssertEqual(
       arguments,
       [
@@ -1447,13 +1447,32 @@ final class RustBridgePlaceholderTests: XCTestCase {
         "--displacement-depth=-64",
         "--line-thickness", "2",
         "--mono",
+        "--backend", "cpu",
         "--project-path", "/tmp/project.morphogen.json"
       ]
     )
     // No active mod slot ⇒ the exact unmodulated CLI path.
     XCTAssertFalse(arguments.contains("--modulate"))
     XCTAssertFalse(arguments.contains("--modulation-sampling"))
-    XCTAssertFalse(arguments.contains("--backend"), "rutt-etra is CPU-only (no backend flag)")
+    XCTAssertTrue(arguments.contains("--backend"))
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsPinCpuBackendTokens() throws {
+    // Pin: default backend emits `--backend cpu`.
+    var request = makeRuttEtraRequest()
+    request.backend = .cpu
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+    let backendIdx = try XCTUnwrap(arguments.firstIndex(of: "--backend"))
+    XCTAssertEqual(arguments[backendIdx + 1], "cpu")
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsPinMetalBackendTokens() throws {
+    // Pin: Metal backend emits `--backend metal`.
+    var request = makeRuttEtraRequest()
+    request.backend = .metal
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+    let backendIdx = try XCTUnwrap(arguments.firstIndex(of: "--backend"))
+    XCTAssertEqual(arguments[backendIdx + 1], "metal")
   }
 
   func testDownscaleFramesArgumentsPinTokenSequence() throws {

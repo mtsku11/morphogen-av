@@ -8,11 +8,12 @@ use morphogen_render::{
     FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
     GrainSelection, GranularMosaicSettings, ImageBufferF32, PaletteQuantizeSettings, ParticleField,
     PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError,
-    RetroStaticSettings, ScanlineFilter, SortAxis, SortDirection, SortKey, StructureMode,
+    RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection, SortKey,
+    StructureMode,
 };
 
 use crate::{
-    FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError,
+    FlowDisplaceDispatchPlan, GranularMosaicDispatchPlan, MetalDispatchError, RuttEtraDispatchPlan,
     ADVECT_FEEDBACK_KERNEL_NAME, ADVECT_FEEDBACK_SHADER_SOURCE, CHANNEL_SHIFT_KERNEL_NAME,
     CHANNEL_SHIFT_SHADER_SOURCE, COAGULATED_COMPOSITE_KERNEL_NAME,
     COAGULATED_COMPOSITE_SHADER_SOURCE, CONVOLUTION_BLEND_COLOR_KERNEL_NAME,
@@ -25,8 +26,8 @@ use crate::{
     GRANULAR_MOSAIC_SHADER_SOURCE, LUCAS_KANADE_REFINE_KERNEL_NAME,
     LUCAS_KANADE_REFINE_SHADER_SOURCE, PALETTE_QUANTIZE_KERNEL_NAME,
     PALETTE_QUANTIZE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
-    RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME,
-    VIDEO_VOCODER_SHADER_SOURCE,
+    RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE, RUTT_ETRA_KERNEL_NAME,
+    RUTT_ETRA_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -156,6 +157,16 @@ struct PaletteQuantizeMetalParams {
     height: u32,
     mode: u32,   // 0 = posterize, 1 = neon palette
     levels: u32, // posterize only; 0 when mode != 0
+}
+
+#[repr(C)]
+struct RuttEtraMetalParams {
+    width: u32,
+    height: u32,
+    line_pitch: u32,
+    displacement_depth: f32,
+    line_thickness: u32,
+    mono: u32,
 }
 
 #[repr(C)]
@@ -2213,6 +2224,92 @@ pub fn channel_shift_metal(
     read_rgba_f32_texture(&output_texture, w, h)
 }
 
+/// Rutt-Etra scanline gather kernel on the GPU — the Metal port of
+/// `morphogen_render::render_rutt_etra_frame`. Each output pixel gathers its
+/// colour by scanning scanlines in reverse order (bottom→top) and stopping at
+/// the first covering scanline, which is equivalent to the CPU's top→bottom
+/// last-writer-wins scatter — the result is byte-identical to the CPU path.
+pub fn rutt_etra_scanline_metal(
+    source_b: &ImageBufferF32,
+    settings: &RuttEtraSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if source_b.width == 0 || source_b.height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+
+    let plan = RuttEtraDispatchPlan::new(settings, source_b.width, source_b.height)?;
+    let w = plan.width;
+    let h = plan.height;
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(RUTT_ETRA_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(RUTT_ETRA_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let source_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&source_texture, source_b)?;
+
+    let params = RuttEtraMetalParams {
+        width: w,
+        height: h,
+        line_pitch: plan.line_pitch,
+        displacement_depth: plan.displacement_depth,
+        line_thickness: plan.line_thickness,
+        mono: u32::from(plan.mono),
+    };
+
+    let tg_w = plan.threads_per_threadgroup.width as u64;
+    let tg_h = plan.threads_per_threadgroup.height as u64;
+    let grid_w = plan.threadgroups_per_grid.width as u64;
+    let grid_h = plan.threadgroups_per_grid.height as u64;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&source_texture));
+    encoder.set_texture(1, Some(&output_texture));
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<RuttEtraMetalParams>() as u64,
+        (&params as *const RuttEtraMetalParams).cast(),
+    );
+    encoder.dispatch_thread_groups(MTLSize::new(grid_w, grid_h, 1), MTLSize::new(tg_w, tg_h, 1));
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, w, h)
+}
+
 pub fn palette_quantize_metal(
     source_b: &ImageBufferF32,
     settings: &PaletteQuantizeSettings,
@@ -3416,6 +3513,43 @@ mod tests {
             Err(e) => panic!("palette_quantize_metal (palette) failed: {e}"),
         };
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_rutt_etra_scanline_matches_cpu_reference() {
+        // Small synthetic gradient: luma ramps left→right so displacement varies
+        // across columns. Pitch 4, depth 6.0, thickness 1, mono false — enough
+        // to produce both displaced and black pixels, exercising the gather loop.
+        use morphogen_render::{render_rutt_etra_frame, RuttEtraSettings};
+
+        let source = ImageBufferF32::from_fn(32, 16, |x, _y| {
+            let v = x as f32 / 31.0;
+            [v, v, v, 1.0]
+        })
+        .expect("fixture");
+
+        let settings = RuttEtraSettings {
+            line_pitch: 4,
+            displacement_depth: 6.0,
+            line_thickness: 1,
+            mono: false,
+        };
+
+        let cpu = render_rutt_etra_frame(&source, &settings).expect("cpu render");
+        let gpu = match rutt_etra_scanline_metal(&source, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal rutt-etra parity: no Metal device");
+                return;
+            }
+            Err(e) => panic!("rutt_etra_scanline_metal failed: {e}"),
+        };
+
+        // The gather kernel must be byte-identical to the CPU scatter.
+        assert_eq!(
+            gpu.pixels, cpu.pixels,
+            "Metal rutt-etra output must be byte-identical to the CPU reference"
+        );
     }
 
     fn assert_image_near(actual: &ImageBufferF32, expected: &ImageBufferF32, epsilon: f32) {

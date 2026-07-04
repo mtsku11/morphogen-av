@@ -30,7 +30,7 @@ use morphogen_render::{
     CHANNEL_SHIFT_FLOW_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
     FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM,
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM,
-    RMS_DISPLACEMENT_ROUTE_ALGORITHM, RUTT_ETRA_ALGORITHM,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM, RUTT_ETRA_ALGORITHM, RUTT_ETRA_METAL_ALGORITHM,
 };
 
 use crate::args::*;
@@ -2810,6 +2810,7 @@ pub(crate) struct QueueAddRuttEtraSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
     pub(crate) settings: RuttEtraSettings,
+    pub(crate) backend: RenderBackend,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
@@ -2856,6 +2857,7 @@ pub(crate) fn queue_add_rutt_etra_sequence(
             displacement_depth: request.settings.displacement_depth,
             line_thickness: request.settings.line_thickness,
             mono: request.settings.mono,
+            backend: request.backend,
             modulation_routes: modulation.routes,
             modulator_audio_path: request
                 .modulator_audio
@@ -2913,6 +2915,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
         displacement_depth,
         line_thickness,
         mono,
+        backend,
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
@@ -2945,6 +2948,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
             output_dir: &output_dir.join("frames"),
             settings,
             frames,
+            backend,
             modulation: ModulationCliArgs {
                 modulate: &modulation_specs,
                 modulator_audio: modulator_audio_path.as_deref().map(Path::new),
@@ -2958,8 +2962,12 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
                 named_modulator_frames: &named_modulator_frames_specs,
             },
         })?;
+        let algorithm = match backend {
+            RenderBackend::Cpu => RUTT_ETRA_ALGORITHM,
+            RenderBackend::Metal => RUTT_ETRA_METAL_ALGORITHM,
+        };
         let mut effect = serde_json::json!({
-            "algorithm": RUTT_ETRA_ALGORITHM,
+            "algorithm": algorithm,
             "settings": settings,
         });
         if let Some(modulation) = modulation_manifest_json(

@@ -322,6 +322,9 @@ final class AppState: ObservableObject {
   @Published var ruttEtraModulatorFramesURL: URL?
   @Published var ruttEtraModSampling = ModulationSamplingOption.hold
   @Published var ruttEtraNamedModulators: [NamedModulatorEntry] = []
+  @Published var ruttEtraBackend = AppState.stickyBackend("backend.ruttEtra", default: .cpu) {
+    didSet { AppState.persistBackend("backend.ruttEtra", ruttEtraBackend) }
+  }
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -2555,7 +2558,7 @@ final class AppState: ObservableObject {
       effectLabel: "rutt-etra"
     ) else { return }
 
-    let request = RuttEtraSequenceRenderQueueCommandRequest(
+    var request = RuttEtraSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultRuttEtraSequenceRenderQueueURL(),
       carrierDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("rutt-etra", isDirectory: true),
@@ -2572,6 +2575,7 @@ final class AppState: ObservableObject {
       modulationSampling: ruttEtraModSampling,
       namedModulators: namedModulatorSpecs(ruttEtraNamedModulators)
     )
+    request.backend = ruttEtraBackend
 
     statusMessage = "Queueing rutt-etra through morphogen-cli..."
     DispatchQueue.global(qos: .userInitiated).async {

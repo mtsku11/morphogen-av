@@ -749,6 +749,7 @@ fn render_stage(
                 output_dir: stage_dir,
                 settings: RuttEtraSettings::from(spec.clone()),
                 frames: u32::MAX,
+                backend: RenderBackend::Cpu,
                 modulation: stage.modulation_args(),
             })?
             .frame_count

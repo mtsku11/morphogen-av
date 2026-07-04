@@ -1131,6 +1131,10 @@ pub(crate) enum Commands {
         /// Render every line white instead of the source colour.
         #[arg(long, default_value_t = false)]
         mono: bool,
+        /// Render backend. `metal` runs the gather kernel and is gated against
+        /// the CPU reference per frame (byte-identical parity required).
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: displacement_depth (clamped to [-512, 512]), line_pitch
         /// (integer — clamped to [1, 256], then rounded to nearest, ties away
@@ -2158,6 +2162,10 @@ pub(crate) enum Commands {
         /// Render every line white instead of the source colour.
         #[arg(long, default_value_t = false)]
         mono: bool,
+        /// Render backend. `metal` runs the gather kernel, gated per-frame
+        /// against the CPU reference (byte-identical parity required).
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
