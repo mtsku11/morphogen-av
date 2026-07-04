@@ -131,13 +131,23 @@ take this to the next level" notes live in
   via the route list, SwiftUI LFO slot option on the Rutt-Etra panel.
   Deferred: drawn breakpoint envelopes, the 6-panel LFO slot sweep, LFO-on-LFO.
 
+- **Effect chaining (Slices 1–3 + queue COMPLETE)** —
+  `docs/EFFECT_CHAIN_MILESTONE.md`: `render-chain` over a versioned JSON
+  stage list (retro_static / channel_shift / palette_quantize / rutt_etra /
+  stateful flow_feedback), whole-spec validation before any render, stage
+  markers + chain-record resume/refusal semantics, per-stage modulation
+  blocks (LFO routes need no media), queue-add/run-chain add→run
+  byte-identical. Open: the SwiftUI chain-builder panel (design decision —
+  needs user input on the builder UX); datamosh stage type on demand.
+
 ## Next
 
-**Effect chaining** (`docs/RECOMMENDATIONS.md` Part 2 §A — the biggest lever):
-a `render-chain` job running an ordered list of effect stages, each stage's
-output feeding the next, one reproducible chain manifest. Needs its own
-milestone contract first. The Rutt-Etra deferred slices and the LFO 6-panel
-sweep wait on the looks being user-confirmed on real footage.
+**SwiftUI chain-builder panel design** (the open half of
+`docs/EFFECT_CHAIN_MILESTONE.md` Slice 4) — needs user input on the UX
+(simple ordered stage list vs. something richer). After that, per
+`docs/RECOMMENDATIONS.md`: phase-vocoder spectral cross-synth (Part 1 §2).
+The Rutt-Etra deferred slices and the LFO 6-panel sweep wait on the looks
+being user-confirmed on real footage.
 
 ### Flow Feedback and Advection Milestone
 

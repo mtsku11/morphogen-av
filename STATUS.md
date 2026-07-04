@@ -8,7 +8,7 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **508 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **510 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
@@ -20,6 +20,18 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Effect chain — Slice 4 queue half, MILESTONE EFFECTIVELY CLOSED**
+  (`cb6bc24`, built inline): queue-add-chain validates the whole spec at
+  add time (rejection persists nothing); the core `RenderChain` task
+  persists the RESOLVED spec as a JSON document — declared deviation from
+  "promote types into core" (a typed mirror = third knob-vocabulary copy);
+  queue-run shares `run_chain_spec` with the direct command → add→run
+  byte-identical across every artifact (smoke-pinned incl. an LFO-modulated
+  stage). cargo 508 → **510**, swift 98 untouched. **Remaining open item:
+  the SwiftUI chain-builder panel — a design decision needing user input
+  (simple ordered stage list vs richer builder). Next action: ask the user,
+  or per RECOMMENDATIONS: phase-vocoder spectral cross-synth.**
 
 - **Effect chain — Slice 3 of 4** (`1a3284a`, built inline): per-stage
   nested `"modulation"` blocks (nested because deny_unknown_fields can't

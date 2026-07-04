@@ -1,6 +1,14 @@
 # Effect Chain Milestone — run a chain, not a node
 
-**Status: contract — build not started.** This doc is the acceptance contract
+**Status: Slices 1–3 landed and verified; Slice 4 queue half landed**
+(`b53acc5` stateless MVP, `328b069` stateful stage + resume semantics,
+`1a3284a` per-stage modulation, `cb6bc24` queue task with add→run
+byte-identity — the task persists the resolved spec document rather than
+typed core mirrors, a declared deviation avoiding a third knob-vocabulary
+copy). **Open: the SwiftUI chain-builder panel** — deliberately deferred as
+the design decision point this contract flags; the builder UX needs user
+input. Datamosh as a stage type also deferred (CLI-side settings, many
+knobs — admit on demand). This doc is the acceptance contract
 (per the CLAUDE.md "contract first" workflow). Origin: `docs/RECOMMENDATIONS.md`
 Part 2 §A — the biggest lever: every render command executes exactly one
 effect, so composing today means manually feeding one render's output frames
