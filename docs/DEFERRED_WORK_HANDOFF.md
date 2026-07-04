@@ -297,6 +297,23 @@ the effects catalog. None has a user green-light — **present the menu, let the
 user pick, then write the contract.** Ranked by payoff ÷ effort. Each respects
 the invariants by construction; the one that needs a carve-out says so.
 
+### 5.0 Composition timeline — THE FLAGSHIP (user-requested plan, 2026-07-04)
+
+Unlike the rest of this tier, this one **has a full contract already written**:
+**[COMPOSITION_MILESTONE.md](COMPOSITION_MILESTONE.md)**. Scenes (each a
+verbatim `render-chain` spec) on a global timeline, joined by deterministic
+cut/crossfade transitions, with scene-fingerprint caching (edit scene 3 of 6 →
+only scene 3 re-renders) and an optional **master clock** (one composition-level
+audio/video modulator every scene routes from via a `master:` prefix, offset by
+its timeline position — the piece scored by its own soundtrack). Turns the app
+from an effects catalog into a composition instrument; binds chains, the mod
+matrix, LFOs, the preview loop, and checkpoint/resume multiplicatively.
+Determinism composes for free — the assembly step is pure arithmetic. Five
+byte-identity anchors (single-scene ≡ render-chain; cut ≡ concat; crossfade-0 ≡
+cut; cache identity; master ≡ local-at-offset-0) make it falsifiable slice by
+slice. Slices S1–S6 are build-ready; S7 (SwiftUI panel) is user-gated. If the
+user asks for "the next big thing," start here.
+
 ### 5.1 Modulation signal algebra (combinators on the mod bus)
 
 **What:** Every real synth's mod matrix has signal math; ours routes one
@@ -481,6 +498,9 @@ code. Do not start speculatively.
 
 ### Suggested build order if the user wants this tier
 
+**5.0 compositions is the headline and has its contract ready** — it can start
+immediately and slots anywhere in the order below (its S5 master clock gets
+richer as 5.1/1.7 land, but nothing blocks S1–S4). For the rest:
 5.1 combinators → 5.2 oscillators → 1.7 drawn envelopes → 5.5 performance
 capture → 5.3 MIDI → 5.4 mattes → 5.6 colour → (2.1 → 3.2 →) 5.7 canvas.
 The first four form a coherent "it's a synth now" arc; each is independently

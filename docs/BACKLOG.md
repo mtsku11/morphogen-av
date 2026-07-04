@@ -160,6 +160,12 @@ take this to the next level" notes live in
 
 ## Next
 
+**The flagship plan (user-requested 2026-07-04) is the composition timeline —
+contract ready in [COMPOSITION_MILESTONE.md](COMPOSITION_MILESTONE.md)**:
+scenes-of-chains on a global timeline with deterministic transitions,
+scene-fingerprint caching, and a master modulation clock. Slices S1–S6 are
+build-ready without further user input.
+
 **The full deferred-work catalog, tiered and build-ready, is
 [DEFERRED_WORK_HANDOFF.md](DEFERRED_WORK_HANDOFF.md)** — entry points, slice
 plans, traps, and the user decisions already made. Summary: **SwiftUI
