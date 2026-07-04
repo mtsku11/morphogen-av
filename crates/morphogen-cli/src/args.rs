@@ -1198,14 +1198,19 @@ pub(crate) enum Commands {
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
     },
-    /// Run an ordered list of stateless single-source effect stages from a JSON
-    /// spec (see docs/EFFECT_CHAIN_MILESTONE.md). Stage 1 reads `input_dir`;
-    /// each later stage reads the previous stage's output directory
+    /// Run an ordered list of single-source effect stages from a JSON spec
+    /// (see docs/EFFECT_CHAIN_MILESTONE.md). Stage 1 reads `input_dir`; each
+    /// later stage reads the previous stage's output frames
     /// (`<output_dir>/stage_<NN>_<effect>/`). Writes
     /// `<output_dir>/chain-manifest.json` recording each stage's algorithm id
     /// and resolved settings. The whole spec is validated before any stage
-    /// renders. Slice 1: CPU-only, stateless stages
-    /// (retro_static/channel_shift/palette_quantize/rutt_etra), no modulation.
+    /// renders. Stages: retro_static, channel_shift (constant shifts),
+    /// palette_quantize, rutt_etra, and the stateful flow_feedback
+    /// (self-feedback: the stage input feeds both modulator and carrier; its
+    /// checkpoint lives inside the stage directory). CPU-only, no modulation.
+    /// Re-running the same spec into the same output directory skips
+    /// completed stages and resumes an interrupted stateful stage from its
+    /// checkpoint; a changed spec or changed input frames refuses.
     RenderChain {
         /// Chain spec JSON (`{"version": 1, "stages": [...]}`).
         spec_path: PathBuf,

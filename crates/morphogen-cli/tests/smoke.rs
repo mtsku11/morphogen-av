@@ -422,6 +422,337 @@ fn render_chain_same_spec_twice_is_byte_identical() {
     }
 }
 
+/// The default-knob 2-stage feedback chain spec shared by the Slice-2 tests.
+const FEEDBACK_CHAIN_SPEC: &str = r#"{"version": 1, "stages": [
+    {"effect": "flow_feedback"},
+    {"effect": "palette_quantize", "mode": "posterize", "levels": 4}
+]}"#;
+
+/// Every chain artifact of the 2-stage feedback chain on a 3-frame input,
+/// for whole-output byte comparisons.
+const FEEDBACK_CHAIN_ARTIFACTS: [&str; 12] = [
+    "chain-record.json",
+    "chain-manifest.json",
+    "stage_01_flow_feedback/frames/frame_000000.png",
+    "stage_01_flow_feedback/frames/frame_000001.png",
+    "stage_01_flow_feedback/frames/frame_000002.png",
+    "stage_01_flow_feedback/checkpoint.json",
+    "stage_01_flow_feedback/manifest.json",
+    "stage_01_flow_feedback/stage-complete.json",
+    "stage_02_palette_quantize/frame_000000.png",
+    "stage_02_palette_quantize/frame_000001.png",
+    "stage_02_palette_quantize/frame_000002.png",
+    "stage_02_palette_quantize/stage-complete.json",
+];
+
+fn run_chain(spec_path: &Path, input_dir: &Path, output_dir: &Path) -> assert_cmd::assert::Assert {
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-chain",
+            spec_path.to_string_lossy().as_ref(),
+            input_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+}
+
+#[test]
+fn render_chain_flow_feedback_stage_matches_manual_two_step_render() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    // The feedback effect needs motion in its input; translated texture.
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(&spec_path, FEEDBACK_CHAIN_SPEC);
+    let chain_dir = temp_dir.path().join("chain-out");
+    run_chain(&spec_path, &source_dir, &chain_dir)
+        .success()
+        .stdout(predicate::str::contains(
+            chain_dir
+                .join("stage_02_palette_quantize")
+                .display()
+                .to_string(),
+        ));
+
+    // Manual step 1: the direct feedback render with the same (default)
+    // knobs — the chain's stage input feeds both modulator and carrier.
+    let manual_feedback_dir = temp_dir.path().join("manual-feedback");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            source_dir.to_string_lossy().as_ref(),
+            manual_feedback_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+
+    // Manual step 2: the direct next-stage render on the feedback frames.
+    let manual_quantize_dir = temp_dir.path().join("manual-quantize");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-palette-quantize-sequence",
+            manual_feedback_dir
+                .join("frames")
+                .to_string_lossy()
+                .as_ref(),
+            manual_quantize_dir.to_string_lossy().as_ref(),
+            "--mode",
+            "posterize",
+            "--levels",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    // The stage directory is byte-for-byte the standalone render (shared
+    // handler, shared job id, checkpoint contract scoped inside the stage).
+    for relative in [
+        "frames/frame_000000.png",
+        "frames/frame_000001.png",
+        "frames/frame_000002.png",
+        "checkpoint.json",
+        "manifest.json",
+    ] {
+        assert_eq!(
+            fs::read(chain_dir.join("stage_01_flow_feedback").join(relative))
+                .unwrap_or_else(|_| panic!("chain stage 1 {relative}")),
+            fs::read(manual_feedback_dir.join(relative))
+                .unwrap_or_else(|_| panic!("manual feedback {relative}")),
+            "feedback stage must be byte-identical to the direct render ({relative})"
+        );
+    }
+    assert_png_frames_identical(
+        &manual_quantize_dir,
+        &chain_dir.join("stage_02_palette_quantize"),
+        3,
+    );
+
+    // Chain-manifest records the feedback stage's derived algorithm id and
+    // resolved (default) knobs.
+    let manifest = read_json(&chain_dir.join("chain-manifest.json"));
+    assert_eq!(manifest["stages"][0]["effect"], "flow_feedback");
+    assert_eq!(manifest["stages"][0]["algorithm"], "flow_feedback_cpu_v2");
+    assert_eq!(manifest["stages"][0]["settings"]["feedback_mix"], 0.72);
+    assert_eq!(manifest["stages"][0]["settings"]["decay"], 0.995);
+    assert_eq!(
+        manifest["stages"][0]["settings"]["flow_source"],
+        "optical_flow"
+    );
+}
+
+#[test]
+fn render_chain_resumes_interrupted_feedback_stage_to_byte_identity() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(&spec_path, FEEDBACK_CHAIN_SPEC);
+
+    // Reference: one uninterrupted chain run.
+    let reference_dir = temp_dir.path().join("reference-out");
+    run_chain(&spec_path, &source_dir, &reference_dir).success();
+
+    // Seed an interrupted stage 1: the direct CLI with --stop-after-frame
+    // leaves a running checkpoint after frame 0 inside the stage directory
+    // (the chain shares the direct command's job id, so the checkpoint
+    // contract matches), plus the chain record the interrupted run would
+    // have written before stage 1.
+    let seeded_dir = temp_dir.path().join("seeded-out");
+    fs::create_dir_all(&seeded_dir).expect("create seeded output dir");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-feedback-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            source_dir.to_string_lossy().as_ref(),
+            seeded_dir
+                .join("stage_01_flow_feedback")
+                .to_string_lossy()
+                .as_ref(),
+            "--stop-after-frame",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed flow-feedback sequence after frame 0",
+        ));
+    fs::copy(
+        reference_dir.join("chain-record.json"),
+        seeded_dir.join("chain-record.json"),
+    )
+    .expect("seed chain record");
+    assert!(!seeded_dir
+        .join("stage_01_flow_feedback/frames/frame_000001.png")
+        .exists());
+
+    // Re-running the chain resumes stage 1 from its checkpoint and renders
+    // stage 2; the whole output is byte-identical to the uninterrupted run.
+    run_chain(&spec_path, &source_dir, &seeded_dir).success();
+    for relative in FEEDBACK_CHAIN_ARTIFACTS {
+        assert_eq!(
+            fs::read(seeded_dir.join(relative)).unwrap_or_else(|_| panic!("seeded {relative}")),
+            fs::read(reference_dir.join(relative))
+                .unwrap_or_else(|_| panic!("reference {relative}")),
+            "resumed chain must be byte-identical to the uninterrupted run ({relative})"
+        );
+    }
+}
+
+#[test]
+fn render_chain_rerun_of_completed_chain_is_a_clean_skip() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(&spec_path, FEEDBACK_CHAIN_SPEC);
+    let output_dir = temp_dir.path().join("chain-out");
+    run_chain(&spec_path, &source_dir, &output_dir).success();
+
+    let before: Vec<Vec<u8>> = FEEDBACK_CHAIN_ARTIFACTS
+        .iter()
+        .map(|relative| {
+            fs::read(output_dir.join(relative)).unwrap_or_else(|_| panic!("before {relative}"))
+        })
+        .collect();
+
+    // Pinned semantics: a completed chain re-runs as a clean skip — every
+    // stage reports "already complete", the summary still prints, exit 0,
+    // and every artifact stays byte-identical.
+    run_chain(&spec_path, &source_dir, &output_dir)
+        .success()
+        .stdout(predicate::str::contains(
+            "stage 01 (flow_feedback) already complete — skipped",
+        ))
+        .stdout(predicate::str::contains(
+            "stage 02 (palette_quantize) already complete — skipped",
+        ))
+        .stdout(predicate::str::contains("rendered chain with 2 stage(s)"));
+
+    for (relative, expected) in FEEDBACK_CHAIN_ARTIFACTS.iter().zip(&before) {
+        assert_eq!(
+            &fs::read(output_dir.join(relative)).unwrap_or_else(|_| panic!("after {relative}")),
+            expected,
+            "clean skip must leave every artifact byte-identical ({relative})"
+        );
+    }
+}
+
+#[test]
+fn render_chain_refuses_changed_spec_changed_input_and_unrecorded_dirty_dir() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(&spec_path, FEEDBACK_CHAIN_SPEC);
+    let output_dir = temp_dir.path().join("chain-out");
+    run_chain(&spec_path, &source_dir, &output_dir).success();
+    let manifest_before =
+        fs::read(output_dir.join("chain-manifest.json")).expect("manifest before");
+    let frame_before = fs::read(output_dir.join("stage_02_palette_quantize/frame_000000.png"))
+        .expect("frame before");
+
+    // A changed spec against the recorded output refuses and touches nothing.
+    let changed_spec_path = temp_dir.path().join("chain-changed.json");
+    write_chain_spec(
+        &changed_spec_path,
+        r#"{"version": 1, "stages": [
+            {"effect": "flow_feedback"},
+            {"effect": "palette_quantize", "mode": "posterize", "levels": 8}
+        ]}"#,
+    );
+    run_chain(&changed_spec_path, &source_dir, &output_dir)
+        .failure()
+        .stderr(predicate::str::contains(
+            "a changed spec invalidates existing stage outputs",
+        ));
+
+    // Changed input frames (same spec) also refuse: skipping completed
+    // stages assumes the recorded input fingerprint still holds.
+    let other_source_dir = temp_dir.path().join("other-source-frames");
+    write_texture_sequence(&other_source_dir, &[1, 3, 5]);
+    run_chain(&spec_path, &other_source_dir, &output_dir)
+        .failure()
+        .stderr(predicate::str::contains("input frames changed"));
+
+    assert_eq!(
+        fs::read(output_dir.join("chain-manifest.json")).expect("manifest after"),
+        manifest_before,
+        "refusal must leave the chain manifest untouched"
+    );
+    assert_eq!(
+        fs::read(output_dir.join("stage_02_palette_quantize/frame_000000.png"))
+            .expect("frame after"),
+        frame_before,
+        "refusal must leave stage frames untouched"
+    );
+
+    // A non-empty output directory without a chain record refuses too.
+    let dirty_dir = temp_dir.path().join("dirty-out");
+    fs::create_dir_all(&dirty_dir).expect("create dirty dir");
+    fs::write(dirty_dir.join("notes.txt"), "not chain output").expect("write stray file");
+    run_chain(&spec_path, &source_dir, &dirty_dir)
+        .failure()
+        .stderr(predicate::str::contains("no chain-record.json"));
+    assert_eq!(
+        fs::read_dir(&dirty_dir).expect("read dirty dir").count(),
+        1,
+        "refusal must write nothing into the unrecorded directory"
+    );
+}
+
+#[test]
+fn render_chain_rejects_invalid_flow_feedback_stage() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+
+    let run_case = |name: &str, spec_json: &str, expected_stderr: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, spec_json);
+        let output_dir = temp_dir.path().join(format!("{name}-out"));
+        run_chain(&spec_path, &source_dir, &output_dir)
+            .failure()
+            .stderr(predicate::str::contains(expected_stderr));
+        assert!(
+            !output_dir.exists(),
+            "{name}: nothing must be written on rejection"
+        );
+    };
+
+    run_case(
+        "bad-mix",
+        r#"{"version": 1, "stages": [{"effect": "flow_feedback", "feedback_mix": 2.0}]}"#,
+        "feedback_mix must be between zero and one",
+    );
+    run_case(
+        "bad-iterations",
+        r#"{"version": 1, "stages": [{"effect": "flow_feedback", "iterations": 2}]}"#,
+        "exactly one iteration",
+    );
+    run_case(
+        "unknown-field",
+        r#"{"version": 1, "stages": [{"effect": "flow_feedback", "bogus_knob": 1.0}]}"#,
+        "unknown field `bogus_knob`",
+    );
+    // A stage-2 feedback typo after a valid stage 1 must leave nothing.
+    run_case(
+        "bad-stage-2",
+        r#"{"version": 1, "stages": [
+            {"effect": "palette_quantize", "levels": 4},
+            {"effect": "flow_feedback", "decay": -1.0}
+        ]}"#,
+        "decay must be greater than or equal to zero",
+    );
+}
+
 #[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
