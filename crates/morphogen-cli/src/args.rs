@@ -1207,7 +1207,9 @@ pub(crate) enum Commands {
     /// renders. Stages: retro_static, channel_shift (constant shifts),
     /// palette_quantize, rutt_etra, and the stateful flow_feedback
     /// (self-feedback: the stage input feeds both modulator and carrier; its
-    /// checkpoint lives inside the stage directory). CPU-only, no modulation.
+    /// checkpoint lives inside the stage directory). CPU-only. Stages take an
+    /// optional "modulation" block (route specs, media paths, sampling,
+    /// envelope fps for stateless stages) — LFO routes need no media.
     /// Re-running the same spec into the same output directory skips
     /// completed stages and resumes an interrupted stateful stage from its
     /// checkpoint; a changed spec or changed input frames refuses.

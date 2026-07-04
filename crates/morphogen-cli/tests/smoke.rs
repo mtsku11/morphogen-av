@@ -754,6 +754,160 @@ fn render_chain_rejects_invalid_flow_feedback_stage() {
 }
 
 #[test]
+fn render_chain_stage_lfo_modulation_matches_direct_render() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    // Static input (identical frames): the LFO is the only source of change.
+    write_texture_sequence(&source_dir, &[0, 0, 0]);
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(
+        &spec_path,
+        r#"{"version": 1, "stages": [
+            {"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0,
+             "line_thickness": 1, "mono": false,
+             "modulation": {"routes": ["displacement_depth=lfo(sine,0.5):64"]}},
+            {"effect": "palette_quantize", "mode": "posterize", "levels": 4}
+        ]}"#,
+    );
+    let chain_dir = temp_dir.path().join("chain-out");
+    run_chain(&spec_path, &source_dir, &chain_dir).success();
+
+    // The modulated stage is byte-identical to the direct CLI render with
+    // the same route (a pure-LFO route set needs no --modulator-* flags).
+    let direct_dir = temp_dir.path().join("direct-rutt-etra");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "6.0",
+            "--modulate",
+            "displacement_depth=lfo(sine,0.5):64",
+            "--modulation-fps",
+            "12",
+        ])
+        .assert()
+        .success();
+    for relative in [
+        "frame_000000.png",
+        "frame_000001.png",
+        "frame_000002.png",
+        "manifest.json",
+    ] {
+        assert_eq!(
+            fs::read(chain_dir.join("stage_01_rutt_etra").join(relative))
+                .unwrap_or_else(|_| panic!("chain {relative}")),
+            fs::read(direct_dir.join(relative)).unwrap_or_else(|_| panic!("direct {relative}")),
+            "modulated chain stage must be byte-identical to the direct render ({relative})"
+        );
+    }
+
+    // The chain manifest records the stage's modulation block; the
+    // unmodulated stage's settings carry no modulation key at all (the
+    // pre-slice marker/manifest shape, skip-when-absent).
+    let manifest = read_json(&chain_dir.join("chain-manifest.json"));
+    assert_eq!(
+        manifest["stages"][0]["settings"]["modulation"]["routes"][0],
+        "displacement_depth=lfo(sine,0.5):64"
+    );
+    assert!(manifest["stages"][1]["settings"]
+        .as_object()
+        .expect("stage 2 settings object")
+        .get("modulation")
+        .is_none());
+    let marker = read_json(&chain_dir.join("stage_02_palette_quantize/stage-complete.json"));
+    assert!(marker["settings"]
+        .as_object()
+        .expect("marker settings object")
+        .get("modulation")
+        .is_none());
+}
+
+#[test]
+fn render_chain_rejects_invalid_stage_modulation() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+
+    let mut run_case = |name: &str, spec_json: &str, expected_error: &str| {
+        let spec_path = temp_dir.path().join(format!("chain-{name}.json"));
+        write_chain_spec(&spec_path, spec_json);
+        let output_dir = temp_dir.path().join(format!("out-{name}"));
+        run_chain(&spec_path, &source_dir, &output_dir)
+            .failure()
+            .stderr(predicate::str::contains(expected_error));
+        assert!(
+            !output_dir.exists(),
+            "rejected modulation ({name}) must leave nothing on disk"
+        );
+    };
+
+    // Unknown target for the stage's effect (apply-fn probe), in stage 2 so
+    // a valid stage 1 can't render first.
+    run_case(
+        "unknown-target",
+        r#"{"version": 1, "stages": [
+            {"effect": "palette_quantize", "levels": 4},
+            {"effect": "rutt_etra", "modulation": {"routes": ["mono=luma:1"]}}
+        ]}"#,
+        "unknown rutt-etra modulation target",
+    );
+    // A media-sourced route with no media declared on the stage.
+    run_case(
+        "missing-media",
+        r#"{"version": 1, "stages": [
+            {"effect": "rutt_etra",
+             "modulation": {"routes": ["displacement_depth=audio-rms:64"]}}
+        ]}"#,
+        "requires a modulation.modulator_audio path on this stage",
+    );
+    // The feedback envelope base is the pinned frame rate, not a free knob.
+    run_case(
+        "feedback-fps",
+        r#"{"version": 1, "stages": [
+            {"effect": "flow_feedback",
+             "modulation": {"routes": ["feedback_mix=lfo(sine,1):0.5"], "fps": 6.0}}
+        ]}"#,
+        "sample against its pinned frame rate",
+    );
+}
+
+#[test]
+fn render_chain_modulated_feedback_stage_checkpoint_carries_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(
+        &spec_path,
+        r#"{"version": 1, "stages": [
+            {"effect": "flow_feedback",
+             "modulation": {"routes": ["feedback_mix=lfo(saw,1,0.25):0.5,0.25"]}}
+        ]}"#,
+    );
+    let chain_dir = temp_dir.path().join("chain-out");
+    run_chain(&spec_path, &source_dir, &chain_dir).success();
+
+    // The LFO route rides the stage's checkpoint contract exactly as it does
+    // standalone; the envelope base is the pinned chain frame rate.
+    let checkpoint = read_json(&chain_dir.join("stage_01_flow_feedback/checkpoint.json"));
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "feedback_mix");
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["shape"], "saw");
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["rate_hz"], 1.0);
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["phase"], 0.25);
+    assert_eq!(modulation["fps"], 12.0);
+    assert!(modulation["modulator_audio"].is_null());
+    assert!(modulation["modulator_frames"].is_null());
+}
+
+#[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_path = temp_dir.path().join("modulator.png");

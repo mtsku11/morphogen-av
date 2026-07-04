@@ -25,15 +25,18 @@ use std::{
 
 use morphogen_core::{FlowSource, RenderBackend};
 use morphogen_render::{
-    ChannelShiftSettings, FlowFeedbackSettings, ModulationSampling, PaletteQuantizeSettings,
-    QuantizeMode, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, StructureMode,
-    CHANNEL_SHIFT_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM, RETRO_STATIC_ALGORITHM,
-    RUTT_ETRA_ALGORITHM,
+    apply_channel_shift_modulation, apply_flow_feedback_modulation,
+    apply_palette_quantize_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
+    parse_modulation_route, validate_route_targets, ChannelShiftSettings, FlowFeedbackSettings,
+    ModulationSampling, PaletteQuantizeSettings, QuantizeMode, RetroStaticSettings,
+    RuttEtraSettings, ScanlineFilter, StructureMode, CHANNEL_SHIFT_ALGORITHM,
+    PALETTE_QUANTIZE_ALGORITHM, RETRO_STATIC_ALGORITHM, RUTT_ETRA_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::error::CliError;
 use crate::imaging::{collect_image_frames, update_fnv1a};
+use crate::modulate::{parse_named_modulator_specs, resolve_modulator_media};
 use crate::render::{
     render_channel_shift_sequence, render_feedback_sequence, render_palette_quantize_sequence,
     render_retro_static_sequence, render_rutt_etra_sequence, ChannelShiftSequenceRequest,
@@ -140,8 +143,10 @@ impl ChainStage {
         Ok(serde_json::from_str(&text)?)
     }
 
-    /// Validate this stage's knobs through the effect's own `validate()`.
-    /// Called for every stage before any stage renders.
+    /// Validate this stage's knobs through the effect's own `validate()`,
+    /// plus its modulation block (route grammar, duplicate targets, unknown
+    /// targets via the effect's apply fn, media requirements). Called for
+    /// every stage before any stage renders.
     fn validate(&self) -> Result<(), CliError> {
         match self {
             ChainStage::RetroStatic(spec) => {
@@ -160,7 +165,133 @@ impl ChainStage {
                 FlowFeedbackSettings::from(spec.clone()).validate()?;
             }
         }
+        self.validate_modulation()
+    }
+
+    /// This stage's modulation block, if any (Slice 3).
+    fn modulation_spec(&self) -> Option<&StageModulationSpec> {
+        match self {
+            ChainStage::RetroStatic(spec) => spec.modulation.as_ref(),
+            ChainStage::ChannelShift(spec) => spec.modulation.as_ref(),
+            ChainStage::PaletteQuantize(spec) => spec.modulation.as_ref(),
+            ChainStage::RuttEtra(spec) => spec.modulation.as_ref(),
+            ChainStage::FlowFeedback(spec) => spec.modulation.as_ref(),
+        }
+    }
+
+    /// Probe one route target against this effect's apply function on a
+    /// scratch settings copy (the queue-add precedent) — an unknown target
+    /// fails at spec-validation time, before anything renders.
+    fn probe_modulation_target(&self, target: &str) -> Result<(), CliError> {
+        match self {
+            ChainStage::RetroStatic(spec) => {
+                let mut settings = RetroStaticSettings::from(spec.clone());
+                apply_retro_static_modulation(&mut settings, target, 0.0)?;
+            }
+            ChainStage::ChannelShift(spec) => {
+                let mut settings = ChannelShiftSettings::from(spec.clone());
+                apply_channel_shift_modulation(&mut settings, target, 0.0)?;
+            }
+            ChainStage::PaletteQuantize(spec) => {
+                let mut settings = PaletteQuantizeSettings::from(spec.clone());
+                apply_palette_quantize_modulation(&mut settings, target, 0.0)?;
+            }
+            ChainStage::RuttEtra(spec) => {
+                let mut settings = RuttEtraSettings::from(spec.clone());
+                apply_rutt_etra_modulation(&mut settings, target, 0.0)?;
+            }
+            ChainStage::FlowFeedback(spec) => {
+                let mut settings = FlowFeedbackSettings::from(spec.clone());
+                apply_flow_feedback_modulation(&mut settings, target, 0.0)?;
+            }
+        }
         Ok(())
+    }
+
+    /// Validate the stage's modulation block: route grammar + duplicate
+    /// targets, unknown targets (apply-fn probe), envelope fps rules, and
+    /// media requirements (a route's source must have its default or named
+    /// media declared in the block — the missing-media wording comes from
+    /// the shared `resolve_modulator_media`).
+    fn validate_modulation(&self) -> Result<(), CliError> {
+        let Some(modulation) = self.modulation_spec() else {
+            return Ok(());
+        };
+        if let Some(fps) = modulation.fps {
+            if matches!(self, ChainStage::FlowFeedback(_)) {
+                return Err(CliError::Message(
+                    "a flow_feedback stage's modulation envelopes sample against its \
+                     pinned frame rate (one timeline per stateful render) — remove the \
+                     modulation \"fps\" field"
+                        .to_string(),
+                ));
+            }
+            if !fps.is_finite() || fps <= 0.0 {
+                return Err(CliError::Message(
+                    "stage modulation fps must be positive and finite".to_string(),
+                ));
+            }
+        }
+        let routes = modulation
+            .routes
+            .iter()
+            .map(|spec| parse_modulation_route(spec))
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_route_targets(&routes)?;
+        let named_audio = parse_named_modulator_specs(
+            &modulation.named_modulator_audio,
+            "modulation.named_modulator_audio",
+        )?;
+        let named_frames = parse_named_modulator_specs(
+            &modulation.named_modulator_frames,
+            "modulation.named_modulator_frames",
+        )?;
+        for route in &routes {
+            self.probe_modulation_target(&route.target)?;
+            if route.source.needs_audio() {
+                resolve_modulator_media(
+                    route,
+                    modulation.modulator_audio.as_deref(),
+                    &named_audio,
+                    "a modulation.modulator_audio path on this stage",
+                    "a modulation.named_modulator_audio entry",
+                )?;
+            }
+            if route.source.needs_frames() {
+                resolve_modulator_media(
+                    route,
+                    modulation.modulator_frames.as_deref(),
+                    &named_frames,
+                    "a modulation.modulator_frames path on this stage",
+                    "a modulation.named_modulator_frames entry",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The `ModulationCliArgs` this stage renders with. A feedback stage's
+    /// envelope base is its pinned frame rate (the one-timeline-per-stateful-
+    /// render rule); stateless stages default to the direct CLI's
+    /// `--modulation-fps` default of 12.
+    fn modulation_args(&self) -> ModulationCliArgs<'_> {
+        match self.modulation_spec() {
+            None => no_modulation(),
+            Some(modulation) => ModulationCliArgs {
+                modulate: &modulation.routes,
+                modulator_audio: modulation.modulator_audio.as_deref(),
+                modulator_frames: modulation.modulator_frames.as_deref(),
+                sampling: modulation.sampling,
+                fps: if matches!(self, ChainStage::FlowFeedback(_)) {
+                    CHAIN_FEEDBACK_FRAME_RATE
+                } else {
+                    modulation.fps.unwrap_or(12.0)
+                },
+                cache_dir: None,
+                named_modulator_audio: &modulation.named_modulator_audio,
+                named_modulator_frames: &modulation.named_modulator_frames,
+            },
+        }
     }
 
     /// The directory the *next* stage reads: stateless handlers write frames
@@ -176,6 +307,49 @@ impl ChainStage {
     }
 }
 
+/// A stage's optional modulation block (Slice 3): the standard route
+/// grammar plus the media/sampling companions, mirroring `ModulationCliArgs`
+/// semantics. A nested object rather than flattened fields because serde's
+/// `deny_unknown_fields` does not compose with `flatten`. Skipped when
+/// absent so pre-slice markers, records, and manifests stay byte-identical.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub(crate) struct StageModulationSpec {
+    /// `--modulate` route specs verbatim
+    /// (`<target>=[<name>.]<source>[:<scale>[,<offset>]][@hold|@smooth]`).
+    /// LFO sources need no media — the natural chain modulators.
+    pub routes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulator_audio: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulator_frames: Option<PathBuf>,
+    pub sampling: ModulationSampling,
+    /// Envelope fps for stateless stages (`None` = the direct CLI's
+    /// `--modulation-fps` default of 12). Invalid on a `flow_feedback`
+    /// stage, whose envelope base is its pinned frame rate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
+    /// Repeatable `<name>=<path>` named-modulator media specs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub named_modulator_audio: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub named_modulator_frames: Vec<String>,
+}
+
+impl Default for StageModulationSpec {
+    fn default() -> Self {
+        Self {
+            routes: Vec::new(),
+            modulator_audio: None,
+            modulator_frames: None,
+            sampling: ModulationSampling::default(),
+            fps: None,
+            named_modulator_audio: Vec::new(),
+            named_modulator_frames: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct RetroStaticStageSpec {
@@ -183,6 +357,8 @@ pub(crate) struct RetroStaticStageSpec {
     pub assumed_bpp: u32,
     pub filter: ScanlineFilter,
     pub strength: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulation: Option<StageModulationSpec>,
 }
 
 impl Default for RetroStaticStageSpec {
@@ -193,6 +369,7 @@ impl Default for RetroStaticStageSpec {
             assumed_bpp: d.assumed_bpp,
             filter: d.filter,
             strength: d.strength,
+            modulation: None,
         }
     }
 }
@@ -217,6 +394,8 @@ pub(crate) struct ChannelShiftStageSpec {
     pub shift_g_y: f32,
     pub shift_b_x: f32,
     pub shift_b_y: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulation: Option<StageModulationSpec>,
 }
 
 impl Default for ChannelShiftStageSpec {
@@ -229,6 +408,7 @@ impl Default for ChannelShiftStageSpec {
             shift_g_y: d.shift_g_y,
             shift_b_x: d.shift_b_x,
             shift_b_y: d.shift_b_y,
+            modulation: None,
         }
     }
 }
@@ -251,6 +431,8 @@ impl From<ChannelShiftStageSpec> for ChannelShiftSettings {
 pub(crate) struct PaletteQuantizeStageSpec {
     pub mode: QuantizeMode,
     pub levels: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulation: Option<StageModulationSpec>,
 }
 
 impl Default for PaletteQuantizeStageSpec {
@@ -259,6 +441,7 @@ impl Default for PaletteQuantizeStageSpec {
         Self {
             mode: d.mode,
             levels: d.levels,
+            modulation: None,
         }
     }
 }
@@ -279,6 +462,8 @@ pub(crate) struct RuttEtraStageSpec {
     pub displacement_depth: f32,
     pub line_thickness: u32,
     pub mono: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulation: Option<StageModulationSpec>,
 }
 
 impl Default for RuttEtraStageSpec {
@@ -289,6 +474,7 @@ impl Default for RuttEtraStageSpec {
             displacement_depth: d.displacement_depth,
             line_thickness: d.line_thickness,
             mono: d.mono,
+            modulation: None,
         }
     }
 }
@@ -320,6 +506,8 @@ pub(crate) struct FlowFeedbackStageSpec {
     pub structure_mix: f32,
     pub structure_mode: StructureMode,
     pub flow_source: FlowSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modulation: Option<StageModulationSpec>,
 }
 
 impl Default for FlowFeedbackStageSpec {
@@ -336,6 +524,7 @@ impl Default for FlowFeedbackStageSpec {
             structure_mix: 0.0,
             structure_mode: StructureMode::SingleScale,
             flow_source: FlowSource::OpticalFlow,
+            modulation: None,
         }
     }
 }
@@ -539,7 +728,7 @@ fn render_stage(
                 settings: RetroStaticSettings::from(spec.clone()),
                 frames: u32::MAX,
                 backend: RenderBackend::Cpu,
-                modulation: no_modulation(),
+                modulation: stage.modulation_args(),
             })?
             .frame_count
         }
@@ -553,7 +742,7 @@ fn render_stage(
                 source_a_dir: None,
                 flow_gain: 0.0,
                 radius: 0,
-                modulation: no_modulation(),
+                modulation: stage.modulation_args(),
             })?
             .frame_count
         }
@@ -564,7 +753,7 @@ fn render_stage(
                 settings: PaletteQuantizeSettings::from(spec.clone()),
                 frames: u32::MAX,
                 backend: RenderBackend::Cpu,
-                modulation: no_modulation(),
+                modulation: stage.modulation_args(),
             })?
             .frame_count
         }
@@ -574,7 +763,7 @@ fn render_stage(
                 output_dir: stage_dir,
                 settings: RuttEtraSettings::from(spec.clone()),
                 frames: u32::MAX,
-                modulation: no_modulation(),
+                modulation: stage.modulation_args(),
             })?
             .frame_count
         }
@@ -595,7 +784,7 @@ fn render_stage(
                 job_id: CHAIN_FEEDBACK_JOB_ID,
                 provenance: None,
                 stop_after_frame: false,
-                modulation: no_modulation(),
+                modulation: stage.modulation_args(),
             })?
             .frame_count
         }
