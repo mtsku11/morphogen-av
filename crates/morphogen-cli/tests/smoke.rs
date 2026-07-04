@@ -118,6 +118,161 @@ fn render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs() {
     assert_eq!(manifest["frame_count"], 2);
 }
 
+/// Two-source A→B: `--source-a-dir` pointing at the same dir as B is
+/// byte-identical to the single-source render (the continuity identity);
+/// a distinct A switches the algorithm id, records `source_a`, and diverges.
+#[test]
+fn render_rutt_etra_two_source_matches_single_when_a_equals_b_and_diverges_otherwise() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let b_dir = temp_dir.path().join("source-b");
+    let a_dir = temp_dir.path().join("source-a");
+    let single_dir = temp_dir.path().join("single");
+    let two_ab_dir = temp_dir.path().join("two-ab");
+    let two_distinct_dir = temp_dir.path().join("two-distinct");
+    fs::create_dir_all(&b_dir).expect("create b frames");
+    fs::create_dir_all(&a_dir).expect("create a frames");
+
+    for index in 0..2u32 {
+        // B: horizontal luma ramp (colour source).
+        let b = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, value, value, u8::MAX])
+        });
+        b.save(b_dir.join(format!("frame_{index:06}.png")))
+            .expect("write b frame");
+        // A: vertical luma ramp — distinct structure, so displacement differs.
+        let a = ImageBuffer::from_fn(16, 16, |_, y| {
+            let value = (y as u8).wrapping_mul(16);
+            Rgba([value, value, value, u8::MAX])
+        });
+        a.save(a_dir.join(format!("frame_{index:06}.png")))
+            .expect("write a frame");
+    }
+
+    let common = [
+        "--frames",
+        "2",
+        "--line-pitch",
+        "4",
+        "--displacement-depth",
+        "24.0",
+    ];
+
+    // single-source on B
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(
+            [
+                "render-rutt-etra-sequence",
+                b_dir.to_string_lossy().as_ref(),
+                single_dir.to_string_lossy().as_ref(),
+            ]
+            .iter()
+            .copied()
+            .chain(common.iter().copied()),
+        )
+        .assert()
+        .success();
+
+    // two-source with A == B (source-a points at B) → must byte-match single
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(
+            [
+                "render-rutt-etra-sequence",
+                b_dir.to_string_lossy().as_ref(),
+                two_ab_dir.to_string_lossy().as_ref(),
+                "--source-a-dir",
+                b_dir.to_string_lossy().as_ref(),
+            ]
+            .iter()
+            .copied()
+            .chain(common.iter().copied()),
+        )
+        .assert()
+        .success();
+
+    // two-source with a distinct A → diverges, records the two-source id
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(
+            [
+                "render-rutt-etra-sequence",
+                b_dir.to_string_lossy().as_ref(),
+                two_distinct_dir.to_string_lossy().as_ref(),
+                "--source-a-dir",
+                a_dir.to_string_lossy().as_ref(),
+            ]
+            .iter()
+            .copied()
+            .chain(common.iter().copied()),
+        )
+        .assert()
+        .success();
+
+    // Continuity identity: A == B is byte-identical to single-source.
+    for index in 0..2 {
+        let file_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(single_dir.join(&file_name)).expect("single frame"),
+            fs::read(two_ab_dir.join(&file_name)).expect("two-ab frame"),
+            "A==B two-source must byte-match single-source ({file_name})"
+        );
+    }
+
+    // A distinct A must actually change at least one frame.
+    let single0 = fs::read(single_dir.join("frame_000000.png")).expect("single 0");
+    let distinct0 = fs::read(two_distinct_dir.join("frame_000000.png")).expect("distinct 0");
+    assert_ne!(
+        single0, distinct0,
+        "a distinct Source A must change the displacement"
+    );
+
+    // Algorithm id switches and source_a provenance is recorded.
+    let single_manifest = read_json(&single_dir.join("manifest.json"));
+    assert_eq!(single_manifest["algorithm"], "rutt_etra_scanline_cpu_v1");
+    assert!(single_manifest.get("source_a").is_none());
+    let two_manifest = read_json(&two_distinct_dir.join("manifest.json"));
+    assert_eq!(two_manifest["algorithm"], "rutt_etra_two_source_cpu_v1");
+    assert_eq!(
+        two_manifest["source_a"],
+        a_dir.to_string_lossy().to_string()
+    );
+}
+
+/// Two-source has no Metal kernel yet (slice 2); `--source-a-dir --backend metal`
+/// must fail clearly rather than silently ignore the backend choice.
+#[test]
+fn render_rutt_etra_two_source_rejects_metal_backend() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let b_dir = temp_dir.path().join("source-b");
+    let out_dir = temp_dir.path().join("out");
+    fs::create_dir_all(&b_dir).expect("create b frames");
+    let b = ImageBuffer::from_fn(16, 16, |x, _| {
+        let value = (x as u8).wrapping_mul(16);
+        Rgba([value, value, value, u8::MAX])
+    });
+    b.save(b_dir.join("frame_000000.png"))
+        .expect("write b frame");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            b_dir.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+            "--source-a-dir",
+            b_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "1",
+            "--backend",
+            "metal",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--backend cpu only"));
+}
+
 /// AC 3: `--backend metal` renders byte-identical to `--backend cpu` on the
 /// gather kernel, and the Metal manifest records the Metal algorithm id.
 #[cfg(target_os = "macos")]

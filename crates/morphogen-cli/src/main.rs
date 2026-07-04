@@ -846,6 +846,7 @@ fn run() -> Result<(), CliError> {
         Commands::RenderRuttEtraSequence {
             source_b_dir,
             output_dir,
+            source_a_dir,
             frames,
             line_pitch,
             displacement_depth,
@@ -863,6 +864,7 @@ fn run() -> Result<(), CliError> {
         } => render_rutt_etra_sequence(RuttEtraSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
+            source_a_dir: source_a_dir.as_deref(),
             settings: RuttEtraSettings {
                 line_pitch,
                 displacement_depth,

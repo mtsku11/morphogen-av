@@ -747,6 +747,7 @@ fn render_stage(
             render_rutt_etra_sequence(RuttEtraSequenceRequest {
                 source_b_dir: previous_dir,
                 output_dir: stage_dir,
+                source_a_dir: None,
                 settings: RuttEtraSettings::from(spec.clone()),
                 frames: u32::MAX,
                 backend: RenderBackend::Cpu,

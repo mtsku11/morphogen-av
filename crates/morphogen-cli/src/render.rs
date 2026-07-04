@@ -33,11 +33,11 @@ use morphogen_render::{
     render_block_collage_frame, render_cascade_collage_frame, render_cascade_trails,
     render_channel_shift_frame, render_field_particles, render_fluid_mosaic,
     render_palette_quantize_frame, render_pixel_sort_frame, render_retro_static_frame,
-    render_rutt_etra_frame, reset_residual_in_refreshed_blocks, resort_fluid_mosaic_colors,
-    select_grains_cpu, select_grains_from_pool_cpu, select_grains_multimodal_cpu,
-    synthesize_turbulence_flow, uniform_displacement_field, video_vocoder_cpu, write_flow_cache,
-    write_flow_cache_with_source_fingerprint, write_flow_feedback_state,
-    write_grain_color_descriptor_cache, write_grain_descriptor_cache,
+    render_rutt_etra_frame, render_rutt_etra_two_source_frame, reset_residual_in_refreshed_blocks,
+    resort_fluid_mosaic_colors, select_grains_cpu, select_grains_from_pool_cpu,
+    select_grains_multimodal_cpu, synthesize_turbulence_flow, uniform_displacement_field,
+    video_vocoder_cpu, write_flow_cache, write_flow_cache_with_source_fingerprint,
+    write_flow_feedback_state, write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, zero_flow, AntiRepeat,
     BlockCollageSettings, CascadeCollageSettings, CascadeTrailSettings, ChannelShiftSettings,
     CoagulationField, CoagulationFlowSource, CoagulationSettings, CodecEngraveSettings,
@@ -53,7 +53,7 @@ use morphogen_render::{
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RUTT_ETRA_ALGORITHM,
-    RUTT_ETRA_METAL_ALGORITHM,
+    RUTT_ETRA_METAL_ALGORITHM, RUTT_ETRA_TWO_SOURCE_ALGORITHM,
 };
 use morphogen_render::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
@@ -6197,6 +6197,10 @@ pub(crate) fn render_rutt_etra_frame_metal(
 pub(crate) struct RuttEtraSequenceRequest<'a> {
     pub(crate) source_b_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
+    /// Optional Source A (modulator) frames. When set, A's luma drives the
+    /// scanline displacement (two-source cross-synthesis) and B supplies colour;
+    /// when `None`, B displaces its own scanlines (single-source).
+    pub(crate) source_a_dir: Option<&'a Path>,
     pub(crate) settings: RuttEtraSettings,
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
@@ -6220,7 +6224,33 @@ pub(crate) fn render_rutt_etra_sequence(
         ));
     }
 
-    let frame_count = (request.frames as usize).min(source_b_frames.len());
+    // Optional Source A (modulator): its luma drives the displacement.
+    let source_a_frames = match request.source_a_dir {
+        Some(dir) => {
+            let frames = collect_image_frames(dir)?;
+            if frames.is_empty() {
+                return Err(CliError::Message(
+                    "rutt-etra two-source requires at least one PNG frame in the source A directory"
+                        .to_string(),
+                ));
+            }
+            // Two-source Metal has no kernel yet (slice 2); fail clearly rather
+            // than silently ignore the backend choice.
+            if request.backend == RenderBackend::Metal {
+                return Err(CliError::Message(
+                    "rutt-etra two-source (--source-a-dir) currently supports --backend cpu only"
+                        .to_string(),
+                ));
+            }
+            Some(frames)
+        }
+        None => None,
+    };
+
+    let mut frame_count = (request.frames as usize).min(source_b_frames.len());
+    if let Some(a_frames) = &source_a_frames {
+        frame_count = frame_count.min(a_frames.len());
+    }
     fs::create_dir_all(request.output_dir)?;
 
     let modulation = request.modulation.build_plan()?;
@@ -6241,9 +6271,15 @@ pub(crate) fn render_rutt_etra_sequence(
             }
         }
         let source_b = load_image_f32(frame_path)?;
-        let rendered = match request.backend {
-            RenderBackend::Cpu => render_rutt_etra_frame(&source_b, &frame_settings)?,
-            RenderBackend::Metal => render_rutt_etra_frame_metal(&source_b, &frame_settings)?,
+        let rendered = match &source_a_frames {
+            Some(a_frames) => {
+                let source_a = load_image_f32(&a_frames[index])?;
+                render_rutt_etra_two_source_frame(&source_a, &source_b, &frame_settings)?
+            }
+            None => match request.backend {
+                RenderBackend::Cpu => render_rutt_etra_frame(&source_b, &frame_settings)?,
+                RenderBackend::Metal => render_rutt_etra_frame_metal(&source_b, &frame_settings)?,
+            },
         };
         save_png(
             &rendered,
@@ -6251,11 +6287,16 @@ pub(crate) fn render_rutt_etra_sequence(
         )?;
     }
 
-    let algorithm = match request.backend {
-        RenderBackend::Cpu => RUTT_ETRA_ALGORITHM,
-        RenderBackend::Metal => RUTT_ETRA_METAL_ALGORITHM,
+    let algorithm = if source_a_frames.is_some() {
+        // Two-source is CPU-only in this slice (Metal was rejected above).
+        RUTT_ETRA_TWO_SOURCE_ALGORITHM
+    } else {
+        match request.backend {
+            RenderBackend::Cpu => RUTT_ETRA_ALGORITHM,
+            RenderBackend::Metal => RUTT_ETRA_METAL_ALGORITHM,
+        }
     };
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "algorithm": algorithm,
         "line_pitch": request.settings.line_pitch,
         "displacement_depth": request.settings.displacement_depth,
@@ -6263,6 +6304,9 @@ pub(crate) fn render_rutt_etra_sequence(
         "mono": request.settings.mono,
         "frame_count": frame_count,
     });
+    if let Some(dir) = request.source_a_dir {
+        manifest["source_a"] = serde_json::json!(dir.display().to_string());
+    }
     fs::write(
         request.output_dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest)?,

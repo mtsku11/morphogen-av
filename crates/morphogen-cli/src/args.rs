@@ -1115,6 +1115,13 @@ pub(crate) enum Commands {
         /// Source B frames (PNG sequence) — the carrier whose scanlines are drawn.
         source_b_dir: PathBuf,
         output_dir: PathBuf,
+        /// Optional Source A frames (PNG sequence) — the modulator whose luma
+        /// drives the vertical displacement (Source B still supplies the colour).
+        /// When set, this is two-source cross-synthesis
+        /// (`rutt_etra_two_source_cpu_v1`); A and B must share dimensions. When
+        /// absent, Source B displaces its own scanlines (single-source, unchanged).
+        #[arg(long)]
+        source_a_dir: Option<PathBuf>,
         /// Number of output frames to render.
         #[arg(long, default_value_t = 120)]
         frames: u32,

@@ -2946,6 +2946,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
         let render_result = render_rutt_etra_sequence(RuttEtraSequenceRequest {
             source_b_dir: Path::new(&carrier_frame_directory),
             output_dir: &output_dir.join("frames"),
+            source_a_dir: None,
             settings,
             frames,
             backend,

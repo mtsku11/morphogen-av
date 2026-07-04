@@ -154,7 +154,8 @@ pub use retro_static::{
     render_retro_static_frame, RetroStaticSettings, ScanlineFilter, RETRO_STATIC_ALGORITHM,
 };
 pub use rutt_etra::{
-    render_rutt_etra_frame, RuttEtraSettings, RUTT_ETRA_ALGORITHM, RUTT_ETRA_METAL_ALGORITHM,
+    render_rutt_etra_frame, render_rutt_etra_two_source_frame, RuttEtraSettings,
+    RUTT_ETRA_ALGORITHM, RUTT_ETRA_METAL_ALGORITHM, RUTT_ETRA_TWO_SOURCE_ALGORITHM,
 };
 pub use sampler::sample_bilinear_clamped;
 pub use video_vocoder::{
