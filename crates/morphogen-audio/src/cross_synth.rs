@@ -11,7 +11,10 @@
 //! resynthesis is out of scope here (the roadmap's high-quality tier).
 
 use crate::{
-    rms::rms_envelope, spectral::spectral_centroid_from_magnitudes, stft::stft_magnitude_cache,
+    rms::rms_envelope,
+    spectral::spectral_centroid_from_magnitudes,
+    stft::stft_magnitude_cache,
+    stft_complex::{istft_complex_mono, stft_complex_mono, validate_complex_stft_config},
     AudioBufferF32, AudioError, StftConfig,
 };
 
@@ -19,6 +22,8 @@ use crate::{
 pub const RMS_GAIN_CROSS_SYNTH_ALGORITHM: &str = "rms_gain_cross_synth_cpu_v1";
 /// `filter` mode render id.
 pub const CENTROID_FILTER_CROSS_SYNTH_ALGORITHM: &str = "centroid_filter_cross_synth_cpu_v1";
+/// `vocode` mode render id.
+pub const PHASE_VOCODER_CROSS_SYNTH_ALGORITHM: &str = "phase_vocoder_cross_synth_cpu_v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterType {
@@ -163,6 +168,198 @@ pub fn centroid_filter_cross_synth(
     one_pole_filter_sweep(carrier, &times, &cnorm, filter_type, amount)
 }
 
+/// Downmix an interleaved multi-channel buffer to mono `f64` samples (mean of
+/// channels per frame — the same `mean_channels` convention as
+/// `stft_magnitude_cache`).
+fn mono_mix_f64(buffer: &AudioBufferF32) -> Vec<f64> {
+    let channels = buffer.channels.max(1);
+    (0..buffer.frames)
+        .map(|frame| {
+            let start = frame * channels;
+            let sum: f64 = buffer.samples[start..start + channels]
+                .iter()
+                .map(|&s| s as f64)
+                .sum();
+            sum / channels as f64
+        })
+        .collect()
+}
+
+/// `bands + 1` strictly increasing bin-index boundaries in `[0, bin_count]`,
+/// log-spaced (band `i` spans bins `[boundaries[i], boundaries[i + 1])`). Low
+/// bands are narrow (fine resolution near DC), high bands wide — the standard
+/// log-frequency banding shape. Degenerate collapses (possible when `bands` is
+/// close to `bin_count`) are walked forward to stay strictly increasing;
+/// callers must ensure `bands <= bin_count - 1` so the walk cannot overflow.
+fn log_band_boundaries(bands: usize, bin_count: usize) -> Vec<usize> {
+    let bin_count_f = bin_count as f64;
+    let mut raw: Vec<f64> = (0..=bands)
+        .map(|i| {
+            let t = i as f64 / bands as f64;
+            (bin_count_f + 1.0).powf(t) - 1.0
+        })
+        .collect();
+    let scale = bin_count_f / raw[bands];
+    for value in raw.iter_mut() {
+        *value *= scale;
+    }
+    let mut boundaries: Vec<usize> = raw.iter().map(|v| v.round() as usize).collect();
+    boundaries[0] = 0;
+    boundaries[bands] = bin_count;
+    for i in 1..=bands {
+        if boundaries[i] <= boundaries[i - 1] {
+            boundaries[i] = boundaries[i - 1] + 1;
+        }
+    }
+    boundaries
+}
+
+/// Map each bin `0..bin_count` to its band index, given `boundaries` from
+/// [`log_band_boundaries`].
+fn bin_to_band_map(boundaries: &[usize], bin_count: usize) -> Vec<usize> {
+    let bands = boundaries.len() - 1;
+    let mut map = Vec::with_capacity(bin_count);
+    let mut band = 0_usize;
+    for bin in 0..bin_count {
+        while band + 1 < bands && bin >= boundaries[band + 1] {
+            band += 1;
+        }
+        map.push(band);
+    }
+    map
+}
+
+/// Mean magnitude per band.
+fn band_means(magnitudes: &[f64], boundaries: &[usize]) -> Vec<f64> {
+    let bands = boundaries.len() - 1;
+    (0..bands)
+        .map(|band| {
+            let start = boundaries[band];
+            let end = boundaries[band + 1].min(magnitudes.len());
+            if end > start {
+                magnitudes[start..end].iter().sum::<f64>() / (end - start) as f64
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+/// `vocode` mode: impose A's log-band spectral envelope onto B's complex
+/// spectrum, keeping B's phase verbatim, then resynthesize with a real inverse
+/// STFT. See `docs/PHASE_VOCODER_MILESTONE.md`.
+pub fn phase_vocoder_cross_synth(
+    modulator: &AudioBufferF32,
+    carrier: &AudioBufferF32,
+    stft_config: StftConfig,
+    vocode_bands: usize,
+    amount: f32,
+) -> Result<AudioBufferF32, AudioError> {
+    validate_amount(amount)?;
+    if amount == 0.0 {
+        return Ok(carrier.clone());
+    }
+    validate_complex_stft_config(&stft_config)?;
+    let bin_count = stft_config.fft_size / 2 + 1;
+    if vocode_bands == 0 || vocode_bands > stft_config.fft_size / 2 {
+        return Err(AudioError::InvalidSettings(format!(
+            "vocode_bands must be between 1 and fft_size / 2 ({}), got {vocode_bands}",
+            stft_config.fft_size / 2
+        )));
+    }
+
+    // Analyze A (mixed to mono, matching the existing filter mode's convention)
+    // into per-frame log-band envelopes, normalized by the global peak band
+    // value across all A frames (silent A => all-zero envelope, not an error).
+    let a_mono = mono_mix_f64(modulator);
+    let a_frames = stft_complex_mono(&a_mono, stft_config, modulator.sample_rate)?;
+    if a_frames.is_empty() {
+        return Err(AudioError::InvalidSettings(
+            "modulator produced no STFT frames (too short for the FFT size)".to_string(),
+        ));
+    }
+    // Frames whose window reaches past the end of A are zero-padded (needed so
+    // ISTFT can cover a full-length B — see `stft_complex`); a hard signal->0
+    // truncation edge injects broadband energy that can outweigh a genuine
+    // sustained plateau, so it must not be eligible to win the peak-normalization
+    // search below. Fall back to the unfiltered set only if A is so short that
+    // every frame is zero-padded (nothing else to normalize against).
+    let fully_valid_count = a_frames
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index * stft_config.hop_size + stft_config.fft_size <= a_mono.len())
+        .count();
+    let envelope_frames: &[_] = if fully_valid_count > 0 {
+        &a_frames[..fully_valid_count]
+    } else {
+        &a_frames
+    };
+    let boundaries = log_band_boundaries(vocode_bands, bin_count);
+    let bin_band = bin_to_band_map(&boundaries, bin_count);
+
+    let mut times = Vec::with_capacity(envelope_frames.len());
+    let mut envelopes = Vec::with_capacity(envelope_frames.len());
+    let mut global_peak = 0.0_f64;
+    for frame in envelope_frames {
+        let magnitudes: Vec<f64> = (0..bin_count)
+            .map(|bin| {
+                (frame.real[bin] * frame.real[bin] + frame.imag[bin] * frame.imag[bin]).sqrt()
+            })
+            .collect();
+        let env = band_means(&magnitudes, &boundaries);
+        global_peak = env.iter().cloned().fold(global_peak, f64::max);
+        times.push(frame.time_seconds);
+        envelopes.push(env);
+    }
+    if global_peak > 0.0 {
+        for env in envelopes.iter_mut() {
+            for value in env.iter_mut() {
+                *value /= global_peak;
+            }
+        }
+    }
+
+    // Shape each B channel independently through the same A envelope timeline.
+    let channels = carrier.channels;
+    let mut out_channels: Vec<Vec<f64>> = Vec::with_capacity(channels);
+    for channel in 0..channels {
+        let b_mono: Vec<f64> = (0..carrier.frames)
+            .map(|frame| carrier.samples[frame * channels + channel] as f64)
+            .collect();
+        let mut b_frames = stft_complex_mono(&b_mono, stft_config, carrier.sample_rate)?;
+        let mut cursor = 0_usize;
+        for frame in b_frames.iter_mut() {
+            hold_last(&times, &mut cursor, frame.time_seconds);
+            let env = &envelopes[cursor];
+            for bin in 0..bin_count {
+                let e = env[bin_band[bin]];
+                // out = lerp(B, B * E, amount) = B * (1 + (E - 1) * amount)
+                let factor = 1.0 + (e - 1.0) * amount as f64;
+                frame.real[bin] *= factor;
+                frame.imag[bin] *= factor;
+                // Mirror the negative-frequency bin so the scaled spectrum stays
+                // conjugate-symmetric (E is real, so this preserves symmetry
+                // exactly rather than relying on the forward FFT's own
+                // near-symmetry surviving floating-point rounding).
+                if bin != 0 && bin * 2 != stft_config.fft_size {
+                    let mirror = stft_config.fft_size - bin;
+                    frame.real[mirror] = frame.real[bin];
+                    frame.imag[mirror] = -frame.imag[bin];
+                }
+            }
+        }
+        out_channels.push(istft_complex_mono(&b_frames, stft_config, carrier.frames)?);
+    }
+
+    let mut samples = vec![0.0_f32; carrier.samples.len()];
+    for frame in 0..carrier.frames {
+        for (channel, out) in out_channels.iter().enumerate() {
+            samples[frame * channels + channel] = out[frame] as f32;
+        }
+    }
+    AudioBufferF32::new(channels, carrier.sample_rate, samples)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +454,116 @@ mod tests {
         let carrier = buf(1, 4, vec![0.5; 8]);
         assert!(rms_gain_cross_synth(&modulator, &carrier, 4, 4, 1.5).is_err());
         assert!(rms_gain_cross_synth(&modulator, &carrier, 4, 4, f32::NAN).is_err());
+    }
+
+    fn vocode_config() -> StftConfig {
+        StftConfig {
+            fft_size: 64,
+            hop_size: 16,
+            window: WindowFunction::Hann,
+        }
+    }
+
+    /// A deterministic pseudo-noise-like signal, nonzero everywhere — a stand-in
+    /// carrier for vocode tests.
+    fn synthetic_carrier(len: usize) -> Vec<f32> {
+        (0..len)
+            .map(|i| {
+                let t = i as f64;
+                (0.5 * (0.7 * t).sin() + 0.3 * (1.9 * t + 0.3).sin()) as f32
+            })
+            .collect()
+    }
+
+    /// A modulator that is silent for the first half and a steady 300 Hz tone
+    /// for the second half (sample rate 8000).
+    fn half_silent_half_tone_modulator(len: usize, sample_rate: u32) -> Vec<f32> {
+        (0..len)
+            .map(|i| {
+                if i < len / 2 {
+                    0.0
+                } else {
+                    (std::f64::consts::TAU * 300.0 * i as f64 / sample_rate as f64).sin() as f32
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn vocode_amount_zero_is_byte_identical_passthrough() {
+        let modulator = buf(1, 8000, half_silent_half_tone_modulator(1024, 8000));
+        let carrier = buf(1, 8000, synthetic_carrier(1024));
+        let out = phase_vocoder_cross_synth(&modulator, &carrier, vocode_config(), 8, 0.0)
+            .expect("vocode");
+        assert_eq!(out.samples, carrier.samples);
+    }
+
+    #[test]
+    fn vocode_is_deterministic_across_two_runs() {
+        let modulator = buf(1, 8000, half_silent_half_tone_modulator(1024, 8000));
+        let carrier = buf(1, 8000, synthetic_carrier(1024));
+        let out_a = phase_vocoder_cross_synth(&modulator, &carrier, vocode_config(), 8, 1.0)
+            .expect("vocode run 1");
+        let out_b = phase_vocoder_cross_synth(&modulator, &carrier, vocode_config(), 8, 1.0)
+            .expect("vocode run 2");
+        assert_eq!(out_a.samples, out_b.samples);
+    }
+
+    #[test]
+    fn vocode_silent_modulator_yields_silence() {
+        let modulator = buf(1, 8000, vec![0.0; 1024]);
+        let carrier = buf(1, 8000, synthetic_carrier(1024));
+        let out = phase_vocoder_cross_synth(&modulator, &carrier, vocode_config(), 8, 1.0)
+            .expect("vocode");
+        let max_abs: f32 = out.samples.iter().map(|s| s.abs()).fold(0.0, f32::max);
+        assert!(max_abs < 1e-6, "expected silence, got max abs {max_abs}");
+    }
+
+    #[test]
+    fn vocode_one_band_behaves_like_broadband_gain_envelope() {
+        // A constant (non-varying, no discontinuity) nonzero modulator: with a
+        // single band the envelope is one scalar per frame, and since A never
+        // varies, every interior frame ties for the global peak and normalizes
+        // to exactly 1.0 — i.e. a no-op broadband gain. A discontinuous
+        // loud/silent step is deliberately avoided here: the step's edge itself
+        // injects broadband energy that can (correctly, given a mean-magnitude
+        // envelope) outweigh a sustained plateau, which would make an interior
+        // sample of the plateau an unreliable proxy for "envelope ≈ 1".
+        let sample_rate = 8000;
+        let modulator = buf(1, sample_rate, vec![1.0; 1024]);
+        let carrier_samples = synthetic_carrier(1024);
+        let carrier = buf(1, sample_rate, carrier_samples.clone());
+        let out = phase_vocoder_cross_synth(&modulator, &carrier, vocode_config(), 1, 1.0)
+            .expect("vocode");
+
+        // Interior (clear of the zero-padded tail edge): output ≈ carrier.
+        let mut max_abs_err = 0.0_f32;
+        for (got, want) in out.samples[64..900].iter().zip(&carrier_samples[64..900]) {
+            max_abs_err = max_abs_err.max((got - want).abs());
+        }
+        assert!(
+            max_abs_err < 1e-3,
+            "expected carrier preserved under a constant 1-band envelope, err {max_abs_err}"
+        );
+    }
+
+    #[test]
+    fn vocode_rejects_bands_above_half_fft_size() {
+        let modulator = buf(1, 8000, half_silent_half_tone_modulator(256, 8000));
+        let carrier = buf(1, 8000, synthetic_carrier(256));
+        let config = StftConfig {
+            fft_size: 16,
+            hop_size: 4,
+            window: WindowFunction::Hann,
+        };
+        assert!(phase_vocoder_cross_synth(&modulator, &carrier, config, 9, 1.0).is_err());
+        assert!(phase_vocoder_cross_synth(&modulator, &carrier, config, 8, 1.0).is_ok());
+    }
+
+    #[test]
+    fn vocode_rejects_zero_bands() {
+        let modulator = buf(1, 8000, half_silent_half_tone_modulator(256, 8000));
+        let carrier = buf(1, 8000, synthetic_carrier(256));
+        assert!(phase_vocoder_cross_synth(&modulator, &carrier, vocode_config(), 0, 1.0).is_err());
     }
 }

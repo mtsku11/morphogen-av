@@ -88,8 +88,8 @@ pub(crate) enum Commands {
         modulator_wav: PathBuf,
         carrier_wav: PathBuf,
         output_wav: PathBuf,
-        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
-        mode: CliCrossSynthMode,
+        #[arg(long, value_enum, default_value_t = CliSpectralCrossSynthMode::Gain)]
+        mode: CliSpectralCrossSynthMode,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
         #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
@@ -104,6 +104,10 @@ pub(crate) enum Commands {
         stft_hop: usize,
         #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
         window: CliWindowFunction,
+        /// `--mode vocode` only: number of log-spaced spectral-envelope bands
+        /// (1..=fft_size/2).
+        #[arg(long, default_value_t = 32)]
+        vocode_bands: usize,
     },
     /// Convolve carrier audio (Source B) with Source A's impulse response.
     RenderAudioImpulseConvolution {
@@ -2804,6 +2808,19 @@ pub(crate) enum CliCrossSynthMode {
     #[default]
     Gain,
     Filter,
+}
+
+/// `render-spectral-cross-synth`'s own mode enum: a superset of
+/// [`CliCrossSynthMode`] with `Vocode` (Slice 1 of
+/// `docs/PHASE_VOCODER_MILESTONE.md`, direct-render only — the queue task
+/// (`QueueAddSpectralCrossSynth`, backed by the core `CrossSynthMode`) does not
+/// yet know about it; that's Slice 2).
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliSpectralCrossSynthMode {
+    #[default]
+    Gain,
+    Filter,
+    Vocode,
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]

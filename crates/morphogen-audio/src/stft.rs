@@ -135,7 +135,7 @@ fn dft_magnitudes(frame: &[f32]) -> Vec<f32> {
     magnitudes
 }
 
-fn window_value(index: usize, size: usize, window: WindowFunction) -> f64 {
+pub(crate) fn window_value(index: usize, size: usize, window: WindowFunction) -> f64 {
     if size <= 1 {
         return 1.0;
     }

@@ -15,7 +15,7 @@ use crate::AudioError;
 ///
 /// `re.len()` must equal `im.len()` and be a power of two. `inverse` runs the
 /// inverse transform (conjugate twiddles + `1/n` scaling).
-fn fft_in_place(re: &mut [f64], im: &mut [f64], inverse: bool) {
+pub(crate) fn fft_in_place(re: &mut [f64], im: &mut [f64], inverse: bool) {
     let n = re.len();
     debug_assert_eq!(n, im.len());
     if n <= 1 {

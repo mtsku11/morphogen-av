@@ -11,6 +11,7 @@ pub mod onset;
 pub mod rms;
 pub mod spectral;
 pub mod stft;
+mod stft_complex;
 pub mod video_route;
 pub mod wav;
 
@@ -20,8 +21,9 @@ pub use convolution::{
     IMPULSE_CONVOLUTION_BLEND_ALGORITHM, PER_CHANNEL_IMPULSE_CONVOLUTION_BLEND_ALGORITHM,
 };
 pub use cross_synth::{
-    centroid_filter_cross_synth, rms_gain_cross_synth, FilterType,
-    CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+    centroid_filter_cross_synth, phase_vocoder_cross_synth, rms_gain_cross_synth, FilterType,
+    CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, PHASE_VOCODER_CROSS_SYNTH_ALGORITHM,
+    RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 pub use descriptors::{AudioAnalysisCache, AudioDescriptorFrame};
 pub use error::AudioError;

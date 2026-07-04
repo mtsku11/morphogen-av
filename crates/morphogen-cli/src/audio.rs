@@ -6,9 +6,10 @@ use crate::error::CliError;
 use crate::imaging::{collect_image_frames, load_image_f32, write_parent_dirs};
 use morphogen_audio::{
     centroid_filter_cross_synth, descriptor_filter_route, descriptor_gain_route,
-    descriptor_pan_route, impulse_convolution_blend, load_wav_f32, rms_gain_cross_synth,
-    save_wav_f32, ConvolutionMethod as AudioConvolutionMethod, FilterType, StftConfig,
-    CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, RMS_GAIN_CROSS_SYNTH_ALGORITHM,
+    descriptor_pan_route, impulse_convolution_blend, load_wav_f32, phase_vocoder_cross_synth,
+    rms_gain_cross_synth, save_wav_f32, ConvolutionMethod as AudioConvolutionMethod, FilterType,
+    StftConfig, CENTROID_FILTER_CROSS_SYNTH_ALGORITHM, PHASE_VOCODER_CROSS_SYNTH_ALGORITHM,
+    RMS_GAIN_CROSS_SYNTH_ALGORITHM,
 };
 use morphogen_core::{
     video_audio_route_algorithm_id, ConvolutionMethod, CrossSynthFilterType, CrossSynthMode,
@@ -195,23 +196,28 @@ pub(crate) fn render_spectral_cross_synth(
     modulator_wav: &Path,
     carrier_wav: &Path,
     output_wav: &Path,
-    mode: CliCrossSynthMode,
+    mode: CliSpectralCrossSynthMode,
     amount: f32,
     filter_type: FilterType,
     rms_window: usize,
     rms_hop: usize,
     stft_config: StftConfig,
+    vocode_bands: usize,
 ) -> Result<(), CliError> {
     let modulator = load_wav_f32(modulator_wav)?;
     let carrier = load_wav_f32(carrier_wav)?;
     let (output, algorithm) = match mode {
-        CliCrossSynthMode::Gain => (
+        CliSpectralCrossSynthMode::Gain => (
             rms_gain_cross_synth(&modulator, &carrier, rms_window, rms_hop, amount)?,
             RMS_GAIN_CROSS_SYNTH_ALGORITHM,
         ),
-        CliCrossSynthMode::Filter => (
+        CliSpectralCrossSynthMode::Filter => (
             centroid_filter_cross_synth(&modulator, &carrier, stft_config, filter_type, amount)?,
             CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
+        ),
+        CliSpectralCrossSynthMode::Vocode => (
+            phase_vocoder_cross_synth(&modulator, &carrier, stft_config, vocode_bands, amount)?,
+            PHASE_VOCODER_CROSS_SYNTH_ALGORITHM,
         ),
     };
 

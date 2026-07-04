@@ -89,6 +89,7 @@ fn run() -> Result<(), CliError> {
             fft_size,
             stft_hop,
             window,
+            vocode_bands,
         } => render_spectral_cross_synth(
             &modulator_wav,
             &carrier_wav,
@@ -103,6 +104,7 @@ fn run() -> Result<(), CliError> {
                 hop_size: stft_hop,
                 window: window.into(),
             },
+            vocode_bands,
         ),
         Commands::RenderAudioImpulseConvolution {
             modulator_wav,
