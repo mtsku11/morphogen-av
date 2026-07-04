@@ -1,8 +1,16 @@
 # Rutt-Etra Metal Port — Code-Review Fixup
 
-Four confirmed findings from a medium-effort review of commit `9c622de`.
-All four require code changes; none require design decisions. Implement them in
-order (1→4) — they are independent but easiest to verify that way.
+Four confirmed findings from a medium-effort review of commit `9c622de`, resolved
+as **three implementation fixes** (findings 1 and 3 are one change: the parity
+gate is both wrong and in the wrong place — moving the correct gate into the
+frame function fixes both at once). No design decisions are left open.
+
+Root cause worth knowing before you start: the milestone contract itself
+(`docs/RUTT_ETRA_METAL_MILESTONE.md` lines 133–140) sketched the `!=` gate and
+claimed it matched "granular-mosaic-pool and flow-feedback Metal paths" — it
+doesn't; every other gate in the codebase uses `max_channel_difference` +
+`METAL_CPU_PARITY_EPSILON`. The build faithfully implemented a wrong contract,
+so Fix 1 amends the contract text as well as the code.
 
 Project root: `/Users/marcscully/Projects/morphogen-av`
 
@@ -11,164 +19,42 @@ Project root: `/Users/marcscully/Projects/morphogen-av`
 ## Baseline (before touching anything)
 
 ```sh
-cargo test --workspace   # 534 passing, 0 failing
-swift test               # 115 passing, 0 failing
+cargo test --workspace   # expect 534 passing, 0 failing
+swift build && swift test  # expect 115 passing, 0 failing (unchanged by this work)
 cargo clippy --workspace --all-targets -- -D warnings  # clean
 ```
 
-Capture the exact numbers. Report the delta at the end.
+Capture the exact numbers; report the delta at the end.
 
 ---
 
-## Fix 1 — Wrong parity gate semantics (HIGHEST PRIORITY)
+## Fix 1 — Parity gate: wrong semantics AND wrong location
+*(resolves review findings 1 and 3)*
 
-**File:** `crates/morphogen-cli/src/render.rs`  
-**Lines:** 6235–6243 (the Metal branch inside `render_rutt_etra_sequence`)
+**Files:** `crates/morphogen-cli/src/render.rs` (both changes),
+`docs/RUTT_ETRA_METAL_MILESTONE.md` (contract amendment)
 
-**Problem:** the gate uses `if metal != cpu` — exact `PartialEq` on `Vec<f32>`.
-Every other Metal gate in this file (12+ sites, e.g. lines 456–466, 5991–6003,
-6130–6148) uses `gpu.max_channel_difference(&cpu)` compared against
-`METAL_CPU_PARITY_EPSILON`. A 1-ULP hardware rounding difference causes a
-permanent hard-failure with no diagnostic. NaN pixels cause a spurious failure
-via `NaN != NaN`.
+**Problem, two halves:**
 
-**The established pattern (copy from lines 456–466):**
-```rust
-let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
-    CliError::Message(
-        "Metal and CPU rutt-etra outputs have mismatched dimensions; cannot verify parity"
-            .to_string(),
-    )
-})?;
-if difference > METAL_CPU_PARITY_EPSILON {
-    return Err(CliError::Message(format!(
-        "Metal rutt-etra render diverged from CPU reference by {difference} \
-         (tolerance {METAL_CPU_PARITY_EPSILON})"
-    )));
-}
-```
+- *Semantics* (`render.rs:6237`): the gate is `if metal != cpu` — exact
+  `PartialEq` over `Vec<f32>`. Every other Metal gate in this file (12+ sites:
+  456, 1521, 2199, 2801, 5991, …) computes `gpu.max_channel_difference(&cpu)`
+  and compares against `METAL_CPU_PARITY_EPSILON`. Exact equality means a 1-ULP
+  hardware rounding difference permanently disables the Metal backend with no
+  divergence magnitude in the error, and a NaN pixel fails spuriously
+  (`NaN != NaN`).
+- *Location* (`render.rs:6162`): the gate lives inline in
+  `render_rutt_etra_sequence`, while `render_rutt_etra_frame_metal` is a raw
+  GPU passthrough. Every other `render_*_frame_metal` in this file (e.g.
+  `render_retro_static_frame_metal` at 5985–6004,
+  `render_palette_quantize_frame_metal` at 6130–6148) embeds the gate inside
+  the function so any future call site is automatically gated.
 
-**Required change:** replace the current Metal branch body:
-```rust
-// BEFORE (lines 6235–6242):
-RenderBackend::Metal => {
-    let metal = render_rutt_etra_frame_metal(&source_b, &frame_settings)?;
-    let cpu = render_rutt_etra_frame(&source_b, &frame_settings)?;
-    if metal != cpu {
-        return Err(CliError::Message(format!(
-            "Metal/CPU parity failure on frame {index}"
-        )));
-    }
-    metal
-}
-
-// AFTER:
-RenderBackend::Metal => {
-    let metal = render_rutt_etra_frame_metal(&source_b, &frame_settings)?;
-    let cpu = render_rutt_etra_frame(&source_b, &frame_settings)?;
-    let difference = metal.max_channel_difference(&cpu).ok_or_else(|| {
-        CliError::Message(
-            "Metal and CPU rutt-etra outputs have mismatched dimensions; cannot verify parity"
-                .to_string(),
-        )
-    })?;
-    if difference > METAL_CPU_PARITY_EPSILON {
-        return Err(CliError::Message(format!(
-            "Metal rutt-etra render diverged from CPU reference by {difference} \
-             (tolerance {METAL_CPU_PARITY_EPSILON})"
-        )));
-    }
-    metal
-}
-```
-
-**Verification:** `cargo test -p morphogen-cli` passes; `cargo clippy` clean.
-
----
-
-## Fix 2 — `line_pitch = 0` not validated before Metal dispatch
-
-**File:** `crates/morphogen-metal/src/flow_displace_dispatch.rs`  
-**Lines:** 589–610 (`RuttEtraDispatchPlan::new`)
-
-**Problem:** `new()` guards `width/height > 0` and `displacement_depth.is_finite()`
-but not `settings.line_pitch >= 1`. The shader at `shaders/rutt_etra_scanline.metal`
-line 41 computes `(params.height + params.line_pitch - 1) / params.line_pitch` —
-integer division by zero if `line_pitch == 0`. The CPU renderer's own guard in
-`rutt_etra.rs:validate()` is never reached because `rutt_etra_scanline_metal` in
-`runtime.rs` calls `RuttEtraDispatchPlan::new` first.
-
-**Required change:** add a `line_pitch` guard immediately after the
-`displacement_depth` check (line 598):
-```rust
-// After line 598 (the is_finite check), add:
-if settings.line_pitch == 0 {
-    return Err(MetalDispatchError::InvalidRuttEtraSettings(
-        "line_pitch must be >= 1".to_string(),
-    ));
-}
-if settings.line_thickness == 0 {
-    return Err(MetalDispatchError::InvalidRuttEtraSettings(
-        "line_thickness must be >= 1".to_string(),
-    ));
-}
-```
-
-Note: `MetalDispatchError::InvalidRuttEtraSettings` already exists (added in
-`9c622de`). The `line_thickness` guard is added here too for completeness —
-`int(line_thickness) - 1` in the shader would underflow if `line_thickness == 0`
-(currently not reachable through normal paths but the dispatch plan is `pub`).
-
-**Also add a test** in `flow_displace_dispatch.rs`'s existing `#[cfg(test)] mod tests`
-block (beside `rutt_etra_shader_has_expected_bindings`):
-```rust
-#[test]
-fn rutt_etra_dispatch_plan_rejects_zero_line_pitch() {
-    use morphogen_render::RuttEtraSettings;
-    let s = RuttEtraSettings { line_pitch: 0, ..RuttEtraSettings::default() };
-    assert!(RuttEtraDispatchPlan::new(&s, 16, 16).is_err());
-}
-
-#[test]
-fn rutt_etra_dispatch_plan_rejects_zero_line_thickness() {
-    use morphogen_render::RuttEtraSettings;
-    let s = RuttEtraSettings { line_thickness: 0, ..RuttEtraSettings::default() };
-    assert!(RuttEtraDispatchPlan::new(&s, 16, 16).is_err());
-}
-```
-
-**Verification:** `cargo test -p morphogen-metal` passes; both new tests green.
-
----
-
-## Fix 3 — `render_rutt_etra_frame_metal` is a raw passthrough (no embedded parity gate)
-
-**File:** `crates/morphogen-cli/src/render.rs`  
-**Lines:** 6161–6179
-
-**Problem:** every other `render_*_frame_metal` in this file (e.g.
-`render_retro_static_frame_metal` at lines 5985–6004,
-`render_palette_quantize_frame_metal` at lines 6130–6148) embeds the CPU
-comparison and epsilon gate so any call site is automatically safe.
-`render_rutt_etra_frame_metal` just calls `rutt_etra_scanline_metal` and returns
-raw GPU output — the parity gate lives only in `render_rutt_etra_sequence`.
-Future call sites bypass the invariant silently.
-
-**Required change:** move the parity logic into `render_rutt_etra_frame_metal`
-itself (macOS variant only), and simplify the sequence's Metal branch to a plain
-call:
+**Change A** — replace the body of the macOS `render_rutt_etra_frame_metal`
+(currently lines 6161–6169) with the embedded gate, copying the retro-static
+shape exactly:
 
 ```rust
-// BEFORE — render_rutt_etra_frame_metal (macOS, lines 6162–6169):
-#[cfg(target_os = "macos")]
-pub(crate) fn render_rutt_etra_frame_metal(
-    source_b: &ImageBufferF32,
-    settings: &RuttEtraSettings,
-) -> Result<ImageBufferF32, CliError> {
-    Ok(morphogen_metal::rutt_etra_scanline_metal(source_b, settings)?)
-}
-
-// AFTER:
 #[cfg(target_os = "macos")]
 pub(crate) fn render_rutt_etra_frame_metal(
     source_b: &ImageBufferF32,
@@ -192,196 +78,197 @@ pub(crate) fn render_rutt_etra_frame_metal(
 }
 ```
 
-Once the parity gate is embedded in the function, simplify the Metal branch in
-`render_rutt_etra_sequence` (which was already fixed by Fix 1) to:
+The non-macOS variant (lines 6171–6179) is untouched.
+
+**Change B** — collapse the Metal branch in `render_rutt_etra_sequence`
+(currently lines 6234–6243) to a plain call, matching the retro-static call
+site at line 5961:
+
 ```rust
-RenderBackend::Metal => render_rutt_etra_frame_metal(&source_b, &frame_settings)?,
+let rendered = match request.backend {
+    RenderBackend::Cpu => render_rutt_etra_frame(&source_b, &frame_settings)?,
+    RenderBackend::Metal => render_rutt_etra_frame_metal(&source_b, &frame_settings)?,
+};
 ```
 
-This is now identical in shape to the `render_retro_static_frame_metal` call site
-at line 5961: `render_retro_static_frame_metal(&source, &frame_settings)?`.
+The old error message carried the frame index; the embedded gate loses it. That
+matches every other effect (none report frame index) — accept it.
 
-**Important:** Fix 1 and Fix 3 touch overlapping lines. Apply Fix 1 first as
-written, then apply Fix 3's two changes (the function body, then simplify the
-call site). The end state after both fixes is:
-- `render_rutt_etra_frame_metal` embeds the gate (using `max_channel_difference`)
-- The Metal branch in `render_rutt_etra_sequence` is a single call with no
-  inlined parity logic
+**Change C** — amend `docs/RUTT_ETRA_METAL_MILESTONE.md`: in the dispatch
+sketch (lines ~133–140), replace the `if metal != cpu` snippet and its
+"(same as granular-mosaic-pool and flow-feedback Metal paths)" comment with the
+epsilon-gate pattern above, embedded in the frame function. Leave acceptance
+criterion 2 (`cpu_result == metal_result` in the runtime test) as-is — an
+exact-equality *test* on a fixed 32×16 fixture is fine and currently passes;
+only the production *gate* needed tolerance.
 
-**Verification:** `cargo test -p morphogen-cli` passes; `cargo clippy` clean.
+**Verification:** `cargo test -p morphogen-cli` and
+`cargo test -p morphogen-metal` pass; clippy clean.
 
 ---
 
-## Fix 4 — Missing CLI-level smoke tests for `--backend metal` (AC 3 & 4)
+## Fix 2 — `line_pitch = 0` reaches the GPU as integer division by zero
+*(resolves review finding 2)*
+
+**File:** `crates/morphogen-metal/src/flow_displace_dispatch.rs`
+
+**Problem:** `RuttEtraDispatchPlan::new` (lines 589–599) guards
+`width/height > 0` and `displacement_depth.is_finite()` but not
+`line_pitch >= 1`. The shader (`shaders/rutt_etra_scanline.metal:41`) computes
+`(params.height + params.line_pitch - 1) / params.line_pitch` — uint division
+by zero when `line_pitch == 0`. The CPU renderer's own `validate()` guard
+(`crates/morphogen-render/src/rutt_etra.rs:50`) is never consulted on this
+path: `rutt_etra_scanline_metal` in `runtime.rs` builds the dispatch plan
+straight from the settings struct, so crafted queue JSON with `line_pitch: 0`
+reaches the GPU.
+
+**Note a correction to the previous version of this doc:** there is **no**
+existing `MetalDispatchError::InvalidRuttEtraSettings` variant — `9c622de`
+added only `MissingRuttEtraKernelEntryPoint` and `MissingRuttEtraBindingLayout`.
+You must add the variant, following the existing pixel-sort precedent at
+lines 171–172:
+
+```rust
+#[error("invalid rutt-etra settings: {0}")]
+InvalidRuttEtraSettings(String),
+```
+
+Add it to the `MetalDispatchError` enum beside the two `MissingRuttEtra*`
+variants (lines 181–184).
+
+**Then add the guards** in `RuttEtraDispatchPlan::new`, after the
+`displacement_depth.is_finite()` check at line 597–599:
+
+```rust
+if settings.line_pitch == 0 {
+    return Err(MetalDispatchError::InvalidRuttEtraSettings(
+        "line_pitch must be >= 1".to_string(),
+    ));
+}
+if settings.line_thickness == 0 {
+    return Err(MetalDispatchError::InvalidRuttEtraSettings(
+        "line_thickness must be >= 1".to_string(),
+    ));
+}
+```
+
+(`line_thickness == 0` is not UB in the shader — the span just becomes empty —
+but it silently diverges from the CPU path's `validate()` contract, and the
+plan is `pub`; guard both for the same reason.)
+
+**Add two unit tests** in the existing `#[cfg(test)] mod tests` of
+`flow_displace_dispatch.rs`, beside `rutt_etra_shader_has_expected_bindings`.
+Check how that test module constructs `RuttEtraSettings` (whether a `Default`
+impl exists or fields are spelled out) and match it:
+
+```rust
+#[test]
+fn rutt_etra_dispatch_plan_rejects_zero_line_pitch() {
+    // line_pitch: 0, other fields valid (pitch 4 → 0, depth 6.0, thickness 1, mono false)
+    assert!(RuttEtraDispatchPlan::new(&settings_with_zero_pitch, 16, 16).is_err());
+}
+
+#[test]
+fn rutt_etra_dispatch_plan_rejects_zero_line_thickness() {
+    assert!(RuttEtraDispatchPlan::new(&settings_with_zero_thickness, 16, 16).is_err());
+}
+```
+
+**Verification:** `cargo test -p morphogen-metal` — both new tests green.
+
+---
+
+## Fix 3 — Missing CLI smoke tests for `--backend metal` (contract AC 3 & 4)
+*(resolves review finding 4)*
 
 **File:** `crates/morphogen-cli/tests/smoke.rs`
 
-**Problem:** the milestone contract (`docs/RUTT_ETRA_METAL_MILESTONE.md`
-acceptance criteria 3 and 4) requires two smoke tests in `tests/smoke.rs`:
-- AC 3: `render-rutt-etra-sequence --backend metal` byte-compares with CPU
-- AC 4: `queue-add-rutt-etra-sequence --backend metal` → `queue-run` is
-  byte-identical to the direct Metal render
+**Problem:** the milestone acceptance criteria 3 and 4 require two smoke tests
+in `tests/smoke.rs`; neither exists. The runtime parity test in `runtime.rs`
+is unit-level on a 32×16 fixture — it never exercises the CLI dispatcher, the
+manifest algorithm-id selection, or the queue backend round-trip.
 
-The runtime parity test in `runtime.rs` is unit-level on a 32×16 fixture; it
-does not cover the CLI dispatcher, manifest algorithm-id, or queue serialization.
+**Conventions in this file (use these, don't invent helpers):**
 
-**Pattern to follow:** the existing CPU smoke test at line 67
-(`render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs`) and the
-queue smoke test nearby. Copy their fixture setup; add `--backend metal`.
+- CLI invocation: `Command::cargo_bin("morphogen").expect("morphogen binary").args([...])`
+  (`assert_cmd`); **not** any `run_cli` helper.
+- Fixtures: built inline with `ImageBuffer::from_fn` — copy the gradient loop
+  from `render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs`
+  (lines 73–81).
+- Manifest reads: the existing `read_json` helper (see line 112).
+- Queue run command: **`queue-run-rutt-etra-sequence`** (task-specific), not a
+  generic `queue-run`.
+- Queued output lands at `<output_root>/job-0001/frames/` (see the byte-compare
+  loop at lines 7553–7559 in `queue_rutt_etra_modulated_matches_direct_and_records_routes`
+  — that test is the AC 4 pattern to mirror).
+- The render manifest has **no** `backend` field (see `render.rs:6255–6262`) —
+  do not assert one. The Metal discriminator in the manifest is
+  `"algorithm": "rutt_etra_scanline_metal_v1"`. The **queue task JSON** does
+  have a `backend` field (`#[serde(default)]`, snake_case → `"metal"`), and the
+  review noted it's unasserted — pin it in the AC 4 test.
 
-**Add two tests:**
+**Test 1 — AC 3** (`#[cfg(target_os = "macos")]`):
+`render_rutt_etra_sequence_metal_matches_cpu_byte_identical`
 
-```rust
-#[test]
-#[cfg(target_os = "macos")]
-fn render_rutt_etra_sequence_metal_is_byte_identical_to_cpu() {
-    // AC 3: --backend metal produces the same frames as --backend cpu and
-    // records the Metal algorithm id in the manifest.
-    let fixture_dir = fixtures::gradient_frame_dir();  // use the same helper the CPU test uses
-    let cpu_out = tempdir().unwrap();
-    let metal_out = tempdir().unwrap();
+1. Build a 16×16 two-frame gradient fixture (copy lines 73–81).
+2. Render once with `--backend cpu` and once with `--backend metal` into
+   separate dirs — same knobs (`--frames 2 --line-pitch 4
+   --displacement-depth 12.5 --line-thickness 2`).
+3. `fs::read` and `assert_eq!` each frame pair byte-for-byte. (The kernel is
+   stateless and currently byte-identical on Apple silicon; if this ever fails
+   while the epsilon gate passes, that is real hardware drift — loosen the test
+   to the epsilon comparison then, not now.)
+4. `read_json` the Metal manifest: assert
+   `manifest["algorithm"] == "rutt_etra_scanline_metal_v1"` and that the knob
+   fields match (mirror the assertions at lines 113–118).
 
-    run_cli(&[
-        "render-rutt-etra-sequence",
-        fixture_dir.path().to_str().unwrap(),
-        cpu_out.path().to_str().unwrap(),
-        "--frames", "3",
-        "--line-pitch", "4",
-        "--displacement-depth", "20",
-        "--line-thickness", "1",
-        "--backend", "cpu",
-    ])
-    .assert()
-    .success();
+**Test 2 — AC 4** (`#[cfg(target_os = "macos")]`):
+`queue_rutt_etra_metal_matches_direct_render`
 
-    run_cli(&[
-        "render-rutt-etra-sequence",
-        fixture_dir.path().to_str().unwrap(),
-        metal_out.path().to_str().unwrap(),
-        "--frames", "3",
-        "--line-pitch", "4",
-        "--displacement-depth", "20",
-        "--line-thickness", "1",
-        "--backend", "metal",
-    ])
-    .assert()
-    .success();
+1. Same fixture. Direct render with `--backend metal`.
+2. `queue-add-rutt-etra-sequence <queue.json> <source> <output_root>` with the
+   same knobs plus `--frame-rate 4 --backend metal`.
+3. Parse the persisted queue JSON and assert
+   `queue_json["jobs"][0]["task"]["backend"] == "metal"` (this is the
+   previously-unasserted field).
+4. `queue-run-rutt-etra-sequence <queue.json>`.
+5. Byte-compare `frame_000000.png`, `frame_000001.png`, **and** `manifest.json`
+   between `<output_root>/job-0001/frames/` and the direct dir — mirror the
+   loop at lines 7553–7559.
 
-    // Frames must be byte-identical.
-    for i in 0..3 {
-        let cpu_frame = std::fs::read(cpu_out.path().join(format!("frame_{i:06}.png"))).unwrap();
-        let metal_frame = std::fs::read(metal_out.path().join(format!("frame_{i:06}.png"))).unwrap();
-        assert_eq!(cpu_frame, metal_frame, "frame {i} differs between cpu and metal");
-    }
-
-    // Metal manifest records the Metal algorithm id.
-    let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(metal_out.path().join("manifest.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(manifest["algorithm"], "rutt_etra_scanline_metal_v1");
-}
-
-#[test]
-#[cfg(target_os = "macos")]
-fn queue_rutt_etra_metal_add_run_byte_identical_to_direct() {
-    // AC 4: queued --backend metal is byte-identical to direct --backend metal.
-    // Follow the pattern of the existing CPU queue smoke test nearby.
-    let fixture_dir = fixtures::gradient_frame_dir();
-    let queue_dir = tempdir().unwrap();
-    let direct_out = tempdir().unwrap();
-    let queue_out = tempdir().unwrap();
-
-    // Direct Metal render.
-    run_cli(&[
-        "render-rutt-etra-sequence",
-        fixture_dir.path().to_str().unwrap(),
-        direct_out.path().to_str().unwrap(),
-        "--frames", "3",
-        "--line-pitch", "4",
-        "--displacement-depth", "20",
-        "--line-thickness", "1",
-        "--backend", "metal",
-    ])
-    .assert()
-    .success();
-
-    // Queue add.
-    run_cli(&[
-        "queue-add-rutt-etra-sequence",
-        queue_dir.path().to_str().unwrap(),
-        fixture_dir.path().to_str().unwrap(),
-        queue_out.path().to_str().unwrap(),
-        "--frames", "3",
-        "--frame-rate", "12",
-        "--line-pitch", "4",
-        "--displacement-depth=20",
-        "--line-thickness", "1",
-        "--backend", "metal",
-    ])
-    .assert()
-    .success();
-
-    // Queue run.
-    run_cli(&["queue-run", queue_dir.path().to_str().unwrap()])
-        .assert()
-        .success();
-
-    // Frames byte-identical to the direct Metal render.
-    let bundle = find_only_bundle(queue_out.path());
-    for i in 0..3 {
-        let direct = std::fs::read(direct_out.path().join(format!("frame_{i:06}.png"))).unwrap();
-        let queued = std::fs::read(bundle.join("frames").join(format!("frame_{i:06}.png"))).unwrap();
-        assert_eq!(direct, queued, "frame {i} differs between direct and queued metal");
-    }
-
-    // Manifest records Metal algorithm id and backend field.
-    let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(bundle.join("manifest.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(manifest["algorithm"], "rutt_etra_scanline_metal_v1");
-    assert_eq!(manifest["backend"], "metal");
-}
-```
-
-**Pattern notes:**
-- Look at the existing `render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs`
-  test (line 67) for the exact `run_cli`, `tempdir`, fixture, and `find_only_bundle`
-  helpers used in this file. Use the same helpers — do not introduce new ones.
-- `#[cfg(target_os = "macos")]` gates both tests so they are skipped on
-  non-Mac CI that lacks Metal.
-- The `gradient_frame_dir()` fixture name is illustrative; use whatever the
-  actual helper in the file is called (check the imports and fixture module at
-  the top of `smoke.rs`).
-
-**Verification:** `cargo test -p morphogen-cli -- rutt_etra` runs all rutt-etra
-smoke tests green; on macOS the two new Metal tests execute and pass.
+**Verification:** `cargo test -p morphogen-cli --test smoke -- rutt_etra`
+runs all rutt-etra smoke tests green on macOS.
 
 ---
 
-## Commit instructions
+## Order, commit, report
 
-One commit covering all four fixes:
+Apply Fix 1 → Fix 2 → Fix 3 (the smoke tests exercise the gate Fix 1 rewrites,
+so they must land after it).
+
+One commit, all three fixes:
+
 ```
-fix: Rutt-Etra Metal port — epsilon gate, line_pitch guard, embedded parity, smoke tests
+fix: Rutt-Etra Metal — epsilon parity gate in frame fn, dispatch guards, AC 3/4 smoke tests
 ```
 
 Working agreements:
-- `cargo test --workspace` must finish with the same or higher pass count (≥534)
-- `swift test` must stay ≥115
-- `cargo clippy --workspace --all-targets -- -D warnings`: clean
-- `cargo fmt --check`: clean
-- Never commit `scripts/solitaire-cascade-prototype.py` or `shader-port-ideas/`
-- No push — local commit only; report the commit hash
 
-## Report format
+- `cargo test --workspace` ≥ 534 passing, 0 failing (expect +4: 2 dispatch
+  guards + 2 smoke). `swift test` stays 115 — no Swift changes here.
+- `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo fmt --check`: clean.
+- Never stage `scripts/solitaire-cascade-prototype.py` or `shader-port-ideas/`
+  (intentionally untracked).
+- **No push** — local commit only; report the hash.
+
+Report format:
 
 ```
-Baseline: cargo 534, swift 115
-After:    cargo NNN (+NN), swift NNN (+NN)
-Clippy: clean
-Findings fixed: 1, 2, 3, 4
+Baseline: cargo 534/0, swift 115/0
+After:    cargo NNN/0 (+N), swift 115/0
+Clippy + fmt: clean
+Fixes landed: 1 (gate semantics+location+contract), 2 (dispatch guards), 3 (AC 3/4 smoke)
 Commit: <hash>
-Deviations from this doc (if any): …
+Deviations from this doc: <none, or list with reasons>
 ```
