@@ -7707,3 +7707,101 @@ fn queue_rutt_etra_lfo_modulated_matches_direct_without_media() {
     assert!(modulation["modulator_audio"].is_null());
     assert!(modulation["modulator_frames"].is_null());
 }
+
+#[test]
+fn downscale_frames_two_runs_are_byte_identical() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    fs::create_dir_all(&source_dir).expect("create source frames");
+    // 5x5 is not evenly divisible by scale 2, exercising the edge-clip path.
+    for index in 0..2u32 {
+        let frame = ImageBuffer::from_fn(5, 5, |x, y| {
+            let value = (x as u8)
+                .wrapping_mul(24)
+                .wrapping_add(y as u8 * 7 + index as u8);
+            Rgba([value, value.wrapping_add(index as u8 * 11), 40, u8::MAX])
+        });
+        frame
+            .save(source_dir.join(format!("frame_{index:06}.png")))
+            .expect("write source frame");
+    }
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let run = |output_dir: &Path| {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "downscale-frames",
+                source_arg.as_str(),
+                output_dir.to_string_lossy().as_ref(),
+                "--scale",
+                "2",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("box_downscale_cpu_v1"));
+    };
+
+    let first_dir = temp_dir.path().join("first-run");
+    let second_dir = temp_dir.path().join("second-run");
+    run(&first_dir);
+    run(&second_dir);
+
+    assert_png_frames_identical(&first_dir, &second_dir, 2);
+}
+
+#[test]
+fn downscale_frames_feeds_rutt_etra_sequence_at_reduced_dimensions() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let downscaled_dir = temp_dir.path().join("downscaled-frames");
+    let output_dir = temp_dir.path().join("rutt-etra-frames");
+    fs::create_dir_all(&source_dir).expect("create source frames");
+
+    for index in 0..2u32 {
+        let frame = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, value, value, u8::MAX])
+        });
+        frame
+            .save(source_dir.join(format!("frame_{index:06}.png")))
+            .expect("write source frame");
+    }
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "downscale-frames",
+            source_dir.to_string_lossy().as_ref(),
+            downscaled_dir.to_string_lossy().as_ref(),
+            "--scale",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            downscaled_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+        ])
+        .assert()
+        .success();
+
+    for index in 0..2 {
+        let frame_path = output_dir.join(format!("frame_{index:06}.png"));
+        let decoded = image::ImageReader::open(&frame_path)
+            .expect("open rendered frame")
+            .decode()
+            .expect("decode rendered frame");
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (4, 4),
+            "16x16 source at scale 4 must render at the downscaled 4x4 dimensions"
+        );
+    }
+}

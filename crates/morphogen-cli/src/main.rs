@@ -52,6 +52,12 @@ fn run() -> Result<(), CliError> {
             sample_rate,
             max_duration_seconds,
         } => extract_audio(&input, &output_wav, sample_rate, max_duration_seconds),
+        Commands::DownscaleFrames {
+            input_dir,
+            output_dir,
+            scale,
+            max_frames,
+        } => downscale_frames(&input_dir, &output_dir, scale, max_frames),
         Commands::ExportAudioStem {
             input_wav,
             output_wav,

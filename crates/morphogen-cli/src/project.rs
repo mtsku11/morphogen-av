@@ -13,7 +13,10 @@ use morphogen_media::{
 use morphogen_render::{luminance_gradient_flow_cpu, write_flow_cache};
 
 use crate::error::CliError;
-use crate::imaging::{load_image_f32, synthetic_flow, write_parent_dirs};
+use crate::imaging::{
+    box_downscale, collect_image_frames, load_image_f32, save_png, synthetic_flow,
+    write_parent_dirs, BOX_DOWNSCALE_ALGORITHM,
+};
 pub(crate) fn init_example(output_path: &Path) -> Result<(), CliError> {
     let project = Project::example_two_source_flow_displace();
     project.validate()?;
@@ -121,6 +124,47 @@ pub(crate) fn extract_audio(
         }
         Err(error) => Err(error.into()),
     }
+}
+
+pub(crate) fn downscale_frames(
+    input_dir: &Path,
+    output_dir: &Path,
+    scale: u32,
+    max_frames: Option<u32>,
+) -> Result<(), CliError> {
+    if scale == 0 {
+        return Err(CliError::Message(
+            "scale must be an integer >= 1".to_string(),
+        ));
+    }
+
+    let frames = collect_image_frames(input_dir)?;
+    let frame_count = match max_frames {
+        Some(cap) => (cap as usize).min(frames.len()),
+        None => frames.len(),
+    };
+
+    fs::create_dir_all(output_dir)?;
+
+    for frame_path in frames.iter().take(frame_count) {
+        let image = load_image_f32(frame_path)?;
+        let downscaled = box_downscale(&image, scale)?;
+        let file_name = frame_path.file_name().ok_or_else(|| {
+            CliError::Message(format!(
+                "frame path {} has no file name",
+                frame_path.display()
+            ))
+        })?;
+        save_png(&downscaled, &output_dir.join(file_name))?;
+    }
+
+    println!(
+        "downscaled {frame_count} frame(s) from {} to {} (algorithm {BOX_DOWNSCALE_ALGORITHM}, scale {scale})",
+        input_dir.display(),
+        output_dir.display()
+    );
+
+    Ok(())
 }
 
 pub(crate) fn export_audio_stem(
@@ -420,4 +464,76 @@ pub(crate) fn cache_luminance_flow(
         output_dir.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morphogen_render::ImageBufferF32;
+
+    fn write_solid_frame(path: &Path, width: u32, height: u32, value: f32) {
+        let image = ImageBufferF32::from_fn(width, height, |_, _| [value, value, value, 1.0])
+            .expect("build frame");
+        save_png(&image, path).expect("write frame");
+    }
+
+    #[test]
+    fn downscale_frames_rejects_scale_zero() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let input_dir = temp_dir.path().join("in");
+        let output_dir = temp_dir.path().join("out");
+        fs::create_dir_all(&input_dir).expect("create input dir");
+        write_solid_frame(&input_dir.join("frame_000000.png"), 4, 4, 0.5);
+
+        let error = downscale_frames(&input_dir, &output_dir, 0, None)
+            .expect_err("scale 0 must be rejected");
+        assert_eq!(error.to_string(), "scale must be an integer >= 1");
+    }
+
+    #[test]
+    fn downscale_frames_respects_max_frames_cap_in_sorted_order() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let input_dir = temp_dir.path().join("in");
+        let output_dir = temp_dir.path().join("out");
+        fs::create_dir_all(&input_dir).expect("create input dir");
+        for index in 0..3u32 {
+            write_solid_frame(
+                &input_dir.join(format!("frame_{index:06}.png")),
+                4,
+                4,
+                index as f32 * 0.25,
+            );
+        }
+
+        downscale_frames(&input_dir, &output_dir, 2, Some(2)).expect("downscale frames");
+
+        assert!(output_dir.join("frame_000000.png").exists());
+        assert!(output_dir.join("frame_000001.png").exists());
+        assert!(
+            !output_dir.join("frame_000002.png").exists(),
+            "max-frames must cap processing in sorted order"
+        );
+    }
+
+    #[test]
+    fn downscale_frames_output_names_mirror_input_basenames() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let input_dir = temp_dir.path().join("in");
+        let output_dir = temp_dir.path().join("out");
+        fs::create_dir_all(&input_dir).expect("create input dir");
+        write_solid_frame(&input_dir.join("my_odd_name.png"), 6, 6, 0.75);
+
+        downscale_frames(&input_dir, &output_dir, 3, None).expect("downscale frames");
+
+        let output_path = output_dir.join("my_odd_name.png");
+        assert!(
+            output_path.exists(),
+            "output basename must mirror the input basename"
+        );
+        let decoded = image::ImageReader::open(&output_path)
+            .expect("open output frame")
+            .decode()
+            .expect("decode output frame");
+        assert_eq!((decoded.width(), decoded.height()), (2, 2));
+    }
 }

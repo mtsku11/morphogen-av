@@ -50,6 +50,19 @@ pub(crate) enum Commands {
         #[arg(long)]
         max_duration_seconds: Option<f64>,
     },
+    /// Deterministic CPU box-average downscale of a PNG frame sequence — a
+    /// preview utility (algorithm `box_downscale_cpu_v1`), not an effect.
+    /// `--scale 1` is the identity anchor. No manifest is written.
+    DownscaleFrames {
+        input_dir: PathBuf,
+        output_dir: PathBuf,
+        /// Box size in pixels per output pixel; must be >= 1 (1 = identity).
+        #[arg(long)]
+        scale: u32,
+        /// Cap how many frames (sorted order) are processed.
+        #[arg(long)]
+        max_frames: Option<u32>,
+    },
     ExportAudioStem {
         input_wav: PathBuf,
         output_wav: PathBuf,
