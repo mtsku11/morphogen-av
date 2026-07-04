@@ -224,6 +224,67 @@ enum RustBridgePlaceholder {
     return try runCommand(arguments: arguments, currentDirectoryURL: repoRoot)
   }
 
+  /// Token sequence for the deterministic preview downscale
+  /// (`box_downscale_cpu_v1`); pinned in the bridge tests. Callers skip the
+  /// command entirely at scale 1 (the identity anchor — the preview reads
+  /// the original directories instead), so a scale below 2 here is a
+  /// programmer error, not a passthrough.
+  static func downscaleFramesArguments(
+    inputDirectoryURL: URL,
+    outputDirectoryURL: URL,
+    scale: Int,
+    maxFrames: Int?
+  ) throws -> [String] {
+    guard scale >= 2 else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "downscale scale must be >= 2 (scale 1 skips the downscale)"
+      )
+    }
+    if let maxFrames, maxFrames <= 0 {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "max frame count must be greater than zero"
+      )
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "--release",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "downscale-frames",
+      inputDirectoryURL.path,
+      outputDirectoryURL.path,
+      "--scale",
+      String(scale)
+    ]
+    if let maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    return arguments
+  }
+
+  static func runDownscaleFrames(
+    inputDirectoryURL: URL,
+    outputDirectoryURL: URL,
+    scale: Int,
+    maxFrames: Int?
+  ) throws -> RustCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    return try runCommand(
+      arguments: try downscaleFramesArguments(
+        inputDirectoryURL: inputDirectoryURL,
+        outputDirectoryURL: outputDirectoryURL,
+        scale: scale,
+        maxFrames: maxFrames
+      ),
+      currentDirectoryURL: repoRoot
+    )
+  }
+
   static func runShowcasePreview(
     request: ShowcaseRenderCommandRequest
   ) throws -> ShowcaseRenderCommandResult {

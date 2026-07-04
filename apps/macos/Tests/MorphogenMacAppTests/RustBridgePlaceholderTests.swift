@@ -1456,6 +1456,90 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--backend"), "rutt-etra is CPU-only (no backend flag)")
   }
 
+  func testDownscaleFramesArgumentsPinTokenSequence() throws {
+    // Preview-loop milestone Slice 3: the exact downscale token sequence.
+    let arguments = try RustBridgePlaceholder.downscaleFramesArguments(
+      inputDirectoryURL: URL(fileURLWithPath: "/tmp/proxy-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/preview/downscaled-carrier", isDirectory: true),
+      scale: 4,
+      maxFrames: 48
+    )
+    XCTAssertEqual(
+      arguments,
+      [
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+        "downscale-frames",
+        "/tmp/proxy-b-frames",
+        "/tmp/preview/downscaled-carrier",
+        "--scale", "4",
+        "--max-frames", "48"
+      ]
+    )
+
+    // Without a frame cap the flag is omitted entirely.
+    let uncapped = try RustBridgePlaceholder.downscaleFramesArguments(
+      inputDirectoryURL: URL(fileURLWithPath: "/tmp/proxy-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/preview/downscaled-carrier", isDirectory: true),
+      scale: 2,
+      maxFrames: nil
+    )
+    XCTAssertFalse(uncapped.contains("--max-frames"))
+  }
+
+  func testDownscaleFramesArgumentsRejectIdentityAndInvalidValues() {
+    // Scale 1 never reaches the bridge — the preview flow skips the
+    // downscale entirely (identity anchor) — so the builder treats it as a
+    // programmer error rather than emitting a wasted render.
+    for scale in [1, 0, -2] {
+      XCTAssertThrowsError(
+        try RustBridgePlaceholder.downscaleFramesArguments(
+          inputDirectoryURL: URL(fileURLWithPath: "/tmp/in"),
+          outputDirectoryURL: URL(fileURLWithPath: "/tmp/out"),
+          scale: scale,
+          maxFrames: nil
+        )
+      )
+    }
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.downscaleFramesArguments(
+        inputDirectoryURL: URL(fileURLWithPath: "/tmp/in"),
+        outputDirectoryURL: URL(fileURLWithPath: "/tmp/out"),
+        scale: 4,
+        maxFrames: 0
+      )
+    )
+  }
+
+  func testRuttEtraArgumentAssemblyUnchangedApartFromInputPath() throws {
+    // The same-engine invariant made visible (preview-loop milestone): a
+    // preview reroutes ONLY the input directory; every other token of the
+    // effect render's argument assembly is byte-identical.
+    let fullRes = makeRuttEtraRequest()  // carrier /tmp/source-b-frames
+    let preview = RuttEtraSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/rutt-etra-queue.json"),
+      carrierDirectoryURL: URL(
+        fileURLWithPath: "/tmp/preview/downscaled-carrier", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/rutt-etra", isDirectory: true),
+      frames: 96,
+      frameRate: 24.0,
+      linePitch: 8,
+      displacementDepth: 48.0,
+      lineThickness: 1,
+      mono: false,
+      projectURL: nil
+    )
+
+    let fullArguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(
+      request: fullRes)
+    let previewArguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(
+      request: preview)
+
+    XCTAssertEqual(fullArguments.count, previewArguments.count)
+    let differingTokens = zip(fullArguments, previewArguments).filter { $0 != $1 }
+    XCTAssertEqual(differingTokens.map { $0.0 }, ["/tmp/source-b-frames"])
+    XCTAssertEqual(differingTokens.map { $0.1 }, ["/tmp/preview/downscaled-carrier"])
+  }
+
   func testQueuedRuttEtraSequenceArgumentsCarryModulationRoutes() throws {
     var request = makeRuttEtraRequest()
     request.modulationRoutes = [

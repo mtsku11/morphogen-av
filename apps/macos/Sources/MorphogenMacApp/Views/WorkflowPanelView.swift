@@ -774,12 +774,26 @@ struct WorkflowPanelView: View {
               .controlSize(.small)
           }
           Spacer()
+          // The two preview knobs: downscale factor and seconds of motion.
+          // Both feed the session at beginEffectPreview time, nothing else.
+          Picker("Scale", selection: $state.previewScale) {
+            Text("Full").tag(1)
+            Text("1/2").tag(2)
+            Text("1/4").tag(4)
+            Text("1/8").tag(8)
+          }
+          .pickerStyle(.segmented)
+          .fixedSize()
+          .disabled(state.isRenderingPreview)
+          Stepper("\(state.previewSeconds)s", value: $state.previewSeconds, in: 1...12)
+            .fixedSize()
+            .disabled(state.isRenderingPreview)
         }
 
         if state.previewFrames.isEmpty {
           Text(state.isRenderingPreview
             ? state.previewSummary
-            : "Quick Preview renders the first \(state.previewFrameCount) frames of the selected effect on your loaded sources — a fast look before committing to the full clip.")
+            : "Quick Preview renders ~\(state.previewSeconds)s of the selected effect on your loaded sources at reduced resolution — a fast look before committing to the full clip.")
             .font(.caption)
             .foregroundStyle(.secondary)
         } else {
@@ -842,7 +856,9 @@ struct WorkflowPanelView: View {
     // the count reliably transitions 0 → N even at a constant frame cap).
     .onChange(of: state.previewFrames.count) { _, newCount in
       if newCount > 0 {
-        previewPlayer.start(frameCount: newCount, fps: state.mediaProxyFrameRate)
+        // The fps recorded when THIS preview began — a proxy-fps change made
+        // after extraction must not shift an already-rendered preview's rate.
+        previewPlayer.start(frameCount: newCount, fps: state.previewPlaybackFps)
       } else {
         previewPlayer.stop()
       }

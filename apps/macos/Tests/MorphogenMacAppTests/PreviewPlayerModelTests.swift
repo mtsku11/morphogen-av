@@ -90,4 +90,30 @@ final class PreviewPlayerModelTests: XCTestCase {
     XCTAssertEqual(model.currentIndex, 0)
     XCTAssertEqual(model.elapsed(now: t0.addingTimeInterval(5)), 0)
   }
+
+  // MARK: preview session pure helpers (preview-loop Slice 3)
+
+  func testPreviewFrameCapIsSecondsTimesFpsRounded() {
+    XCTAssertEqual(previewFrameCap(seconds: 4, fps: 12), 48)
+    // Fractional fps rounds to nearest.
+    XCTAssertEqual(previewFrameCap(seconds: 3, fps: 12.5), 38)
+    // Degenerate inputs clamp to a single frame, never zero or negative.
+    XCTAssertEqual(previewFrameCap(seconds: 0, fps: 12), 1)
+    XCTAssertEqual(previewFrameCap(seconds: 4, fps: 0), 1)
+    XCTAssertEqual(previewFrameCap(seconds: 4, fps: .nan), 1)
+  }
+
+  func testPreviewInputOverrideIsNilAtScaleOneElseFixedDestination() {
+    let root = URL(fileURLWithPath: "/tmp/preview-root", isDirectory: true)
+    // Scale 1 = the identity anchor: no override, render from the originals.
+    XCTAssertNil(previewInputOverrideURL(previewRoot: root, scale: 1, label: "carrier"))
+    XCTAssertEqual(
+      previewInputOverrideURL(previewRoot: root, scale: 4, label: "carrier")?.lastPathComponent,
+      "downscaled-carrier"
+    )
+    XCTAssertEqual(
+      previewInputOverrideURL(previewRoot: root, scale: 2, label: "modulator")?.lastPathComponent,
+      "downscaled-modulator"
+    )
+  }
 }

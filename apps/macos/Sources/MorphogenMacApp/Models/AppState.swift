@@ -515,9 +515,16 @@ final class AppState: ObservableObject {
   @Published var mediaProxyMaxFrames = 120
   @Published var statusMessage = "Analysis cache idle. Offline queue empty."
 
-  /// Number of frames rendered for a quick effect preview (a short look at the
-  /// selected effect before committing to the full clip).
-  let previewFrameCount = 8
+  /// Preview downscale factor (box average, `downscale-frames`): 1 = full
+  /// resolution (identity — no downscale run), 4 = the quarter-res default.
+  @Published var previewScale = 4
+  /// Seconds of motion a quick preview covers; the frame cap is
+  /// `previewSeconds × proxy fps`, computed when the preview begins.
+  @Published var previewSeconds = 4
+  /// The proxy fps recorded when the current/last preview began — playback
+  /// must use this, not the live proxy setting, so changing the extraction
+  /// fps after the fact cannot shift an already-rendered preview's rate.
+  @Published private(set) var previewPlaybackFps = 12.0
   @Published var previewFrames: [NSImage] = []
   @Published var previewSummary = "No preview rendered"
   @Published var isRenderingPreview = false
@@ -576,11 +583,16 @@ final class AppState: ObservableObject {
   }
 
   /// Begin a quick preview of the selected effect: the matching render method is
-  /// invoked next and, because `previewSession` is set, it writes a small frame
-  /// cap into a temp directory instead of the user's chosen output. Returns
-  /// `false` (and reports why) when the required sources are not loaded yet.
+  /// invoked next and, because `previewSession` is set, it writes a capped frame
+  /// count into a temp directory instead of the user's chosen output — reading
+  /// its inputs from downscaled copies of the source proxies (the quarter-res
+  /// fast path; same engine, only the input paths change). Returns `false`
+  /// (and reports why) when the required sources are not loaded yet or the
+  /// downscale fails.
   func beginEffectPreview(requiresModulator: Bool) -> Bool {
-    guard frameSequenceCarrierURL != nil else {
+    // Read the RAW stored proxy dirs here (not the effective helpers): a
+    // still-active previous session must never chain-downscale its own copies.
+    guard let carrierURL = frameSequenceCarrierURL else {
       statusMessage = "Select Source B frames before previewing."
       return false
     }
@@ -589,13 +601,58 @@ final class AppState: ObservableObject {
       return false
     }
 
-    previewSession = EffectPreviewSession(
-      outputRootURL: RustBridgePlaceholder.defaultEffectPreviewOutputRootURL(),
-      maxFrames: previewFrameCount
+    let outputRoot = RustBridgePlaceholder.defaultEffectPreviewOutputRootURL()
+    let fps = mediaProxyFrameRate
+    let cap = previewFrameCap(seconds: previewSeconds, fps: fps)
+    let scale = previewScale
+
+    // Scale 1 is the identity anchor: both overrides are nil, so the preview
+    // renders from the ORIGINAL proxy directories and no downscale runs.
+    let carrierOverride = previewInputOverrideURL(
+      previewRoot: outputRoot, scale: scale, label: "carrier"
     )
+    let modulatorOverride = requiresModulator
+      ? previewInputOverrideURL(previewRoot: outputRoot, scale: scale, label: "modulator")
+      : nil
+
+    do {
+      if let carrierOverride {
+        // Clear stale frames so a longer previous preview cannot leak extra
+        // frames into this one, then downscale synchronously (the render
+        // that consumes the copies is invoked immediately after).
+        try? FileManager.default.removeItem(at: carrierOverride)
+        _ = try RustBridgePlaceholder.runDownscaleFrames(
+          inputDirectoryURL: carrierURL,
+          outputDirectoryURL: carrierOverride,
+          scale: scale,
+          maxFrames: cap
+        )
+      }
+      if let modulatorOverride, let modulatorURL = frameSequenceModulatorURL {
+        try? FileManager.default.removeItem(at: modulatorOverride)
+        _ = try RustBridgePlaceholder.runDownscaleFrames(
+          inputDirectoryURL: modulatorURL,
+          outputDirectoryURL: modulatorOverride,
+          scale: scale,
+          maxFrames: cap
+        )
+      }
+    } catch {
+      statusMessage = "Preview downscale failed: \(error.localizedDescription)"
+      return false
+    }
+
+    previewSession = EffectPreviewSession(
+      outputRootURL: outputRoot,
+      maxFrames: cap,
+      fps: fps,
+      carrierInputOverrideURL: carrierOverride,
+      modulatorInputOverrideURL: modulatorOverride
+    )
+    previewPlaybackFps = fps
     previewFrames = []
     isRenderingPreview = true
-    previewSummary = "Rendering \(previewFrameCount)-frame preview…"
+    previewSummary = "Rendering \(cap)-frame preview…"
     return true
   }
 
@@ -624,12 +681,25 @@ final class AppState: ObservableObject {
     previewSession?.maxFrames ?? chosen
   }
 
+  /// Carrier input directory a render should read: the preview session's
+  /// downscaled copy while a preview is active (the same-engine invariant —
+  /// only the input paths change), else the stored proxy directory.
+  /// Mirrors `effectiveOutputRoot`. Nil override (scale 1) = original dir.
+  private func effectiveCarrierURL() -> URL? {
+    previewSession?.carrierInputOverrideURL ?? frameSequenceCarrierURL
+  }
+
+  /// Modulator counterpart of `effectiveCarrierURL()`.
+  private func effectiveModulatorURL() -> URL? {
+    previewSession?.modulatorInputOverrideURL ?? frameSequenceModulatorURL
+  }
+
   private func finishPreviewIfNeeded(frameDirectory: URL) {
-    guard previewSession != nil else {
+    guard let session = previewSession else {
       return
     }
     previewSession = nil
-    let limit = previewFrameCount
+    let limit = session.maxFrames
     DispatchQueue.global(qos: .userInitiated).async {
       let images = Self.loadPreviewFrames(from: frameDirectory, limit: limit)
       DispatchQueue.main.async {
@@ -1168,11 +1238,11 @@ final class AppState: ObservableObject {
   }
 
   func runTwoSourceFrameSequenceRender() {
-    guard let modulatorURL = frameSequenceModulatorURL else {
+    guard let modulatorURL = effectiveModulatorURL() else {
       statusMessage = "Select Source A frame directory before rendering."
       return
     }
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering."
       return
     }
@@ -1220,11 +1290,11 @@ final class AppState: ObservableObject {
   }
 
   func runFlowFeedbackSequenceRender() {
-    guard let modulatorURL = frameSequenceModulatorURL else {
+    guard let modulatorURL = effectiveModulatorURL() else {
       statusMessage = "Select Source A frame directory before rendering flow feedback."
       return
     }
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering flow feedback."
       return
     }
@@ -1323,11 +1393,11 @@ final class AppState: ObservableObject {
   }
 
   func runShowcasePreviewRender() {
-    guard let modulatorURL = frameSequenceModulatorURL else {
+    guard let modulatorURL = effectiveModulatorURL() else {
       statusMessage = "Select Source A frame directory before rendering a showcase preview."
       return
     }
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering a showcase preview."
       return
     }
@@ -1372,7 +1442,7 @@ final class AppState: ObservableObject {
   }
 
   func runProceduralFluidAdvectSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering procedural fluid advection."
       return
     }
@@ -1447,11 +1517,11 @@ final class AppState: ObservableObject {
   }
 
   func runTwoSourceFluidAdvectSequenceRender() {
-    guard let modulatorURL = frameSequenceModulatorURL else {
+    guard let modulatorURL = effectiveModulatorURL() else {
       statusMessage = "Select Source A frame directory before rendering two-source fluid advection."
       return
     }
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering two-source fluid advection."
       return
     }
@@ -1506,7 +1576,7 @@ final class AppState: ObservableObject {
   }
 
   func runOpticalFlowAdvectSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering self-flow advection."
       return
     }
@@ -1560,7 +1630,7 @@ final class AppState: ObservableObject {
   }
 
   func runFieldParticlesSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering field particles."
       return
     }
@@ -1596,7 +1666,7 @@ final class AppState: ObservableObject {
   }
 
   func runTrailCascadeSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering the trail cascade."
       return
     }
@@ -1636,7 +1706,7 @@ final class AppState: ObservableObject {
   }
 
   func runCascadeCollageSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering the cascade collage."
       return
     }
@@ -2190,7 +2260,7 @@ final class AppState: ObservableObject {
   }
 
   func runRetroStaticSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering retro static."
       return
     }
@@ -2264,7 +2334,7 @@ final class AppState: ObservableObject {
   }
 
   func runChannelShiftSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering channel shift."
       return
     }
@@ -2326,7 +2396,7 @@ final class AppState: ObservableObject {
       shiftGY: channelShiftGY,
       shiftBX: channelShiftBX,
       shiftBY: channelShiftBY,
-      sourceADirectoryURL: channelShiftFlowGain != 0 ? frameSequenceModulatorURL : nil,
+      sourceADirectoryURL: channelShiftFlowGain != 0 ? effectiveModulatorURL() : nil,
       flowGain: channelShiftFlowGain,
       flowRadius: channelShiftFlowRadius,
       backend: channelShiftBackend,
@@ -2363,7 +2433,7 @@ final class AppState: ObservableObject {
   }
 
   func runPaletteQuantizeSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering palette quantize."
       return
     }
@@ -2442,7 +2512,7 @@ final class AppState: ObservableObject {
   }
 
   func runRuttEtraSequenceRender() {
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering rutt-etra."
       return
     }
@@ -2560,11 +2630,11 @@ final class AppState: ObservableObject {
   }
 
   func runGranularMosaicPoolSequenceRender() {
-    guard let modulatorURL = frameSequenceModulatorURL else {
+    guard let modulatorURL = effectiveModulatorURL() else {
       statusMessage = "Select Source A frame directory before rendering the grain pool."
       return
     }
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering the grain pool."
       return
     }
@@ -2643,11 +2713,11 @@ final class AppState: ObservableObject {
   }
 
   func runVideoVocoderSequenceRender() {
-    guard let modulatorURL = frameSequenceModulatorURL else {
+    guard let modulatorURL = effectiveModulatorURL() else {
       statusMessage = "Select Source A frame directory before rendering the video vocoder."
       return
     }
-    guard let carrierURL = frameSequenceCarrierURL else {
+    guard let carrierURL = effectiveCarrierURL() else {
       statusMessage = "Select Source B frame directory before rendering the video vocoder."
       return
     }
@@ -2851,11 +2921,11 @@ final class AppState: ObservableObject {
   }
 
   func runDatamoshRender() {
-    guard let modulatorURL = datamoshModulatorURL ?? frameSequenceModulatorURL else {
+    guard let modulatorURL = datamoshModulatorURL ?? effectiveModulatorURL() else {
       statusMessage = "Select a Source A frame directory before rendering the datamosh."
       return
     }
-    guard let carrierURL = datamoshCarrierURL ?? frameSequenceCarrierURL else {
+    guard let carrierURL = datamoshCarrierURL ?? effectiveCarrierURL() else {
       statusMessage = "Select a Source B frame directory before rendering the datamosh."
       return
     }
@@ -3546,6 +3616,30 @@ final class AppState: ObservableObject {
 private struct EffectPreviewSession {
   let outputRootURL: URL
   let maxFrames: Int
+  /// Proxy fps recorded when the preview began; playback runs at this rate.
+  let fps: Double
+  /// Downscaled input copies the render reads instead of the source proxies;
+  /// nil = no override (scale 1 identity), render from the original dirs.
+  let carrierInputOverrideURL: URL?
+  let modulatorInputOverrideURL: URL?
+}
+
+/// Preview frame cap: `seconds × fps` rounded to nearest (ties away from
+/// zero), floored at one frame; invalid fps or non-positive seconds also
+/// yield the 1-frame floor. Free function for testability (the
+/// `enumModulationMapping` precedent).
+func previewFrameCap(seconds: Int, fps: Double) -> Int {
+  guard seconds > 0, fps.isFinite, fps > 0 else { return 1 }
+  return max(1, Int((Double(seconds) * fps).rounded()))
+}
+
+/// Where a preview session reroutes one input directory: nil at scale 1 —
+/// the identity anchor skips the downscale entirely and the preview renders
+/// from the ORIGINAL directory — else the fixed downscale destination under
+/// the preview temp root. Free function for testability.
+func previewInputOverrideURL(previewRoot: URL, scale: Int, label: String) -> URL? {
+  guard scale > 1 else { return nil }
+  return previewRoot.appendingPathComponent("downscaled-\(label)", isDirectory: true)
 }
 
 enum RenderQualityOption: String, CaseIterable, Identifiable {
