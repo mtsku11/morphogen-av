@@ -4,15 +4,15 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-07-03_
+_Last updated: 2026-07-04_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **532 passing across 7 crates, 0 failing.**
-  One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
-  one pre-existing `items_after_test_module` clippy warning in
-  `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
-- `swift test`: **113 passing, 0 failing.**
+- `cargo test --workspace`: **534 passing across 7 crates, 0 failing.**
+  One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
+  Pre-existing `items_after_test_module` clippy warning moved inside the test
+  module by the Metal-port slice (no longer visible).
+- `swift test`: **115 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -20,6 +20,19 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Rutt-Etra Metal port — COMPLETE** (`9c622de`; Sonnet subagent build,
+  orchestrator-verified): `rutt_etra_scanline.metal` gather kernel — each
+  output pixel scans scanlines in reverse order (bottom→top), stops at first
+  covering span (last-writer-wins by construction, no atomics); byte-identical
+  to `rutt_etra_scanline_cpu_v1` on 30 real-footage frames (cello 640×360),
+  confirmed by `diff -r`. Per-frame parity gate in the render path; runtime
+  parity test on a 32×16 synthetic gradient (exact pixel equality). CLI
+  `--backend metal`, queue `backend` field (serde-default CPU, pre-Metal
+  queue JSON compatible), SwiftUI backend picker on the Rutt-Etra panel.
+  Algorithm id `rutt_etra_scanline_metal_v1`. cargo 532 → **534**, swift
+  113 → **115**. **Next action:** Rutt-Etra two-source A→B, or the LFO
+  6-panel sweep, or SwiftUI chain-builder panel (user-directed).
 
 - **Preview loop — Slice 3 of 3, MILESTONE COMPLETE** (`7448c74`; agent died
   on session limit with work on disk — orchestrator fixed one compile error

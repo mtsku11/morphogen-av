@@ -114,15 +114,13 @@ take this to the next level" notes live in
   `direction`/`axis`, palette-quantize `mode`. Deferred: stateful modulation
   targets.
 
-- Rutt-Etra scanline MVP, all 3 slices per `docs/RUTT_ETRA_MILESTONE.md`:
-  deterministic CPU reference `rutt_etra_scanline_cpu_v1` +
-  `render-rutt-etra-sequence` CLI with a knobs+algorithm manifest; modulation
-  targets `displacement_depth`/`line_pitch`/`line_thickness` (clamp/integer
-  rules, audio-RMS static-carrier readout proven); queue add/run
-  byte-identical to direct (frames and manifest) + SwiftUI panel on the
-  palette-quantize pattern (CPU-only, no backend picker). Deferred per
-  contract: Metal port (scatter-rasterization parity, field-particles splat
-  precedent), two-source A→B, depth descriptor, HQ anti-aliased lines.
+- Rutt-Etra scanline MVP + Metal port (COMPLETE) — `docs/RUTT_ETRA_MILESTONE.md`
+  + `docs/RUTT_ETRA_METAL_MILESTONE.md`: CPU reference `rutt_etra_scanline_cpu_v1`
+  + modulation targets + queue + SwiftUI panel; Metal port `rutt_etra_scanline_metal_v1`
+  via gather inversion (scatter→gather, last-writer-wins without atomics),
+  per-frame parity gate, `--backend cpu|metal` CLI + queue + SwiftUI picker.
+  Byte-identical to CPU on real footage (30-frame cello 640×360 diff clean).
+  Still deferred: two-source A→B, depth descriptor, HQ anti-aliased lines.
 
 - **LFO modulation sources (COMPLETE)** — `docs/LFO_MODULATION_MILESTONE.md`
   slices 1–3: `lfo(shape,rate,phase)` as a media-free deterministic
