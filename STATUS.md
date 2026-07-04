@@ -8,7 +8,7 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **505 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **508 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
@@ -20,6 +20,19 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Effect chain — Slice 3 of 4** (`1a3284a`, built inline): per-stage
+  nested `"modulation"` blocks (nested because deny_unknown_fields can't
+  compose with serde flatten; skip-when-absent = pre-slice shapes
+  byte-identical). Whole-spec validation covers route grammar, apply-fn
+  target probes, media requirements, and envelope-fps rules (stateless
+  default 12; feedback's base is its pinned frame rate — setting fps there
+  errors). Modulation rides settings_value → markers/record/refusals gate
+  on it free; feedback checkpoint carries routes free. Smoke-pinned incl.
+  modulated-stage-vs-direct byte-identity. Visual: LFO-raked rutt-etra →
+  posterize chain, within-off 0.000 / within-on 20.691, half-cycle frames
+  Read-confirmed. cargo 505 → **508**. **Next action:** Slice 4 — queue
+  task + SwiftUI chain panel (spec types promote to core).
 
 - **Effect chain — Slice 2 of 4** (`328b069`; agent died on session limit
   mid-verification with work on disk — orchestrator verified and landed):
