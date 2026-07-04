@@ -8,11 +8,11 @@ _Last updated: 2026-07-04_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **534 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **546 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
   Pre-existing `items_after_test_module` clippy warning moved inside the test
   module by the Metal-port slice (no longer visible).
-- `swift test`: **115 passing, 0 failing.**
+- `swift test`: **117 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -20,6 +20,30 @@ _Last updated: 2026-07-04_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Rutt-Etra two-source A→B — MILESTONE COMPLETE** (slices 1–3; built inline,
+  orchestrator-verified per slice). The first *cross-synthesis* Rutt-Etra:
+  Source A's luma drives the scanline displacement while Source B supplies the
+  drawn colour — B's material reorganised by A's structure. Single-source is
+  now the literal `A==B` special case of a shared gather core, giving a
+  byte-identity anchor test so the two paths cannot drift. **Slice 1** (`eda63f1`):
+  `render_rutt_etra_two_source_frame` + `rutt_etra_two_source_cpu_v1`; optional
+  `--source-a-dir` on `render-rutt-etra-sequence` (channel-shift precedent — A
+  present ⇒ two-source, algorithm id switches, manifest gains `source_a`); dim
+  mismatch → `IncompatibleInputs`. **Slice 2** (`611b859`):
+  `rutt_etra_two_source.metal` gather kernel with a second read texture (luma
+  from A tex 0, colour from B tex 1); `rutt_etra_two_source_metal_v1`,
+  epsilon-gated per frame, byte-identical to CPU on hardware (runtime + CLI
+  smoke). **Slice 3** (`ec53aa1`): queue task `source_a_directory` (serde
+  default/skip-none — pre-slice JSON byte-identical), `queue-add --source-a-dir`,
+  add→run byte-identical smoke; SwiftUI persisted "Two-Source" toggle wiring the
+  shared modulator dir as Source A + bridge token tests. **Visual proof on real
+  footage**: cello A × harp B → the cellist's silhouette emerges in the scanline
+  terrain carried in harp's colour, cross-delta single-vs-two ~38/255, frames
+  Read-confirmed. cargo 534 → **546**, swift 115 → **117**. Contract:
+  `docs/RUTT_ETRA_TWO_SOURCE_MILESTONE.md`. **Next action:** SwiftUI chain-builder
+  panel (needs UX input), edge-density/depth descriptors, or the LFO 6-panel
+  sweep (user-directed).
 
 - **Rutt-Etra Metal port — COMPLETE** (`9c622de`; Sonnet subagent build,
   orchestrator-verified): `rutt_etra_scanline.metal` gather kernel — each

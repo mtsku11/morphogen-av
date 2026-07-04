@@ -1,6 +1,9 @@
 # Rutt-Etra Two-Source A→B Milestone
 
-**Status: Not started.** Contract written 2026-07-04. Follows the completed
+**Status: COMPLETE (slices 1–3, 2026-07-04).** CPU reference + CLI (`eda63f1`),
+parity-gated Metal gather kernel (`611b859`), queue task + SwiftUI panel
+(`ec53aa1`). Look confirmed on real footage (cello A × harp B → cellist
+silhouette carrying harp's colour, cross-delta ~38/255). Follows the
 single-source CPU MVP (`docs/RUTT_ETRA_MILESTONE.md`) and Metal port
 (`docs/RUTT_ETRA_METAL_MILESTONE.md`). This is the first *cross-synthesis*
 Rutt-Etra — dead-center on the project's A-modulates-B thesis.
