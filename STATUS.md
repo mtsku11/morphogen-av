@@ -12,7 +12,7 @@ _Last updated: 2026-07-03_
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
-- `swift test`: **100 passing, 0 failing.**
+- `swift test`: **108 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -20,6 +20,18 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Preview loop — Slice 2 of 3** (`bdd1a5f`): the Workflow preview band
+  now PLAYS — `PreviewPlayerModel` + pure `previewFrameIndex(elapsed,
+  frameCount, fps)` (index recomputed from elapsed play time, never
+  incremented → no timer-jitter drift; wraparound in Double space; fps ≤ 0 /
+  empty frames hold frame 0 — all pinned in 8 new tests with injectable
+  clocks); large current-frame view + play/pause + i/N indicator,
+  auto-loops on load, filmstrip kept as a 64px strip with a playing-frame
+  outline. Playback fps = `mediaProxyFrameRate` (the actual extract fps).
+  swift 100 → **108**. Slice-3 note: sample the fps onto the session at
+  beginEffectPreview time (a post-extraction fps change currently shifts
+  playback rate). **Next action:** Slice 3 — the quarter-res fast path.
 
 - **Preview loop — Slice 1 of 3** (`4908712`, contract
   `docs/PREVIEW_LOOP_MILESTONE.md` at `129fcf8`; Sonnet subagent build,
