@@ -8,7 +8,7 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **522 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **532 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
@@ -20,6 +20,19 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Preview loop — Slice 1 of 3** (`4908712`, contract
+  `docs/PREVIEW_LOOP_MILESTONE.md` at `129fcf8`; Sonnet subagent build,
+  orchestrator-verified; user green-lit the realtime-ish preview milestone):
+  `downscale-frames <in> <out> --scale n [--max-frames m]` — exact box
+  average (`div_ceil` dims, edge blocks mean over the in-bounds subset),
+  `box_downscale_cpu_v1`, stdout-only summary (deliberately no manifest).
+  Pinned: scale-1 pixel identity, block means on a synthetic image, cap +
+  basename mirroring, two-run byte-identity, downscaled dir feeds
+  rutt-etra at reduced dims. Live-verified 320×180 → 80×45 at scale 4.
+  Also fixed two clippy warnings my earlier pattern-grep missed
+  (`33926a0`). cargo 522 → **532**. **Next action:** Slice 2 — preview
+  playback (player model + view), then Slice 3 — quarter-res fast path.
 
 - **Phase vocoder — Slice 2 of 2, MILESTONE COMPLETE** (`c3264a5`, built
   inline after the agent's session-limit death left nothing on disk): core
