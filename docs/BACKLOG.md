@@ -160,10 +160,14 @@ take this to the next level" notes live in
 
 ## Next
 
-**SwiftUI chain-builder panel design** (the open half of
-`docs/EFFECT_CHAIN_MILESTONE.md` Slice 4) — needs user input on the UX
-(simple ordered stage list vs. something richer). Remaining menu:
-edge-density/depth descriptors, audiovisual granular grains; user-gated:
+**The full deferred-work catalog, tiered and build-ready, is
+[DEFERRED_WORK_HANDOFF.md](DEFERRED_WORK_HANDOFF.md)** — entry points, slice
+plans, traps, and the user decisions already made. Summary: **SwiftUI
+chain-builder panel design** (the open half of `docs/EFFECT_CHAIN_MILESTONE.md`
+Slice 4) — needs user input on the UX (simple ordered stage list vs. something
+richer). Remaining menu: mod-target registries for the unregistered effects,
+audiovisual granular grains, coagulated slices 2–4, cascade A→B seam, fluid
+mosaic preset queue job, edge-density descriptor, drawn envelopes; user-gated:
 Rutt-Etra deferred slices and the LFO 6-panel sweep (wait on looks being
 user-confirmed on real footage), live preview scrubbing (streaming-engine
 milestone).
