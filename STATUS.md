@@ -8,7 +8,7 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **510 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **521 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
@@ -20,6 +20,24 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Phase vocoder — Slice 1 of 2** (`7ba21ad`, contract
+  `docs/PHASE_VOCODER_MILESTONE.md` at `08cdd2b`; Sonnet subagent build,
+  orchestrator-verified): complex forward/inverse STFT in
+  `morphogen-audio/src/stft_complex.rs` (windowed weighted-OLA, Σw²
+  normalizer floor, hop ≤ fft/2; round-trip ≤ 1e-5 pinned incl. length
+  517) + `--mode vocode` on render-spectral-cross-synth
+  (`phase_vocoder_cross_synth_cpu_v1`): A's log-band envelope (global-peak
+  relative norm) imposed on B's spectrum, B's phase kept verbatim,
+  conjugate-symmetry mirrored explicitly, amount-0 short-circuits before
+  any transform. Three declared deviations accepted (separate CLI mode
+  enum keeps the queue's core enum for Slice 2; A's zero-padded tail
+  frames excluded from the envelope peak search — the truncation edge
+  otherwise outweighs real plateaus; boundary formula pinned in code).
+  Descriptor proof reproduced independently: 150 Hz tone A on a noise B —
+  off centroid 2029.9 Hz (== carrier), on **153.2 Hz**. cargo 510 →
+  **521**. **Next action:** Slice 2 — queue task mode + SwiftUI panel
+  exposure.
 
 - **Effect chain — Slice 4 queue half, MILESTONE EFFECTIVELY CLOSED**
   (`cb6bc24`, built inline): queue-add-chain validates the whole spec at
