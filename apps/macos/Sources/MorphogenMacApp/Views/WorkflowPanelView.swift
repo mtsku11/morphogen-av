@@ -3,6 +3,8 @@ import SwiftUI
 struct WorkflowPanelView: View {
   @ObservedObject var state: AppState
 
+  @StateObject private var previewPlayer = PreviewPlayerModel()
+
   @State private var sourceMode: WorkflowSourceMode = .twoSource
   @State private var analysisSignal: WorkflowAnalysisSignal = .opticalFlow
   @State private var modulationTarget: WorkflowModulationTarget = .displacement
@@ -781,15 +783,45 @@ struct WorkflowPanelView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         } else {
+          let frames = state.previewFrames
+          let shownIndex = min(previewPlayer.currentIndex, frames.count - 1)
+
+          Image(nsImage: frames[shownIndex])
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: 260)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+          HStack(spacing: 10) {
+            Button {
+              previewPlayer.togglePlayPause()
+            } label: {
+              Image(systemName: previewPlayer.isPlaying ? "pause.fill" : "play.fill")
+            }
+            .help(previewPlayer.isPlaying ? "Pause preview playback" : "Play preview loop")
+            Text("frame \(shownIndex + 1)/\(frames.count)")
+              .font(.caption)
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+            Spacer()
+          }
+
           ScrollView(.horizontal, showsIndicators: true) {
             HStack(spacing: 8) {
-              ForEach(Array(state.previewFrames.enumerated()), id: \.offset) { index, image in
+              ForEach(Array(frames.enumerated()), id: \.offset) { index, image in
                 VStack(spacing: 4) {
                   Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
-                    .frame(height: 140)
+                    .frame(height: 64)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                      RoundedRectangle(cornerRadius: 6)
+                        .stroke(
+                          index == shownIndex ? Color.accentColor : .clear,
+                          lineWidth: 2
+                        )
+                    )
                   Text("frame \(index)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -803,6 +835,16 @@ struct WorkflowPanelView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+      }
+    }
+    // Play-the-instrument: loop the preview automatically as soon as its
+    // frames finish loading (beginEffectPreview empties the array first, so
+    // the count reliably transitions 0 → N even at a constant frame cap).
+    .onChange(of: state.previewFrames.count) { _, newCount in
+      if newCount > 0 {
+        previewPlayer.start(frameCount: newCount, fps: state.mediaProxyFrameRate)
+      } else {
+        previewPlayer.stop()
       }
     }
   }
