@@ -8,7 +8,7 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **500 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **505 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
@@ -20,6 +20,21 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Effect chain — Slice 2 of 4** (`328b069`; agent died on session limit
+  mid-verification with work on disk — orchestrator verified and landed):
+  stateful `flow_feedback` stage (self-feedback, shares the direct CLI's
+  job id + contract so the checkpoint lives inside the stage dir and
+  resumes/refuses exactly as standalone; datamosh deferred) + re-run
+  semantics: `chain-record.json` (spec + fnv1a64 input fingerprint) written
+  before stage 1; `stage-complete.json` markers → completed stages skip;
+  interrupted stateful stage resumes; changed spec / changed input /
+  marker mismatch / unrecorded dirty dir all refuse. Smoke-pinned incl.
+  chain-vs-manual-two-step byte-identity and resumed-vs-uninterrupted
+  byte-identity. Live-verified: clean skip + changed-spec refusal; moving
+  fixture feedback→posterize chain vs posterize-only cross-delta ~22/255,
+  smeared trails Read-confirmed. cargo 500 → **505**, swift 98 untouched
+  (re-run 98/0). **Next action:** Slice 3 — per-stage modulation routes.
 
 - **Effect chain — Slice 1 of 4** (`b53acc5`, contract
   `docs/EFFECT_CHAIN_MILESTONE.md` at `5db26bb`; Sonnet subagent build,
