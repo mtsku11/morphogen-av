@@ -908,6 +908,118 @@ fn render_chain_modulated_feedback_stage_checkpoint_carries_routes() {
 }
 
 #[test]
+fn queue_chain_add_run_matches_direct_and_validates_at_add() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 0, 0]);
+    let queue_path = temp_dir.path().join("queue.json");
+
+    // Add-time validation is the whole-spec gate: an unknown modulation
+    // target rejects and persists no queue file.
+    let bad_spec_path = temp_dir.path().join("bad-chain.json");
+    write_chain_spec(
+        &bad_spec_path,
+        r#"{"version": 1, "stages": [
+            {"effect": "rutt_etra", "modulation": {"routes": ["mono=luma:1"]}}
+        ]}"#,
+    );
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-chain",
+            queue_path.to_string_lossy().as_ref(),
+            bad_spec_path.to_string_lossy().as_ref(),
+            source_dir.to_string_lossy().as_ref(),
+            temp_dir
+                .path()
+                .join("queued-out")
+                .to_string_lossy()
+                .as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unknown rutt-etra modulation target",
+        ));
+    assert!(
+        !queue_path.exists(),
+        "rejected chain spec must persist no queue file"
+    );
+
+    // A modulated chain (LFO — no media) queues, and the persisted task
+    // records the resolved spec document.
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(
+        &spec_path,
+        r#"{"version": 1, "stages": [
+            {"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0,
+             "modulation": {"routes": ["displacement_depth=lfo(sine,0.5):64"]}},
+            {"effect": "palette_quantize", "mode": "posterize", "levels": 4}
+        ]}"#,
+    );
+    let queued_root = temp_dir.path().join("queued-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-chain",
+            queue_path.to_string_lossy().as_ref(),
+            spec_path.to_string_lossy().as_ref(),
+            source_dir.to_string_lossy().as_ref(),
+            queued_root.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+    let queue_json = read_json(&queue_path);
+    let task = &queue_json["jobs"][0]["task"];
+    assert_eq!(task["type"], "render_chain");
+    assert_eq!(task["spec"]["version"], 1);
+    assert_eq!(task["spec"]["stages"][0]["effect"], "rutt_etra");
+    // Resolved defaults are filled in the persisted document.
+    assert_eq!(task["spec"]["stages"][0]["line_thickness"], 1);
+    assert_eq!(
+        task["spec"]["stages"][0]["modulation"]["routes"][0],
+        "displacement_depth=lfo(sine,0.5):64"
+    );
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-chain", queue_path.to_string_lossy().as_ref()])
+        .assert()
+        .success();
+
+    // The queued run is byte-identical to the direct render-chain run —
+    // every chain artifact, including record, markers, and manifests.
+    let direct_dir = temp_dir.path().join("direct-out");
+    run_chain(&spec_path, &source_dir, &direct_dir).success();
+    for relative in [
+        "chain-record.json",
+        "chain-manifest.json",
+        "stage_01_rutt_etra/frame_000000.png",
+        "stage_01_rutt_etra/frame_000002.png",
+        "stage_01_rutt_etra/manifest.json",
+        "stage_01_rutt_etra/stage-complete.json",
+        "stage_02_palette_quantize/frame_000000.png",
+        "stage_02_palette_quantize/frame_000002.png",
+        "stage_02_palette_quantize/stage-complete.json",
+    ] {
+        assert_eq!(
+            fs::read(queued_root.join("job-0001").join(relative))
+                .unwrap_or_else(|_| panic!("queued {relative}")),
+            fs::read(direct_dir.join(relative)).unwrap_or_else(|_| panic!("direct {relative}")),
+            "queued chain must be byte-identical to the direct run ({relative})"
+        );
+    }
+
+    // The completed job records the final stage's frames.
+    let finished = read_json(&queue_path);
+    assert_eq!(finished["jobs"][0]["status"], "complete");
+    assert_eq!(
+        finished["jobs"][0]["output"]["frame_paths"][0],
+        "stage_02_palette_quantize/frame_000000.png"
+    );
+}
+
+#[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_path = temp_dir.path().join("modulator.png");

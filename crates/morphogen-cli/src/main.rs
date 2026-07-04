@@ -914,6 +914,20 @@ fn run() -> Result<(), CliError> {
             input_dir,
             output_dir,
         } => render_chain(&spec_path, &input_dir, &output_dir),
+        Commands::QueueAddChain {
+            queue_path,
+            spec_path,
+            input_dir,
+            output_root_dir,
+            project_path,
+        } => queue::queue_add_chain(
+            &queue_path,
+            &spec_path,
+            &input_dir,
+            &output_root_dir,
+            project_path.as_deref(),
+        ),
+        Commands::QueueRunChain { queue_path } => queue::queue_run_chain(&queue_path),
         Commands::RenderFluidMosaicSequence {
             source_a_dir,
             source_b_dir,

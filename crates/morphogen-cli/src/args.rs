@@ -2170,6 +2170,23 @@ pub(crate) enum Commands {
     QueueRunRuttEtraSequence {
         queue_path: PathBuf,
     },
+    /// Queue an effect chain from a spec JSON (see docs/EFFECT_CHAIN_MILESTONE.md).
+    /// The whole spec — knobs and per-stage modulation blocks — is validated at
+    /// add time; rejection persists nothing. The job records the resolved spec,
+    /// so queue-run shares the direct render-chain code path byte for byte.
+    QueueAddChain {
+        queue_path: PathBuf,
+        /// Chain spec JSON (`{"version": 1, "stages": [...]}`).
+        spec_path: PathBuf,
+        /// Input frames (PNG sequence) read by stage 1.
+        input_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long = "project-path")]
+        project_path: Option<PathBuf>,
+    },
+    QueueRunChain {
+        queue_path: PathBuf,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,

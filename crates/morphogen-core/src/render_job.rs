@@ -539,6 +539,17 @@ pub enum RenderJobTask {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
     },
+    /// An effect chain run from a resolved chain-spec document
+    /// (`docs/EFFECT_CHAIN_MILESTONE.md`). The spec is persisted verbatim as
+    /// JSON rather than mirrored into typed core fields: the spec is already
+    /// the canonical, versioned, add-time-validated serialized form (owned by
+    /// the CLI), and a typed mirror here would be a third copy of every
+    /// effect's knob vocabulary to keep in sync.
+    RenderChain {
+        input_frame_directory: String,
+        output_directory: String,
+        spec: serde_json::Value,
+    },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
     /// No blending — hard cuts at every tile boundary.
@@ -1486,6 +1497,22 @@ impl RenderJobStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_chain_task_round_trips_with_embedded_spec_document() {
+        let task = RenderJobTask::RenderChain {
+            input_frame_directory: "/frames".to_string(),
+            output_directory: "/out/job-0001".to_string(),
+            spec: serde_json::json!({
+                "version": 1,
+                "stages": [{"effect": "rutt_etra", "line_pitch": 4}],
+            }),
+        };
+        let json = serde_json::to_string(&task).expect("serialize chain task");
+        assert!(json.starts_with(r#"{"type":"render_chain""#));
+        let decoded: RenderJobTask = serde_json::from_str(&json).expect("decode chain task");
+        assert_eq!(decoded, task);
+    }
 
     #[test]
     fn modulation_source_unit_variants_serialize_as_bare_strings() {

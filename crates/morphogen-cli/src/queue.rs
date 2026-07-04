@@ -2994,6 +2994,128 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
     )
 }
 
+/// Queue an effect chain (`docs/EFFECT_CHAIN_MILESTONE.md` Slice 4). The
+/// whole spec is parsed + validated at add time (grammar, knobs, modulation
+/// routes/media — the same gate as the direct command); the job persists the
+/// *resolved* spec document verbatim, so queue-run re-parses the identical
+/// spec and shares the direct code path (add→run byte-identity).
+pub(crate) fn queue_add_chain(
+    queue_path: &Path,
+    spec_path: &Path,
+    input_dir: &Path,
+    output_root_dir: &Path,
+    project_path: Option<&Path>,
+) -> Result<(), CliError> {
+    let spec_text = fs::read_to_string(spec_path)?;
+    let spec = crate::chain::parse_and_validate_chain_spec(&spec_text)?;
+    let spec_value = crate::chain::resolved_chain_spec_value(&spec)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|p| p.to_string_lossy().to_string()),
+        // The chain's envelope/frame time base (stateless stages default to
+        // 12 fps; the feedback stage's frame rate is pinned to the same 12).
+        settings: png_sequence_settings(12.0),
+        task: RenderJobTask::RenderChain {
+            input_frame_directory: input_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            spec: spec_value,
+        },
+        provenance: Some(single_source_provenance(
+            "source-frames",
+            SourceRole::Carrier,
+            input_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued chain render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_chain(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::RenderChain { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message("render queue has no queued or running chain jobs".to_string())
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::RenderChain {
+        input_frame_directory,
+        output_directory,
+        spec,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a chain render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let spec = crate::chain::chain_spec_from_value(&spec)?;
+        let summary =
+            crate::chain::run_chain_spec(&spec, Path::new(&input_frame_directory), &output_dir)?;
+        let frame_count = u32::try_from(summary.frame_count).map_err(|_| {
+            CliError::Message("chain output contains more than u32::MAX frames".to_string())
+        })?;
+        let frames_prefix = summary
+            .final_frames_dir
+            .strip_prefix(&output_dir)
+            .unwrap_or(&summary.final_frames_dir)
+            .to_string_lossy()
+            .to_string();
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths: (0..frame_count)
+                .map(|index| format!("{frames_prefix}/frame_{index:06}.png"))
+                .collect(),
+            audio_stem_paths: Vec::new(),
+            timing: RenderTimingMetadata {
+                frame_rate: 12.0,
+                frame_count,
+                start_seconds: 0.0,
+                duration_seconds: frame_count as f64 / 12.0,
+                sample_rate: 48_000,
+                audio_sample_count: 0,
+            },
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "chain",
+    )
+}
+
 pub(crate) struct QueueAddBlockCollageSequenceRequest<'a> {
     pub(crate) queue_path: &'a Path,
     pub(crate) source_a_dir: &'a Path,
@@ -5392,6 +5514,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceChannelShift { .. } => "frame_sequence_channel_shift",
             RenderJobTask::FrameSequencePaletteQuantize { .. } => "frame_sequence_palette_quantize",
             RenderJobTask::FrameSequenceRuttEtra { .. } => "frame_sequence_rutt_etra",
+            RenderJobTask::RenderChain { .. } => "render_chain",
             RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
             RenderJobTask::FrameSequencePixelSort { .. } => "frame_sequence_pixel_sort",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",

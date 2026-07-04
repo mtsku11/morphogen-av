@@ -808,14 +808,56 @@ pub(crate) fn render_chain(
     output_dir: &Path,
 ) -> Result<(), CliError> {
     let spec_text = fs::read_to_string(spec_path)?;
-    let spec = parse_chain_spec(&spec_text)?;
-    validate_chain_spec(&spec)?;
+    let spec = parse_and_validate_chain_spec(&spec_text)?;
+    let summary = run_chain_spec(&spec, input_dir, output_dir)?;
+    println!(
+        "rendered chain with {} stage(s) ({} frame(s)) from {} to {}; final stage output: {}",
+        spec.stages.len(),
+        summary.frame_count,
+        input_dir.display(),
+        output_dir.display(),
+        summary.final_frames_dir.display(),
+    );
+    Ok(())
+}
 
+/// Parse + whole-spec validation in one step (the add-time gate shared by
+/// the direct command and `queue-add-chain`).
+pub(crate) fn parse_and_validate_chain_spec(spec_text: &str) -> Result<ChainSpec, CliError> {
+    let spec = parse_chain_spec(spec_text)?;
+    validate_chain_spec(&spec)?;
+    Ok(spec)
+}
+
+/// The resolved spec (defaults filled) as a JSON document — what a queue job
+/// persists. Serialized through the string form so f32 knobs keep their
+/// shortest representation (the `settings_value` precedent).
+pub(crate) fn resolved_chain_spec_value(spec: &ChainSpec) -> Result<serde_json::Value, CliError> {
+    Ok(serde_json::from_str(&serde_json::to_string(spec)?)?)
+}
+
+/// Rebuild + re-validate a spec from a persisted queue-job document.
+pub(crate) fn chain_spec_from_value(value: &serde_json::Value) -> Result<ChainSpec, CliError> {
+    parse_and_validate_chain_spec(&serde_json::to_string(value)?)
+}
+
+pub(crate) struct ChainRunSummary {
+    pub(crate) frame_count: usize,
+    pub(crate) final_frames_dir: PathBuf,
+}
+
+/// The chain mechanic proper, on an already-validated spec: stage loop,
+/// re-run reconciliation, markers, and the chain manifest.
+pub(crate) fn run_chain_spec(
+    spec: &ChainSpec,
+    input_dir: &Path,
+    output_dir: &Path,
+) -> Result<ChainRunSummary, CliError> {
     // Nothing is written to output_dir until the whole spec has validated
     // and the input has been fingerprinted; the first write is the chain
     // record itself (so even an interrupted stage 1 leaves a re-run gate).
     let input_fingerprint = chain_input_fingerprint(input_dir)?;
-    let resuming = reconcile_chain_record(output_dir, &spec, &input_fingerprint)?;
+    let resuming = reconcile_chain_record(output_dir, spec, &input_fingerprint)?;
 
     let mut previous_dir = input_dir.to_path_buf();
     let mut manifest_stages = Vec::with_capacity(spec.stages.len());
@@ -878,14 +920,8 @@ pub(crate) fn render_chain(
         serde_json::to_string_pretty(&chain_manifest)?,
     )?;
 
-    println!(
-        "rendered chain with {} stage(s) ({} frame(s)) from {} to {}; final stage output: {}",
-        spec.stages.len(),
-        final_frame_count,
-        input_dir.display(),
-        output_dir.display(),
-        final_frames_dir.display(),
-    );
-
-    Ok(())
+    Ok(ChainRunSummary {
+        frame_count: final_frame_count,
+        final_frames_dir,
+    })
 }
