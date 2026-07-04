@@ -902,6 +902,10 @@ pub enum RenderJobTask {
         /// [`CrossSynthWindow::Hann`].
         #[serde(default)]
         window: CrossSynthWindow,
+        /// Log-band count for A's spectral envelope (`vocode` mode). Defaults
+        /// to 32 so jobs serialized before the vocode tier deserialize cleanly.
+        #[serde(default = "default_cross_synth_vocode_bands")]
+        vocode_bands: u32,
     },
     /// Audio impulse convolution: Source B (carrier) convolved with Source A's
     /// L1-normalized mono impulse response, blended wet/dry by `amount`
@@ -1014,6 +1018,13 @@ pub enum CrossSynthMode {
     /// A's spectral-centroid envelope sweeps a one-pole filter on B
     /// (`centroid_filter_cross_synth_cpu_v1`).
     Filter,
+    /// A's log-band spectral envelope reweights B's complex spectrum through
+    /// a real inverse STFT (`phase_vocoder_cross_synth_cpu_v1`).
+    Vocode,
+}
+
+fn default_cross_synth_vocode_bands() -> u32 {
+    32
 }
 
 /// Mode for Video-to-Audio Descriptor Routing. The serde default is
@@ -1845,6 +1856,7 @@ mod tests {
             fft_size: 1024,
             stft_hop: 256,
             window: CrossSynthWindow::Hamming,
+            vocode_bands: 16,
         };
 
         let json = serde_json::to_string(&task).expect("serialize cross-synth task");
@@ -1873,6 +1885,7 @@ mod tests {
             mode,
             filter_type,
             window,
+            vocode_bands,
             ..
         } = task
         else {
@@ -1881,6 +1894,9 @@ mod tests {
         assert_eq!(mode, CrossSynthMode::Gain);
         assert_eq!(filter_type, CrossSynthFilterType::Lowpass);
         assert_eq!(window, CrossSynthWindow::Hann);
+        // Pre-vocode queue JSON (no vocode_bands key) deserializes to the
+        // contract default.
+        assert_eq!(vocode_bands, 32);
     }
 
     #[test]

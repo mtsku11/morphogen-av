@@ -2314,8 +2314,8 @@ pub(crate) enum Commands {
         modulator_wav: PathBuf,
         carrier_wav: PathBuf,
         output_root_dir: PathBuf,
-        #[arg(long, value_enum, default_value_t = CliCrossSynthMode::Gain)]
-        mode: CliCrossSynthMode,
+        #[arg(long, value_enum, default_value_t = CliSpectralCrossSynthMode::Gain)]
+        mode: CliSpectralCrossSynthMode,
         #[arg(long, default_value_t = 1.0)]
         amount: f32,
         #[arg(long, value_enum, default_value_t = CliFilterType::Lowpass)]
@@ -2330,6 +2330,9 @@ pub(crate) enum Commands {
         stft_hop: usize,
         #[arg(long, value_enum, default_value_t = CliWindowFunction::Hann)]
         window: CliWindowFunction,
+        /// Log-band count for A's spectral envelope (`vocode` mode).
+        #[arg(long, default_value_t = 32)]
+        vocode_bands: usize,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -2803,18 +2806,10 @@ impl From<CliScanlineFilter> for ScanlineFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, ValueEnum)]
-pub(crate) enum CliCrossSynthMode {
-    #[default]
-    Gain,
-    Filter,
-}
-
-/// `render-spectral-cross-synth`'s own mode enum: a superset of
-/// [`CliCrossSynthMode`] with `Vocode` (Slice 1 of
-/// `docs/PHASE_VOCODER_MILESTONE.md`, direct-render only — the queue task
-/// (`QueueAddSpectralCrossSynth`, backed by the core `CrossSynthMode`) does not
-/// yet know about it; that's Slice 2).
+/// Spectral cross-synth mode for both the direct render and the queue task
+/// (the Slice-1 interim split enum converged here once the core
+/// `CrossSynthMode` gained `Vocode` — `docs/PHASE_VOCODER_MILESTONE.md`
+/// Slice 2).
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub(crate) enum CliSpectralCrossSynthMode {
     #[default]
@@ -3052,11 +3047,12 @@ impl From<CliFilterType> for FilterType {
     }
 }
 
-impl From<CliCrossSynthMode> for CrossSynthMode {
-    fn from(value: CliCrossSynthMode) -> Self {
+impl From<CliSpectralCrossSynthMode> for CrossSynthMode {
+    fn from(value: CliSpectralCrossSynthMode) -> Self {
         match value {
-            CliCrossSynthMode::Gain => Self::Gain,
-            CliCrossSynthMode::Filter => Self::Filter,
+            CliSpectralCrossSynthMode::Gain => Self::Gain,
+            CliSpectralCrossSynthMode::Filter => Self::Filter,
+            CliSpectralCrossSynthMode::Vocode => Self::Vocode,
         }
     }
 }

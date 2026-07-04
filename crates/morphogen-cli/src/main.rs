@@ -1919,6 +1919,7 @@ fn run() -> Result<(), CliError> {
             fft_size,
             stft_hop,
             window,
+            vocode_bands,
             project_path,
         } => queue_add_spectral_cross_synth(QueueAddSpectralCrossSynthRequest {
             queue_path: &queue_path,
@@ -1933,6 +1934,7 @@ fn run() -> Result<(), CliError> {
             fft_size,
             stft_hop,
             window: window.into(),
+            vocode_bands,
             project_path: project_path.as_deref(),
         }),
         Commands::QueueAddAudioImpulseConvolution {

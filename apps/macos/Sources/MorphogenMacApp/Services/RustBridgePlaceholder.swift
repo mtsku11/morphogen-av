@@ -1288,6 +1288,19 @@ enum RustBridgePlaceholder {
     guard request.stftHop > 0 else {
       throw RustBridgeError.invalidFrameSequenceRequest("STFT hop must be greater than zero")
     }
+    if request.mode == .vocode {
+      // Mirror the CLI's add-time vocode checks so rejection happens app-side.
+      guard request.stftHop <= request.fftSize / 2 else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "STFT hop must be at most half the FFT size for vocode mode"
+        )
+      }
+      guard request.vocodeBands >= 1 && request.vocodeBands <= request.fftSize / 2 else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "vocode bands must be between 1 and half the FFT size"
+        )
+      }
+    }
 
     var arguments = [
       "cargo",
@@ -1319,6 +1332,13 @@ enum RustBridgePlaceholder {
       "--window",
       request.window.cliValue
     ]
+
+    // Vocode-only knob — omitted otherwise so gain/filter arg arrays stay
+    // byte-identical to their pre-vocode form.
+    if request.mode == .vocode {
+      arguments.append("--vocode-bands")
+      arguments.append(String(request.vocodeBands))
+    }
 
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
@@ -3290,6 +3310,9 @@ struct SpectralCrossSynthRenderQueueCommandRequest {
   let fftSize: Int
   let stftHop: Int
   let window: CrossSynthWindowOption
+  /// Log-band count for A's spectral envelope (vocode mode only; defaulted so
+  /// pre-vocode call sites are unchanged).
+  var vocodeBands: Int = 32
   let projectURL: URL?
 }
 

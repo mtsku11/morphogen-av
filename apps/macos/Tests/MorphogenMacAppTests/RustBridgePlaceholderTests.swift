@@ -1835,6 +1835,75 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(Self.value(after: "--fft-size", in: arguments), "1024")
     XCTAssertEqual(Self.value(after: "--stft-hop", in: arguments), "256")
     XCTAssertEqual(Self.value(after: "--window", in: arguments), "hamming")
+    // Non-vocode modes never emit the vocode-only knob — the pre-vocode arg
+    // array shape, byte for byte.
+    XCTAssertFalse(arguments.contains("--vocode-bands"))
+  }
+
+  func testQueuedSpectralCrossSynthVocodeArgumentsCarryBands() throws {
+    let request = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cross-synth-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .vocode,
+      amount: 1.0,
+      filterType: .lowpass,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      fftSize: 1024,
+      stftHop: 256,
+      window: .hann,
+      vocodeBands: 24,
+      projectURL: nil
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: request)
+
+    XCTAssertEqual(Self.value(after: "--mode", in: arguments), "vocode")
+    XCTAssertEqual(Self.value(after: "--vocode-bands", in: arguments), "24")
+  }
+
+  func testQueuedSpectralCrossSynthVocodeArgumentsRejectInvalidBandsAndHop() {
+    let base = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cross-synth-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .vocode,
+      amount: 1.0,
+      filterType: .lowpass,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      fftSize: 1024,
+      stftHop: 256,
+      window: .hann,
+      vocodeBands: 513, // > fftSize / 2
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: base)
+    )
+
+    let badHop = SpectralCrossSynthRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cross-synth-queue.json"),
+      modulatorWAVURL: URL(fileURLWithPath: "/tmp/source-a.wav"),
+      carrierWAVURL: URL(fileURLWithPath: "/tmp/source-b.wav"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root", isDirectory: true),
+      mode: .vocode,
+      amount: 1.0,
+      filterType: .lowpass,
+      rmsWindow: 2048,
+      rmsHop: 512,
+      fftSize: 1024,
+      stftHop: 1024, // > fftSize / 2 — fine for gain/filter, invalid for vocode
+      window: .hann,
+      vocodeBands: 32,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddSpectralCrossSynthArguments(request: badHop)
+    )
   }
 
   func testQueuedSpectralCrossSynthArgumentsRejectInvalidValues() {

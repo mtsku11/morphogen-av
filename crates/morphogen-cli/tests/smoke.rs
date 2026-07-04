@@ -4429,6 +4429,127 @@ fn queue_spectral_cross_synth_matches_direct_and_records_knobs() {
     assert_eq!(knobs["amount"], 1.0);
     assert_eq!(knobs["rms_window"], 4);
     assert_eq!(knobs["rms_hop"], 4);
+    // Non-vocode manifests keep their pre-vocode shape — no vocode_bands key.
+    assert!(knobs.get("vocode_bands").is_none());
+}
+
+#[test]
+fn queue_spectral_cross_synth_vocode_matches_direct_and_validates_at_add() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_wav = temp_dir.path().join("modulator.wav");
+    let carrier_wav = temp_dir.path().join("carrier.wav");
+    // A slow tone imposed on a busier carrier — enough samples for fft 64.
+    let modulator: Vec<f32> = (0..256)
+        .map(|i| (std::f32::consts::TAU * i as f32 / 32.0).sin())
+        .collect();
+    let carrier: Vec<f32> = (0..256)
+        .map(|i| (0.7 * i as f32).sin() * 0.5 + (1.9 * i as f32).sin() * 0.3)
+        .collect();
+    write_test_wav(&modulator_wav, &modulator);
+    write_test_wav(&carrier_wav, &carrier);
+
+    let modulator_arg = modulator_wav.to_string_lossy().to_string();
+    let carrier_arg = carrier_wav.to_string_lossy().to_string();
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+
+    // Add-time validation mirrors the render path: bands > fft/2 rejects and
+    // persists no queue file.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-spectral-cross-synth",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+            "--mode",
+            "vocode",
+            "--fft-size",
+            "64",
+            "--stft-hop",
+            "16",
+            "--vocode-bands",
+            "33",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("vocode-bands must be between"));
+    assert!(
+        !queue_path.exists(),
+        "rejected vocode job must persist no queue file"
+    );
+
+    let common = [
+        "--mode",
+        "vocode",
+        "--amount",
+        "1",
+        "--fft-size",
+        "64",
+        "--stft-hop",
+        "16",
+        "--vocode-bands",
+        "8",
+    ];
+    let direct_wav = temp_dir.path().join("direct.wav");
+    let direct_arg = direct_wav.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-spectral-cross-synth",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-spectral-cross-synth",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root_arg.as_str(),
+        ])
+        .args(common)
+        .assert()
+        .success();
+    // The persisted task carries the vocode mode + bands.
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue");
+    assert_eq!(queue_json["jobs"][0]["task"]["mode"], "vocode");
+    assert_eq!(queue_json["jobs"][0]["task"]["vocode_bands"], 8);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-spectral-cross-synth", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let queued_wav = output_root.join("job-0001/audio/cross_synth.wav");
+    assert_eq!(
+        fs::read(&queued_wav).expect("read queued wav"),
+        fs::read(&direct_wav).expect("read direct wav"),
+        "queued vocode render must be byte-identical to the direct render"
+    );
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let knobs = &manifest["spectral_cross_synth"];
+    assert_eq!(knobs["algorithm"], "phase_vocoder_cross_synth_cpu_v1");
+    assert_eq!(knobs["mode"], "vocode");
+    assert_eq!(knobs["vocode_bands"], 8);
+    assert_eq!(knobs["fft_size"], 64);
+    assert_eq!(knobs["stft_hop"], 16);
 }
 
 #[test]

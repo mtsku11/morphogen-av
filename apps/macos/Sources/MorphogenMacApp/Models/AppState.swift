@@ -361,6 +361,7 @@ final class AppState: ObservableObject {
   @Published var crossSynthFFTSize = 1024
   @Published var crossSynthSTFTHop = 256
   @Published var crossSynthWindow: CrossSynthWindowOption = .hann
+  @Published var crossSynthVocodeBands = 32
   @Published var crossSynthSummary = "No spectral cross-synth rendered"
 
   @Published var impulseConvModulatorURL: URL?
@@ -2722,6 +2723,7 @@ final class AppState: ObservableObject {
       fftSize: crossSynthFFTSize,
       stftHop: crossSynthSTFTHop,
       window: crossSynthWindow,
+      vocodeBands: crossSynthVocodeBands,
       projectURL: projectURL
     )
 
@@ -2730,7 +2732,12 @@ final class AppState: ObservableObject {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
         let result = try RustBridgePlaceholder.runQueuedSpectralCrossSynthRender(request: request)
-        let modeText = self.crossSynthMode == .gain ? "RMS-gain" : "centroid-filter"
+        let modeText =
+          switch self.crossSynthMode {
+          case .gain: "RMS-gain"
+          case .filter: "centroid-filter"
+          case .vocode: "phase-vocoder"
+          }
         DispatchQueue.main.async {
           self.crossSynthSummary = "Cross-synth (\(modeText)) bundle at \(result.bundleURL.path)"
           self.statusMessage = "Spectral cross-synth render complete: \(result.bundleURL.path)"
@@ -3962,6 +3969,7 @@ enum VideoVocoderModeOption: String, CaseIterable, Identifiable {
 enum CrossSynthModeOption: String, CaseIterable, Identifiable {
   case gain = "Gain (RMS → amplitude)"
   case filter = "Filter (centroid → cutoff)"
+  case vocode = "Vocode (A's spectrum → B)"
 
   var id: String { rawValue }
 
@@ -3971,6 +3979,8 @@ enum CrossSynthModeOption: String, CaseIterable, Identifiable {
       return "gain"
     case .filter:
       return "filter"
+    case .vocode:
+      return "vocode"
     }
   }
 }

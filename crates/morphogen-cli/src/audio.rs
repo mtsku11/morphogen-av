@@ -277,6 +277,7 @@ pub(crate) struct QueueAddSpectralCrossSynthRequest<'a> {
     pub(crate) fft_size: usize,
     pub(crate) stft_hop: usize,
     pub(crate) window: CrossSynthWindow,
+    pub(crate) vocode_bands: usize,
     pub(crate) project_path: Option<&'a Path>,
 }
 
@@ -296,6 +297,7 @@ pub(crate) fn queue_add_spectral_cross_synth(
         fft_size,
         stft_hop,
         window,
+        vocode_bands,
         project_path,
     } = request;
     if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
@@ -314,6 +316,22 @@ pub(crate) fn queue_add_spectral_cross_synth(
         window: cross_synth_window(window),
     }
     .validate()?;
+    if mode == CrossSynthMode::Vocode {
+        // Mirror the render path's vocode checks (`phase_vocoder_cross_synth`
+        // / `validate_complex_stft_config`) so rejection happens at add time.
+        if stft_hop > fft_size / 2 {
+            return Err(CliError::Message(format!(
+                "stft-hop ({stft_hop}) must be <= fft-size / 2 ({}) for vocode mode",
+                fft_size / 2
+            )));
+        }
+        if vocode_bands == 0 || vocode_bands > fft_size / 2 {
+            return Err(CliError::Message(format!(
+                "vocode-bands must be between 1 and fft-size / 2 ({}), got {vocode_bands}",
+                fft_size / 2
+            )));
+        }
+    }
 
     let mut queue = if queue_path.exists() {
         RenderQueue::load_json(queue_path)?
@@ -361,6 +379,7 @@ pub(crate) fn queue_add_spectral_cross_synth(
             fft_size: fft_size as u32,
             stft_hop: stft_hop as u32,
             window,
+            vocode_bands: vocode_bands as u32,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -408,6 +427,7 @@ pub(crate) fn queue_run_spectral_cross_synth(queue_path: &Path) -> Result<(), Cl
         fft_size,
         stft_hop,
         window,
+        vocode_bands,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -447,6 +467,16 @@ pub(crate) fn queue_run_spectral_cross_synth(queue_path: &Path) -> Result<(), Cl
                 )?,
                 CENTROID_FILTER_CROSS_SYNTH_ALGORITHM,
             ),
+            CrossSynthMode::Vocode => (
+                phase_vocoder_cross_synth(
+                    &modulator,
+                    &carrier,
+                    stft_config,
+                    vocode_bands as usize,
+                    amount,
+                )?,
+                PHASE_VOCODER_CROSS_SYNTH_ALGORITHM,
+            ),
         };
 
         let stem_rel = "audio/cross_synth.wav";
@@ -472,6 +502,7 @@ pub(crate) fn queue_run_spectral_cross_synth(queue_path: &Path) -> Result<(), Cl
         let mode_label = match mode {
             CrossSynthMode::Gain => "gain",
             CrossSynthMode::Filter => "filter",
+            CrossSynthMode::Vocode => "vocode",
         };
         let filter_label = match filter_type {
             CrossSynthFilterType::Lowpass => "lowpass",
@@ -482,7 +513,7 @@ pub(crate) fn queue_run_spectral_cross_synth(queue_path: &Path) -> Result<(), Cl
             CrossSynthWindow::Hamming => "hamming",
             CrossSynthWindow::Rectangular => "rectangular",
         };
-        let manifest = serde_json::json!({
+        let mut manifest = serde_json::json!({
             "job_id": job_id,
             "status": "complete",
             "task": "audio_spectral_cross_synth",
@@ -510,6 +541,11 @@ pub(crate) fn queue_run_spectral_cross_synth(queue_path: &Path) -> Result<(), Cl
             "provenance": queue.jobs[job_index].provenance,
             "deterministic": true
         });
+        // Vocode-only knob: keyed in only for vocode jobs so gain/filter
+        // manifests keep their pre-slice shape byte for byte.
+        if mode == CrossSynthMode::Vocode {
+            manifest["spectral_cross_synth"]["vocode_bands"] = serde_json::json!(vocode_bands);
+        }
         fs::write(
             output_dir.join("manifest.json"),
             serde_json::to_string_pretty(&manifest)?,

@@ -1317,8 +1317,8 @@ struct RenderPanelView: View {
             }
           }
           .pickerStyle(.segmented)
-          .frame(width: 360)
-          .help("Gain: A's RMS envelope drives B's amplitude. Filter: A's spectral centroid sweeps a one-pole cutoff on B.")
+          .frame(width: 560)
+          .help("Gain: A's RMS envelope drives B's amplitude. Filter: A's spectral centroid sweeps a one-pole cutoff on B. Vocode: A's log-band spectral envelope reweights B's spectrum through a real inverse STFT (B keeps its own phase).")
 
           HStack(spacing: 16) {
             Button {
@@ -1352,8 +1352,16 @@ struct RenderPanelView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 200)
-            .disabled(state.crossSynthMode == .gain)
+            .disabled(state.crossSynthMode != .filter)
             .help("One-pole response (Filter mode only).")
+
+            if state.crossSynthMode == .vocode {
+              Stepper(value: $state.crossSynthVocodeBands, in: 1...512, step: 1) {
+                Text("Bands \(state.crossSynthVocodeBands)")
+              }
+              .frame(width: 140, alignment: .leading)
+              .help("Log-spaced spectral-envelope bands (must be at most half the FFT size).")
+            }
           }
 
           Text(state.crossSynthSummary)
