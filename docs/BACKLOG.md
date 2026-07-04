@@ -140,14 +140,23 @@ take this to the next level" notes live in
   byte-identical. Open: the SwiftUI chain-builder panel (design decision —
   needs user input on the builder UX); datamosh stage type on demand.
 
+- **Phase-vocoder cross-synthesis (COMPLETE)** —
+  `docs/PHASE_VOCODER_MILESTONE.md` slices 1–2: complex forward/inverse STFT
+  (`stft_complex.rs`, weighted-OLA, round-trip ≤ 1e-5) + `--mode vocode` on
+  render-spectral-cross-synth (`phase_vocoder_cross_synth_cpu_v1` — A's
+  log-band envelope on B's spectrum, B's phase kept), queue mode + SwiftUI
+  panel option, add→run byte-identical. Deferred: phase manipulation,
+  cepstral envelopes, morphing, mod-matrix routes on vocode knobs.
+
 ## Next
 
 **SwiftUI chain-builder panel design** (the open half of
 `docs/EFFECT_CHAIN_MILESTONE.md` Slice 4) — needs user input on the UX
-(simple ordered stage list vs. something richer). After that, per
-`docs/RECOMMENDATIONS.md`: phase-vocoder spectral cross-synth (Part 1 §2).
-The Rutt-Etra deferred slices and the LFO 6-panel sweep wait on the looks
-being user-confirmed on real footage.
+(simple ordered stage list vs. something richer). The recommended-ordering
+list in `docs/RECOMMENDATIONS.md` is now fully landed; remaining menu items
+there (realtime-ish preview, edge-density/depth descriptors, audiovisual
+granular grains) plus the user-gated items: Rutt-Etra deferred slices and
+the LFO 6-panel sweep (wait on looks being user-confirmed on real footage).
 
 ### Flow Feedback and Advection Milestone
 

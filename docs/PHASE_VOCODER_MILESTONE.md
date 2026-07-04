@@ -1,6 +1,11 @@
 # Phase-Vocoder Cross-Synthesis Milestone — real spectral resynthesis
 
-**Status: contract — build not started.** This doc is the acceptance contract
+**Status: Slices 1–2 landed and verified — MILESTONE COMPLETE** (`7ba21ad`
+complex STFT + vocode mode, `c3264a5` queue + SwiftUI; add→run
+byte-identity smoke-pinned, descriptor proof independently reproduced:
+noise carrier centroid 2029.9 Hz off → 153.2 Hz on under a 150 Hz-tone
+modulator). Only the Deferred section remains open. This doc is the
+acceptance contract
 (per the CLAUDE.md "contract first" workflow). Origin: `docs/RECOMMENDATIONS.md`
 Part 1 §2 and the Deferred list of `docs/SPECTRAL_CROSS_SYNTH_MILESTONE.md` —
 "imposing A's spectral envelope on B's spectrum with a real inverse STFT is

@@ -8,11 +8,11 @@ _Last updated: 2026-07-03_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **521 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **522 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation);
   one pre-existing `items_after_test_module` clippy warning in
   `morphogen-cli/src/render.rs` (Rutt-Etra slice, test targets only).
-- `swift test`: **98 passing, 0 failing.**
+- `swift test`: **100 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -20,6 +20,21 @@ _Last updated: 2026-07-03_
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
 ## What just landed
+
+- **Phase vocoder — Slice 2 of 2, MILESTONE COMPLETE** (`c3264a5`, built
+  inline after the agent's session-limit death left nothing on disk): core
+  `CrossSynthMode::Vocode` + serde-defaulted `vocode_bands` (pre-vocode
+  queue JSON → default 32, pinned); add-time vocode validation (rejection
+  persists nothing); add→run byte-identical (smoke + live-verified against
+  the slice-1 direct render); manifest gains `vocode_bands` only for vocode
+  jobs; the interim slice-1 CLI enum split reconciled
+  (CliSpectralCrossSynthMode now backs both commands). SwiftUI: Vocode mode
+  in the cross-synth panel with a bands stepper, bridge emits
+  `--vocode-bands` only in vocode mode (gain/filter arg arrays pinned
+  byte-identical). cargo 521 → **522**, swift 98 → **100**. **Next action:**
+  the SwiftUI chain-builder panel design (needs user input), or the
+  remaining RECOMMENDATIONS menu (realtime-ish preview, edge-density/depth
+  descriptors, audiovisual granular grains).
 
 - **Phase vocoder — Slice 1 of 2** (`7ba21ad`, contract
   `docs/PHASE_VOCODER_MILESTONE.md` at `08cdd2b`; Sonnet subagent build,
