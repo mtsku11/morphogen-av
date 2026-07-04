@@ -120,7 +120,10 @@ take this to the next level" notes live in
   via gather inversion (scatter→gather, last-writer-wins without atomics),
   per-frame parity gate, `--backend cpu|metal` CLI + queue + SwiftUI picker.
   Byte-identical to CPU on real footage (30-frame cello 640×360 diff clean).
-  Still deferred: two-source A→B, depth descriptor, HQ anti-aliased lines.
+  Two-source A→B now also COMPLETE (`docs/RUTT_ETRA_TWO_SOURCE_MILESTONE.md`):
+  A's luma displaces B's scanlines, B supplies colour; CPU+CLI+Metal+queue+SwiftUI
+  (single-source = the A==B special case of a shared gather core). Still deferred:
+  depth descriptor, HQ anti-aliased lines, normalized-coord A sampling.
 
 - **LFO modulation sources (COMPLETE)** — `docs/LFO_MODULATION_MILESTONE.md`
   slices 1–3: `lfo(shape,rate,phase)` as a media-free deterministic
