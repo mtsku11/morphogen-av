@@ -54,6 +54,7 @@ use morphogen_render::{
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RUTT_ETRA_ALGORITHM,
     RUTT_ETRA_METAL_ALGORITHM, RUTT_ETRA_TWO_SOURCE_ALGORITHM,
+    RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
 use morphogen_render::{
     apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
@@ -6190,6 +6191,41 @@ pub(crate) fn render_rutt_etra_frame_metal(
     ))
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn render_rutt_etra_two_source_frame_metal(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    settings: &RuttEtraSettings,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::rutt_etra_two_source_metal(source_a, source_b, settings)?;
+    let cpu = render_rutt_etra_two_source_frame(source_a, source_b, settings)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU rutt-etra two-source outputs have mismatched dimensions; \
+             cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal rutt-etra two-source render diverged from CPU reference by {difference} \
+             (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_rutt_etra_two_source_frame_metal(
+    _source_a: &ImageBufferF32,
+    _source_b: &ImageBufferF32,
+    _settings: &RuttEtraSettings,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Rutt-Etra scanline — parity-gated Metal port
 // ---------------------------------------------------------------------------
@@ -6234,14 +6270,6 @@ pub(crate) fn render_rutt_etra_sequence(
                         .to_string(),
                 ));
             }
-            // Two-source Metal has no kernel yet (slice 2); fail clearly rather
-            // than silently ignore the backend choice.
-            if request.backend == RenderBackend::Metal {
-                return Err(CliError::Message(
-                    "rutt-etra two-source (--source-a-dir) currently supports --backend cpu only"
-                        .to_string(),
-                ));
-            }
             Some(frames)
         }
         None => None,
@@ -6274,7 +6302,16 @@ pub(crate) fn render_rutt_etra_sequence(
         let rendered = match &source_a_frames {
             Some(a_frames) => {
                 let source_a = load_image_f32(&a_frames[index])?;
-                render_rutt_etra_two_source_frame(&source_a, &source_b, &frame_settings)?
+                match request.backend {
+                    RenderBackend::Cpu => {
+                        render_rutt_etra_two_source_frame(&source_a, &source_b, &frame_settings)?
+                    }
+                    RenderBackend::Metal => render_rutt_etra_two_source_frame_metal(
+                        &source_a,
+                        &source_b,
+                        &frame_settings,
+                    )?,
+                }
             }
             None => match request.backend {
                 RenderBackend::Cpu => render_rutt_etra_frame(&source_b, &frame_settings)?,
@@ -6287,14 +6324,11 @@ pub(crate) fn render_rutt_etra_sequence(
         )?;
     }
 
-    let algorithm = if source_a_frames.is_some() {
-        // Two-source is CPU-only in this slice (Metal was rejected above).
-        RUTT_ETRA_TWO_SOURCE_ALGORITHM
-    } else {
-        match request.backend {
-            RenderBackend::Cpu => RUTT_ETRA_ALGORITHM,
-            RenderBackend::Metal => RUTT_ETRA_METAL_ALGORITHM,
-        }
+    let algorithm = match (source_a_frames.is_some(), request.backend) {
+        (true, RenderBackend::Cpu) => RUTT_ETRA_TWO_SOURCE_ALGORITHM,
+        (true, RenderBackend::Metal) => RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
+        (false, RenderBackend::Cpu) => RUTT_ETRA_ALGORITHM,
+        (false, RenderBackend::Metal) => RUTT_ETRA_METAL_ALGORITHM,
     };
     let mut manifest = serde_json::json!({
         "algorithm": algorithm,

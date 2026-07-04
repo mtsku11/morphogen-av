@@ -27,7 +27,8 @@ use crate::{
     LUCAS_KANADE_REFINE_SHADER_SOURCE, PALETTE_QUANTIZE_KERNEL_NAME,
     PALETTE_QUANTIZE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
     RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE, RUTT_ETRA_KERNEL_NAME,
-    RUTT_ETRA_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
+    RUTT_ETRA_SHADER_SOURCE, RUTT_ETRA_TWO_SOURCE_KERNEL_NAME, RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE,
+    VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -2310,6 +2311,106 @@ pub fn rutt_etra_scanline_metal(
     read_rgba_f32_texture(&output_texture, w, h)
 }
 
+/// Two-source Rutt-Etra: Source A's luma drives the displacement, Source B
+/// supplies the drawn colour. A and B must share dimensions (the caller — the
+/// CPU-gated render path — guarantees this; enforced here defensively).
+pub fn rutt_etra_two_source_metal(
+    source_a: &ImageBufferF32,
+    source_b: &ImageBufferF32,
+    settings: &RuttEtraSettings,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if source_b.width == 0 || source_b.height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+    if source_a.width != source_b.width || source_a.height != source_b.height {
+        return Err(MetalDispatchError::InvalidRuttEtraSettings(format!(
+            "Source A is {}x{}, Source B is {}x{}; two-source requires equal dimensions",
+            source_a.width, source_a.height, source_b.width, source_b.height
+        )));
+    }
+
+    let plan = RuttEtraDispatchPlan::new(settings, source_b.width, source_b.height)?;
+    let w = plan.width;
+    let h = plan.height;
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(RUTT_ETRA_TWO_SOURCE_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let source_a_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let source_b_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&source_a_texture, source_a)?;
+    upload_rgba_f32_texture(&source_b_texture, source_b)?;
+
+    let params = RuttEtraMetalParams {
+        width: w,
+        height: h,
+        line_pitch: plan.line_pitch,
+        displacement_depth: plan.displacement_depth,
+        line_thickness: plan.line_thickness,
+        mono: u32::from(plan.mono),
+    };
+
+    let tg_w = plan.threads_per_threadgroup.width as u64;
+    let tg_h = plan.threads_per_threadgroup.height as u64;
+    let grid_w = plan.threadgroups_per_grid.width as u64;
+    let grid_h = plan.threadgroups_per_grid.height as u64;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&source_a_texture));
+    encoder.set_texture(1, Some(&source_b_texture));
+    encoder.set_texture(2, Some(&output_texture));
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<RuttEtraMetalParams>() as u64,
+        (&params as *const RuttEtraMetalParams).cast(),
+    );
+    encoder.dispatch_thread_groups(MTLSize::new(grid_w, grid_h, 1), MTLSize::new(tg_w, tg_h, 1));
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, w, h)
+}
+
 pub fn palette_quantize_metal(
     source_b: &ImageBufferF32,
     settings: &PaletteQuantizeSettings,
@@ -3549,6 +3650,48 @@ mod tests {
         assert_eq!(
             gpu.pixels, cpu.pixels,
             "Metal rutt-etra output must be byte-identical to the CPU reference"
+        );
+    }
+
+    #[test]
+    fn metal_rutt_etra_two_source_matches_cpu_reference() {
+        // A drives displacement (vertical luma ramp → per-row shift), B supplies
+        // colour (horizontal RGB gradient). Distinct A and B exercise the split
+        // luma/colour reads; the gather proof is unchanged from single-source.
+        use morphogen_render::{render_rutt_etra_two_source_frame, RuttEtraSettings};
+
+        let source_a = ImageBufferF32::from_fn(32, 16, |_x, y| {
+            let v = y as f32 / 15.0;
+            [v, v, v, 1.0]
+        })
+        .expect("A fixture");
+        let source_b = ImageBufferF32::from_fn(32, 16, |x, _y| {
+            let t = x as f32 / 31.0;
+            [1.0 - t, (1.0 - (2.0 * t - 1.0).abs()).max(0.0), t, 1.0]
+        })
+        .expect("B fixture");
+
+        let settings = RuttEtraSettings {
+            line_pitch: 4,
+            displacement_depth: 6.0,
+            line_thickness: 2,
+            mono: false,
+        };
+
+        let cpu = render_rutt_etra_two_source_frame(&source_a, &source_b, &settings)
+            .expect("cpu two-source render");
+        let gpu = match rutt_etra_two_source_metal(&source_a, &source_b, &settings) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal rutt-etra two-source parity: no Metal device");
+                return;
+            }
+            Err(e) => panic!("rutt_etra_two_source_metal failed: {e}"),
+        };
+
+        assert_eq!(
+            gpu.pixels, cpu.pixels,
+            "Metal two-source output must be byte-identical to the CPU reference"
         );
     }
 

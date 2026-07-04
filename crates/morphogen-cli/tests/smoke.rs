@@ -240,37 +240,70 @@ fn render_rutt_etra_two_source_matches_single_when_a_equals_b_and_diverges_other
     );
 }
 
-/// Two-source has no Metal kernel yet (slice 2); `--source-a-dir --backend metal`
-/// must fail clearly rather than silently ignore the backend choice.
+/// Two-source Metal renders byte-identical to CPU on the gather kernel, and the
+/// Metal manifest records the two-source Metal algorithm id.
+#[cfg(target_os = "macos")]
 #[test]
-fn render_rutt_etra_two_source_rejects_metal_backend() {
+fn render_rutt_etra_two_source_metal_matches_cpu_byte_identical() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let b_dir = temp_dir.path().join("source-b");
-    let out_dir = temp_dir.path().join("out");
+    let a_dir = temp_dir.path().join("source-a");
+    let cpu_dir = temp_dir.path().join("cpu");
+    let metal_dir = temp_dir.path().join("metal");
     fs::create_dir_all(&b_dir).expect("create b frames");
-    let b = ImageBuffer::from_fn(16, 16, |x, _| {
-        let value = (x as u8).wrapping_mul(16);
-        Rgba([value, value, value, u8::MAX])
-    });
-    b.save(b_dir.join("frame_000000.png"))
-        .expect("write b frame");
+    fs::create_dir_all(&a_dir).expect("create a frames");
 
-    Command::cargo_bin("morphogen")
-        .expect("morphogen binary")
-        .args([
-            "render-rutt-etra-sequence",
-            b_dir.to_string_lossy().as_ref(),
-            out_dir.to_string_lossy().as_ref(),
-            "--source-a-dir",
-            b_dir.to_string_lossy().as_ref(),
-            "--frames",
-            "1",
-            "--backend",
-            "metal",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("--backend cpu only"));
+    for index in 0..2u32 {
+        let b = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, 255 - value, value / 2, u8::MAX])
+        });
+        b.save(b_dir.join(format!("frame_{index:06}.png")))
+            .expect("write b frame");
+        let a = ImageBuffer::from_fn(16, 16, |_, y| {
+            let value = (y as u8).wrapping_mul(16);
+            Rgba([value, value, value, u8::MAX])
+        });
+        a.save(a_dir.join(format!("frame_{index:06}.png")))
+            .expect("write a frame");
+    }
+
+    for (backend, out_dir) in [("cpu", &cpu_dir), ("metal", &metal_dir)] {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-rutt-etra-sequence",
+                b_dir.to_string_lossy().as_ref(),
+                out_dir.to_string_lossy().as_ref(),
+                "--source-a-dir",
+                a_dir.to_string_lossy().as_ref(),
+                "--frames",
+                "2",
+                "--line-pitch",
+                "4",
+                "--displacement-depth",
+                "12.5",
+                "--line-thickness",
+                "2",
+                "--backend",
+                backend,
+            ])
+            .assert()
+            .success();
+    }
+
+    for index in 0..2 {
+        let file_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(cpu_dir.join(&file_name)).expect("cpu frame"),
+            fs::read(metal_dir.join(&file_name)).expect("metal frame"),
+            "metal two-source must be byte-identical to cpu ({file_name})"
+        );
+    }
+
+    let manifest = read_json(&metal_dir.join("manifest.json"));
+    assert_eq!(manifest["algorithm"], "rutt_etra_two_source_metal_v1");
+    assert_eq!(manifest["frame_count"], 2);
 }
 
 /// AC 3: `--backend metal` renders byte-identical to `--backend cpu` on the

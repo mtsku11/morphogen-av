@@ -42,6 +42,9 @@ pub const RETRO_STATIC_KERNEL_NAME: &str = "retro_static";
 pub const RETRO_STATIC_SHADER_SOURCE: &str = include_str!("../shaders/retro_static.metal");
 pub const RUTT_ETRA_KERNEL_NAME: &str = "rutt_etra_scanline";
 pub const RUTT_ETRA_SHADER_SOURCE: &str = include_str!("../shaders/rutt_etra_scanline.metal");
+pub const RUTT_ETRA_TWO_SOURCE_KERNEL_NAME: &str = "rutt_etra_two_source";
+pub const RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE: &str =
+    include_str!("../shaders/rutt_etra_two_source.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -572,6 +575,23 @@ pub fn validate_rutt_etra_shader_source() -> Result<(), MetalDispatchError> {
     Ok(())
 }
 
+pub fn validate_rutt_etra_two_source_shader_source() -> Result<(), MetalDispatchError> {
+    if !RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE.contains("kernel void rutt_etra_two_source") {
+        return Err(MetalDispatchError::MissingRuttEtraKernelEntryPoint);
+    }
+    for expected in [
+        "texture2d<float, access::read>  source_a [[texture(0)]]",
+        "texture2d<float, access::read>  source_b [[texture(1)]]",
+        "texture2d<float, access::write> output   [[texture(2)]]",
+        "constant RuttEtraParams&        params   [[buffer(0)]]",
+    ] {
+        if !RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingRuttEtraBindingLayout);
+        }
+    }
+    Ok(())
+}
+
 /// Dispatch plan for the Rutt-Etra gather kernel. Stateless and single-source
 /// (analogous to `palette_quantize`): each output pixel gathers its colour by
 /// scanning scanlines in reverse order without any cross-thread coordination.
@@ -767,6 +787,12 @@ mod tests {
     #[test]
     fn rutt_etra_shader_has_expected_bindings() {
         validate_rutt_etra_shader_source().expect("rutt_etra_scanline shader preflight");
+    }
+
+    #[test]
+    fn rutt_etra_two_source_shader_has_expected_bindings() {
+        validate_rutt_etra_two_source_shader_source()
+            .expect("rutt_etra_two_source shader preflight");
     }
 
     #[test]

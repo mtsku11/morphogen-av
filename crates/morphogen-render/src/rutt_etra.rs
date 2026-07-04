@@ -23,6 +23,7 @@ use crate::{ImageBufferF32, RenderError};
 pub const RUTT_ETRA_ALGORITHM: &str = "rutt_etra_scanline_cpu_v1";
 pub const RUTT_ETRA_METAL_ALGORITHM: &str = "rutt_etra_scanline_metal_v1";
 pub const RUTT_ETRA_TWO_SOURCE_ALGORITHM: &str = "rutt_etra_two_source_cpu_v1";
+pub const RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM: &str = "rutt_etra_two_source_metal_v1";
 
 /// Settings for the Rutt-Etra scanline effect.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
