@@ -1,217 +1,250 @@
 # Morphogen AV
 
-Morphogen AV is a Mac-first experimental audiovisual cross-synthesis app. It is designed around two loaded audiovisual sources:
+Morphogen AV is a Mac-first, deterministic audiovisual cross-synthesis
+instrument. You load two sources — **Source A** (modulator/analysis) and
+**Source B** (carrier/material) — and Source A's motion, audio, spectral, or
+structural character reshapes Source B. The long-term target is an
+audiovisual modular synthesizer: typed analysis signals (including
+deterministic LFOs) patch onto any effect's knobs, effects chain together
+into instruments, and everything renders bit-reproducibly offline first, with
+a fast, real preview loop on top of the same engine.
 
-- Source A: modulator / analysis source
-- Source B: carrier / material source
-- Output: B transformed by motion, audio, spectral, temporal, or structural analysis derived from A
+It is not a toy demo. Every effect below is a deterministic CPU reference —
+several with a Metal kernel gated frame-by-frame against that CPU
+reference — driven by a real render queue with resumable checkpoints, wired
+end to end through a native SwiftUI shell.
 
-The long-term goal is an audiovisual modular synthesizer where compatible analysis signals can modulate visual and audio parameters: optical-flow advection, displacement, feedback, video vocoder processing, spectral and granular recomposition, convolutional blending, controlled motion-vector reuse, and descriptor-based routing.
+## Why it's built the way it is
 
-## Current Status
+- **Determinism first.** Offline rendering leads; the realtime preview is a
+  lower-fidelity *view* of the same project graph, never a second engine.
+  Identical inputs + settings ⇒ bit-reproducible output, every time.
+- **CPU is ground truth.** Every Metal kernel is validated frame-by-frame
+  against its CPU reference within a tight tolerance before it ships.
+- **Stateful effects are resumable.** Temporal nodes (feedback, datamosh,
+  chain stages) declare frame-zero behavior and checkpoint from an
+  unquantized float state buffer — never a display PNG — so a render can
+  stop and resume without drifting.
+- **Analysis is reusable sidecar data.** Optical flow, RMS/onset/STFT,
+  grain descriptors — all regenerable from source + settings, fingerprinted
+  so a stale sidecar is never silently reused.
 
-This repository is an initial production-quality scaffold with deterministic vertical slices. The Rust CLI can create and inspect project JSON, probe and extract proxy media through optional FFmpeg tools, render synthetic and real A-modulates-B displacement, temporal feedback, and fluid-advection sequences, produce reusable analysis sidecars, and persist resumable offline render queues with timing and source/cache provenance. The Metal crate compiles and submits flow displacement, feedback, and one-/two-source advection kernels on macOS, gated against the CPU reference. The SwiftUI app shell can select movie sources, extract them to PNG/WAV proxies, submit the proxy frames as a persisted queue job, inspect decoded source previews, and export completed queue bundles to ProRes `.mov`.
+## The effect catalog
 
-## What Works Now
+Two-source (A shapes B), single-source, and audio effects, each with a CPU
+reference and — where marked **⚡** — a parity-gated Metal kernel.
 
-- Serializable project schema and timeline/sample alignment helpers in `morphogen-core`.
-- Typed node-port compatibility checks for known analysis outputs and render parameters in `morphogen-core`.
-- Optional external FFmpeg/FFprobe command wrappers in `morphogen-media`.
-- Portable audio buffer, WAV loading/export, RMS envelope, spectral centroid, STFT magnitude cache, and onset-strength scaffolding in `morphogen-audio`.
-- Float RGBA CPU image buffers, flow fields, bilinear sampling, luma-selected granular mosaicing with reusable grain-analysis sidecars and frame-addressed RMS/onset/centroid controls, luminance-gradient flow generation, temporal pyramidal Lucas-Kanade flow with forward/backward confidence, flow displacement, and versioned reusable flow cache sidecars in `morphogen-render`.
-- Deterministic temporal flow feedback with explicit frame-zero/reset semantics, CPU/Metal parity, resumable RGBA32F state checkpoints, 8/16-bit PNG exports, and export-only flow-guided temporal supersampling.
-- A checked-in tiny golden fixture for CPU flow-displacement output.
-- Metal backend placeholders plus a first flow-displacement compute kernel in `morphogen-metal`.
-- Rust-side Metal dispatch planning, shader preflight, and macOS runtime submission for the flow-displacement kernel.
-- CLI Metal validation command for the synthetic flow-displacement fixture on macOS.
-- CLI commands for project initialization, project inspection, probing, extraction, cache generation, queue persistence, and render testing.
-- Dev queue execution that writes `frames/frame_000000.png`, `audio/main.wav`, `checkpoint.json`, and `manifest.json` with frame/sample timing metadata for a deterministic test job, and persists the same output contract on the queued job.
-- Minimal native SwiftUI macOS shell titled "Morphogen AV".
-- AppKit-backed file picking for Source A and Source B.
-- AVFoundation media probing in the SwiftUI shell, with FFprobe fallback through the dev CLI bridge.
-- First-frame AVFoundation decode into a CoreVideo pixel buffer and Metal texture.
-- App-side preview-frame probe that reports decoded frame dimensions, presentation time, Metal texture format, and displays a decoded source thumbnail.
-- VideoToolbox ProRes encoder discovery and export-plan probing in the SwiftUI shell.
-- Configurable ProRes `.mov` export from a selected PNG frame directory through AVAssetWriter with VideoToolbox encoder selection.
-- SwiftUI controls for extracting selected movies into paired PNG/WAV proxy directories through the dev CLI bridge, then recording their RMS/STFT sidecars on the active project.
-- SwiftUI controls for choosing Source A/Source B frame directories and submitting a real two-source frame-sequence CPU render as a persisted queue job.
-- SwiftUI flow-feedback controls for amount, decay, reset behavior, source, backend, and a first stable/aggressive/reset-driven preset library backed by persisted queue jobs.
-- Queue manifests contain the modulator/carrier directories and the generated flow-cache provenance; completed bundles export directly to configurable ProRes `.mov`.
-- Direct configurable ProRes `.mov` export from the render queue output bundle's `frames/` directory with the first WAV stem muxed as a PCM audio track.
-- Dev-only Swift-to-CLI bridge for project commands, media proxy extraction, queue submission, and CPU reference rendering.
+**Motion & temporal**
+- **Flow displacement** — Source A's optical flow (or luminance gradient)
+  displaces Source B's pixels. ⚡
+- **Flow feedback** — A's motion repeatedly smears B into its own previous
+  output frame; float-state checkpoint, `--structure-mix` re-injects carrier
+  detail so high feedback regenerates structure instead of flattening to fog. ⚡
+- **Datamosh** (`render-datamosh-sequence`) — recursive flow-reuse "bloom" plus
+  a full codec-*simulated* tier: block-quantized motion (macroblock slide),
+  residual re-injection (fine-motion haze), per-block keep/drop refresh
+  (content-aware self-erasing trails), and curated presets
+  (`structured-melt`, `macroblock-rot`, `scanline-smear`, `codec-engrave`). ⚡
+- **Real bitstream datamosh** (`datamosh-bitstream`) — an explicit,
+  intentionally *non-deterministic* carve-out outside the render graph: pure-Rust
+  RIFF surgery duplicates P-frame chunks or strips the keyframe for authentic
+  codec-artifact bloom/void-mosh, decoded back through ffmpeg.
+- **Fluid dye advection** — a source treated as continuous dye, advected
+  through a divergence-free curl-noise vortex field (`render-fluid-advect-sequence`),
+  through A's real optical flow onto B (`...-two-source-sequence`), or through
+  its own motion (`render-optical-flow-advect-sequence`). ⚡
+- **Field particles** — a grid of coloured particles rides the same steady
+  vortex field, with optional live colour re-sampling from the playing source. ⚡
+- **Rutt-Etra scanlines** — the classic analog-video-synth look: the frame
+  redraws as sparse horizontal scanlines vertically displaced by luminance
+  (or any modulator, including LFOs) — `displacement_depth=lfo(sine,0.5)` is
+  the canonical demo.
 
-## Intentional Placeholders
+**Structural & spatial**
+- **Retro static** — simulated bit-depth banding/dither with a selectable
+  error-diffusion filter.
+- **Channel shift** — independent per-channel RGB pixel offsets, constant or
+  driven per-row by Source A's optical flow.
+- **Palette quantize** — posterize or a fixed neon palette, integer/enum
+  modulation targets included.
+- **Pixel sort** — threshold-bounded sort of contiguous runs, by row or column.
+- **Block collage** — hard-cut NxN tile collage between A and B driven by a
+  spatially-coherent noise field.
+- **Convolutional blend** — Source A's frame becomes a normalized image
+  kernel convolved with B (colour or luma kernels; ⚡), or A's audio becomes an
+  L1-normalized impulse response reverbed onto B (mono or true-stereo, direct
+  or FFT convolution).
+- **Cascade collage / cascade trails** — a scribbled, morphing-edge tile
+  cascade generator with per-step hue drift.
+- **Descriptor-coagulated flow blend** — A and B *mutually* mangled: patches
+  of the screen group by colour/texture similarity into an ownership field
+  that advects, smears, and collides over time (the first true two-source
+  mutual effect). ⚡
+- **Colour-group dispersion blend** — the content-advecting sibling: image
+  content itself (not just an ownership mask) flows, shatters, and disperses
+  along A's optical-flow current.
+- **Fluid colour-sort mosaic** — both sources' tiles phase-separate into
+  colour domains via cohesion/repulsion forces, then advect through a fluid
+  field — nine landed variants including adaptive tile sizes, live-refresh
+  content, cluster-blob layout, a sweeping dispersion band, organic
+  turbulence, and steady vortex flow.
+- **Granular mosaic** — Source B recomposed as luma- or colour-matched
+  visual grains selected by Source A, with a temporal grain-pool mode that
+  matches grains across the whole clip by colour + texture + audio RMS.
+- **Video vocoder** — B's tonal envelope reshaped to match A's (histogram
+  specification, or per-band gain). ⚡
+- **Effect chains** (`render-chain`) — compose any of the above into an
+  ordered pipeline from one JSON spec: each stage's output feeds the next,
+  one reproducible manifest, stateful stages checkpoint per-stage, and every
+  stage can carry its own modulation routes.
 
-- The SwiftUI shell does not link Rust directly yet; it can invoke the local CLI during development.
-- Metal runtime integration is wired into a CLI validation command but not into the SwiftUI shell yet.
-- The source preview surface is a first-frame diagnostic thumbnail, not a realtime timeline or node-graph preview yet.
-- Occlusion-aware flow masks, depth, EXR output, and production render-queue execution are future work.
-- FFmpeg is optional and external; if it is missing, media commands return a clear error.
-- The 16-bit PNG feedback sequence is an archival output; the current VideoToolbox ProRes handoff draws into an 8-bit pixel buffer. Multi-stem muxing and high-bit-depth pixel-buffer paths are future work.
+**Audio & cross-domain**
+- **Spectral cross-synthesis** — A's RMS drives B's amplitude, A's spectral
+  centroid sweeps a filter on B, or — the headline mode — a real phase-vocoder
+  imposes A's log-band spectral envelope onto B's spectrum through a complex
+  inverse STFT, keeping B's own phase.
+- **Audio-to-video routing** — A's RMS/onset/centroid drives B's visual
+  displacement amount.
+- **Video-to-audio routing** — A's luminance or optical-flow magnitude drives
+  B's audio gain, stereo pan, or filter cutoff, with hold or smoothed
+  envelope sampling.
 
-## Prerequisites
+## The modulation matrix — the modular-synth core
 
-- macOS, preferably Apple Silicon.
-- Stable Rust toolchain with `cargo` on PATH.
-- Swift 5.9 or newer via Xcode command line tools.
-- Optional: user-installed `ffmpeg` and `ffprobe` for media probe and extraction commands.
+Nearly every knob above accepts `--modulate "<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]"`
+(repeatable) instead of a static value:
 
-## Rust
+- **Analysis sources**: `audio-rms`, `audio-onset`, `audio-centroid` (from a
+  modulator WAV), `luma`, `flow` (from a modulator frame sequence).
+- **LFOs**: `lfo(sine|triangle|square|saw[,rate_hz[,phase]])` — a pure,
+  media-free function of frame time. No modulator file needed at all.
+- **Named modulators**: `<name>.<source>` lets different routes on the same
+  render read different WAVs or frame sequences (`--named-modulator-audio
+  name=path`, repeatable).
+- **Per-route sampling** overrides the render's default hold/smooth envelope
+  evaluation with a trailing `@hold`/`@smooth`.
+- Values always **clamp, never error** — an envelope can never abort a render
+  mid-sequence — and every stateful effect's checkpoint contract includes the
+  active routes, so changing a route on resume is refused rather than
+  silently drifting.
 
-Run tests:
+This whole surface is symmetric across the direct CLI, the persisted render
+queue (`queue-add-*` validates and rejects before persisting; `queue-run-*`
+is byte-identical to the direct render), and the SwiftUI panels.
 
-```sh
-cargo test
+## Deterministic rendering, the render queue, and analysis caches
+
+Renders happen two ways: a **direct CLI command** for one-off/scripted runs,
+or a **persisted offline queue** (`queue-init` / `queue-add-*` /
+`queue-run-*`) that survives interruption, records source/cache provenance,
+and produces a ProRes-ready output bundle (`frames/`, audio stems,
+`manifest.json`, `checkpoint.json`). Stateful effects resume exactly:
+`--stop-after-frame` writes a checksummed unquantized RGBA32F state buffer,
+and re-running the same command continues from it — a changed input,
+setting, or modulation route is detected and refused rather than silently
+producing wrong output.
+
+Analysis (optical flow, RMS/STFT/onset envelopes, grain descriptors) is
+reusable sidecar data: each cache records its algorithm id, dimensions,
+sampling convention, and a content fingerprint of its source, so a renderer
+only reuses a sidecar that still matches and regenerates deterministically
+otherwise.
+
+## The realtime-ish preview loop
+
+The SwiftUI shell's Quick Preview no longer renders eight static thumbnails —
+it plays. Picking sources and hitting **Preview** downscales the source
+proxies once (exact deterministic box-average, `downscale-frames`, default
+quarter resolution), renders a few seconds of the selected effect through
+the *same engine* (only the input paths change — every other render argument
+is identical to a full-resolution render), and loops it in a real player
+(play/pause, frame counter, scale/seconds controls). On an expensive effect
+like flow feedback this is over **13x faster** than the old full-res preview,
+so tuning an effect's look no longer means waiting on a full render.
+
+## The SwiftUI macOS app
+
+A native shell (not a wrapper): pick Source A/B with native file pickers,
+and the app auto-extracts them to PNG/WAV proxies (AVFoundation, with an
+FFprobe/FFmpeg fallback) and generates their RMS/STFT sidecars. A panel per
+effect exposes its knobs, modulation slots (with per-slot named-modulator
+and LFO options), and backend picker where relevant; every panel submits a
+real persisted queue job and can preview it through the quarter-res loop
+before committing to a full render. Completed queue bundles export directly
+to configurable ProRes `.mov` via VideoToolbox, with any audio stems muxed
+in.
+
+*(A native SwiftUI chain-builder panel for the effect-chain JSON spec is the
+one open design decision — everything else above is wired end to end.)*
+
+## Project layout
+
+```
+crates/morphogen-core    project schema, node graph, render-job/queue persistence
+crates/morphogen-render  deterministic CPU effect renderers, caches, samplers
+crates/morphogen-audio   WAV I/O, RMS/STFT/onset/spectral-centroid, complex STFT
+crates/morphogen-media   optional external FFmpeg/FFprobe wrappers
+crates/morphogen-metal   Metal device/pipeline/texture + compute kernels
+crates/morphogen-cli     the engine validation + render/queue driver
+apps/macos               native SwiftUI shell
 ```
 
-Create and inspect an example project:
+## Getting started
+
+**Prerequisites**: macOS (Apple Silicon preferred), a stable Rust toolchain
+with `cargo`, Swift 5.9+ (Xcode command line tools), and optionally
+`ffmpeg`/`ffprobe` on `PATH` for media probing and proxy extraction (media
+commands return a clear error without them; nothing is vendored).
 
 ```sh
-cargo run -p morphogen-cli -- init-example /tmp/morphogen-example.morphogen.json
-cargo run -p morphogen-cli -- inspect-project /tmp/morphogen-example.morphogen.json
-```
+# Rust engine
+cargo test --workspace                  # run the full test suite
+cargo run -p morphogen-cli -- <command> # see docs/REFERENCE.md for the full catalog
 
-Render a synthetic PNG using the CPU reference flow-displacement pipeline:
-
-```sh
-cargo run -p morphogen-cli -- render-test /tmp/morphogen-test.png
-```
-
-Render the synthetic fixture through Metal on macOS:
-
-```sh
-cargo run -p morphogen-cli -- metal-render-test /tmp/morphogen-metal-test.png
-```
-
-Render a real two-source CPU displacement from extracted or generated image frames:
-
-```sh
-cargo run -p morphogen-cli -- render-two-source /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-two-source.png --amount 16
-```
-
-Render Source B as luma-selected visual grains controlled by Source A:
-
-```sh
-cargo run -p morphogen-cli -- render-granular-mosaic /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-granular.png --grain-size 24 --rearrangement 1 --variation 0.35 --seed 42 --grain-cache-dir /tmp/morphogen-grain-cache --backend metal
-cargo run -p morphogen-cli -- render-granular-mosaic-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-granular-frames --grain-size 24 --rearrangement 1 --variation 0.35 --seed 42 --grain-cache-dir /tmp/morphogen-grain-cache --max-frames 120 --backend metal
-```
-
-Route cached Source A audio analysis into frame-addressed granular controls. RMS raises `variation`, normalized onset strength raises `rearrangement`, and normalized spectral centroid offsets `grain_size` in pixels. Generate the cache sidecars first, then pass the same frame rate used for the image sequence:
-
-```sh
-cargo run -p morphogen-cli -- cache-rms /tmp/source-a.wav /tmp/source-a-rms.json
-cargo run -p morphogen-cli -- cache-onsets /tmp/source-a.wav /tmp/source-a-onsets.json
-cargo run -p morphogen-cli -- cache-stft /tmp/source-a.wav /tmp/source-a-stft.json
-cargo run -p morphogen-cli -- render-granular-mosaic-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-granular-frames --grain-size 24 --rearrangement 0.5 --variation 0.1 --rms-cache /tmp/source-a-rms.json --onset-cache /tmp/source-a-onsets.json --stft-cache /tmp/source-a-stft.json --rms-variation-scale 0.6 --onset-rearrangement-scale 0.4 --centroid-grain-size-scale 12 --frame-rate 24 --backend metal
-```
-
-Render paired frame sequences from extracted frame directories:
-
-```sh
-cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --flow-cache-dir /tmp/morphogen-flow-cache --max-frames 120
-```
-
-Use a modulator WAV RMS envelope to vary visual displacement amount over the output sequence:
-
-```sh
-cargo run -p morphogen-cli -- render-frame-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-output-frames --amount 16 --rms-modulator-wav /tmp/source-a.wav --frame-rate 12 --rms-amount-scale 24
-```
-
-Write flow-analysis cache sidecars:
-
-```sh
-cargo run -p morphogen-cli -- cache-synthetic-flow /tmp/morphogen-flow-cache --width 64 --height 64
-cargo run -p morphogen-cli -- cache-luminance-flow /path/to/source-a.png /tmp/morphogen-luma-flow-cache --width 256 --height 256
-cargo run -p morphogen-cli -- render-two-source /path/to/source-a.png /path/to/source-b.png /tmp/morphogen-two-source.png --flow-cache-dir /tmp/morphogen-flow-cache
-```
-
-Write an inspectable STFT magnitude cache from a WAV:
-
-```sh
-cargo run -p morphogen-cli -- cache-stft /tmp/morphogen-audio.wav /tmp/morphogen-stft.json --fft-size 1024 --hop-size 256 --window hann
-```
-
-Write an onset-strength cache from a WAV:
-
-```sh
-cargo run -p morphogen-cli -- cache-onsets /tmp/morphogen-audio.wav /tmp/morphogen-onsets.json --fft-size 1024 --hop-size 256 --window hann
-```
-
-Create and inspect a persisted offline render queue:
-
-```sh
-cargo run -p morphogen-cli -- queue-init /tmp/morphogen-render-queue.json
-cargo run -p morphogen-cli -- queue-add-test /tmp/morphogen-render-queue.json --project-path /tmp/morphogen-example.morphogen.json
-cargo run -p morphogen-cli -- queue-inspect /tmp/morphogen-render-queue.json
-cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /tmp/morphogen-render-output --stop-after-frame
-cargo run -p morphogen-cli -- queue-run-test /tmp/morphogen-render-queue.json /tmp/morphogen-render-output
-```
-
-Queue a real two-source frame-sequence render into a ProRes-ready bundle:
-
-```sh
-cargo run -p morphogen-cli -- queue-init /tmp/morphogen-frame-queue.json
-cargo run -p morphogen-cli -- queue-add-frame-sequence /tmp/morphogen-frame-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-frame-output --amount 16 --max-frames 120 --frame-rate 24
-cargo run -p morphogen-cli -- queue-run-frame-sequence /tmp/morphogen-frame-queue.json
-```
-
-Queue a granular mosaic sequence into the same ProRes-ready bundle shape. The completed bundle records Source A/B provenance, timing, and the generated grain descriptor/selection cache root:
-
-```sh
-cargo run -p morphogen-cli -- queue-init /tmp/morphogen-granular-queue.json
-cargo run -p morphogen-cli -- queue-add-granular-mosaic-sequence /tmp/morphogen-granular-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-granular-output --grain-size 24 --rearrangement 1 --variation 0.35 --seed 42 --max-frames 120 --frame-rate 24 --backend metal
-cargo run -p morphogen-cli -- queue-run-granular-mosaic-sequence /tmp/morphogen-granular-queue.json
-```
-
-Render a temporal feedback bundle. The output contains `frames/`, generated flow-cache sidecars, `checkpoint.json`, and immutable unquantized `state/feedback_frame_*.rgba32f` resume buffers:
-
-```sh
-cargo run -p morphogen-cli -- render-feedback-sequence /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --flow-source optical-flow --carrier-amount 1.5 --feedback-amount 2 --feedback-mix 0.72 --decay 0.995 --output-bit-depth 16 --temporal-supersampling 2 --max-frames 120 --frame-rate 24 --backend metal
-```
-
-Add `--flow-cache-dir /tmp/morphogen-optical-flow-cache` to reuse validated temporal fields on later renders. `--output-bit-depth` accepts `8` or `16`; `--temporal-supersampling` integrates centered samples along the current flow for the exported PNG without changing the one-state-update-per-frame checkpoint contract. `--stop-after-frame` writes a resumable checkpoint; rerun the same command to continue. `--reset-at-frame 48` makes that output frame use the documented frame-zero behavior before feedback continues. The queue variant persists the same contract:
-
-```sh
-cargo run -p morphogen-cli -- queue-add-feedback-sequence /tmp/morphogen-feedback-queue.json /tmp/source-a-frames /tmp/source-b-frames /tmp/morphogen-feedback-output --backend metal
-cargo run -p morphogen-cli -- queue-run-feedback-sequence /tmp/morphogen-feedback-queue.json
-```
-
-Probe media with optional external FFprobe:
-
-```sh
-cargo run -p morphogen-cli -- probe /path/to/media.mov
-```
-
-Extract analysis-friendly proxies with optional external FFmpeg:
-
-```sh
-cargo run -p morphogen-cli -- extract-frames /path/to/media.mov /tmp/morphogen-frames --fps 12 --max-frames 120
-cargo run -p morphogen-cli -- extract-audio /path/to/media.mov /tmp/morphogen-audio.wav --sample-rate 48000 --max-duration-seconds 10
-```
-
-Export a 32-bit float WAV stem through the Rust audio path:
-
-```sh
-cargo run -p morphogen-cli -- export-audio-stem /tmp/morphogen-audio.wav /tmp/morphogen-stem.wav --gain 1.0
-```
-
-## SwiftUI macOS Shell
-
-Build and run the native app shell:
-
-```sh
-swift build
+# SwiftUI app shell
+swift build && swift test
 swift run MorphogenMacApp
 ```
 
-Run Swift-side service tests:
+A quick taste of the CLI:
 
 ```sh
-swift test
+# Extract two sources to analysis-ready proxies
+cargo run -p morphogen-cli -- extract-frames source-a.mov /tmp/a-frames --fps 24
+cargo run -p morphogen-cli -- extract-frames source-b.mov /tmp/b-frames --fps 24
+
+# Feedback with an LFO on feedback_mix — no modulator file needed
+cargo run -p morphogen-cli -- render-feedback-sequence /tmp/a-frames /tmp/b-frames /tmp/out \
+  --feedback-amount 24 --modulate "feedback_mix=lfo(sine,0.25):0.4,0.3"
+
+# Chain rutt-etra scanlines into a posterize pass from one spec
+cargo run -p morphogen-cli -- render-chain chain.json /tmp/b-frames /tmp/chain-out
+
+# A fast quarter-res look before committing to the full render
+cargo run -p morphogen-cli -- downscale-frames /tmp/b-frames /tmp/b-quarter --scale 4 --max-frames 48
 ```
 
-The source buttons open native file pickers. Create Test Project writes an example `.morphogen.json` through `morphogen-cli init-example`, Open Project validates a selected project through `morphogen-cli inspect-project`, Probe Sources uses AVFoundation first and falls back to `morphogen-cli probe`, and Probe Preview Frames decodes selected source first frames into Metal textures. Proxy Output and Extract Source Proxies use `morphogen-cli extract-frames` and `extract-audio` to write each selected source as PNG frames plus a 32-bit float WAV. The WAV duration matches the requested proxy-frame span, keeping the generated RMS/STFT cache size bounded and its timing aligned with the frame sequence; those generated frame directories become the Source A and Source B sequence inputs. Run Two-Source Sequence appends a `frame_sequence_flow_displace` job to a persisted queue and executes it into a bundle containing `frames/`, optional `cache/flow/`, manifest, and checkpoint files. Both sequence export actions can write the completed frames to ProRes `.mov`; Export Queue ProRes MOV also understands any audio stems in the bundle. The CLI bridge calls require `cargo` on PATH; FFmpeg is optional but required for media proxy extraction.
+## Documentation map
 
-## Future Direction
+- **[`docs/REFERENCE.md`](docs/REFERENCE.md)** — the exhaustive CLI command
+  catalog and source-file key-path map.
+- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — system shape (core /
+  Metal / cache / queue / UI).
+- **[`docs/EFFECTS_ROADMAP.md`](docs/EFFECTS_ROADMAP.md)** — the full,
+  detailed per-effect design notes and landed-vs-deferred tiers.
+- **`docs/*_MILESTONE.md`** — the acceptance contract for each effect/feature,
+  written before it was built.
+- **[`docs/BACKLOG.md`](docs/BACKLOG.md)** — completed work + what's next.
+- **[`docs/RECOMMENDATIONS.md`](docs/RECOMMENDATIONS.md)** — strategic
+  "what's underdeveloped, what's next-level" notes.
+- **[`STATUS.md`](STATUS.md)** — the current session-resume checkpoint:
+  verified test baselines and the most recent landed work.
 
-The first deterministic flow-feedback milestone is complete: Source A's temporal pyramidal Lucas-Kanade vector field repeatedly moves and blends Source B with the previous output frame, with CPU/Metal parity, reusable validated sidecars, forward/backward reliability checks, and float-state resume. The next step is exposing that proven contract through SwiftUI controls and effect presets. Details are in [Flow Feedback Milestone](docs/FLOW_FEEDBACK_MILESTONE.md).
+## Current status
+
+`cargo test --workspace`: **532 passing, 0 failing** across 7 crates.
+`swift test`: **113 passing, 0 failing**. Every effect above has a landed CPU
+reference; Metal parity, queue exposure, and SwiftUI panels are landed for
+the large majority (noted per-effect in `docs/EFFECTS_ROADMAP.md` where a
+tier is still CPU-only or direct-CLI-only). See [`STATUS.md`](STATUS.md) for
+the exact, currently-verified baseline and the most recent work.
