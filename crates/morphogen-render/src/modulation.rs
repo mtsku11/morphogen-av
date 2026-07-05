@@ -18,9 +18,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChannelShiftSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
-    PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RenderError, RetroStaticSettings,
-    RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
+    ChannelShiftSettings, CoagulationSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
+    RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
@@ -494,6 +494,14 @@ pub const FLUID_ADVECT_MODULATION_TARGETS: &[&str] = &[
 /// `render-optical-flow-advect-sequence`.
 pub const FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS: &[&str] = &["advect", "reinject"];
 
+/// Coagulated flow blend — the look-driving continuous knobs (memory
+/// `coagulated-flow-blend`: push bias/strength/edge for the bold glitch).
+/// Structural knobs (patch_size, coherence_passes, seed) restructure the field
+/// and are excluded. Coagulated has no checkpoint path, so routes are
+/// provenance-only (the fluid-advect precedent).
+pub const COAGULATION_MODULATION_TARGETS: &[&str] =
+    &["coagulation_strength", "edge_hardness", "bias"];
+
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
 const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
@@ -685,6 +693,37 @@ pub fn apply_fluid_advect_two_source_modulation(
     Ok(())
 }
 
+/// Coagulated-blend knob ranges. `validate` requires only finiteness, so any
+/// finite clamp is safe (clamp-never-error); these bounds keep a runaway
+/// `scale·envelope` expressive without going insane. `edge_hardness` is a
+/// documented `[0, 1]` soft↔hard blend; `bias` is signed (push toward A or B).
+const COAGULATION_STRENGTH_RANGE: (f32, f32) = (0.0, 64.0);
+const COAGULATION_BIAS_RANGE: (f32, f32) = (-8.0, 8.0);
+
+/// Overwrite one routed coagulated-blend knob with a mapped value (clamped).
+pub fn apply_coagulation_modulation(
+    settings: &mut CoagulationSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "coagulation_strength" => {
+            settings.coagulation_strength =
+                value.clamp(COAGULATION_STRENGTH_RANGE.0, COAGULATION_STRENGTH_RANGE.1)
+        }
+        "edge_hardness" => settings.edge_hardness = value.clamp(0.0, 1.0),
+        "bias" => settings.bias = value.clamp(COAGULATION_BIAS_RANGE.0, COAGULATION_BIAS_RANGE.1),
+        _ => {
+            return Err(unknown_target(
+                "coagulated-blend",
+                target,
+                COAGULATION_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// Overwrite one routed palette-quantize knob with a mapped value. `levels`
 /// is the first integer target (clamped to `[2, 256]`, then rounded per the
 /// contracted rule); `mode` selects posterize/palette by variant index
@@ -847,6 +886,35 @@ mod tests {
         assert!(!json.contains("sampling"));
         let decoded: ModulationRoute = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, unsuffixed);
+    }
+
+    #[test]
+    fn coagulation_modulation_sets_clamps_and_rejects_unknown() {
+        let mut settings = CoagulationSettings::default();
+
+        // In-range values are set exactly (the continuity anchor: a routed
+        // value K, scale 1 offset 0, becomes the knob value K).
+        apply_coagulation_modulation(&mut settings, "coagulation_strength", 3.0).unwrap();
+        assert_eq!(settings.coagulation_strength, 3.0);
+        apply_coagulation_modulation(&mut settings, "edge_hardness", 0.5).unwrap();
+        assert_eq!(settings.edge_hardness, 0.5);
+        apply_coagulation_modulation(&mut settings, "bias", -2.0).unwrap();
+        assert_eq!(settings.bias, -2.0);
+
+        // Out-of-range clamps, never errors (a runaway envelope can't abort a frame).
+        apply_coagulation_modulation(&mut settings, "edge_hardness", 5.0).unwrap();
+        assert_eq!(settings.edge_hardness, 1.0);
+        apply_coagulation_modulation(&mut settings, "coagulation_strength", -10.0).unwrap();
+        assert_eq!(settings.coagulation_strength, 0.0);
+        apply_coagulation_modulation(&mut settings, "bias", 100.0).unwrap();
+        assert_eq!(settings.bias, 8.0);
+        // Every applied setting stays finite, so the frame's own validate passes.
+        assert!(settings.validate().is_ok());
+
+        // Structural knobs are not targets.
+        for structural in ["patch_size", "coherence_passes", "seed", "not_a_knob"] {
+            assert!(apply_coagulation_modulation(&mut settings, structural, 1.0).is_err());
+        }
     }
 
     #[test]
