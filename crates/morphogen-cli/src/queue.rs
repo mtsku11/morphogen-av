@@ -6754,6 +6754,7 @@ fn core_modulation_source(source: ModulationSource) -> CoreModulationSource {
         ModulationSource::AudioCentroid => CoreModulationSource::AudioCentroid,
         ModulationSource::Luma => CoreModulationSource::Luma,
         ModulationSource::Flow => CoreModulationSource::Flow,
+        ModulationSource::EdgeDensity => CoreModulationSource::EdgeDensity,
         ModulationSource::Lfo {
             shape,
             rate_hz,

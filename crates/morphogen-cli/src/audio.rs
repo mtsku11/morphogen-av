@@ -115,6 +115,68 @@ pub(crate) fn build_flow_magnitude_samples(
     Ok(samples)
 }
 
+/// Per-frame mean Sobel gradient magnitude (edge density). Measures how much
+/// edge content a frame has, independent of its mean brightness. The 3×3
+/// Sobel kernel is applied to the Rec.709 luma channel; the magnitude is
+/// averaged over all valid interior pixels. Border pixels are skipped to
+/// avoid clamp-bias on the Sobel window.
+pub(crate) fn frame_mean_edge_density(image: &ImageBufferF32) -> f32 {
+    let w = image.width as usize;
+    let h = image.height as usize;
+    if w < 3 || h < 3 {
+        return 0.0;
+    }
+    let luma: Vec<f32> = image
+        .pixels
+        .iter()
+        .map(|p| p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722)
+        .collect();
+    let mut sum = 0.0_f64;
+    let mut count = 0usize;
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let at = |dy: isize, dx: isize| luma[(y as isize + dy) as usize * w + (x as isize + dx) as usize];
+            let gx = at(-1, 1) + 2.0 * at(0, 1) + at(1, 1)
+                   - at(-1, -1) - 2.0 * at(0, -1) - at(1, -1);
+            let gy = at(1, -1) + 2.0 * at(1, 0) + at(1, 1)
+                   - at(-1, -1) - 2.0 * at(-1, 0) - at(-1, 1);
+            sum += ((gx * gx + gy * gy) as f64).sqrt();
+            count += 1;
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        (sum / count as f64) as f32
+    }
+}
+
+/// Read Source A's PNG sequence into `(time_seconds, edge_density)` samples.
+/// Edge density is the mean Sobel gradient magnitude (peak-normalized by the
+/// caller in modulate.rs, same convention as the flow source).
+pub(crate) fn build_edge_density_samples(
+    modulator_dir: &Path,
+    fps: f64,
+    max_frames: Option<usize>,
+) -> Result<Vec<(f64, f32)>, CliError> {
+    let mut frames = collect_image_frames(modulator_dir)?;
+    if let Some(cap) = max_frames {
+        frames.truncate(cap);
+    }
+    if frames.is_empty() {
+        return Err(CliError::Message(format!(
+            "no image frames found in {}",
+            modulator_dir.display()
+        )));
+    }
+    let mut samples = Vec::with_capacity(frames.len());
+    for (index, path) in frames.iter().enumerate() {
+        let image = load_image_f32(path)?;
+        samples.push((index as f64 / fps, frame_mean_edge_density(&image)));
+    }
+    Ok(samples)
+}
+
 /// Build the modulator descriptor samples Source A drives the route with.
 pub(crate) fn build_descriptor_samples(
     modulator_dir: &Path,
@@ -1064,5 +1126,62 @@ pub(crate) fn queue_run_video_audio_route(queue_path: &Path) -> Result<(), CliEr
             eprintln!("video-to-audio route job {job_id} failed: {error}");
             Err(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morphogen_render::ImageBufferF32;
+
+    fn make_checkerboard(width: u32, height: u32, tile: u32) -> ImageBufferF32 {
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let v = if (x / tile + y / tile) % 2 == 0 { 1.0 } else { 0.0 };
+                pixels.push([v, v, v, 1.0]);
+            }
+        }
+        ImageBufferF32 { width, height, pixels }
+    }
+
+    fn make_uniform(width: u32, height: u32, level: f32) -> ImageBufferF32 {
+        let pixels = vec![[level, level, level, 1.0]; (width * height) as usize];
+        ImageBufferF32 { width, height, pixels }
+    }
+
+    #[test]
+    fn edge_density_uniform_frame_is_zero() {
+        // A flat grey frame has no edges.
+        let img = make_uniform(16, 16, 0.5);
+        assert_eq!(frame_mean_edge_density(&img), 0.0);
+    }
+
+    #[test]
+    fn edge_density_increases_with_frequency() {
+        // Fine checker has more edges per pixel than coarse checker,
+        // even though both have identical mean luma (~0.5).
+        let coarse = make_checkerboard(32, 32, 8);
+        let fine = make_checkerboard(32, 32, 2);
+        let coarse_luma = frame_mean_luma(&coarse);
+        let fine_luma = frame_mean_luma(&fine);
+        // Luma must be equal (within 5%) — proves this isn't a luma signal.
+        assert!(
+            (coarse_luma - fine_luma).abs() < 0.05,
+            "mean luma should be near-equal: coarse={coarse_luma} fine={fine_luma}"
+        );
+        let coarse_edge = frame_mean_edge_density(&coarse);
+        let fine_edge = frame_mean_edge_density(&fine);
+        assert!(
+            fine_edge > coarse_edge,
+            "fine checker must have higher edge density: fine={fine_edge} coarse={coarse_edge}"
+        );
+    }
+
+    #[test]
+    fn edge_density_too_small_returns_zero() {
+        // Images narrower than 3×3 can't support a 3×3 Sobel kernel.
+        let tiny = make_checkerboard(2, 2, 1);
+        assert_eq!(frame_mean_edge_density(&tiny), 0.0);
     }
 }

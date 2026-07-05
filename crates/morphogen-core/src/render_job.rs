@@ -1460,6 +1460,8 @@ pub enum ModulationSource {
     AudioCentroid,
     Luma,
     Flow,
+    /// Peak-normalized mean Sobel gradient magnitude per frame (edge density).
+    EdgeDensity,
     /// Internal deterministic modulator — a pure function of
     /// `(frame_time, params)`; no media, no sidecar, no fingerprint.
     Lfo {
@@ -1481,6 +1483,7 @@ impl ModulationSource {
             ModulationSource::AudioCentroid => "audio-centroid",
             ModulationSource::Luma => "luma",
             ModulationSource::Flow => "flow",
+            ModulationSource::EdgeDensity => "edge-density",
             ModulationSource::Lfo { .. } => "lfo",
         }
     }

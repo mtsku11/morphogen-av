@@ -99,6 +99,10 @@ pub enum ModulationSource {
     Luma,
     /// Peak-normalized mean temporal optical-flow magnitude (**relative**).
     Flow,
+    /// Peak-normalized mean Sobel gradient magnitude (edge density) per frame
+    /// (**relative**). Invariant to uniform brightness shifts — a frame with many
+    /// edges is high even if its mean luma equals a plain grey frame.
+    EdgeDensity,
     /// A pure function of `(frame_time, params)` — no media, no sidecar, no
     /// fingerprint. `rate_hz` is cycles/second on the envelope timeline;
     /// `phase` is a phase offset in cycles (`fract` applied at eval time).
@@ -121,6 +125,7 @@ impl ModulationSource {
             ModulationSource::AudioCentroid => "audio-centroid",
             ModulationSource::Luma => "luma",
             ModulationSource::Flow => "flow",
+            ModulationSource::EdgeDensity => "edge-density",
             ModulationSource::Lfo { .. } => "lfo",
         }
     }
@@ -147,6 +152,7 @@ impl ModulationSource {
             "audio-centroid" => Some(ModulationSource::AudioCentroid),
             "luma" => Some(ModulationSource::Luma),
             "flow" => Some(ModulationSource::Flow),
+            "edge-density" => Some(ModulationSource::EdgeDensity),
             _ => None,
         }
     }
@@ -163,7 +169,10 @@ impl ModulationSource {
 
     /// True when the route needs `--modulator-frames`.
     pub fn needs_frames(self) -> bool {
-        matches!(self, ModulationSource::Luma | ModulationSource::Flow)
+        matches!(
+            self,
+            ModulationSource::Luma | ModulationSource::Flow | ModulationSource::EdgeDensity
+        )
     }
 }
 

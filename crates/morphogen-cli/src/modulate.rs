@@ -20,7 +20,7 @@ use morphogen_render::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::audio::{build_flow_magnitude_samples, build_luma_samples};
+use crate::audio::{build_edge_density_samples, build_flow_magnitude_samples, build_luma_samples};
 use crate::error::CliError;
 use crate::render::{feedback_modulation_frames_fingerprint, DatamoshSequenceSettings};
 
@@ -339,6 +339,14 @@ fn extract_envelope(
                 Ok(samples)
             })
         }
+        ModulationSource::EdgeDensity => {
+            let frames_dir = resolve_frames()?;
+            cached_frames_envelope(route, frames_dir, request, |dir| {
+                let mut samples = build_edge_density_samples(dir, request.fps, None)?;
+                peak_normalize(&mut samples);
+                Ok(samples)
+            })
+        }
     }
 }
 
@@ -348,6 +356,7 @@ fn envelope_cache_algorithm(source: ModulationSource) -> &'static str {
     match source {
         ModulationSource::Luma => "modulation_envelope_luma_v1",
         ModulationSource::Flow => "modulation_envelope_flow_v1",
+        ModulationSource::EdgeDensity => "modulation_envelope_edge_density_v1",
         // Audio envelopes are not cached.
         _ => unreachable!("only frames-based envelopes are cached"),
     }
