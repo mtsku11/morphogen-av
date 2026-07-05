@@ -36,7 +36,9 @@ pub(crate) struct ModulationPlan {
 }
 
 /// Envelope identity: which modulator's media, analyzed by which descriptor.
-type EnvelopeKey = (Option<String>, ModulationSource);
+/// Uses `spec_text()` as the source key so the tuple stays `PartialEq` + `Clone`
+/// even after `ModulationSource` drops `Copy` (Breakpoints variant carries a Vec).
+type EnvelopeKey = (Option<String>, String);
 
 impl ModulationPlan {
     /// Routed `(target, mapped value)` pairs for output frame `index` (the
@@ -172,7 +174,7 @@ pub(crate) fn build_modulation_plan(
     // Each distinct (modulator, source) pair is extracted exactly once.
     let mut envelopes: Vec<(EnvelopeKey, Vec<(f64, f32)>)> = Vec::new();
     for route in &routes {
-        let key: EnvelopeKey = (route.modulator.clone(), route.source);
+        let key: EnvelopeKey = (route.modulator.clone(), route.source.spec_text());
         if envelopes.iter().any(|(existing, _)| *existing == key) {
             continue;
         }
@@ -183,7 +185,7 @@ pub(crate) fn build_modulation_plan(
     let routes = routes
         .into_iter()
         .map(|route| {
-            let key: EnvelopeKey = (route.modulator.clone(), route.source);
+            let key: EnvelopeKey = (route.modulator.clone(), route.source.spec_text());
             let samples = envelopes
                 .iter()
                 .find(|(existing, _)| *existing == key)
@@ -262,7 +264,7 @@ fn extract_envelope(
     named_audio: &[(String, PathBuf)],
     named_frames: &[(String, PathBuf)],
 ) -> Result<Vec<(f64, f32)>, CliError> {
-    let source = route.source;
+    let source = route.source.clone();
     let resolve_audio = || {
         resolve_modulator_media(
             route,
@@ -282,10 +284,11 @@ fn extract_envelope(
         )
     };
     match source {
-        // A pure function of (frame_time, params) — no media, no sidecar, no
-        // fingerprint. `modulated_value` computes the value directly from
-        // the route; this envelope is never consulted.
+        // Pure functions of (frame_time, params) — no media, no sidecar, no
+        // fingerprint. `modulated_value` evaluates them directly; this
+        // returned envelope is never consulted.
         ModulationSource::Lfo { .. } => Ok(Vec::new()),
+        ModulationSource::Breakpoints { .. } => Ok(Vec::new()),
         ModulationSource::AudioRms => {
             let buffer = load_wav_f32(resolve_audio()?)?;
             let frames = rms_envelope(&buffer, MODULATION_WINDOW, MODULATION_HOP)?;
@@ -389,7 +392,7 @@ fn cached_frames_envelope(
     request: &ModulationRequest<'_>,
     extract: impl FnOnce(&Path) -> Result<Vec<(f64, f32)>, CliError>,
 ) -> Result<Vec<(f64, f32)>, CliError> {
-    let source = route.source;
+    let source = route.source.clone();
     let Some(cache_dir) = request.cache_dir else {
         return extract(frames_dir);
     };

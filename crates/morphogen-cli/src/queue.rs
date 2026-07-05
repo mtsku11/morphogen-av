@@ -6755,6 +6755,9 @@ fn core_modulation_source(source: ModulationSource) -> CoreModulationSource {
         ModulationSource::Luma => CoreModulationSource::Luma,
         ModulationSource::Flow => CoreModulationSource::Flow,
         ModulationSource::EdgeDensity => CoreModulationSource::EdgeDensity,
+        ModulationSource::Breakpoints { points } => {
+            CoreModulationSource::Breakpoints { points }
+        }
         ModulationSource::Lfo {
             shape,
             rate_hz,

@@ -1450,9 +1450,9 @@ impl LfoShape {
 /// Mirrors `morphogen_render::ModulationSource` for queue-job serialisation.
 ///
 /// The `f32` fields on `Lfo` force dropping the `Eq` derive (keep `Copy`,
-/// `PartialEq`); nothing in this crate requires `Eq` — the containing
-/// route/task types are themselves `PartialEq` only.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+/// `Breakpoints`' `Vec` forces dropping `Copy` — use `.clone()` at call sites.
+/// `PartialEq` is kept; nothing in this crate requires `Eq`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModulationSource {
     AudioRms,
@@ -1469,6 +1469,10 @@ pub enum ModulationSource {
         rate_hz: f32,
         phase: f32,
     },
+    /// User-defined piecewise-linear envelope — inline knots, no media.
+    Breakpoints {
+        points: Vec<[f32; 2]>,
+    },
 }
 
 impl ModulationSource {
@@ -1476,7 +1480,7 @@ impl ModulationSource {
     /// spelling is dynamic (shape/rate/phase), so this returns a generic
     /// `"lfo"` tag for it — use [`ModulationSource::spec_text`] for the
     /// round-trippable spelling.
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             ModulationSource::AudioRms => "audio-rms",
             ModulationSource::AudioOnset => "audio-onset",
@@ -1485,6 +1489,7 @@ impl ModulationSource {
             ModulationSource::Flow => "flow",
             ModulationSource::EdgeDensity => "edge-density",
             ModulationSource::Lfo { .. } => "lfo",
+            ModulationSource::Breakpoints { .. } => "breakpoints",
         }
     }
 
@@ -1492,13 +1497,20 @@ impl ModulationSource {
     /// clause: media variants keep their `name()` spelling; the LFO variant
     /// spells `lfo(<shape>,<rate_hz>,<phase>)` with `f32`'s `Display` (exact
     /// round-trip, the established queue-identity mechanism).
-    pub fn spec_text(self) -> String {
+    pub fn spec_text(&self) -> String {
         match self {
             ModulationSource::Lfo {
                 shape,
                 rate_hz,
                 phase,
             } => format!("lfo({},{},{})", shape.name(), rate_hz, phase),
+            ModulationSource::Breakpoints { points } => {
+                let pairs: Vec<String> = points
+                    .iter()
+                    .map(|[t, v]| format!("{}:{}", t, v))
+                    .collect();
+                format!("breakpoints({})", pairs.join(";"))
+            }
             other => other.name().to_string(),
         }
     }

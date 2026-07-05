@@ -83,10 +83,10 @@ impl LfoShape {
 
 /// Which analysis descriptor drives a route.
 ///
-/// The `f32` fields on `Lfo` force dropping the `Eq` derive (keep `Copy`,
-/// `PartialEq`); nothing requires `Eq` — `EnvelopeKey` comparisons are `==`
-/// in a `Vec`, there are no map keys.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// `Lfo`'s `f32` fields force dropping `Eq`; `Breakpoints`' `Vec` forces
+/// dropping `Copy`. Use `.clone()` at call sites where a copy was implicit.
+/// `EnvelopeKey` now uses `spec_text()` strings for dedup — no map keys.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModulationSource {
     /// Peak-normalized RMS envelope of the modulator WAV (**relative**).
@@ -111,6 +111,14 @@ pub enum ModulationSource {
         rate_hz: f32,
         phase: f32,
     },
+    /// User-defined piecewise-linear envelope: a list of `(t_seconds, value)`
+    /// knot pairs, evaluated via linear interpolation (left-clamp, right-clamp).
+    /// `value` is on `[0, 1]`; the route's `scale`/`offset` then maps it to
+    /// the knob range. No media, no sidecar — the shape is inline in the spec.
+    Breakpoints {
+        /// Pairs of `[t_seconds, value]`, sorted ascending by `t`.
+        points: Vec<[f32; 2]>,
+    },
 }
 
 impl ModulationSource {
@@ -118,7 +126,7 @@ impl ModulationSource {
     /// `luma`, `flow`). The LFO source's spelling is dynamic (shape/rate/
     /// phase), so this returns a generic `"lfo"` tag for it — use
     /// [`ModulationSource::spec_text`] for the round-trippable spelling.
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             ModulationSource::AudioRms => "audio-rms",
             ModulationSource::AudioOnset => "audio-onset",
@@ -127,6 +135,7 @@ impl ModulationSource {
             ModulationSource::Flow => "flow",
             ModulationSource::EdgeDensity => "edge-density",
             ModulationSource::Lfo { .. } => "lfo",
+            ModulationSource::Breakpoints { .. } => "breakpoints",
         }
     }
 
@@ -134,13 +143,20 @@ impl ModulationSource {
     /// clause: media variants keep their `name()` spelling; the LFO variant
     /// spells `lfo(<shape>,<rate_hz>,<phase>)` with `f32`'s `Display` (exact
     /// round-trip, the established queue-identity mechanism).
-    pub fn spec_text(self) -> String {
+    pub fn spec_text(&self) -> String {
         match self {
             ModulationSource::Lfo {
                 shape,
                 rate_hz,
                 phase,
             } => format!("lfo({},{},{})", shape.name(), rate_hz, phase),
+            ModulationSource::Breakpoints { points } => {
+                let pairs: Vec<String> = points
+                    .iter()
+                    .map(|[t, v]| format!("{}:{}", t, v))
+                    .collect();
+                format!("breakpoints({})", pairs.join(";"))
+            }
             other => other.name().to_string(),
         }
     }
@@ -158,7 +174,7 @@ impl ModulationSource {
     }
 
     /// True when the route needs `--modulator-audio`.
-    pub fn needs_audio(self) -> bool {
+    pub fn needs_audio(&self) -> bool {
         matches!(
             self,
             ModulationSource::AudioRms
@@ -168,7 +184,7 @@ impl ModulationSource {
     }
 
     /// True when the route needs `--modulator-frames`.
-    pub fn needs_frames(self) -> bool {
+    pub fn needs_frames(&self) -> bool {
         matches!(
             self,
             ModulationSource::Luma | ModulationSource::Flow | ModulationSource::EdgeDensity
@@ -216,6 +232,21 @@ fn default_scale() -> f32 {
     1.0
 }
 
+/// Split `<source-body>:<params>` at the first `:` that is NOT inside
+/// balanced parentheses. Returns `(source_body, None)` when no such `:` exists.
+fn split_source_params(rest: &str) -> (&str, Option<&str>) {
+    let mut depth: usize = 0;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => return (&rest[..i], Some(&rest[i + 1..])),
+            _ => {}
+        }
+    }
+    (rest, None)
+}
+
 /// Parse the CLI route grammar
 /// `<target>=[<name>.]<source>[:<scale>[,<offset>]][@hold|@smooth]`.
 pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError> {
@@ -246,17 +277,20 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
     if target.is_empty() {
         return Err(bad("empty target"));
     }
-    let (source_name, params) = match rest.split_once(':') {
-        Some((source, params)) => (source, Some(params)),
-        None => (rest, None),
-    };
+    // Split source from optional `:scale[,offset]` params. `breakpoints(...)`
+    // sources contain `:` inside their parens, so we must skip `:` chars that
+    // are inside a balanced `(...)` group.
+    let (source_name, params) = split_source_params(rest);
     // An optional `<name>.` prefix selects a named modulator; the source
     // names themselves contain no '.', so the first dot is unambiguous —
     // except `lfo(...)`, whose parens may themselves contain a '.'
     // (`lfo(sine,0.5)`). An `lfo(...)` body never takes a named-modulator
     // prefix (no media to name), so the dot-split must not run on it; a real
     // prefix ahead of one (`wob.lfo(sine)`) is a distinct, explicit error.
-    let (modulator, source_name) = if source_name.trim().starts_with("lfo(") {
+    let trimmed_source = source_name.trim();
+    let is_paren_source = trimmed_source.starts_with("lfo(")
+        || trimmed_source.starts_with("breakpoints(");
+    let (modulator, source_name) = if is_paren_source {
         (None, source_name)
     } else {
         match source_name.split_once('.') {
@@ -265,9 +299,9 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
                 if name.is_empty() {
                     return Err(bad("empty modulator name"));
                 }
-                if inner.trim().starts_with("lfo(") {
+                if inner.trim().starts_with("lfo(") || inner.trim().starts_with("breakpoints(") {
                     return Err(bad(
-                        "a named modulator prefix is not allowed on an lfo source (lfo needs no media)",
+                        "a named modulator prefix is not allowed on an lfo or breakpoints source (they need no media)",
                     ));
                 }
                 (Some(name.to_string()), inner)
@@ -278,10 +312,12 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
     let source_name = source_name.trim();
     let source = if source_name.starts_with("lfo(") {
         parse_lfo_source(source_name, &bad)?
+    } else if source_name.starts_with("breakpoints(") {
+        parse_breakpoints_source(source_name, &bad)?
     } else {
         ModulationSource::parse(source_name).ok_or_else(|| {
             bad(&format!(
-                "unknown source '{source_name}' (available: audio-rms, audio-onset, audio-centroid, luma, flow, lfo)"
+                "unknown source '{source_name}' (available: audio-rms, audio-onset, audio-centroid, luma, flow, edge-density, lfo, breakpoints)"
             ))
         })?
     };
@@ -367,6 +403,56 @@ fn parse_lfo_source(
     })
 }
 
+/// Parse the `breakpoints(<t>:<v>[;<t>:<v>...])` source body (parens included,
+/// already trimmed). Knots must have finite `t` and `v` in `[0, 1]`; they are
+/// sorted ascending by `t` before storage. Two knots at the same `t` take the
+/// first value (the earlier one in the spec string).
+fn parse_breakpoints_source(
+    text: &str,
+    bad: &dyn Fn(&str) -> RenderError,
+) -> Result<ModulationSource, RenderError> {
+    let inner = text
+        .strip_prefix("breakpoints(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| bad(&format!("malformed breakpoints(...) source '{text}'")))?;
+    if inner.trim().is_empty() {
+        return Err(bad("breakpoints(...) requires at least one knot (t:v)"));
+    }
+    let mut points: Vec<[f32; 2]> = Vec::new();
+    for knot in inner.split(';') {
+        let knot = knot.trim();
+        if knot.is_empty() {
+            continue;
+        }
+        let (t_text, v_text) = knot.split_once(':').ok_or_else(|| {
+            bad(&format!(
+                "malformed knot '{knot}' — expected t:v (e.g. '0.0:0.5')"
+            ))
+        })?;
+        let t: f32 = t_text.trim().parse().map_err(|_| {
+            bad(&format!("invalid knot t '{}' — expected a number", t_text.trim()))
+        })?;
+        let v: f32 = v_text.trim().parse().map_err(|_| {
+            bad(&format!("invalid knot v '{}' — expected a number", v_text.trim()))
+        })?;
+        if !t.is_finite() {
+            return Err(bad(&format!("knot t '{t}' must be finite")));
+        }
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            return Err(bad(&format!(
+                "knot v '{v}' must be finite and in [0, 1]"
+            )));
+        }
+        points.push([t, v]);
+    }
+    if points.is_empty() {
+        return Err(bad("breakpoints(...) requires at least one knot (t:v)"));
+    }
+    // Stable sort ascending by t; ties keep spec order (first wins at eval).
+    points.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(ModulationSource::Breakpoints { points })
+}
+
 /// Reject two routes driving the same target (ambiguous intent).
 pub fn validate_route_targets(routes: &[ModulationRoute]) -> Result<(), RenderError> {
     for (index, route) in routes.iter().enumerate() {
@@ -443,15 +529,47 @@ pub fn modulated_value(
         shape,
         rate_hz,
         phase,
-    } = route.source
+    } = &route.source
     {
         // LFO routes bypass envelope extraction and sampling entirely — a
         // pure function of `(t, params)`. `sampling` (`@hold`/`@smooth`) is a
         // documented no-op here (nothing sparse to sample). All math in f64,
         // cast to f32 at the end (milestone doc, "Semantics").
-        let x = rate_hz as f64 * t + phase as f64;
+        let x = *rate_hz as f64 * t + *phase as f64;
         let p = x - x.floor(); // fract(x) = x - x.floor(), so p ∈ [0,1)
         let raw = shape.evaluate(p);
+        return (raw * route.scale as f64 + route.offset as f64) as f32;
+    }
+    if let ModulationSource::Breakpoints { points } = &route.source {
+        // Piecewise-linear evaluation: interpolate between knots, clamp at ends.
+        // `sampling` (@hold/@smooth) is intentionally ignored — the envelope is
+        // already defined as continuous (lerp); there is nothing sparse to hold.
+        let raw = if points.is_empty() {
+            0.0_f64
+        } else if points.len() == 1 {
+            points[0][1] as f64
+        } else {
+            let t32 = t as f32;
+            if t32 <= points[0][0] {
+                points[0][1] as f64
+            } else if t32 >= points[points.len() - 1][0] {
+                points[points.len() - 1][1] as f64
+            } else {
+                let mut lo = 0usize;
+                while lo + 1 < points.len() && points[lo + 1][0] <= t32 {
+                    lo += 1;
+                }
+                let [t0, v0] = points[lo];
+                let [t1, v1] = points[lo + 1];
+                let span = t1 - t0;
+                if span <= 0.0 {
+                    v0 as f64
+                } else {
+                    let alpha = ((t32 - t0) / span).clamp(0.0, 1.0);
+                    (v0 + (v1 - v0) * alpha) as f64
+                }
+            }
+        };
         return (raw * route.scale as f64 + route.offset as f64) as f32;
     }
     sample_envelope(samples, t, sampling) * route.scale + route.offset
@@ -1667,5 +1785,65 @@ mod tests {
             apply_rutt_etra_modulation(&mut rutt, "displacement_depth", value).unwrap();
             assert_eq!(rutt.displacement_depth, 150.0);
         }
+    }
+
+    // ── Breakpoints modulation source ────────────────────────────────────────
+
+    fn bp_route(points: Vec<[f32; 2]>, scale: f32, offset: f32) -> ModulationRoute {
+        ModulationRoute {
+            target: "strength".to_string(),
+            source: ModulationSource::Breakpoints { points },
+            scale,
+            offset,
+            sampling: None,
+            modulator: None,
+        }
+    }
+
+    #[test]
+    fn breakpoints_single_knot_returns_constant() {
+        let route = bp_route(vec![[0.0, 0.5]], 1.0, 0.0);
+        assert_eq!(modulated_value(&route, &[], 0.0, ModulationSampling::Hold), 0.5);
+        assert_eq!(modulated_value(&route, &[], 10.0, ModulationSampling::Hold), 0.5);
+    }
+
+    #[test]
+    fn breakpoints_interpolates_between_knots() {
+        // 0s→0.0, 1s→1.0 — midpoint should be 0.5.
+        let route = bp_route(vec![[0.0, 0.0], [1.0, 1.0]], 1.0, 0.0);
+        let v = modulated_value(&route, &[], 0.5, ModulationSampling::Hold);
+        assert!((v - 0.5).abs() < 1e-5, "expected ~0.5, got {v}");
+    }
+
+    #[test]
+    fn breakpoints_clamps_before_first_and_after_last() {
+        let route = bp_route(vec![[2.0, 0.25], [4.0, 0.75]], 1.0, 0.0);
+        let before = modulated_value(&route, &[], 0.0, ModulationSampling::Hold);
+        let after  = modulated_value(&route, &[], 8.0, ModulationSampling::Hold);
+        assert!((before - 0.25).abs() < 1e-5, "expected left-clamp 0.25, got {before}");
+        assert!((after  - 0.75).abs() < 1e-5, "expected right-clamp 0.75, got {after}");
+    }
+
+    #[test]
+    fn breakpoints_scale_offset_applied() {
+        // Single knot 1.0, scale=2, offset=-0.5 → 1.0*2 - 0.5 = 1.5.
+        let route = bp_route(vec![[0.0, 1.0]], 2.0, -0.5);
+        let v = modulated_value(&route, &[], 0.0, ModulationSampling::Hold);
+        assert!((v - 1.5).abs() < 1e-5, "expected 1.5, got {v}");
+    }
+
+    #[test]
+    fn breakpoints_parse_round_trips_spec_text() {
+        let spec = "strength=breakpoints(0.0:0.0;0.5:1.0;1.0:0.0)";
+        let route = parse_modulation_route(spec).expect("parse should succeed");
+        let respec = format!("strength={}", route.source.spec_text());
+        let route2 = parse_modulation_route(&respec).expect("re-parse should succeed");
+        assert_eq!(route.source, route2.source);
+    }
+
+    #[test]
+    fn breakpoints_rejects_value_out_of_range() {
+        let result = parse_modulation_route("strength=breakpoints(0.0:1.5)");
+        assert!(result.is_err(), "value 1.5 > 1 should be rejected");
     }
 }
