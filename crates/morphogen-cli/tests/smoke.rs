@@ -1232,6 +1232,178 @@ fn render_composition_crossfade_blends_the_overlap_window() {
 }
 
 #[test]
+fn render_composition_caches_unchanged_scenes_and_rerenders_edited_ones() {
+    // Anchor A4: re-running an unchanged spec re-renders nothing and re-assembles
+    // byte-identical output; changing only scene B leaves scene A byte-identical.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+
+    // Scene A is fixed; scene B's rutt-etra displacement is the tunable knob.
+    let spec_for = |b_disp: f64| {
+        format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "a", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 4}}]}},
+                  "transition_out": {{"type": "cut"}}}},
+                {{"name": "b", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": {b_disp}, "line_thickness": 1, "mono": false}}]}}}}
+            ]}}"#
+        )
+    };
+    let spec_path = temp_dir.path().join("composition.json");
+    let out_dir = temp_dir.path().join("comp-out");
+    let render = |disp: f64| {
+        write_chain_spec(&spec_path, &spec_for(disp));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+    };
+    let scene_a = out_dir.join("scene_01_a/stage_01_palette_quantize/frame_000000.png");
+    let scene_b = out_dir.join("scene_02_b/stage_01_rutt_etra/frame_000000.png");
+
+    // Run 1: fresh.
+    render(2.0)
+        .success()
+        .stdout(predicate::str::contains("scene 01 (a) rendered"))
+        .stdout(predicate::str::contains("scene 02 (b) rendered"));
+    let a_run1 = fs::read(&scene_a).expect("scene a frame run1");
+    let b_run1 = fs::read(&scene_b).expect("scene b frame run1");
+    let frames_run1: Vec<Vec<u8>> = (0..6)
+        .map(|i| fs::read(out_dir.join(format!("frames/frame_{i:06}.png"))).expect("frame"))
+        .collect();
+
+    // Run 2: identical spec → every scene reused, output byte-identical.
+    render(2.0)
+        .success()
+        .stdout(predicate::str::contains("scene 01 (a) reused from cache"))
+        .stdout(predicate::str::contains("scene 02 (b) reused from cache"));
+    assert_eq!(fs::read(&scene_a).expect("scene a run2"), a_run1);
+    assert_eq!(fs::read(&scene_b).expect("scene b run2"), b_run1);
+    for (i, expected) in frames_run1.iter().enumerate() {
+        assert_eq!(
+            &fs::read(out_dir.join(format!("frames/frame_{i:06}.png"))).expect("frame run2"),
+            expected,
+            "unchanged re-run must re-assemble byte-identical frame {i}"
+        );
+    }
+
+    // Run 3: edit scene B only → A reused (byte-identical), B re-rendered (differs).
+    render(20.0)
+        .success()
+        .stdout(predicate::str::contains("scene 01 (a) reused from cache"))
+        .stdout(predicate::str::contains("scene 02 (b) rendered"));
+    assert_eq!(
+        fs::read(&scene_a).expect("scene a run3"),
+        a_run1,
+        "editing scene B must leave scene A byte-identical"
+    );
+    assert_ne!(
+        fs::read(&scene_b).expect("scene b run3"),
+        b_run1,
+        "editing scene B's knob must change its render"
+    );
+}
+
+#[test]
+fn render_composition_resumes_after_a_scene_is_lost() {
+    // Acceptance 4: a completed scene is reused, a lost scene re-renders, and
+    // the result is byte-identical to an uninterrupted run.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+    let spec = format!(
+        r#"{{"version": 1, "fps": 12, "scenes": [
+            {{"name": "a", "duration_frames": 3, "input_dir": {source},
+              "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 4}}]}},
+              "transition_out": {{"type": "cut"}}}},
+            {{"name": "b", "duration_frames": 3, "input_dir": {source},
+              "chain": {{"version": 1, "stages": [{{"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false}}]}}}}
+        ]}}"#
+    );
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(&spec_path, &spec);
+    let render_into = |out: &Path| {
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out.to_string_lossy().as_ref(),
+            ])
+            .assert()
+    };
+
+    // Reference: a single uninterrupted render.
+    let ref_dir = temp_dir.path().join("ref-out");
+    render_into(&ref_dir).success();
+
+    // Working: render, then lose scene 2 (simulate an interruption after scene 1).
+    let work_dir = temp_dir.path().join("work-out");
+    render_into(&work_dir).success();
+    fs::remove_dir_all(work_dir.join("scene_02_b")).expect("drop scene 2");
+
+    // Re-run: scene 1 reused, scene 2 re-rendered, output byte-identical to ref.
+    render_into(&work_dir)
+        .success()
+        .stdout(predicate::str::contains("scene 01 (a) reused from cache"))
+        .stdout(predicate::str::contains("scene 02 (b) rendered"));
+    assert_png_frames_identical(&ref_dir.join("frames"), &work_dir.join("frames"), 6);
+}
+
+#[test]
+fn render_composition_refuses_structural_change_into_existing_dir() {
+    // Acceptance 5: a changed scene name/order refuses (rather than reuse
+    // another scene's cached frames).
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+    let good_chain = r#"{"version": 1, "stages": [{"effect": "palette_quantize", "mode": "posterize", "levels": 4}]}"#;
+    let spec_for = |first: &str| {
+        format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "{first}", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "cut"}}}},
+                {{"name": "b", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}
+            ]}}"#
+        )
+    };
+    let spec_path = temp_dir.path().join("composition.json");
+    let out_dir = temp_dir.path().join("comp-out");
+    let render = |first: &str| {
+        write_chain_spec(&spec_path, &spec_for(first));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+    };
+
+    render("a").success();
+    // Rename the first scene → structural change → refuse, original dir intact.
+    render("a2")
+        .failure()
+        .stderr(predicate::str::contains("scenes changed (names or order)"));
+    assert!(
+        out_dir.join("scene_01_a").is_dir(),
+        "a refused structural change must not destroy the existing render"
+    );
+}
+
+#[test]
 fn render_chain_same_spec_twice_is_byte_identical() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");

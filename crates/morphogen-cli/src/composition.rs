@@ -25,12 +25,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::chain::{run_chain_spec, validate_chain_spec, ChainSpec};
 use crate::error::CliError;
-use crate::imaging::{collect_image_frames, load_image_f32, save_png};
+use crate::imaging::{collect_image_frames, load_image_f32, save_png, update_fnv1a};
 
 /// Only composition spec version this build understands. The field exists so a
 /// future format change is a clear error, not a silent best-effort parse (the
 /// chain-spec precedent).
 const COMPOSITION_SPEC_VERSION: u32 = 1;
+
+/// Persisted at the output root; records the scene skeleton (names in order)
+/// and each scene's render-cache fingerprint so a re-run can skip unchanged
+/// scenes and refuse a structurally changed spec. Lives at the root — never
+/// inside a scene directory — so scene directories stay pristine for the
+/// chain's own reconciliation.
+const COMPOSITION_RECORD_FILE: &str = "composition-record.json";
 
 // ---------------------------------------------------------------------------
 // Spec types
@@ -238,6 +245,73 @@ fn read_scene_chain_manifest(scene_dir: &Path) -> Result<serde_json::Value, CliE
     Ok(serde_json::from_str(&fs::read_to_string(&path)?)?)
 }
 
+/// One scene's entry in the composition record: its name (the structural
+/// skeleton) and render-cache fingerprint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SceneRecord {
+    name: String,
+    fingerprint: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct CompositionRecord {
+    scenes: Vec<SceneRecord>,
+}
+
+fn read_composition_record(path: &Path) -> Option<CompositionRecord> {
+    if !path.is_file() {
+        return None;
+    }
+    // A truncated/unparseable record (interrupted mid-write) is treated as
+    // absent: the structural guard simply doesn't fire and every scene
+    // re-renders, which is safe because each scene is deterministic.
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+}
+
+/// Content hash of a scene's input frames (fnv1a64 over each frame's file name
+/// and bytes, in sorted order) — path-independent, so identical footage in a
+/// moved directory still hits the cache. Mirrors the chain's input-fingerprint
+/// recipe (content, not the directory path).
+fn source_content_hash(input_dir: &Path) -> Result<String, CliError> {
+    let frames = collect_image_frames(input_dir)?;
+    if frames.is_empty() {
+        return Err(CliError::Message(format!(
+            "scene input directory {} contains no supported image frames",
+            input_dir.display()
+        )));
+    }
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    for frame in &frames {
+        update_fnv1a(
+            &mut checksum,
+            frame.file_name().unwrap_or_default().as_encoded_bytes(),
+        );
+        update_fnv1a(&mut checksum, &[0]);
+        update_fnv1a(&mut checksum, &fs::read(frame)?);
+    }
+    Ok(format!("fnv1a64:{checksum:016x}"))
+}
+
+/// A scene's render-cache key: everything that determines its rendered frames —
+/// the resolved chain spec (stages, settings, routes), the input footage
+/// content, and the composition fps (which governs modulation sampling).
+/// Deliberately excludes `duration_frames` / `transition_out` / `name`: those
+/// drive the timeline *assembly* (always redone) or are structural (a
+/// name/order change refuses), not the pixels the scene renders.
+fn scene_fingerprint(scene: &Scene, fps: f64) -> Result<String, CliError> {
+    let chain_json = serde_json::to_string(&scene.chain)?;
+    let content = source_content_hash(&scene.input_dir)?;
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    update_fnv1a(&mut checksum, chain_json.as_bytes());
+    update_fnv1a(&mut checksum, &[0]);
+    update_fnv1a(&mut checksum, content.as_bytes());
+    update_fnv1a(&mut checksum, &[0]);
+    update_fnv1a(&mut checksum, &fps.to_bits().to_le_bytes());
+    Ok(format!("fnv1a64:{checksum:016x}"))
+}
+
 /// A rendered scene, carried from the render pass into the assembly pass.
 struct RenderedScene {
     name: String,
@@ -297,14 +371,76 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
     let spec_text = fs::read_to_string(spec_path)?;
     let spec = parse_and_validate_composition_spec(&spec_text)?;
 
-    // Pass 1: render every scene and collect its final frames. A crossfade
-    // needs the *next* scene's head frames, so assembly is a second pass over
-    // all scenes rather than interleaved with rendering.
+    fs::create_dir_all(output_dir)?;
+    let record_path = output_dir.join(COMPOSITION_RECORD_FILE);
+    let prior = read_composition_record(&record_path);
+
+    // Structural guard: the set and order of scene names is the composition's
+    // skeleton. A changed skeleton (rename/reorder/add/remove) refuses rather
+    // than risk reusing another scene's cached frames — the chain-refusal
+    // precedent. A changed *setting* keeps the skeleton and re-renders only its
+    // scene (below).
+    if let Some(prior) = &prior {
+        let prior_names: Vec<&str> = prior.scenes.iter().map(|s| s.name.as_str()).collect();
+        let new_names: Vec<&str> = spec.scenes.iter().map(|s| s.name.as_str()).collect();
+        if prior_names != new_names {
+            return Err(CliError::Message(format!(
+                "the composition's scenes changed (names or order) since {} was first rendered; \
+                 reusing cached scene frames would be unsound — use a fresh output directory",
+                output_dir.display()
+            )));
+        }
+    }
+
+    // The working record carries prior fingerprints forward (skeleton matches,
+    // so by index) so an unchanged scene hits the cache; each scene overwrites
+    // its own entry as it completes and the record is persisted after every
+    // scene, so an interrupted run resumes.
+    let mut record = CompositionRecord {
+        scenes: spec
+            .scenes
+            .iter()
+            .map(|scene| SceneRecord {
+                name: scene.name.clone(),
+                fingerprint: String::new(),
+            })
+            .collect(),
+    };
+    if let Some(prior) = &prior {
+        for (slot, prior_scene) in record.scenes.iter_mut().zip(&prior.scenes) {
+            slot.fingerprint = prior_scene.fingerprint.clone();
+        }
+    }
+    fs::write(&record_path, serde_json::to_string_pretty(&record)?)?;
+
+    // Pass 1: render (or reuse) every scene and collect its final frames. A
+    // crossfade needs the *next* scene's head frames, so assembly is a second
+    // pass over all scenes rather than interleaved with rendering.
     let mut scenes: Vec<RenderedScene> = Vec::with_capacity(spec.scenes.len());
     for (index, scene) in spec.scenes.iter().enumerate() {
         let scene_number = index + 1;
         let directory = format!("scene_{scene_number:02}_{}", scene.name);
         let scene_dir = output_dir.join(&directory);
+        let fingerprint = scene_fingerprint(scene, spec.fps)?;
+
+        // Reuse only when the recorded fingerprint matches AND the render is
+        // complete on disk (the chain writes chain-manifest.json last). Disk is
+        // truth: a manually deleted scene dir re-renders even if the record
+        // still names it.
+        let same_fingerprint = record.scenes[index].fingerprint == fingerprint;
+        let complete_on_disk = scene_dir.join("chain-manifest.json").is_file();
+        let reuse = same_fingerprint && complete_on_disk;
+
+        // A stale scene dir (changed spec/input) would make the chain refuse a
+        // changed spec into it, so clear it for a fresh render. A
+        // same-fingerprint-but-incomplete dir is left intact so the chain
+        // resumes from its own stage markers/checkpoint.
+        if scene_dir.exists() && !same_fingerprint {
+            fs::remove_dir_all(&scene_dir)?;
+        }
+
+        // Cheap when reusing: the chain fast-skips completed stages and returns
+        // the summary without re-rendering.
         let summary = run_chain_spec(&scene.chain, &scene.input_dir, &scene_dir)?;
 
         // The declared timeline length must match what the scene actually
@@ -317,6 +453,14 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
                 scene.name, scene.duration_frames, summary.frame_count
             )));
         }
+
+        record.scenes[index].fingerprint = fingerprint;
+        fs::write(&record_path, serde_json::to_string_pretty(&record)?)?;
+        println!(
+            "scene {scene_number:02} ({}) {}",
+            scene.name,
+            if reuse { "reused from cache" } else { "rendered" }
+        );
 
         scenes.push(RenderedScene {
             name: scene.name.clone(),
@@ -331,8 +475,13 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
 
     // Pass 2: walk the timeline. Each scene writes its frames not consumed by
     // the *previous* transition; the last `out_frames` of those are blended
-    // with the next scene's head (which are therefore skipped there).
+    // with the next scene's head (which are therefore skipped there). The
+    // timeline is rebuilt from scratch so a changed transition can't leave
+    // stale high-index frames behind.
     let frames_dir = output_dir.join("frames");
+    if frames_dir.exists() {
+        fs::remove_dir_all(&frames_dir)?;
+    }
     fs::create_dir_all(&frames_dir)?;
     let mut global = 0usize;
     let mut start = 0usize;
