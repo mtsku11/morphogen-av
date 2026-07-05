@@ -166,6 +166,12 @@ scenes-of-chains on a global timeline with deterministic transitions,
 scene-fingerprint caching, and a master modulation clock. Slices S1–S6 are
 build-ready without further user input.
 
+**The wild experimental plan (user-requested 2026-07-05) is the morphogenesis
+engine — contract ready in
+[MORPHOGENESIS_MILESTONE.md](MORPHOGENESIS_MILESTONE.md)**: Gray-Scott
+reaction-diffusion grown on the footage, A steering the chemistry via the
+existing mod matrix. Slices S1–S4 build-ready; Metal deferred-by-default.
+
 **The full deferred-work catalog, tiered and build-ready, is
 [DEFERRED_WORK_HANDOFF.md](DEFERRED_WORK_HANDOFF.md)** — entry points, slice
 plans, traps, and the user decisions already made. Summary: **SwiftUI

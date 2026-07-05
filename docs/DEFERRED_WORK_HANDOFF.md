@@ -314,6 +314,23 @@ cut; cache identity; master ≡ local-at-offset-0) make it falsifiable slice by
 slice. Slices S1–S6 are build-ready; S7 (SwiftUI panel) is user-gated. If the
 user asks for "the next big thing," start here.
 
+### 5.0b Morphogenesis — reaction-diffusion engine (THE WILD ONE, user-requested plan 2026-07-05)
+
+Contract ready: **[MORPHOGENESIS_MILESTONE.md](MORPHOGENESIS_MILESTONE.md)**.
+Gray-Scott reaction-diffusion grows living Turing patterns (coral, mitosis,
+worms) *on the footage*: B seeds and colours the field, B's luma shifts the
+chemistry locally so bright/dark regions grow different species, and A steers
+it through the **existing mod matrix** (register `feed`/`kill`/etc. as targets
+— `feed = audio-rms` makes the growth breathe with the soundtrack, zero bespoke
+audio code). The only effect in the catalog that generates emergent structure
+rather than transforming what's there — and the app named Morphogen finally
+contains morphogenesis. Perfect invariant citizen: stateful temporal node,
+declared frame-zero seeding, RGBA32F checkpoint, fixed-order stencil ⇒
+deterministic by construction. Four anchors + a falsifiable "aliveness"
+variance test (most of (f,k) space is dead — ship presets, not raw numbers).
+Slices S1–S4 build-ready; S5 Metal deferred-by-default (12 substeps/frame
+compounds sub-epsilon drift — the datamosh finding).
+
 ### 5.1 Modulation signal algebra (combinators on the mod bus)
 
 **What:** Every real synth's mod matrix has signal math; ours routes one
