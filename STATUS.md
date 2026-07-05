@@ -8,65 +8,37 @@ _Last updated: 2026-07-05_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **562 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **582 passing across 7 crates, 0 failing.**
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
-- `swift test`: **119 passing, 0 failing.**
+- `swift test`: **123 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
   fmt/clippy behaviour; the 1.96 drift was reconciled 2026-07-02).
 - Manual-testing clips (`cello.mp4`, `cello2.mp4`, `harp.mp4`) are gitignored, not tracked.
 
-## Current roadmap (2026-07-05): all deferred-doc tiers, then Morphogenesis
+## Current roadmap (2026-07-05): Tier 5 "it's a synth now" arc, then Morphogenesis
 
 User directive: **work through every tier in `docs/DEFERRED_WORK_HANDOFF.md`
 before the Morphogenesis feature.** Full roadmap tracked as **tasks #10–#26**
-(Tier 1.1–1.7, 5.1–5.6 buildable; 2.x gated; 3.x blocked; Tier 4 parked/skip).
+(Tier 1 COMPLETE; 5.1–5.6 buildable; 2.x gated; 3.x blocked; Tier 4 parked/skip).
 
-Standing decisions (locked): **depth-first per effect** for the 1.1 sweep;
-**full bespoke SwiftUI panels for all 6** effects (incl. the 3 experimental
-panel-less ones — coagulated/dispersion/fluid-mosaic); **push after each whole
-tier item completes** (not per commit). Tier 4 is explicitly NOT built (parked;
-some items user-rejected). 2.4 live-preview + 5.7 patcher canvas need explicit
-commitment; 3.1 depth needs a user-approved carve-out contract first.
+Standing decisions (locked): Tier 4 is explicitly NOT built (parked; some items
+user-rejected). 2.4 live-preview + 5.7 patcher canvas need explicit commitment;
+3.1 depth needs a user-approved carve-out contract first.
 
-**Wisest value-order for the remainder** (my judgement, long-term):
-finish 1.1 (mature effects field-particles/cascade-collage/cascade-trails are
-cheap — existing queue+panel, just add registry+`--modulate`+route-persistence+
-mod-slots; dispersion + fluid-mosaic reuse the coagulated 4-layer template) →
-1.6 edge-density + 1.7 drawn envelopes (small, unblock 5.4/5.5) →
-1.2/1.3/1.4/1.5 → the Tier-5 "it's a synth now" arc 5.1 combinators (highest
-ROI — multiplies the whole matrix) → 5.2 oscillators → 5.5 capture → 5.3 MIDI →
-5.4 mattes → 5.6 colour → gated 2.x → blocked 3.x → **then Morphogenesis**.
+**Tier 1 — COMPLETE** (all 1.1–1.7 verified as already done). Confirmed 2026-07-05:
+all registries, CLI `--modulate`, queue persistence, and SwiftUI mod-slots for
+field-particles, cascade-collage, cascade-trails, dispersion, fluid-mosaic, and
+coagulated-blend were fully wired; OLA audio resynthesis (1.2), cascade B-sampler
+(1.4), edge-density source (1.6), and breakpoints envelope source (1.7) landed in
+this session.
 
-### In flight: Tier 1.1 — mod-target registries (1.5 of 6 effects done)
-
-**Field particles — 3 of 4 layers** (registry `a269138`; CLI `--modulate` +
-queue route persistence `3c1d9f2` — targets advect/turbulence_scale/
-turbulence_speed/detail, provenance-only; continuity + add→run byte-identical +
-off-vs-on 0.0→26.0 verified). **Remaining: SwiftUI mod-slots** — a LIGHT
-extension (field particles already has a panel + bridge, so just add 4
-ModulationSlotRow + AppState slot state + thread `modulationRoutes` through the
-existing field-particles bridge request via `appendModulationArguments` + one
-bridge-token test). Then it's the next mature effect (cascade collage / cascade
-trails), then dispersion + fluid mosaic (full 4-layer like coagulated).
-
-
-
-**Coagulated flow blend — COMPLETE, all 4 layers** (local, unpushed — 1.1 not
-finished so no push yet per cadence). Registry `910ec9e`
-(COAGULATION_MODULATION_TARGETS = coagulation_strength/edge_hardness/bias;
-clamp-never-error; structural knobs excluded) → CLI `--modulate` `a86b326`
-(per-frame settings copy, provenance-only — no checkpoint path; continuity
-identity byte-identical + off-vs-on 0.0→0.82 Read-confirmed) → queue task
-`f05df23` (new `RenderJobTask::FrameSequenceCoagulatedBlend`, advect_source as a
-string across the core boundary — cascade-trails precedent; add→run
-byte-identical; also lands 1.3's deferred queue-task sub-item) → SwiftUI bridge
-`f3e28ec` + panel `31858b7` (CoagulatedBlendPanelView; ModulationSlotRow made
-internal for reuse). **Next: the 5 remaining 1.1 effects** — start with the 3
-mature ones (cheap), then dispersion + fluid mosaic. Details + traps in memory
-`coagulated-flow-blend` / `modulation-matrix`; the 4-layer template is now
-coagulated's 5 commits.
+**Next: Tier 5 "it's a synth now" arc** — present the Tier 5 menu to the user and
+get a pick before writing a contract and building. Order by ROI:
+5.1 combinators (highest — multiplies the whole matrix) → 5.2 oscillators →
+5.5 capture → 5.3 MIDI → 5.4 mattes → 5.6 colour → then gated 2.x → blocked 3.x
+→ **Morphogenesis**.
 
 ### Composition timeline — MILESTONE COMPLETE (S1–S7), pushed to origin/main
 
