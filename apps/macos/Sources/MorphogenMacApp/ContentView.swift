@@ -37,6 +37,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 16) {
               NodeGraphPlaceholderView()
               AnalysisPanelView()
+              CompositionPanelView(state: state)
               RenderPanelView(state: state)
             }
             .padding(.top, 8)

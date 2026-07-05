@@ -3,6 +3,28 @@ import Foundation
 import XCTest
 
 final class RustBridgePlaceholderTests: XCTestCase {
+  func testQueuedCompositionArgumentsIncludeSpecOutputAndProject() throws {
+    let request = CompositionRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/composition-queue.json"),
+      specURL: URL(fileURLWithPath: "/tmp/piece.json"),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/comp-output", isDirectory: true),
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json")
+    )
+
+    let arguments = RustBridgePlaceholder.queueAddCompositionArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(9),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-composition", "/tmp/composition-queue.json"]
+    )
+    // Order matters: spec then output root are positional after the queue path.
+    XCTAssertEqual(arguments[9], "/tmp/piece.json")
+    XCTAssertEqual(arguments[10], "/tmp/comp-output")
+    XCTAssertTrue(arguments.contains("--project-path"))
+    XCTAssertTrue(arguments.contains("/tmp/project.morphogen.json"))
+    // No top-level input directory: sources are per-scene inside the spec.
+  }
+
   func testQueuedFrameSequenceArgumentsIncludeSelectedInputsAndOptions() throws {
     let request = FrameSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/frame-sequence-queue.json"),

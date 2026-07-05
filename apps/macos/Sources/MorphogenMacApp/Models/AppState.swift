@@ -52,6 +52,12 @@ final class AppState: ObservableObject {
   @Published var frameSequenceOutputPath =
     "Default: \(RustBridgePlaceholder.defaultFrameSequenceOutputRootURL().path)"
   @Published var frameSequenceSummary = "No two-source frame sequence rendered"
+  // Composition timeline (spec-file runner; docs/COMPOSITION_MILESTONE.md).
+  @Published var compositionSpecURL: URL?
+  @Published var compositionSpecPath = "No composition spec selected"
+  @Published var compositionOutputURL: URL?
+  @Published var compositionOutputPath = "No composition output directory selected"
+  @Published var compositionSummary = "No composition rendered yet"
   @Published var frameSequenceAmount = 16.0
   @Published var frameSequenceMaxFrames = 120
   @Published var frameSequenceWritesFlowCache = true
@@ -929,6 +935,80 @@ final class AppState: ObservableObject {
     frameSequenceOutputURL = url
     frameSequenceOutputPath = url.path
     statusMessage = "Frame sequence output selected: \(url.lastPathComponent)"
+  }
+
+  // MARK: - Composition timeline (docs/COMPOSITION_MILESTONE.md)
+
+  func chooseCompositionSpecFile() {
+    guard let url = ProjectFilePanel.chooseProjectFile() else {
+      statusMessage = "Composition spec selection cancelled."
+      return
+    }
+    compositionSpecURL = url
+    compositionSpecPath = url.path
+    statusMessage = "Composition spec selected: \(url.lastPathComponent)"
+  }
+
+  func chooseCompositionOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Composition output selection cancelled."
+      return
+    }
+    compositionOutputURL = url
+    compositionOutputPath = url.path
+    statusMessage = "Composition output selected: \(url.lastPathComponent)"
+  }
+
+  /// Queue-add + queue-run a composition spec through the CLI bridge, then load
+  /// the assembled timeline (`frames/`) into the preview so the finished piece
+  /// can be scrubbed. Sources are per-scene inside the spec.
+  func runComposition() {
+    guard let specURL = compositionSpecURL else {
+      statusMessage = "Choose a composition spec file before rendering."
+      compositionSummary = "No composition spec selected."
+      return
+    }
+    guard let outputURL = compositionOutputURL else {
+      statusMessage = "Choose a composition output directory before rendering."
+      compositionSummary = "No composition output directory selected."
+      return
+    }
+
+    let request = CompositionRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultCompositionRenderQueueURL(),
+      specURL: specURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("composition", isDirectory: true),
+      projectURL: projectURL
+    )
+
+    compositionSummary = "Queueing composition…"
+    statusMessage = "Queueing composition \(specURL.lastPathComponent) through morphogen-cli…"
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedCompositionRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        let frames = Self.loadPreviewFrames(from: bundle.frameDirectory, limit: 480)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.previewFrames = frames
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.proResExportSummary =
+            "Queued composition ready for ProRes export: \(bundle.bundleURL.path)"
+          self.compositionSummary =
+            "\(bundle.frameCount) timeline frame(s) at \(bundle.frameDirectory.path)"
+          self.statusMessage = "Composition render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.compositionSummary = "Composition render failed: \(error.localizedDescription)"
+          self.statusMessage = "Composition render failed: \(error.localizedDescription)"
+        }
+      }
+    }
   }
 
   func chooseCrossSynthModulatorWAV() {

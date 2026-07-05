@@ -2321,6 +2321,76 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  // MARK: - Composition timeline (docs/COMPOSITION_MILESTONE.md)
+
+  static func defaultCompositionRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-composition-queue.json"
+    )
+  }
+
+  /// Queue a composition spec (queue-add-composition) then run it
+  /// (queue-run-composition) — the same add→run flow every effect panel uses.
+  /// The whole spec is validated at add time; a rejected spec throws before the
+  /// run. Sources are per-scene inside the spec, so there is no top-level input.
+  static func runQueuedCompositionRender(
+    request: CompositionRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: queueAddCompositionArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "--release",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-composition",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddCompositionArguments(
+    request: CompositionRenderQueueCommandRequest
+  ) -> [String] {
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "--release",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-composition",
+      request.queueURL.path,
+      request.specURL.path,
+      request.outputRootDirectoryURL.path
+    ]
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    return arguments
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -3618,6 +3688,15 @@ struct RuttEtraSequenceRenderQueueCommandRequest {
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
   var namedModulators: [NamedModulatorMediaSpec] = []
+}
+
+struct CompositionRenderQueueCommandRequest {
+  let queueURL: URL
+  /// Composition spec JSON (`{"version": 1, "fps": 12, "scenes": [...]}`);
+  /// sources are per-scene inside it.
+  let specURL: URL
+  let outputRootDirectoryURL: URL
+  var projectURL: URL? = nil
 }
 
 struct ConvolutionalBlendSequenceRenderQueueCommandRequest {
