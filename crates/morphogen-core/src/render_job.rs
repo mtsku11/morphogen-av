@@ -378,6 +378,43 @@ pub enum RenderJobTask {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
     },
+    FrameSequenceFluidMosaic {
+        source_a_directory: String,
+        source_b_directory: String,
+        output_directory: String,
+        frame_rate: f64,
+        frames: u32,
+        tile_size: u32,
+        color_bins: u32,
+        cohesion: f32,
+        cohesion_radius: f32,
+        repulsion: f32,
+        repulsion_radius: f32,
+        fluid_strength: f32,
+        fluid_scale: f32,
+        fluid_drift: f32,
+        damping: f32,
+        settle_iterations: u32,
+        jitter: f32,
+        turbulence: f32,
+        turbulence_scale: f32,
+        turbulence_speed: f32,
+        vortex_flow: f32,
+        vortex_scale: f32,
+        seed: u64,
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
+    },
     FrameSequenceFieldParticles {
         source_frame_directory: String,
         output_directory: String,

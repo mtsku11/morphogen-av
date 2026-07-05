@@ -60,8 +60,9 @@ use morphogen_render::{
     apply_cascade_collage_modulation, apply_cascade_trails_modulation,
     apply_channel_shift_modulation, apply_coagulation_modulation, apply_dispersion_modulation,
     apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
-    apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
-    apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
+    apply_fluid_advect_two_source_modulation, apply_fluid_mosaic_modulation,
+    apply_palette_quantize_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
+    apply_rutt_etra_modulation,
     ModulationRoute, ModulationSampling,
 };
 use serde::{Deserialize, Serialize};
@@ -3000,6 +3001,7 @@ pub(crate) struct FluidMosaicSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FluidMosaicSettings,
     pub(crate) frames: usize,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the fluid colour-sort mosaic. Tiles of both sources are seeded from each
@@ -3026,14 +3028,28 @@ pub(crate) fn render_fluid_mosaic_sequence(
         ));
     }
 
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_fluid_mosaic_modulation(&mut probe, target, value)?;
+        }
+    }
+
     let source_a = load_image_f32(&source_a_frames[0])?;
     let source_b = load_image_f32(&source_b_frames[0])?;
     fs::create_dir_all(request.output_dir)?;
 
     let mut state = initialize_fluid_mosaic(&source_a, &source_b, request.settings)?;
     for index in 0..request.frames {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_fluid_mosaic_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         if index > 0 {
-            state = advance_fluid_mosaic(&state, request.settings, index as u32)?;
+            state = advance_fluid_mosaic(&state, frame_settings, index as u32)?;
         }
         // Live colour refresh: re-sample each tile's painted colour/patch from the
         // current source frame so the videos play through the mosaic. Frame 0 already
@@ -3041,16 +3057,16 @@ pub(crate) fn render_fluid_mosaic_sequence(
         // With --live-resort the re-sample also re-bins each tile, so the cohesion force
         // follows the live colour and domains migrate to track the video (sim-driving);
         // plain --live-refresh leaves the bins frozen (render-only).
-        if (request.settings.live_refresh || request.settings.live_resort) && index > 0 {
+        if (frame_settings.live_refresh || frame_settings.live_resort) && index > 0 {
             let frame_a = load_image_f32(&source_a_frames[index % source_a_frames.len()])?;
             let frame_b = load_image_f32(&source_b_frames[index % source_b_frames.len()])?;
-            if request.settings.live_resort {
+            if frame_settings.live_resort {
                 resort_fluid_mosaic_colors(&mut state, &frame_a, &frame_b)?;
             } else {
                 refresh_fluid_mosaic_colors(&mut state, &frame_a, &frame_b)?;
             }
         }
-        let frame = render_fluid_mosaic(&state, request.settings)?;
+        let frame = render_fluid_mosaic(&state, frame_settings)?;
         save_png(
             &frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),

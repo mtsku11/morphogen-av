@@ -345,6 +345,44 @@ final class AppState: ObservableObject {
   @Published var disperseModDampingOffset = 0.0
   @Published var disperseModDampingSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var disperseModDampingModulator = ""
+  // Fluid mosaic — colour-group tile simulation (two-source, CPU only).
+  @Published var mosaicOutputURL: URL?
+  @Published var mosaicOutputPath = "No fluid-mosaic output directory selected"
+  @Published var mosaicSummary = "No fluid mosaic rendered yet"
+  @Published var mosaicTileSize = 8
+  @Published var mosaicColorBins = 5
+  @Published var mosaicCohesion = 0.035
+  @Published var mosaicRepulsion = 1.4
+  @Published var mosaicFluidStrength = 0.5
+  @Published var mosaicDamping = 0.88
+  @Published var mosaicSettleIterations = 60
+  @Published var mosaicJitter = 0.03
+  @Published var mosaicTurbulence = 0.0
+  @Published var mosaicFrames = 120
+  @Published var mosaicModSampling = ModulationSamplingOption.hold
+  @Published var mosaicModulatorAudioURL: URL?
+  @Published var mosaicModulatorFramesURL: URL?
+  @Published var mosaicNamedModulators: [NamedModulatorEntry] = []
+  @Published var mosaicModCohesionSource = ModulationSourceOption.off
+  @Published var mosaicModCohesionScale = 0.05
+  @Published var mosaicModCohesionOffset = 0.0
+  @Published var mosaicModCohesionSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var mosaicModCohesionModulator = ""
+  @Published var mosaicModRepulsionSource = ModulationSourceOption.off
+  @Published var mosaicModRepulsionScale = 2.0
+  @Published var mosaicModRepulsionOffset = 0.0
+  @Published var mosaicModRepulsionSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var mosaicModRepulsionModulator = ""
+  @Published var mosaicModFluidSource = ModulationSourceOption.off
+  @Published var mosaicModFluidScale = 1.0
+  @Published var mosaicModFluidOffset = 0.0
+  @Published var mosaicModFluidSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var mosaicModFluidModulator = ""
+  @Published var mosaicModTurbulenceSource = ModulationSourceOption.off
+  @Published var mosaicModTurbulenceScale = 1.0
+  @Published var mosaicModTurbulenceOffset = 0.0
+  @Published var mosaicModTurbulenceSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var mosaicModTurbulenceModulator = ""
   // Retro Static — deliberate scanline-filter misread glitch.
   @Published var retroStaticRealBpp = 4
   @Published var retroStaticAssumedBpp = 3
@@ -2777,6 +2815,111 @@ final class AppState: ObservableObject {
       requestDescription: "Queueing dispersion blend through morphogen-cli..."
     ) {
       try RustBridgePlaceholder.runQueuedDispersionBlendSequenceRender(request: request)
+    }
+  }
+
+  func mosaicDeclaredModulatorNames() -> [String] { mosaicNamedModulators.map(\.name) }
+
+  func addMosaicNamedModulator() { mosaicNamedModulators.append(NamedModulatorEntry()) }
+
+  func removeMosaicNamedModulator(id: UUID) {
+    mosaicNamedModulators.removeAll { $0.id == id }
+  }
+
+  func chooseMosaicNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &mosaicNamedModulators, id: id) }
+
+  func chooseMosaicNamedModulatorFrames(id: UUID) {
+    pickNamedModulatorFrames(in: &mosaicNamedModulators, id: id)
+  }
+
+  func chooseMosaicOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Fluid Mosaic Output Directory"
+    ) else {
+      statusMessage = "Fluid mosaic output directory selection cancelled."
+      return
+    }
+    mosaicOutputURL = url
+    mosaicOutputPath = url.path
+  }
+
+  func chooseMosaicModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    mosaicModulatorAudioURL = url
+    statusMessage = "Mosaic modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseMosaicModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frame Directory"
+    ) else {
+      statusMessage = "Modulator frame directory selection cancelled."
+      return
+    }
+    mosaicModulatorFramesURL = url
+    statusMessage = "Mosaic modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func runFluidMosaicRender() {
+    guard let sourceAURL = effectiveModulatorURL() else {
+      statusMessage = "Select Source A frame directory before rendering fluid mosaic."
+      return
+    }
+    guard let sourceBURL = effectiveCarrierURL() else {
+      statusMessage = "Select Source B frame directory before rendering fluid mosaic."
+      return
+    }
+    guard let outputURL = mosaicOutputURL else {
+      statusMessage = "Choose a fluid-mosaic output directory before rendering."
+      return
+    }
+    guard let routes = modulationRoutes(
+      slots: [
+        ("cohesion", mosaicModCohesionSource, mosaicModCohesionScale, mosaicModCohesionOffset, mosaicModCohesionSamplingOverride),
+        ("repulsion", mosaicModRepulsionSource, mosaicModRepulsionScale, mosaicModRepulsionOffset, mosaicModRepulsionSamplingOverride),
+        ("fluid_strength", mosaicModFluidSource, mosaicModFluidScale, mosaicModFluidOffset, mosaicModFluidSamplingOverride),
+        ("turbulence", mosaicModTurbulenceSource, mosaicModTurbulenceScale, mosaicModTurbulenceOffset, mosaicModTurbulenceSamplingOverride),
+      ],
+      modulatorAudioURL: mosaicModulatorAudioURL,
+      modulatorFramesURL: mosaicModulatorFramesURL,
+      namedModulators: mosaicNamedModulators,
+      slotModulators: [mosaicModCohesionModulator, mosaicModRepulsionModulator, mosaicModFluidModulator, mosaicModTurbulenceModulator],
+      effectLabel: "fluid mosaic"
+    ) else { return }
+
+    let request = FluidMosaicSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultFluidMosaicSequenceRenderQueueURL(),
+      sourceADirectoryURL: sourceAURL,
+      sourceBDirectoryURL: sourceBURL,
+      outputDirectoryURL: outputURL.appendingPathComponent("fluid-mosaic", isDirectory: true),
+      tileSize: mosaicTileSize,
+      colorBins: mosaicColorBins,
+      cohesion: Float(mosaicCohesion),
+      repulsion: Float(mosaicRepulsion),
+      fluidStrength: Float(mosaicFluidStrength),
+      damping: Float(mosaicDamping),
+      settleIterations: mosaicSettleIterations,
+      jitter: Float(mosaicJitter),
+      turbulence: Float(mosaicTurbulence),
+      frames: mosaicFrames,
+      modulationRoutes: routes,
+      modulatorAudioURL: mosaicModulatorAudioURL,
+      modulatorFramesURL: mosaicModulatorFramesURL,
+      modulationSampling: mosaicModSampling,
+      namedModulators: namedModulatorSpecs(mosaicNamedModulators)
+    )
+
+    runFluidAdvectionQueue(
+      label: "Fluid mosaic",
+      requestDescription: "Queueing fluid mosaic through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedFluidMosaicSequenceRender(request: request)
     }
   }
 

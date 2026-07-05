@@ -2589,6 +2589,77 @@ enum RustBridgePlaceholder {
     ]
   }
 
+  // MARK: — Fluid Mosaic
+
+  static func defaultFluidMosaicSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("fluid-mosaic-queue.json")
+  }
+
+  static func runQueuedFluidMosaicSequenceRender(
+    request: FluidMosaicSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddFluidMosaicSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: queueRunFluidMosaicSequenceArguments(queueURL: request.queueURL),
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddFluidMosaicSequenceArguments(
+    request: FluidMosaicSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    var arguments = [
+      "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+      "queue-add-fluid-mosaic-sequence",
+      request.queueURL.path,
+      request.sourceADirectoryURL.path,
+      request.sourceBDirectoryURL.path,
+      request.outputDirectoryURL.path,
+      "--frames", String(request.frames),
+      "--tile-size", String(request.tileSize),
+      "--color-bins", String(request.colorBins),
+      "--cohesion", cliNumber(Double(request.cohesion)),
+      "--repulsion", cliNumber(Double(request.repulsion)),
+      "--fluid-strength", cliNumber(Double(request.fluidStrength)),
+      "--damping", cliNumber(Double(request.damping)),
+      "--settle-iterations", String(request.settleIterations),
+      "--jitter", cliNumber(Double(request.jitter)),
+      "--turbulence", cliNumber(Double(request.turbulence)),
+    ]
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
+    return arguments
+  }
+
+  static func queueRunFluidMosaicSequenceArguments(queueURL: URL) -> [String] {
+    [
+      "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+      "queue-run-fluid-mosaic-sequence",
+      queueURL.path,
+    ]
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -3973,6 +4044,28 @@ struct DispersionBlendSequenceRenderQueueCommandRequest {
   let smear: Float
   let maxFrames: Int?
   let projectURL: URL?
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
+}
+
+struct FluidMosaicSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceADirectoryURL: URL
+  let sourceBDirectoryURL: URL
+  let outputDirectoryURL: URL
+  let tileSize: Int
+  let colorBins: Int
+  let cohesion: Float
+  let repulsion: Float
+  let fluidStrength: Float
+  let damping: Float
+  let settleIterations: Int
+  let jitter: Float
+  let turbulence: Float
+  let frames: Int
   var modulationRoutes: [ModulationRouteSpec] = []
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil

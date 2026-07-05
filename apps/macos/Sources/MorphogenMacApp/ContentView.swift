@@ -40,6 +40,7 @@ struct ContentView: View {
               CompositionPanelView(state: state)
               CoagulatedBlendPanelView(state: state)
               DispersionBlendPanelView(state: state)
+              FluidMosaicPanelView(state: state)
               RenderPanelView(state: state)
             }
             .padding(.top, 8)

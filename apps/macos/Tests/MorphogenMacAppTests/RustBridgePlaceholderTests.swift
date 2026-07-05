@@ -675,6 +675,39 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--project-path"))
   }
 
+  func testQueuedFluidMosaicSequenceArgumentsIncludeModulationRoute() throws {
+    var request = FluidMosaicSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-mosaic-queue.json"),
+      sourceADirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      sourceBDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputDirectoryURL: URL(fileURLWithPath: "/tmp/output/fluid-mosaic", isDirectory: true),
+      tileSize: 8,
+      colorBins: 5,
+      cohesion: 0.035,
+      repulsion: 1.4,
+      fluidStrength: 0.5,
+      damping: 0.88,
+      settleIterations: 60,
+      jitter: 0.03,
+      turbulence: 0.0,
+      frames: 120
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "cohesion", source: "audio-rms", scale: 1, offset: 0)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/score.wav")
+
+    let arguments = try RustBridgePlaceholder.queueAddFluidMosaicSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("queue-add-fluid-mosaic-sequence"))
+    XCTAssertTrue(arguments.contains("--modulate"))
+    XCTAssertTrue(arguments.contains("cohesion=audio-rms:1,0"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("/tmp/score.wav"))
+    XCTAssertTrue(arguments.contains("--frames"))
+    XCTAssertTrue(arguments.contains("120"))
+  }
+
   func testQueuedRetroStaticSequenceArgumentsIncludeGlitchControls() throws {
     let request = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),

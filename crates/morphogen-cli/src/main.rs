@@ -1172,6 +1172,70 @@ fn run() -> Result<(), CliError> {
         Commands::QueueRunDispersionBlendSequence { queue_path } => {
             queue::queue_run_dispersion_blend_sequence(&queue_path)
         }
+        Commands::QueueAddFluidMosaicSequence {
+            queue_path,
+            source_a_dir,
+            source_b_dir,
+            output_dir,
+            frames,
+            tile_size,
+            color_bins,
+            cohesion,
+            cohesion_radius,
+            repulsion,
+            repulsion_radius,
+            fluid_strength,
+            fluid_scale,
+            fluid_drift,
+            damping,
+            settle_iterations,
+            jitter,
+            turbulence,
+            turbulence_scale,
+            turbulence_speed,
+            vortex_flow,
+            vortex_scale,
+            seed,
+            modulate,
+            modulation_sampling,
+            modulator_audio,
+            modulator_frames,
+            named_modulator_audio,
+            named_modulator_frames,
+        } => queue::queue_add_fluid_mosaic_sequence(queue::QueueAddFluidMosaicSequenceRequest {
+            queue_path: &queue_path,
+            source_a_dir: &source_a_dir,
+            source_b_dir: &source_b_dir,
+            output_dir: &output_dir,
+            frames,
+            tile_size,
+            color_bins,
+            cohesion,
+            cohesion_radius,
+            repulsion,
+            repulsion_radius,
+            fluid_strength,
+            fluid_scale,
+            fluid_drift,
+            damping,
+            settle_iterations,
+            jitter,
+            turbulence,
+            turbulence_scale,
+            turbulence_speed,
+            vortex_flow,
+            vortex_scale,
+            seed,
+            modulate: &modulate,
+            modulator_audio: modulator_audio.as_deref(),
+            modulator_frames: modulator_frames.as_deref(),
+            modulation_sampling: modulation_sampling.into(),
+            named_modulator_audio: &named_modulator_audio,
+            named_modulator_frames: &named_modulator_frames,
+        }),
+        Commands::QueueRunFluidMosaicSequence { queue_path } => {
+            queue::queue_run_fluid_mosaic_sequence(&queue_path)
+        }
         Commands::RenderFluidMosaicSequence {
             source_a_dir,
             source_b_dir,
@@ -1208,6 +1272,14 @@ fn run() -> Result<(), CliError> {
             vortex_detail,
             vortex_speed,
             seed,
+            modulate,
+            modulation_sampling,
+            modulation_fps,
+            modulator_audio,
+            modulator_frames,
+            named_modulator_audio,
+            named_modulator_frames,
+            max_frames,
         } => {
             // When the steady-vortex flow is active it is meant to be the dominant
             // current, so the analytic fluid + jitter (which otherwise read as a wobble
@@ -1221,6 +1293,7 @@ fn run() -> Result<(), CliError> {
                 repulsion_radius.unwrap_or(if vortex_active { 16.0 } else { 10.0 });
             let fluid_strength = fluid_strength.unwrap_or(if vortex_active { 0.0 } else { 0.5 });
             let jitter = jitter.unwrap_or(if vortex_active { 0.0 } else { 0.03 });
+            let effective_frames = max_frames.unwrap_or(frames);
             render_fluid_mosaic_sequence(FluidMosaicSequenceRequest {
                 source_a_dir: &source_a_dir,
                 source_b_dir: &source_b_dir,
@@ -1258,7 +1331,17 @@ fn run() -> Result<(), CliError> {
                     vortex_speed,
                     seed,
                 },
-                frames,
+                frames: effective_frames,
+                modulation: ModulationCliArgs {
+                    modulate: &modulate,
+                    modulator_audio: modulator_audio.as_deref(),
+                    modulator_frames: modulator_frames.as_deref(),
+                    sampling: modulation_sampling.into(),
+                    fps: modulation_fps,
+                    cache_dir: None,
+                    named_modulator_audio: &named_modulator_audio,
+                    named_modulator_frames: &named_modulator_frames,
+                },
             })
             .map(|_| ())
         }

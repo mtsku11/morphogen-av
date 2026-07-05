@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     CascadeCollageSettings, CascadeTrailSettings, ChannelShiftSettings, CoagulationSettings,
     DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
-    RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
+    FluidAdvectTwoSourceSettings, FluidMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
+    QuantizeMode, RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis,
+    SortDirection,
 };
 
 /// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
@@ -528,6 +529,13 @@ pub const CASCADE_COLLAGE_MODULATION_TARGETS: &[&str] =
 pub const DISPERSION_MODULATION_TARGETS: &[&str] =
     &["coagulation_strength", "bias", "scatter_amount", "damping"];
 
+/// Fluid mosaic — the look-driving continuous knobs.
+/// Structural knobs (tile_size, color_bins, settle_iterations, seed, *_radius,
+/// scale/drift/speed params, adaptive/carry/live flags) excluded.
+/// MOSAIC STAYS CPU (sequential sim). Per-frame force values modulate normally.
+pub const FLUID_MOSAIC_MODULATION_TARGETS: &[&str] =
+    &["cohesion", "repulsion", "fluid_strength", "turbulence"];
+
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
 const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
@@ -817,6 +825,30 @@ pub fn apply_cascade_collage_modulation(
                 "cascade-collage",
                 target,
                 CASCADE_COLLAGE_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed fluid-mosaic knob (clamped). Per-frame force values only —
+/// structural knobs (tile_size, color_bins, settle_iterations, flag params) must not
+/// be modulated since they govern the state initialization and would corrupt the sim.
+pub fn apply_fluid_mosaic_modulation(
+    settings: &mut FluidMosaicSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "cohesion" => settings.cohesion = value.clamp(0.0, 1.0),
+        "repulsion" => settings.repulsion = value.clamp(0.0, SHIFT_RANGE.1),
+        "fluid_strength" => settings.fluid_strength = value.clamp(0.0, SHIFT_RANGE.1),
+        "turbulence" => settings.turbulence = value.clamp(0.0, SHIFT_RANGE.1),
+        _ => {
+            return Err(unknown_target(
+                "fluid-mosaic",
+                target,
+                FLUID_MOSAIC_MODULATION_TARGETS,
             ))
         }
     }
@@ -1125,6 +1157,30 @@ mod tests {
 
         for structural in ["seed", "block_blend", "hue_steps", "tile_scale", "nope"] {
             assert!(apply_cascade_collage_modulation(&mut settings, structural, 1.0).is_err());
+        }
+    }
+
+    #[test]
+    fn fluid_mosaic_modulation_sets_clamps_and_rejects_unknown() {
+        let mut settings = FluidMosaicSettings::default();
+
+        apply_fluid_mosaic_modulation(&mut settings, "cohesion", 0.05).unwrap();
+        assert_eq!(settings.cohesion, 0.05);
+        apply_fluid_mosaic_modulation(&mut settings, "repulsion", 2.0).unwrap();
+        assert_eq!(settings.repulsion, 2.0);
+        apply_fluid_mosaic_modulation(&mut settings, "fluid_strength", 1.5).unwrap();
+        assert_eq!(settings.fluid_strength, 1.5);
+        apply_fluid_mosaic_modulation(&mut settings, "turbulence", 0.8).unwrap();
+        assert_eq!(settings.turbulence, 0.8);
+
+        // cohesion clamps to [0, 1]; repulsion/fluid/turbulence clamp to [0, SHIFT_RANGE.1].
+        apply_fluid_mosaic_modulation(&mut settings, "cohesion", 5.0).unwrap();
+        assert_eq!(settings.cohesion, 1.0);
+        apply_fluid_mosaic_modulation(&mut settings, "repulsion", -1.0).unwrap();
+        assert_eq!(settings.repulsion, 0.0);
+
+        for structural in ["tile_size", "color_bins", "settle_iterations", "seed", "nope"] {
+            assert!(apply_fluid_mosaic_modulation(&mut settings, structural, 1.0).is_err());
         }
     }
 

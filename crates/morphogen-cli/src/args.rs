@@ -1470,6 +1470,30 @@ pub(crate) enum Commands {
         vortex_speed: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Modulation routes: `target=source:scale,offset` (repeatable).
+        /// Valid targets: cohesion, repulsion, fluid_strength, turbulence.
+        #[arg(long, action = clap::ArgAction::Append, value_name = "TARGET=SOURCE:SCALE,OFFSET")]
+        modulate: Vec<String>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Playback rate for audio envelope sampling (frames per second).
+        #[arg(long, default_value_t = 24.0)]
+        modulation_fps: f64,
+        /// Audio WAV for modulation routes using audio sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Frame-sequence dir for modulation routes using frame-luma sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Named-modulator entries, audio: `name=path/to.wav` (repeatable).
+        #[arg(long, action = clap::ArgAction::Append, value_name = "NAME=PATH")]
+        named_modulator_audio: Vec<String>,
+        /// Named-modulator entries, frames: `name=path/to/frames` (repeatable).
+        #[arg(long, action = clap::ArgAction::Append, value_name = "NAME=PATH")]
+        named_modulator_frames: Vec<String>,
+        /// Max frames (limits render length when modulation sources are shorter).
+        #[arg(long)]
+        max_frames: Option<usize>,
     },
     /// Render a descriptor-coagulated flow blend (experimental, deterministic;
     /// Slice 1 — CPU-only, single-frame, no advection/feedback yet). Both sources
@@ -2533,6 +2557,69 @@ pub(crate) enum Commands {
         named_modulator_frames: Vec<String>,
     },
     QueueRunDispersionBlendSequence {
+        queue_path: PathBuf,
+    },
+    /// Queue a fluid colour-sort mosaic render job. Adds a FrameSequenceFluidMosaic task
+    /// to the queue, then processes it synchronously via queue-run-fluid-mosaic-sequence.
+    QueueAddFluidMosaicSequence {
+        queue_path: PathBuf,
+        source_a_dir: PathBuf,
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        #[arg(long, default_value_t = 8)]
+        tile_size: u32,
+        #[arg(long, default_value_t = 5)]
+        color_bins: u32,
+        #[arg(long, default_value_t = 0.035)]
+        cohesion: f32,
+        #[arg(long, default_value_t = 24.0)]
+        cohesion_radius: f32,
+        #[arg(long, default_value_t = 1.4)]
+        repulsion: f32,
+        #[arg(long, default_value_t = 10.0)]
+        repulsion_radius: f32,
+        #[arg(long, default_value_t = 0.5)]
+        fluid_strength: f32,
+        #[arg(long, default_value_t = 0.01)]
+        fluid_scale: f32,
+        #[arg(long, default_value_t = 0.15)]
+        fluid_drift: f32,
+        #[arg(long, default_value_t = 0.88)]
+        damping: f32,
+        #[arg(long, default_value_t = 60)]
+        settle_iterations: u32,
+        #[arg(long, default_value_t = 0.03)]
+        jitter: f32,
+        #[arg(long, default_value_t = 0.0)]
+        turbulence: f32,
+        #[arg(long, default_value_t = 0.02)]
+        turbulence_scale: f32,
+        #[arg(long, default_value_t = 0.3)]
+        turbulence_speed: f32,
+        #[arg(long, default_value_t = 0.0)]
+        vortex_flow: f32,
+        #[arg(long, default_value_t = 0.008)]
+        vortex_scale: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Modulation routes: `target=source:scale,offset` (repeatable).
+        /// Valid targets: cohesion, repulsion, fluid_strength, turbulence.
+        #[arg(long, action = clap::ArgAction::Append, value_name = "TARGET=SOURCE:SCALE,OFFSET")]
+        modulate: Vec<String>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
+    },
+    QueueRunFluidMosaicSequence {
         queue_path: PathBuf,
     },
     QueueAddGranularMosaicSequence {
