@@ -803,6 +803,187 @@ fn render_chain_single_stage_is_byte_identical_to_direct_render() {
 }
 
 #[test]
+fn render_composition_single_scene_is_byte_identical_to_direct_chain() {
+    // Anchor A1: a one-scene composition is byte-identical, frame for frame,
+    // to `render-chain` run directly on that scene's chain spec + input —
+    // compositions are a view over the engine, never a second engine.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    // The chain spec the scene embeds, and the same spec rendered standalone.
+    let chain_json = r#"{"version": 1, "stages": [
+        {"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false}
+    ]}"#;
+
+    let comp_spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(
+        &comp_spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "solo", "duration_frames": 3, "input_dir": {source}, "chain": {chain}}}
+            ]}}"#,
+            source = serde_json::to_string(&source_arg).expect("encode source path"),
+            chain = chain_json,
+        ),
+    );
+    let comp_output_dir = temp_dir.path().join("comp-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            comp_spec_path.to_string_lossy().as_ref(),
+            comp_output_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered composition with 1 scene (3 frame(s))",
+        ));
+
+    let chain_spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(&chain_spec_path, chain_json);
+    let chain_output_dir = temp_dir.path().join("chain-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-chain",
+            chain_spec_path.to_string_lossy().as_ref(),
+            source_arg.as_str(),
+            chain_output_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+
+    // The scene render is byte-identical to the standalone chain render
+    // (same engine): stage frames + the chain manifest.
+    let scene_stage_dir = comp_output_dir.join("scene_01_solo/stage_01_rutt_etra");
+    let chain_stage_dir = chain_output_dir.join("stage_01_rutt_etra");
+    assert_png_frames_identical(&chain_stage_dir, &scene_stage_dir, 3);
+    assert_eq!(
+        fs::read(comp_output_dir.join("scene_01_solo/chain-manifest.json"))
+            .expect("scene chain manifest"),
+        fs::read(chain_output_dir.join("chain-manifest.json")).expect("direct chain manifest"),
+        "the scene's chain-manifest.json must be byte-identical to the direct render's"
+    );
+
+    // The assembled timeline (`frames/`) is byte-identical to the chain's
+    // final stage frames — the single-scene global numbering is a verbatim copy.
+    assert_png_frames_identical(&chain_stage_dir, &comp_output_dir.join("frames"), 3);
+}
+
+#[test]
+fn render_composition_rejects_invalid_specs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let source = serde_json::to_string(&source_arg).expect("encode source path");
+    let good_chain = r#"{"version": 1, "stages": [{"effect": "palette_quantize", "mode": "posterize", "levels": 4}]}"#;
+
+    let run_case = |name: &str, spec_json: &str, expected_stderr: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, spec_json);
+        let output_dir = temp_dir.path().join(format!("{name}-out"));
+
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                output_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected_stderr));
+
+        assert!(
+            !output_dir.exists(),
+            "{name}: nothing must be written to the output dir on rejection"
+        );
+    };
+
+    run_case(
+        "bad-version",
+        &format!(
+            r#"{{"version": 2, "fps": 12, "scenes": [{{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}]}}"#
+        ),
+        "unsupported composition spec version 2",
+    );
+    run_case(
+        "bad-fps",
+        &format!(
+            r#"{{"version": 1, "fps": 0, "scenes": [{{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}]}}"#
+        ),
+        "fps must be positive and finite",
+    );
+    run_case(
+        "no-scenes",
+        r#"{"version": 1, "fps": 12, "scenes": []}"#,
+        "at least one scene",
+    );
+    run_case(
+        "bad-scene-name",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [{{"name": "../evil", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}]}}"#
+        ),
+        "is invalid",
+    );
+    run_case(
+        "zero-duration",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [{{"name": "a", "duration_frames": 0, "input_dir": {source}, "chain": {good_chain}}}]}}"#
+        ),
+        "at least 1 frame",
+    );
+    run_case(
+        "last-scene-transition",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [{{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "cut"}}}}]}}"#
+        ),
+        "must omit transition_out",
+    );
+    run_case(
+        "bad-chain-knob",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [{{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 1}}]}}}}]}}"#
+        ),
+        "levels must be >= 2",
+    );
+    run_case(
+        "unknown-field",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "bogus": true, "scenes": [{{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}]}}"#
+        ),
+        "unknown field `bogus`",
+    );
+    // Multi-scene assembly is the next slice; refuse rather than silently
+    // rendering only scene 1.
+    run_case(
+        "multi-scene",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "cut"}}}},
+                {{"name": "b", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}
+            ]}}"#
+        ),
+        "multi-scene compositions are not implemented yet",
+    );
+    // Duplicate names caught even in the (deferred) multi-scene shape.
+    run_case(
+        "duplicate-names",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "cut"}}}},
+                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}
+            ]}}"#
+        ),
+        "duplicate scene name",
+    );
+}
+
+#[test]
 fn render_chain_same_spec_twice_is_byte_identical() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");

@@ -11,6 +11,7 @@ use morphogen_render::{
 mod args;
 mod audio;
 mod chain;
+mod composition;
 mod error;
 mod imaging;
 mod modulate;
@@ -21,6 +22,7 @@ mod showcase;
 use args::*;
 use audio::*;
 use chain::*;
+use composition::*;
 use error::CliError;
 use project::*;
 use queue::*;
@@ -926,6 +928,10 @@ fn run() -> Result<(), CliError> {
             input_dir,
             output_dir,
         } => render_chain(&spec_path, &input_dir, &output_dir),
+        Commands::RenderComposition {
+            spec_path,
+            output_dir,
+        } => render_composition(&spec_path, &output_dir),
         Commands::QueueAddChain {
             queue_path,
             spec_path,

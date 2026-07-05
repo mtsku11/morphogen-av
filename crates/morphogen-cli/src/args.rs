@@ -1248,6 +1248,21 @@ pub(crate) enum Commands {
         input_dir: PathBuf,
         output_dir: PathBuf,
     },
+    /// Arrange finished render jobs into a piece on a global timeline
+    /// (see docs/COMPOSITION_MILESTONE.md). A composition is an ordered list of
+    /// scenes, each a full effect chain over its own source (`input_dir` +
+    /// `chain` per scene — a scene body IS a verbatim `render-chain` spec).
+    /// Each scene renders via the existing chain path into
+    /// `<output_dir>/scene_<NN>_<name>/`, and the timeline is assembled into
+    /// `<output_dir>/frames/`. The whole spec is validated before anything
+    /// renders. Slice 1: single-scene passthrough (multi-scene cut assembly,
+    /// crossfades, scene cache, and the master clock are later slices).
+    RenderComposition {
+        /// Composition spec JSON
+        /// (`{"version": 1, "fps": 12, "scenes": [...]}`).
+        spec_path: PathBuf,
+        output_dir: PathBuf,
+    },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour
     /// cohesion plus colour-blind repulsion phase-separate them into colour domains

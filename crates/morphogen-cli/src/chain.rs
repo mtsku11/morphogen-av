@@ -681,7 +681,7 @@ pub(crate) fn parse_chain_spec(spec_text: &str) -> Result<ChainSpec, CliError> {
         .map_err(|error| CliError::Message(format!("invalid chain spec: {error}")))
 }
 
-fn validate_chain_spec(spec: &ChainSpec) -> Result<(), CliError> {
+pub(crate) fn validate_chain_spec(spec: &ChainSpec) -> Result<(), CliError> {
     if spec.version != CHAIN_SPEC_VERSION {
         return Err(CliError::Message(format!(
             "unsupported chain spec version {} (this build understands version {})",
