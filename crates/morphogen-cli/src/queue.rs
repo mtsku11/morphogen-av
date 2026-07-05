@@ -16,16 +16,17 @@ use morphogen_core::{
     VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
-    apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
-    apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
-    apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
-    flow_displace_cpu, parse_modulation_route, validate_route_targets, BlendMode,
-    BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
-    ChannelShiftSettings, ConvolutionBlendSettings, FieldParticleSettings, FlowFeedbackSettings,
-    FluidAdvectSettings, FluidAdvectTwoSourceSettings, GranularMosaicSettings, LfoShape,
-    MaskSource, ModulationSampling, ModulationSource, PaletteQuantizeSettings, PixelSortSettings,
-    QuantizeMode, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
-    SortKey, StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM,
+    apply_channel_shift_modulation, apply_coagulation_modulation, apply_flow_feedback_modulation,
+    apply_fluid_advect_modulation, apply_fluid_advect_two_source_modulation,
+    apply_palette_quantize_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
+    apply_rutt_etra_modulation, flow_displace_cpu, parse_modulation_route, validate_route_targets,
+    BlendMode, BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
+    ChannelShiftSettings, CoagulationFlowSource, CoagulationSettings, ConvolutionBlendSettings,
+    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
+    GranularMosaicSettings, LfoShape, MaskSource, ModulationSampling, ModulationSource,
+    PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RetroStaticSettings, RuttEtraSettings,
+    ScanlineFilter, SortAxis, SortDirection, SortKey, StructureMode, VideoVocoderSettings,
+    BLOCK_COLLAGE_ALGORITHM, COAGULATED_BLEND_ALGORITHM,
     CASCADE_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM, CHANNEL_SHIFT_ALGORITHM,
     CHANNEL_SHIFT_FLOW_ALGORITHM, FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM,
     FLUID_ADVECT_TWO_SOURCE_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM,
@@ -447,6 +448,132 @@ pub(crate) fn queue_add_fluid_advect_two_source_sequence(
     queue.save_json(queue_path)?;
     println!(
         "queued two-source fluid-advect render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) struct QueueAddCoagulatedBlendSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_a_dir: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) settings: CoagulationSettings,
+    pub(crate) flow_source: CoagulationFlowSource,
+    pub(crate) advect_amount: f32,
+    pub(crate) refresh: f32,
+    pub(crate) turbulence: f32,
+    pub(crate) smear: f32,
+    pub(crate) smear_decay: f32,
+    pub(crate) frame_rate: f64,
+    pub(crate) max_frames: Option<u32>,
+    pub(crate) backend: RenderBackend,
+    pub(crate) project_path: Option<&'a Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
+    pub(crate) named_modulator_audio: &'a [String],
+    pub(crate) named_modulator_frames: &'a [String],
+}
+
+pub(crate) fn queue_add_coagulated_blend_sequence(
+    request: QueueAddCoagulatedBlendSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddCoagulatedBlendSequenceRequest {
+        queue_path,
+        source_a_dir,
+        source_b_dir,
+        output_root_dir,
+        settings,
+        flow_source,
+        advect_amount,
+        refresh,
+        turbulence,
+        smear,
+        smear_decay,
+        frame_rate,
+        max_frames,
+        backend,
+        project_path,
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
+    } = request;
+    settings.validate()?;
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame rate must be positive and finite".to_string(),
+        ));
+    }
+    if matches!(max_frames, Some(0)) {
+        return Err(CliError::Message(
+            "max-frames must be greater than zero".to_string(),
+        ));
+    }
+    let modulation = parse_queue_modulation_routes(
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        named_modulator_audio,
+        named_modulator_frames,
+        |target| {
+            let mut probe = settings;
+            apply_coagulation_modulation(&mut probe, target, 0.0).map_err(CliError::from)
+        },
+    )?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::FrameSequenceCoagulatedBlend {
+            source_a_directory: source_a_dir.to_string_lossy().to_string(),
+            source_b_directory: source_b_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frame_rate,
+            patch_size: settings.patch_size,
+            color_weight: settings.color_weight,
+            texture_weight: settings.texture_weight,
+            coherence_passes: settings.coherence_passes,
+            coherence_strength: settings.coherence_strength,
+            randomness: settings.randomness,
+            coagulation_strength: settings.coagulation_strength,
+            edge_hardness: settings.edge_hardness,
+            edge_dither: settings.edge_dither,
+            block_jitter: settings.block_jitter,
+            bias: settings.bias,
+            seed: settings.seed,
+            advect_source: coagulation_flow_source_label(flow_source),
+            advect_amount,
+            refresh,
+            turbulence,
+            smear,
+            smear_decay,
+            max_frames,
+            backend,
+            modulation_routes: modulation.routes,
+            modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: modulator_frames.map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(modulation_sampling),
+            named_modulator_audio: modulation.named_audio,
+            named_modulator_frames: modulation.named_frames,
+        },
+        provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued coagulated-blend render job {job_id} in {}",
         queue_path.display()
     );
     Ok(())
@@ -1829,6 +1956,150 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
         &output_dir,
         outcome,
         "two-source fluid-advect",
+    )
+}
+
+pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::FrameSequenceCoagulatedBlend { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running coagulated-blend jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let provenance = queue.jobs[job_index].provenance.clone();
+    let RenderJobTask::FrameSequenceCoagulatedBlend {
+        source_a_directory,
+        source_b_directory,
+        output_directory,
+        frame_rate,
+        patch_size,
+        color_weight,
+        texture_weight,
+        coherence_passes,
+        coherence_strength,
+        randomness,
+        coagulation_strength,
+        edge_hardness,
+        edge_dither,
+        block_jitter,
+        bias,
+        seed,
+        advect_source,
+        advect_amount,
+        refresh,
+        turbulence,
+        smear,
+        smear_decay,
+        max_frames,
+        backend,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a coagulated-blend render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = CoagulationSettings {
+        patch_size,
+        color_weight,
+        texture_weight,
+        coherence_passes,
+        coherence_strength,
+        randomness,
+        coagulation_strength,
+        edge_hardness,
+        edge_dither,
+        block_jitter,
+        bias,
+        seed,
+    };
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
+    let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
+    let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
+            source_a_dir: Path::new(&source_a_directory),
+            source_b_dir: Path::new(&source_b_directory),
+            output_dir: &output_dir.join("frames"),
+            settings,
+            flow_source: parse_coagulation_flow_source(&advect_source),
+            advect_amount,
+            refresh,
+            turbulence,
+            smear,
+            smear_decay,
+            backend,
+            max_frames: max_frames.map(|n| n as usize),
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(Path::new),
+                modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                // The job's frame_rate is the envelope time base.
+                fps: frame_rate,
+                cache_dir: None,
+                named_modulator_audio: &named_modulator_audio_specs,
+                named_modulator_frames: &named_modulator_frames_specs,
+            },
+        })?;
+        let mut effect = serde_json::json!({
+            "algorithm": COAGULATED_BLEND_ALGORITHM,
+            "settings": settings,
+            "backend": render_backend_label(backend),
+            "advect_source": advect_source,
+        });
+        if let Some(modulation) = modulation_manifest_json(
+            &modulation_routes,
+            modulator_audio_path.as_deref(),
+            modulator_frames_directory.as_deref(),
+            modulation_sampling,
+            frame_rate,
+        ) {
+            effect["modulation"] = modulation;
+        }
+        complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
+            job_id: &job_id,
+            output_dir: &output_dir,
+            frame_count: render_result.frame_count,
+            frame_rate,
+            task: "frame_sequence_coagulated_blend",
+            effect_key: "coagulated_blend",
+            effect,
+            provenance: provenance.as_ref(),
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "coagulated-blend",
     )
 }
 
@@ -4465,6 +4736,25 @@ pub(crate) struct QueueAddDatamoshBitstreamRequest<'a> {
     pub(crate) project_path: Option<&'a Path>,
 }
 
+fn coagulation_flow_source_label(source: CoagulationFlowSource) -> String {
+    match source {
+        CoagulationFlowSource::AFlow => "a-flow",
+        CoagulationFlowSource::BFlow => "b-flow",
+        CoagulationFlowSource::Mixed => "mixed",
+        CoagulationFlowSource::Turbulence => "turbulence",
+    }
+    .to_string()
+}
+
+fn parse_coagulation_flow_source(s: &str) -> CoagulationFlowSource {
+    match s {
+        "b-flow" => CoagulationFlowSource::BFlow,
+        "mixed" => CoagulationFlowSource::Mixed,
+        "turbulence" => CoagulationFlowSource::Turbulence,
+        _ => CoagulationFlowSource::AFlow,
+    }
+}
+
 fn cascade_field_type_label(field: CascadeFieldType) -> String {
     match field {
         CascadeFieldType::Vortex => "vortex".to_string(),
@@ -5648,6 +5938,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequenceRuttEtra { .. } => "frame_sequence_rutt_etra",
             RenderJobTask::RenderChain { .. } => "render_chain",
             RenderJobTask::RenderComposition { .. } => "render_composition",
+            RenderJobTask::FrameSequenceCoagulatedBlend { .. } => "frame_sequence_coagulated_blend",
             RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
             RenderJobTask::FrameSequencePixelSort { .. } => "frame_sequence_pixel_sort",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",

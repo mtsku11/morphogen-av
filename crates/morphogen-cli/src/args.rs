@@ -2286,6 +2286,77 @@ pub(crate) enum Commands {
     QueueRunComposition {
         queue_path: PathBuf,
     },
+    /// Queue a descriptor-coagulated flow blend (two-source). Mirrors
+    /// render-coagulated-blend-sequence; queue-run shares the direct render code
+    /// path byte for byte. Modulation targets coagulation_strength/edge_hardness/
+    /// bias are provenance-only (coagulated has no checkpoint path).
+    QueueAddCoagulatedBlendSequence {
+        queue_path: PathBuf,
+        source_a_dir: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        /// Envelope time base for modulation sampling + output timing metadata.
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 16)]
+        patch_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        color_weight: f32,
+        #[arg(long, default_value_t = 0.0)]
+        texture_weight: f32,
+        #[arg(long, default_value_t = 2)]
+        coherence_passes: u32,
+        #[arg(long, default_value_t = 0.5)]
+        coherence_strength: f32,
+        #[arg(long, default_value_t = 0.0)]
+        randomness: f32,
+        #[arg(long, default_value_t = 0.0)]
+        coagulation_strength: f32,
+        #[arg(long, default_value_t = 0.0)]
+        edge_hardness: f32,
+        #[arg(long, default_value_t = 0.0)]
+        edge_dither: f32,
+        #[arg(long, default_value_t = 0.0)]
+        block_jitter: f32,
+        #[arg(long, default_value_t = 0.0)]
+        bias: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long, value_enum, default_value_t = CliCoagulationFlowSource::AFlow)]
+        advect_source: CliCoagulationFlowSource,
+        #[arg(long, default_value_t = 0.0)]
+        advect_amount: f32,
+        #[arg(long, default_value_t = 1.0)]
+        refresh: f32,
+        #[arg(long, default_value_t = 1.0)]
+        turbulence: f32,
+        #[arg(long, default_value_t = 0.0)]
+        smear: f32,
+        #[arg(long, default_value_t = 0.9)]
+        smear_decay: f32,
+        #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
+        backend: CliRenderBackend,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long = "project-path")]
+        project_path: Option<PathBuf>,
+        /// Modulation route (repeatable). Targets: coagulation_strength, edge_hardness, bias.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
+    },
+    QueueRunCoagulatedBlendSequence {
+        queue_path: PathBuf,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,

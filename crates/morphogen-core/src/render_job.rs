@@ -294,6 +294,54 @@ pub enum RenderJobTask {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
     },
+    /// Descriptor-coagulated flow blend (two-source) over a paired PNG sequence.
+    /// Modulation targets coagulation_strength/edge_hardness/bias are
+    /// provenance-only (coagulated has no checkpoint path). `advect_source` is
+    /// stored as a string — its render-only enum can't cross the core boundary
+    /// (the cascade-trails `field` precedent).
+    FrameSequenceCoagulatedBlend {
+        source_a_directory: String,
+        source_b_directory: String,
+        output_directory: String,
+        frame_rate: f64,
+        patch_size: u32,
+        color_weight: f32,
+        texture_weight: f32,
+        coherence_passes: u32,
+        coherence_strength: f32,
+        randomness: f32,
+        coagulation_strength: f32,
+        edge_hardness: f32,
+        edge_dither: f32,
+        block_jitter: f32,
+        bias: f32,
+        seed: u64,
+        #[serde(default)]
+        advect_source: String,
+        advect_amount: f32,
+        refresh: f32,
+        turbulence: f32,
+        smear: f32,
+        smear_decay: f32,
+        #[serde(default)]
+        max_frames: Option<u32>,
+        #[serde(default)]
+        backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated). Envelope times are
+        /// sampled against this job's `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
+    },
     FrameSequenceFieldParticles {
         source_frame_directory: String,
         output_directory: String,

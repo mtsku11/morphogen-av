@@ -623,6 +623,76 @@ fn write_chain_spec(path: &Path, spec_json: &str) {
 }
 
 #[test]
+fn queue_coagulated_add_run_matches_direct() {
+    // The queued run (queue-add → queue-run) is byte-identical to a direct
+    // render-coagulated-blend-sequence with the same knobs + modulation.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_a = temp_dir.path().join("A");
+    let source_b = temp_dir.path().join("B");
+    write_texture_sequence(&source_a, &[0, 2, 4]);
+    write_texture_sequence(&source_b, &[1, 3, 5]);
+    let a = source_a.to_string_lossy().to_string();
+    let b = source_b.to_string_lossy().to_string();
+    let queue_path = temp_dir.path().join("queue.json");
+    let queued_root = temp_dir.path().join("queued-out");
+
+    // Shared knobs: a modulated coagulation_strength (LFO — no media) + bias.
+    let knobs = [
+        "--bias",
+        "1",
+        "--edge-hardness",
+        "0.6",
+        "--max-frames",
+        "3",
+        "--modulate",
+        "coagulation_strength=lfo(sine,0.5):6,6",
+    ];
+
+    let mut add_args = vec![
+        "queue-add-coagulated-blend-sequence".to_string(),
+        queue_path.to_string_lossy().to_string(),
+        a.clone(),
+        b.clone(),
+        queued_root.to_string_lossy().to_string(),
+    ];
+    add_args.extend(knobs.iter().map(|s| s.to_string()));
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&add_args)
+        .assert()
+        .success();
+
+    // The persisted task records the resolved spec (route + provenance-only).
+    let task = read_json(&queue_path)["jobs"][0]["task"].clone();
+    assert_eq!(task["type"], "frame_sequence_coagulated_blend");
+    assert_eq!(task["coagulation_strength"], 0.0);
+    assert_eq!(task["bias"], 1.0);
+    assert_eq!(task["modulation_routes"][0]["target"], "coagulation_strength");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-coagulated-blend-sequence", queue_path.to_string_lossy().as_ref()])
+        .assert()
+        .success();
+
+    let direct_dir = temp_dir.path().join("direct-out");
+    let mut direct_args = vec![
+        "render-coagulated-blend-sequence".to_string(),
+        a,
+        b,
+        direct_dir.to_string_lossy().to_string(),
+    ];
+    direct_args.extend(knobs.iter().map(|s| s.to_string()));
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&direct_args)
+        .assert()
+        .success();
+
+    assert_png_frames_identical(&direct_dir, &queued_root.join("job-0001/frames"), 3);
+}
+
+#[test]
 fn coagulated_modulation_scale_zero_matches_constant_knob() {
     // Continuity identity: a route with scale 0, offset K is byte-identical to
     // the constant knob K — routing perturbs the engine only by the knob value.
