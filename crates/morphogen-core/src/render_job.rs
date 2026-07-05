@@ -1449,9 +1449,8 @@ impl LfoShape {
 /// Which analysis descriptor drives a persisted modulation route.
 /// Mirrors `morphogen_render::ModulationSource` for queue-job serialisation.
 ///
-/// The `f32` fields on `Lfo` force dropping the `Eq` derive (keep `Copy`,
-/// `Breakpoints`' `Vec` forces dropping `Copy` — use `.clone()` at call sites.
-/// `PartialEq` is kept; nothing in this crate requires `Eq`.
+/// `Lfo`'s `f32` fields force dropping `Eq`; `Breakpoints`' `Vec` forces
+/// dropping `Copy`. `PartialEq` is kept; nothing in this crate requires `Eq`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModulationSource {
@@ -1473,13 +1472,19 @@ pub enum ModulationSource {
     Breakpoints {
         points: Vec<[f32; 2]>,
     },
+    // ── Signal combinators ────────────────────────────────────────────────────
+    Sum(Box<ModulationSource>, Box<ModulationSource>),
+    Mul(Box<ModulationSource>, Box<ModulationSource>),
+    Invert(Box<ModulationSource>),
+    Min(Box<ModulationSource>, Box<ModulationSource>),
+    Max(Box<ModulationSource>, Box<ModulationSource>),
+    Gate {
+        signal: Box<ModulationSource>,
+        threshold: f32,
+    },
 }
 
 impl ModulationSource {
-    /// The CLI route-grammar spelling (`audio-rms`, …). The LFO source's
-    /// spelling is dynamic (shape/rate/phase), so this returns a generic
-    /// `"lfo"` tag for it — use [`ModulationSource::spec_text`] for the
-    /// round-trippable spelling.
     pub fn name(&self) -> &'static str {
         match self {
             ModulationSource::AudioRms => "audio-rms",
@@ -1490,20 +1495,19 @@ impl ModulationSource {
             ModulationSource::EdgeDensity => "edge-density",
             ModulationSource::Lfo { .. } => "lfo",
             ModulationSource::Breakpoints { .. } => "breakpoints",
+            ModulationSource::Sum(..) => "sum",
+            ModulationSource::Mul(..) => "mul",
+            ModulationSource::Invert(..) => "invert",
+            ModulationSource::Min(..) => "min",
+            ModulationSource::Max(..) => "max",
+            ModulationSource::Gate { .. } => "gate",
         }
     }
 
-    /// The exact round-trippable spelling for the CLI route grammar's source
-    /// clause: media variants keep their `name()` spelling; the LFO variant
-    /// spells `lfo(<shape>,<rate_hz>,<phase>)` with `f32`'s `Display` (exact
-    /// round-trip, the established queue-identity mechanism).
     pub fn spec_text(&self) -> String {
         match self {
-            ModulationSource::Lfo {
-                shape,
-                rate_hz,
-                phase,
-            } => format!("lfo({},{},{})", shape.name(), rate_hz, phase),
+            ModulationSource::Lfo { shape, rate_hz, phase } =>
+                format!("lfo({},{},{})", shape.name(), rate_hz, phase),
             ModulationSource::Breakpoints { points } => {
                 let pairs: Vec<String> = points
                     .iter()
@@ -1511,6 +1515,18 @@ impl ModulationSource {
                     .collect();
                 format!("breakpoints({})", pairs.join(";"))
             }
+            ModulationSource::Sum(a, b) =>
+                format!("sum({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Mul(a, b) =>
+                format!("mul({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Invert(x) =>
+                format!("invert({})", x.spec_text()),
+            ModulationSource::Min(a, b) =>
+                format!("min({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Max(a, b) =>
+                format!("max({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Gate { signal, threshold } =>
+                format!("gate({},{})", signal.spec_text(), threshold),
             other => other.name().to_string(),
         }
     }

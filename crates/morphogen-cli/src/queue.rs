@@ -6767,6 +6767,28 @@ fn core_modulation_source(source: ModulationSource) -> CoreModulationSource {
             rate_hz,
             phase,
         },
+        ModulationSource::Sum(a, b) => CoreModulationSource::Sum(
+            Box::new(core_modulation_source(*a)),
+            Box::new(core_modulation_source(*b)),
+        ),
+        ModulationSource::Mul(a, b) => CoreModulationSource::Mul(
+            Box::new(core_modulation_source(*a)),
+            Box::new(core_modulation_source(*b)),
+        ),
+        ModulationSource::Invert(x) =>
+            CoreModulationSource::Invert(Box::new(core_modulation_source(*x))),
+        ModulationSource::Min(a, b) => CoreModulationSource::Min(
+            Box::new(core_modulation_source(*a)),
+            Box::new(core_modulation_source(*b)),
+        ),
+        ModulationSource::Max(a, b) => CoreModulationSource::Max(
+            Box::new(core_modulation_source(*a)),
+            Box::new(core_modulation_source(*b)),
+        ),
+        ModulationSource::Gate { signal, threshold } => CoreModulationSource::Gate {
+            signal: Box::new(core_modulation_source(*signal)),
+            threshold,
+        },
     }
 }
 

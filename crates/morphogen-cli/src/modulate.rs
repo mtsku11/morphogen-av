@@ -7,6 +7,7 @@
 //! `morphogen_render::modulation`; contract in
 //! `docs/MODULATION_MATRIX_MILESTONE.md`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,16 +29,20 @@ use crate::render::{feedback_modulation_frames_fingerprint, DatamoshSequenceSett
 const MODULATION_WINDOW: usize = 2048;
 const MODULATION_HOP: usize = 512;
 
+/// Pre-extracted envelopes for one route: leaf-source `spec_text()` → samples.
+type RouteEnvelopes = HashMap<String, Vec<(f64, f32)>>;
+
 /// Everything needed to evaluate routed knob values per output frame.
 pub(crate) struct ModulationPlan {
-    routes: Vec<(ModulationRoute, Vec<(f64, f32)>)>,
+    /// Each route paired with its leaf envelopes. Combinator routes carry one
+    /// entry per distinct media-backed leaf; pure-function routes carry an
+    /// empty map.
+    routes: Vec<(ModulationRoute, RouteEnvelopes)>,
     sampling: ModulationSampling,
     fps: f64,
 }
 
-/// Envelope identity: which modulator's media, analyzed by which descriptor.
-/// Uses `spec_text()` as the source key so the tuple stays `PartialEq` + `Clone`
-/// even after `ModulationSource` drops `Copy` (Breakpoints variant carries a Vec).
+/// Dedup key: (named_modulator, leaf_spec_text).
 type EnvelopeKey = (Option<String>, String);
 
 impl ModulationPlan {
@@ -51,12 +56,10 @@ impl ModulationPlan {
 
     pub(crate) fn frame_values(&self, index: usize) -> impl Iterator<Item = (&str, f32)> + '_ {
         let t = index as f64 / self.fps;
-        self.routes.iter().map(move |(route, samples)| {
+        self.routes.iter().map(move |(route, envelopes)| {
             (
                 route.target.as_str(),
-                // A route's own sampling (`@hold`/`@smooth`) overrides the
-                // render-level default.
-                modulated_value(route, samples, t, route.sampling.unwrap_or(self.sampling)),
+                modulated_value(route, envelopes, t, self.sampling),
             )
         })
     }
@@ -171,27 +174,41 @@ pub(crate) fn build_modulation_plan(
     let named_frames =
         parse_named_modulator_specs(request.named_modulator_frames, "--named-modulator-frames")?;
 
-    // Each distinct (modulator, source) pair is extracted exactly once.
-    let mut envelopes: Vec<(EnvelopeKey, Vec<(f64, f32)>)> = Vec::new();
+    // Each distinct (modulator, leaf_spec_text) pair is extracted exactly once.
+    // Combinator routes may have multiple media-backed leaves; each is extracted
+    // and stored in a per-route HashMap keyed by leaf spec_text().
+    let mut leaf_cache: Vec<(EnvelopeKey, Vec<(f64, f32)>)> = Vec::new();
     for route in &routes {
-        let key: EnvelopeKey = (route.modulator.clone(), route.source.spec_text());
-        if envelopes.iter().any(|(existing, _)| *existing == key) {
-            continue;
+        for leaf in route.source.leaf_media_sources() {
+            let key: EnvelopeKey = (route.modulator.clone(), leaf.spec_text());
+            if leaf_cache.iter().any(|(existing, _)| *existing == key) {
+                continue;
+            }
+            // Create a thin route context carrying the leaf source + inherited modulator.
+            let leaf_route = ModulationRoute {
+                target: String::new(),
+                source: leaf,
+                scale: 1.0,
+                offset: 0.0,
+                sampling: None,
+                modulator: route.modulator.clone(),
+            };
+            let samples = extract_envelope(&leaf_route, &request, &named_audio, &named_frames)?;
+            leaf_cache.push((key, samples));
         }
-        let samples = extract_envelope(route, &request, &named_audio, &named_frames)?;
-        envelopes.push((key, samples));
     }
 
     let routes = routes
         .into_iter()
         .map(|route| {
-            let key: EnvelopeKey = (route.modulator.clone(), route.source.spec_text());
-            let samples = envelopes
-                .iter()
-                .find(|(existing, _)| *existing == key)
-                .map(|(_, samples)| samples.clone())
-                .unwrap_or_default();
-            (route, samples)
+            let mut envelopes: RouteEnvelopes = HashMap::new();
+            for leaf in route.source.leaf_media_sources() {
+                let key: EnvelopeKey = (route.modulator.clone(), leaf.spec_text());
+                if let Some((_, samples)) = leaf_cache.iter().find(|(k, _)| *k == key) {
+                    envelopes.insert(leaf.spec_text(), samples.clone());
+                }
+            }
+            (route, envelopes)
         })
         .collect();
 
@@ -349,6 +366,16 @@ fn extract_envelope(
                 peak_normalize(&mut samples);
                 Ok(samples)
             })
+        }
+        // Combinators are never passed to extract_envelope directly — only their
+        // atomic media leaves are extracted via leaf_media_sources() in build_plan.
+        ModulationSource::Sum(..)
+        | ModulationSource::Mul(..)
+        | ModulationSource::Invert(..)
+        | ModulationSource::Min(..)
+        | ModulationSource::Max(..)
+        | ModulationSource::Gate { .. } => {
+            unreachable!("combinator sources are never extracted directly")
         }
     }
 }

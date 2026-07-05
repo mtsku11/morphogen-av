@@ -15,6 +15,8 @@
 //!
 //! Contract: `docs/MODULATION_MATRIX_MILESTONE.md`.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -119,13 +121,30 @@ pub enum ModulationSource {
         /// Pairs of `[t_seconds, value]`, sorted ascending by `t`.
         points: Vec<[f32; 2]>,
     },
+    // ── Signal combinators ────────────────────────────────────────────────────
+    /// Pointwise sum of two child signals: `eval(a) + eval(b)`.
+    /// Result is NOT clamped — the route's scale/offset maps it to the knob.
+    Sum(Box<ModulationSource>, Box<ModulationSource>),
+    /// Pointwise product: `eval(a) * eval(b)`. Typical use: audio-gated LFO.
+    Mul(Box<ModulationSource>, Box<ModulationSource>),
+    /// Signal inversion: `1.0 − eval(x)`. Maps [0,1] → [1,0].
+    Invert(Box<ModulationSource>),
+    /// Pointwise minimum of two child signals.
+    Min(Box<ModulationSource>, Box<ModulationSource>),
+    /// Pointwise maximum of two child signals.
+    Max(Box<ModulationSource>, Box<ModulationSource>),
+    /// Hard gate: outputs `eval(signal)` when `eval(signal) >= threshold`, else 0.
+    Gate {
+        signal: Box<ModulationSource>,
+        /// Static threshold in `[0, 1]` (applied to the raw un-scaled signal).
+        threshold: f32,
+    },
 }
 
 impl ModulationSource {
-    /// The CLI spelling (`audio-rms`, `audio-onset`, `audio-centroid`,
-    /// `luma`, `flow`). The LFO source's spelling is dynamic (shape/rate/
-    /// phase), so this returns a generic `"lfo"` tag for it — use
-    /// [`ModulationSource::spec_text`] for the round-trippable spelling.
+    /// The CLI name tag. For parameterised sources (LFO, Breakpoints,
+    /// combinators) this is a generic label — use `spec_text()` for the
+    /// full round-trippable spelling.
     pub fn name(&self) -> &'static str {
         match self {
             ModulationSource::AudioRms => "audio-rms",
@@ -136,20 +155,22 @@ impl ModulationSource {
             ModulationSource::EdgeDensity => "edge-density",
             ModulationSource::Lfo { .. } => "lfo",
             ModulationSource::Breakpoints { .. } => "breakpoints",
+            ModulationSource::Sum(..) => "sum",
+            ModulationSource::Mul(..) => "mul",
+            ModulationSource::Invert(..) => "invert",
+            ModulationSource::Min(..) => "min",
+            ModulationSource::Max(..) => "max",
+            ModulationSource::Gate { .. } => "gate",
         }
     }
 
-    /// The exact round-trippable spelling for the CLI grammar's source
-    /// clause: media variants keep their `name()` spelling; the LFO variant
-    /// spells `lfo(<shape>,<rate_hz>,<phase>)` with `f32`'s `Display` (exact
-    /// round-trip, the established queue-identity mechanism).
+    /// The exact round-trippable spelling for the CLI grammar's source clause.
+    /// Atomic media sources keep their `name()` spelling; parameterised and
+    /// combinator sources spell their full recursive expression.
     pub fn spec_text(&self) -> String {
         match self {
-            ModulationSource::Lfo {
-                shape,
-                rate_hz,
-                phase,
-            } => format!("lfo({},{},{})", shape.name(), rate_hz, phase),
+            ModulationSource::Lfo { shape, rate_hz, phase } =>
+                format!("lfo({},{},{})", shape.name(), rate_hz, phase),
             ModulationSource::Breakpoints { points } => {
                 let pairs: Vec<String> = points
                     .iter()
@@ -157,10 +178,24 @@ impl ModulationSource {
                     .collect();
                 format!("breakpoints({})", pairs.join(";"))
             }
+            ModulationSource::Sum(a, b) =>
+                format!("sum({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Mul(a, b) =>
+                format!("mul({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Invert(x) =>
+                format!("invert({})", x.spec_text()),
+            ModulationSource::Min(a, b) =>
+                format!("min({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Max(a, b) =>
+                format!("max({},{})", a.spec_text(), b.spec_text()),
+            ModulationSource::Gate { signal, threshold } =>
+                format!("gate({},{})", signal.spec_text(), threshold),
             other => other.name().to_string(),
         }
     }
 
+    /// Parse an atomic (non-parameterised) source name. Returns `None` for
+    /// LFO, Breakpoints, and combinator forms — those need `parse_source_expr`.
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "audio-rms" => Some(ModulationSource::AudioRms),
@@ -173,22 +208,83 @@ impl ModulationSource {
         }
     }
 
-    /// True when the route needs `--modulator-audio`.
+    /// True when this source (or any leaf of its combinator tree) requires
+    /// `--modulator-audio`.
     pub fn needs_audio(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ModulationSource::AudioRms
-                | ModulationSource::AudioOnset
-                | ModulationSource::AudioCentroid
-        )
+            | ModulationSource::AudioOnset
+            | ModulationSource::AudioCentroid => true,
+            ModulationSource::Luma
+            | ModulationSource::Flow
+            | ModulationSource::EdgeDensity
+            | ModulationSource::Lfo { .. }
+            | ModulationSource::Breakpoints { .. } => false,
+            ModulationSource::Sum(a, b)
+            | ModulationSource::Mul(a, b)
+            | ModulationSource::Min(a, b)
+            | ModulationSource::Max(a, b) => a.needs_audio() || b.needs_audio(),
+            ModulationSource::Invert(x) | ModulationSource::Gate { signal: x, .. } => {
+                x.needs_audio()
+            }
+        }
     }
 
-    /// True when the route needs `--modulator-frames`.
+    /// True when this source (or any leaf of its combinator tree) requires
+    /// `--modulator-frames`.
     pub fn needs_frames(&self) -> bool {
-        matches!(
-            self,
-            ModulationSource::Luma | ModulationSource::Flow | ModulationSource::EdgeDensity
-        )
+        match self {
+            ModulationSource::Luma | ModulationSource::Flow | ModulationSource::EdgeDensity => true,
+            ModulationSource::AudioRms
+            | ModulationSource::AudioOnset
+            | ModulationSource::AudioCentroid
+            | ModulationSource::Lfo { .. }
+            | ModulationSource::Breakpoints { .. } => false,
+            ModulationSource::Sum(a, b)
+            | ModulationSource::Mul(a, b)
+            | ModulationSource::Min(a, b)
+            | ModulationSource::Max(a, b) => a.needs_frames() || b.needs_frames(),
+            ModulationSource::Invert(x) | ModulationSource::Gate { signal: x, .. } => {
+                x.needs_frames()
+            }
+        }
+    }
+
+    /// Collect the distinct atomic media-backed leaf sources in this expression
+    /// tree (deduped by `spec_text()`). Pure-function sources (LFO, Breakpoints)
+    /// and combinators themselves are not returned — only the leaves that need
+    /// an extracted envelope.
+    pub fn leaf_media_sources(&self) -> Vec<ModulationSource> {
+        let mut out = Vec::new();
+        self.collect_leaves(&mut out);
+        out
+    }
+
+    fn collect_leaves(&self, out: &mut Vec<ModulationSource>) {
+        match self {
+            ModulationSource::AudioRms
+            | ModulationSource::AudioOnset
+            | ModulationSource::AudioCentroid
+            | ModulationSource::Luma
+            | ModulationSource::Flow
+            | ModulationSource::EdgeDensity => {
+                let key = self.spec_text();
+                if !out.iter().any(|s| s.spec_text() == key) {
+                    out.push(self.clone());
+                }
+            }
+            ModulationSource::Lfo { .. } | ModulationSource::Breakpoints { .. } => {}
+            ModulationSource::Sum(a, b)
+            | ModulationSource::Mul(a, b)
+            | ModulationSource::Min(a, b)
+            | ModulationSource::Max(a, b) => {
+                a.collect_leaves(out);
+                b.collect_leaves(out);
+            }
+            ModulationSource::Invert(x) | ModulationSource::Gate { signal: x, .. } => {
+                x.collect_leaves(out);
+            }
+        }
     }
 }
 
@@ -232,8 +328,8 @@ fn default_scale() -> f32 {
     1.0
 }
 
-/// Split `<source-body>:<params>` at the first `:` that is NOT inside
-/// balanced parentheses. Returns `(source_body, None)` when no such `:` exists.
+/// Split `<source-body>:<params>` at the first `:` at paren depth 0.
+/// Returns `(source_body, None)` when no such `:` exists.
 fn split_source_params(rest: &str) -> (&str, Option<&str>) {
     let mut depth: usize = 0;
     for (i, c) in rest.char_indices() {
@@ -245,6 +341,132 @@ fn split_source_params(rest: &str) -> (&str, Option<&str>) {
         }
     }
     (rest, None)
+}
+
+/// Split `<name>.<source>` at the first `.` at paren depth 0.
+/// Dots inside balanced parens (e.g. float literals in `lfo(sine,0.5)`) are
+/// at depth > 0 and skipped. Returns `None` when no depth-0 dot exists.
+fn split_dot_at_depth0(s: &str) -> Option<(&str, &str)> {
+    let mut depth: usize = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            '.' if depth == 0 => return Some((&s[..i], &s[i + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split the inner argument string of a combinator at top-level (depth-0) commas.
+/// E.g. `"audio-rms,lfo(sine,0.5)"` → `["audio-rms", "lfo(sine,0.5)"]`.
+fn split_args_at_depth0(inner: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut depth: usize = 0;
+    let mut start = 0;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                result.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push(&inner[start..]);
+    result
+}
+
+/// Recursive source-expression parser. Handles atoms (audio-rms, luma, …),
+/// parameterised sources (lfo, breakpoints), and combinator expressions
+/// (sum, mul, invert, min, max, gate).
+fn parse_source_expr(
+    text: &str,
+    bad: &dyn Fn(&str) -> RenderError,
+) -> Result<ModulationSource, RenderError> {
+    let text = text.trim();
+
+    if text.starts_with("lfo(") {
+        return parse_lfo_source(text, bad);
+    }
+    if text.starts_with("breakpoints(") {
+        return parse_breakpoints_source(text, bad);
+    }
+
+    // Binary combinators
+    for prefix in &["sum(", "mul(", "min(", "max("] {
+        if text.starts_with(prefix) {
+            let name = &prefix[..prefix.len() - 1]; // strip the '('
+            let inner = text
+                .strip_prefix(prefix)
+                .and_then(|r| r.strip_suffix(')'))
+                .ok_or_else(|| bad(&format!("malformed {name}(...) source '{text}'")))?;
+            let args = split_args_at_depth0(inner);
+            if args.len() != 2 {
+                return Err(bad(&format!(
+                    "{name}(...) requires exactly 2 arguments, got {}",
+                    args.len()
+                )));
+            }
+            let a = Box::new(parse_source_expr(args[0], bad)?);
+            let b = Box::new(parse_source_expr(args[1], bad)?);
+            return Ok(match name {
+                "sum" => ModulationSource::Sum(a, b),
+                "mul" => ModulationSource::Mul(a, b),
+                "min" => ModulationSource::Min(a, b),
+                "max" => ModulationSource::Max(a, b),
+                _ => unreachable!(),
+            });
+        }
+    }
+
+    // Unary combinator: invert
+    if text.starts_with("invert(") {
+        let inner = text
+            .strip_prefix("invert(")
+            .and_then(|r| r.strip_suffix(')'))
+            .ok_or_else(|| bad(&format!("malformed invert(...) source '{text}'")))?;
+        let x = Box::new(parse_source_expr(inner, bad)?);
+        return Ok(ModulationSource::Invert(x));
+    }
+
+    // Gate: gate(signal, float-threshold)
+    if text.starts_with("gate(") {
+        let inner = text
+            .strip_prefix("gate(")
+            .and_then(|r| r.strip_suffix(')'))
+            .ok_or_else(|| bad(&format!("malformed gate(...) source '{text}'")))?;
+        let args = split_args_at_depth0(inner);
+        if args.len() != 2 {
+            return Err(bad(&format!(
+                "gate(...) requires exactly 2 arguments (signal, threshold), got {}",
+                args.len()
+            )));
+        }
+        let signal = Box::new(parse_source_expr(args[0], bad)?);
+        let threshold: f32 = args[1].trim().parse().map_err(|_| {
+            bad(&format!(
+                "gate threshold '{}' must be a finite number",
+                args[1].trim()
+            ))
+        })?;
+        if !threshold.is_finite() {
+            return Err(bad("gate threshold must be finite"));
+        }
+        return Ok(ModulationSource::Gate { signal, threshold });
+    }
+
+    // Atomic sources
+    ModulationSource::parse(text).ok_or_else(|| {
+        bad(&format!(
+            "unknown source '{text}' (available: audio-rms, audio-onset, audio-centroid, \
+             luma, flow, edge-density, lfo(...), breakpoints(...), sum(...), mul(...), \
+             invert(...), min(...), max(...), gate(...))"
+        ))
+    })
 }
 
 /// Parse the CLI route grammar
@@ -277,50 +499,34 @@ pub fn parse_modulation_route(spec: &str) -> Result<ModulationRoute, RenderError
     if target.is_empty() {
         return Err(bad("empty target"));
     }
-    // Split source from optional `:scale[,offset]` params. `breakpoints(...)`
-    // sources contain `:` inside their parens, so we must skip `:` chars that
-    // are inside a balanced `(...)` group.
+    // Split source from optional `:scale[,offset]` params. Sources like
+    // `breakpoints(t:v;...)` and combinator args contain `:` inside parens;
+    // skip depth > 0 colons.
     let (source_name, params) = split_source_params(rest);
-    // An optional `<name>.` prefix selects a named modulator; the source
-    // names themselves contain no '.', so the first dot is unambiguous —
-    // except `lfo(...)`, whose parens may themselves contain a '.'
-    // (`lfo(sine,0.5)`). An `lfo(...)` body never takes a named-modulator
-    // prefix (no media to name), so the dot-split must not run on it; a real
-    // prefix ahead of one (`wob.lfo(sine)`) is a distinct, explicit error.
+    // An optional `<name>.` prefix selects a named modulator. A depth-aware
+    // dot split handles dots inside float args (e.g. `lfo(sine,0.5)`).
+    // LFO and Breakpoints sources accept no named-modulator prefix (they
+    // need no media); combinators inherit the route's modulator for all
+    // of their media-backed leaves.
     let trimmed_source = source_name.trim();
-    let is_paren_source = trimmed_source.starts_with("lfo(")
-        || trimmed_source.starts_with("breakpoints(");
-    let (modulator, source_name) = if is_paren_source {
-        (None, source_name)
-    } else {
-        match source_name.split_once('.') {
+    let (modulator, source_name): (Option<String>, &str) =
+        match split_dot_at_depth0(trimmed_source) {
             Some((name, inner)) => {
                 let name = name.trim();
                 if name.is_empty() {
                     return Err(bad("empty modulator name"));
                 }
-                if inner.trim().starts_with("lfo(") || inner.trim().starts_with("breakpoints(") {
+                let inner_trimmed = inner.trim();
+                if inner_trimmed.starts_with("lfo(") || inner_trimmed.starts_with("breakpoints(") {
                     return Err(bad(
                         "a named modulator prefix is not allowed on an lfo or breakpoints source (they need no media)",
                     ));
                 }
-                (Some(name.to_string()), inner)
+                (Some(name.to_string()), inner.trim())
             }
-            None => (None, source_name),
-        }
-    };
-    let source_name = source_name.trim();
-    let source = if source_name.starts_with("lfo(") {
-        parse_lfo_source(source_name, &bad)?
-    } else if source_name.starts_with("breakpoints(") {
-        parse_breakpoints_source(source_name, &bad)?
-    } else {
-        ModulationSource::parse(source_name).ok_or_else(|| {
-            bad(&format!(
-                "unknown source '{source_name}' (available: audio-rms, audio-onset, audio-centroid, luma, flow, edge-density, lfo, breakpoints)"
-            ))
-        })?
-    };
+            None => (None, trimmed_source),
+        };
+    let source = parse_source_expr(source_name, &bad)?;
     let (scale, offset) = match params {
         None => (1.0, 0.0),
         Some(params) => {
@@ -519,60 +725,100 @@ pub fn sample_envelope(samples: &[(f64, f32)], t: f64, sampling: ModulationSampl
 }
 
 /// The mapped (pre-clamp) knob value for a route at time `t`.
+///
+/// `envelopes` maps each atomic media-backed leaf source's `spec_text()` to
+/// its pre-extracted `(time_seconds, value)` samples. Pure-function sources
+/// (LFO, Breakpoints) and combinators of them require an empty map; routes
+/// with media leaves (audio-rms, luma, …) expect their envelope in the map.
 pub fn modulated_value(
     route: &ModulationRoute,
-    samples: &[(f64, f32)],
+    envelopes: &HashMap<String, Vec<(f64, f32)>>,
     t: f64,
     sampling: ModulationSampling,
 ) -> f32 {
-    if let ModulationSource::Lfo {
-        shape,
-        rate_hz,
-        phase,
-    } = &route.source
-    {
-        // LFO routes bypass envelope extraction and sampling entirely — a
-        // pure function of `(t, params)`. `sampling` (`@hold`/`@smooth`) is a
-        // documented no-op here (nothing sparse to sample). All math in f64,
-        // cast to f32 at the end (milestone doc, "Semantics").
-        let x = *rate_hz as f64 * t + *phase as f64;
-        let p = x - x.floor(); // fract(x) = x - x.floor(), so p ∈ [0,1)
-        let raw = shape.evaluate(p);
-        return (raw * route.scale as f64 + route.offset as f64) as f32;
-    }
-    if let ModulationSource::Breakpoints { points } = &route.source {
-        // Piecewise-linear evaluation: interpolate between knots, clamp at ends.
-        // `sampling` (@hold/@smooth) is intentionally ignored — the envelope is
-        // already defined as continuous (lerp); there is nothing sparse to hold.
-        let raw = if points.is_empty() {
-            0.0_f64
-        } else if points.len() == 1 {
-            points[0][1] as f64
-        } else {
+    let effective_sampling = route.sampling.unwrap_or(sampling);
+    let raw = eval_source(&route.source, envelopes, t, effective_sampling);
+    raw * route.scale + route.offset
+}
+
+/// Recursively evaluate a `ModulationSource` expression at time `t`.
+/// Returns a raw (pre-scale, pre-offset) value; combinators operate on raw
+/// child values and do NOT internally clamp — the knob's apply function clamps.
+fn eval_source(
+    source: &ModulationSource,
+    envelopes: &HashMap<String, Vec<(f64, f32)>>,
+    t: f64,
+    sampling: ModulationSampling,
+) -> f32 {
+    match source {
+        ModulationSource::Lfo { shape, rate_hz, phase } => {
+            // Pure function of (t, params) — sampling is a documented no-op.
+            let x = *rate_hz as f64 * t + *phase as f64;
+            let p = x - x.floor();
+            shape.evaluate(p) as f32
+        }
+        ModulationSource::Breakpoints { points } => {
+            // Piecewise-linear — sampling ignored (envelope is already continuous).
+            if points.is_empty() {
+                return 0.0;
+            }
+            if points.len() == 1 {
+                return points[0][1];
+            }
             let t32 = t as f32;
             if t32 <= points[0][0] {
-                points[0][1] as f64
-            } else if t32 >= points[points.len() - 1][0] {
-                points[points.len() - 1][1] as f64
-            } else {
-                let mut lo = 0usize;
-                while lo + 1 < points.len() && points[lo + 1][0] <= t32 {
-                    lo += 1;
-                }
-                let [t0, v0] = points[lo];
-                let [t1, v1] = points[lo + 1];
-                let span = t1 - t0;
-                if span <= 0.0 {
-                    v0 as f64
-                } else {
-                    let alpha = ((t32 - t0) / span).clamp(0.0, 1.0);
-                    (v0 + (v1 - v0) * alpha) as f64
-                }
+                return points[0][1];
             }
-        };
-        return (raw * route.scale as f64 + route.offset as f64) as f32;
+            if t32 >= points[points.len() - 1][0] {
+                return points[points.len() - 1][1];
+            }
+            let mut lo = 0usize;
+            while lo + 1 < points.len() && points[lo + 1][0] <= t32 {
+                lo += 1;
+            }
+            let [t0, v0] = points[lo];
+            let [t1, v1] = points[lo + 1];
+            let span = t1 - t0;
+            if span <= 0.0 {
+                v0
+            } else {
+                let alpha = ((t32 - t0) / span).clamp(0.0, 1.0);
+                v0 + (v1 - v0) * alpha
+            }
+        }
+        // Atomic media-backed sources: look up the pre-extracted envelope.
+        other @ (ModulationSource::AudioRms
+        | ModulationSource::AudioOnset
+        | ModulationSource::AudioCentroid
+        | ModulationSource::Luma
+        | ModulationSource::Flow
+        | ModulationSource::EdgeDensity) => {
+            let empty: &[(f64, f32)] = &[];
+            let samples = envelopes
+                .get(&other.spec_text())
+                .map(|v| v.as_slice())
+                .unwrap_or(empty);
+            sample_envelope(samples, t, sampling)
+        }
+        // Combinators — recursively evaluate children.
+        ModulationSource::Sum(a, b) => {
+            eval_source(a, envelopes, t, sampling) + eval_source(b, envelopes, t, sampling)
+        }
+        ModulationSource::Mul(a, b) => {
+            eval_source(a, envelopes, t, sampling) * eval_source(b, envelopes, t, sampling)
+        }
+        ModulationSource::Invert(x) => 1.0 - eval_source(x, envelopes, t, sampling),
+        ModulationSource::Min(a, b) => {
+            eval_source(a, envelopes, t, sampling).min(eval_source(b, envelopes, t, sampling))
+        }
+        ModulationSource::Max(a, b) => {
+            eval_source(a, envelopes, t, sampling).max(eval_source(b, envelopes, t, sampling))
+        }
+        ModulationSource::Gate { signal, threshold } => {
+            let sig = eval_source(signal, envelopes, t, sampling);
+            if sig >= *threshold { sig } else { 0.0 }
+        }
     }
-    sample_envelope(samples, t, sampling) * route.scale + route.offset
 }
 
 // ─── Per-effect target registries ─────────────────────────────────────────────
@@ -1390,8 +1636,9 @@ mod tests {
     #[test]
     fn modulated_value_applies_affine_mapping() {
         let route = parse_modulation_route("strength=luma:0.5,0.25").unwrap();
-        let samples = vec![(0.0, 1.0)];
-        let value = modulated_value(&route, &samples, 0.0, ModulationSampling::Hold);
+        let mut envelopes = HashMap::new();
+        envelopes.insert("luma".to_string(), vec![(0.0_f64, 1.0_f32)]);
+        let value = modulated_value(&route, &envelopes, 0.0, ModulationSampling::Hold);
         assert!((value - 0.75).abs() < 1e-6);
     }
 
@@ -1658,8 +1905,8 @@ mod tests {
         let wrapped = parse_modulation_route("depth=lfo(saw,1,1.25)").unwrap();
         let base = parse_modulation_route("depth=lfo(saw,1,0.25)").unwrap();
         for t in [0.0, 0.5, 1.0, 3.3] {
-            let a = modulated_value(&wrapped, &[], t, ModulationSampling::Hold);
-            let b = modulated_value(&base, &[], t, ModulationSampling::Hold);
+            let a = modulated_value(&wrapped, &HashMap::new(), t, ModulationSampling::Hold);
+            let b = modulated_value(&base, &HashMap::new(), t, ModulationSampling::Hold);
             assert_eq!(a, b, "phase 1.25 must equal phase 0.25 at t={t}");
         }
     }
@@ -1741,9 +1988,9 @@ mod tests {
         let held = parse_modulation_route("depth=lfo(sine,0.5):64,-32@hold").unwrap();
         let smoothed = parse_modulation_route("depth=lfo(sine,0.5):64,-32@smooth").unwrap();
         for t in [0.0, 0.3, 0.77, 1.5] {
-            let a = modulated_value(&unsuffixed, &[], t, ModulationSampling::Hold);
-            let b = modulated_value(&held, &[], t, ModulationSampling::Smooth);
-            let c = modulated_value(&smoothed, &[], t, ModulationSampling::Hold);
+            let a = modulated_value(&unsuffixed, &HashMap::new(), t, ModulationSampling::Hold);
+            let b = modulated_value(&held, &HashMap::new(), t, ModulationSampling::Smooth);
+            let c = modulated_value(&smoothed, &HashMap::new(), t, ModulationSampling::Hold);
             assert_eq!(a, b, "@hold must equal unsuffixed, byte-equal, at t={t}");
             assert_eq!(a, c, "@smooth must equal unsuffixed, byte-equal, at t={t}");
         }
@@ -1780,7 +2027,7 @@ mod tests {
         let route = parse_modulation_route("displacement_depth=lfo(sine,1):0,150").unwrap();
         let mut rutt = RuttEtraSettings::default();
         for t in [0.0, 0.1, 0.37, 5.5] {
-            let value = modulated_value(&route, &[], t, ModulationSampling::Hold);
+            let value = modulated_value(&route, &HashMap::new(), t, ModulationSampling::Hold);
             assert_eq!(value, 150.0, "scale 0 must ignore t entirely, t={t}");
             apply_rutt_etra_modulation(&mut rutt, "displacement_depth", value).unwrap();
             assert_eq!(rutt.displacement_depth, 150.0);
@@ -1803,23 +2050,23 @@ mod tests {
     #[test]
     fn breakpoints_single_knot_returns_constant() {
         let route = bp_route(vec![[0.0, 0.5]], 1.0, 0.0);
-        assert_eq!(modulated_value(&route, &[], 0.0, ModulationSampling::Hold), 0.5);
-        assert_eq!(modulated_value(&route, &[], 10.0, ModulationSampling::Hold), 0.5);
+        assert_eq!(modulated_value(&route, &HashMap::new(), 0.0, ModulationSampling::Hold), 0.5);
+        assert_eq!(modulated_value(&route, &HashMap::new(), 10.0, ModulationSampling::Hold), 0.5);
     }
 
     #[test]
     fn breakpoints_interpolates_between_knots() {
         // 0s→0.0, 1s→1.0 — midpoint should be 0.5.
         let route = bp_route(vec![[0.0, 0.0], [1.0, 1.0]], 1.0, 0.0);
-        let v = modulated_value(&route, &[], 0.5, ModulationSampling::Hold);
+        let v = modulated_value(&route, &HashMap::new(), 0.5, ModulationSampling::Hold);
         assert!((v - 0.5).abs() < 1e-5, "expected ~0.5, got {v}");
     }
 
     #[test]
     fn breakpoints_clamps_before_first_and_after_last() {
         let route = bp_route(vec![[2.0, 0.25], [4.0, 0.75]], 1.0, 0.0);
-        let before = modulated_value(&route, &[], 0.0, ModulationSampling::Hold);
-        let after  = modulated_value(&route, &[], 8.0, ModulationSampling::Hold);
+        let before = modulated_value(&route, &HashMap::new(), 0.0, ModulationSampling::Hold);
+        let after  = modulated_value(&route, &HashMap::new(), 8.0, ModulationSampling::Hold);
         assert!((before - 0.25).abs() < 1e-5, "expected left-clamp 0.25, got {before}");
         assert!((after  - 0.75).abs() < 1e-5, "expected right-clamp 0.75, got {after}");
     }
@@ -1828,7 +2075,7 @@ mod tests {
     fn breakpoints_scale_offset_applied() {
         // Single knot 1.0, scale=2, offset=-0.5 → 1.0*2 - 0.5 = 1.5.
         let route = bp_route(vec![[0.0, 1.0]], 2.0, -0.5);
-        let v = modulated_value(&route, &[], 0.0, ModulationSampling::Hold);
+        let v = modulated_value(&route, &HashMap::new(), 0.0, ModulationSampling::Hold);
         assert!((v - 1.5).abs() < 1e-5, "expected 1.5, got {v}");
     }
 
@@ -1845,5 +2092,162 @@ mod tests {
     fn breakpoints_rejects_value_out_of_range() {
         let result = parse_modulation_route("strength=breakpoints(0.0:1.5)");
         assert!(result.is_err(), "value 1.5 > 1 should be rejected");
+    }
+
+    // ── Combinator modulation sources ─────────────────────────────────────────
+
+    fn eval_route(spec: &str, t: f64) -> f32 {
+        let route = parse_modulation_route(spec).expect(spec);
+        modulated_value(&route, &HashMap::new(), t, ModulationSampling::Hold)
+    }
+
+    #[test]
+    fn combinator_sum_adds_two_signals() {
+        // sum(lfo(square,1), lfo(square,1)) with phase offset:
+        // at t=0: square is low (0), so sum = 0+0 = 0.
+        // at t=0.75: square is high (1), so sum = 1+1 = 2.
+        let v0 = eval_route("x=sum(lfo(square,1),lfo(square,1)):1,0", 0.0);
+        let v1 = eval_route("x=sum(lfo(square,1),lfo(square,1)):1,0", 0.75);
+        assert!((v0 - 0.0).abs() < 1e-5, "expected 0 at t=0, got {v0}");
+        assert!((v1 - 2.0).abs() < 1e-5, "expected 2 at t=0.75, got {v1}");
+    }
+
+    #[test]
+    fn combinator_mul_products_two_signals() {
+        // mul(lfo(saw,1), lfo(saw,1)):4 → saw² × 4; at t=0.5: (0.5*0.5)*4 = 1.0
+        let v = eval_route("x=mul(lfo(saw,1),lfo(saw,1)):4,0", 0.5);
+        assert!((v - 1.0).abs() < 1e-5, "expected 1.0, got {v}");
+        // at t=0: 0*0=0
+        let v0 = eval_route("x=mul(lfo(saw,1),lfo(saw,1)):4,0", 0.0);
+        assert!((v0 - 0.0).abs() < 1e-5, "expected 0.0, got {v0}");
+    }
+
+    #[test]
+    fn combinator_invert_flips_signal() {
+        // invert(lfo(saw,1)) at t=0 → 1-0=1; at t=0.5 → 1-0.5=0.5
+        let v0 = eval_route("x=invert(lfo(saw,1)):1,0", 0.0);
+        let v1 = eval_route("x=invert(lfo(saw,1)):1,0", 0.5);
+        assert!((v0 - 1.0).abs() < 1e-5, "expected 1.0, got {v0}");
+        assert!((v1 - 0.5).abs() < 1e-5, "expected 0.5, got {v1}");
+    }
+
+    #[test]
+    fn combinator_min_returns_lower_of_two() {
+        // min(lfo(saw,1), 0.5-constant) using breakpoints
+        // lfo(saw,1) at t=0.75=0.75; const=0.5 → min=0.5
+        // lfo at t=0.25=0.25; const=0.5 → min=0.25
+        let v_high = eval_route("x=min(lfo(saw,1),breakpoints(0.0:0.5)):1,0", 0.75);
+        let v_low  = eval_route("x=min(lfo(saw,1),breakpoints(0.0:0.5)):1,0", 0.25);
+        assert!((v_high - 0.5).abs() < 1e-5, "expected 0.5, got {v_high}");
+        assert!((v_low  - 0.25).abs() < 1e-5, "expected 0.25, got {v_low}");
+    }
+
+    #[test]
+    fn combinator_max_returns_higher_of_two() {
+        // max(lfo(saw,1), breakpoints(0.0:0.5)) — same setup, opposite result
+        let v_high = eval_route("x=max(lfo(saw,1),breakpoints(0.0:0.5)):1,0", 0.75);
+        let v_low  = eval_route("x=max(lfo(saw,1),breakpoints(0.0:0.5)):1,0", 0.25);
+        assert!((v_high - 0.75).abs() < 1e-5, "expected 0.75, got {v_high}");
+        assert!((v_low  - 0.5).abs() < 1e-5,  "expected 0.5, got {v_low}");
+    }
+
+    #[test]
+    fn combinator_gate_passes_when_above_threshold() {
+        // gate(lfo(saw,1), 0.5): below → 0, above → signal
+        let v_below = eval_route("x=gate(lfo(saw,1),0.5):1,0", 0.25);
+        let v_above = eval_route("x=gate(lfo(saw,1),0.5):1,0", 0.75);
+        assert!((v_below - 0.0).abs() < 1e-5, "expected 0 below threshold, got {v_below}");
+        assert!((v_above - 0.75).abs() < 1e-5, "expected 0.75 above threshold, got {v_above}");
+    }
+
+    #[test]
+    fn combinator_nesting_works() {
+        // mul(invert(lfo(saw,1)), lfo(saw,1)) = (1 - saw) * saw
+        // at t=0.5: (1-0.5)*0.5 = 0.25
+        let v = eval_route("x=mul(invert(lfo(saw,1)),lfo(saw,1)):1,0", 0.5);
+        assert!((v - 0.25).abs() < 1e-5, "expected 0.25, got {v}");
+    }
+
+    #[test]
+    fn combinator_spec_text_round_trips() {
+        for spec in [
+            "x=sum(audio-rms,lfo(sine,1,0)):2,0",
+            "x=mul(lfo(saw,0.5,0),invert(lfo(sine,1,0))):1,0",
+            "x=min(luma,flow):1,0",
+            "x=max(audio-rms,edge-density):1,0",
+            "x=invert(lfo(triangle,2,0)):3,-1",
+            "x=gate(lfo(sine,1,0),0.5):1,0",
+            "x=sum(mul(lfo(saw,1,0),breakpoints(0.0:0.5;1.0:1.0)),audio-rms):1,0",
+        ] {
+            let route = parse_modulation_route(spec).unwrap_or_else(|e| panic!("parse '{spec}': {e}"));
+            let respec = format!("x={}:{},{}", route.source.spec_text(), route.scale, route.offset);
+            let route2 = parse_modulation_route(&respec)
+                .unwrap_or_else(|e| panic!("re-parse '{respec}': {e}"));
+            assert_eq!(route.source, route2.source, "spec_text round-trip failed for '{spec}'");
+        }
+    }
+
+    #[test]
+    fn combinator_needs_audio_and_frames_recurse() {
+        let sum_audio_luma: ModulationSource = parse_modulation_route("x=sum(audio-rms,luma):1,0")
+            .unwrap()
+            .source;
+        assert!(sum_audio_luma.needs_audio());
+        assert!(sum_audio_luma.needs_frames());
+
+        let lfo_only: ModulationSource = parse_modulation_route("x=invert(lfo(sine,1)):1,0")
+            .unwrap()
+            .source;
+        assert!(!lfo_only.needs_audio());
+        assert!(!lfo_only.needs_frames());
+
+        let flow_gate: ModulationSource = parse_modulation_route("x=gate(flow,0.3):1,0")
+            .unwrap()
+            .source;
+        assert!(!flow_gate.needs_audio());
+        assert!(flow_gate.needs_frames());
+    }
+
+    #[test]
+    fn combinator_leaf_media_sources_deduplicates() {
+        let source: ModulationSource =
+            parse_modulation_route("x=sum(audio-rms,audio-rms):1,0").unwrap().source;
+        let leaves = source.leaf_media_sources();
+        assert_eq!(leaves.len(), 1, "audio-rms should appear once after dedup");
+
+        let source2: ModulationSource =
+            parse_modulation_route("x=sum(audio-rms,luma):1,0").unwrap().source;
+        let leaves2 = source2.leaf_media_sources();
+        assert_eq!(leaves2.len(), 2);
+
+        let pure: ModulationSource =
+            parse_modulation_route("x=mul(lfo(sine,1),breakpoints(0.0:0.5)):1,0").unwrap().source;
+        assert!(pure.leaf_media_sources().is_empty());
+    }
+
+    #[test]
+    fn combinator_rejects_malformed_specs() {
+        for spec in [
+            "x=sum(audio-rms)",         // sum needs 2 args
+            "x=mul(lfo(sine,1))",       // mul needs 2 args
+            "x=invert()",               // invert needs 1 arg (empty)
+            "x=gate(audio-rms,abc)",    // gate threshold must be a number
+            "x=sum(audio-rms,unknown)", // unknown inner source
+            "x=sum(audio-rms",          // unclosed paren
+        ] {
+            assert!(
+                parse_modulation_route(spec).is_err(),
+                "expected '{spec}' to fail"
+            );
+        }
+    }
+
+    #[test]
+    fn combinator_dot_split_handles_float_args_in_lfo() {
+        // The depth-aware dot split must not confuse the '.' in `lfo(sine,0.5)`
+        // with a named-modulator prefix.
+        let route = parse_modulation_route("x=sum(lfo(sine,0.5),lfo(saw,0.5)):1,0").unwrap();
+        assert_eq!(route.modulator, None);
+        assert!(matches!(route.source, ModulationSource::Sum(..)));
     }
 }
