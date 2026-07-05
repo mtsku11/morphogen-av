@@ -39,7 +39,19 @@ mod-slots; dispersion + fluid-mosaic reuse the coagulated 4-layer template) →
 ROI — multiplies the whole matrix) → 5.2 oscillators → 5.5 capture → 5.3 MIDI →
 5.4 mattes → 5.6 colour → gated 2.x → blocked 3.x → **then Morphogenesis**.
 
-### In flight: Tier 1.1 — mod-target registries (1 of 6 effects done)
+### In flight: Tier 1.1 — mod-target registries (1.5 of 6 effects done)
+
+**Field particles — 3 of 4 layers** (registry `a269138`; CLI `--modulate` +
+queue route persistence `3c1d9f2` — targets advect/turbulence_scale/
+turbulence_speed/detail, provenance-only; continuity + add→run byte-identical +
+off-vs-on 0.0→26.0 verified). **Remaining: SwiftUI mod-slots** — a LIGHT
+extension (field particles already has a panel + bridge, so just add 4
+ModulationSlotRow + AppState slot state + thread `modulationRoutes` through the
+existing field-particles bridge request via `appendModulationArguments` + one
+bridge-token test). Then it's the next mature effect (cascade collage / cascade
+trails), then dispersion + fluid mosaic (full 4-layer like coagulated).
+
+
 
 **Coagulated flow blend — COMPLETE, all 4 layers** (local, unpushed — 1.1 not
 finished so no push yet per cadence). Registry `910ec9e`
