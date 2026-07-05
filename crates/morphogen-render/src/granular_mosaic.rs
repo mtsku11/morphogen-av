@@ -19,6 +19,12 @@ pub const MULTIMODAL_GRAIN_ALGORITHM: &str = "multimodal_nearest_grain_cpu_v1";
 /// lacks the texture dims and must be regenerated rather than silently read as zero.
 pub const POOLED_GRAIN_ALGORITHM: &str = "pooled_av_nearest_grain_cpu_v2";
 
+/// Algorithm identifier for the AV-granular OLA resynthesis audio output.
+/// Distinct from `POOLED_GRAIN_ALGORITHM` so a stale audio artifact (e.g. from a run
+/// without a carrier WAV) never satisfies a run that wants audio. Video frames are
+/// byte-identical to a run without `--carrier-wav`; only the audio sidecar is new.
+pub const POOLED_AV_AUDIO_ALGORITHM: &str = "pooled_av_ola_resynthesis_cpu_v1";
+
 /// Parameters for deterministic visual grain recomposition. A tile's average
 /// Source A luminance selects a Source B tile; variation blends that choice
 /// with a seeded alternate tile, while rearrangement blends the selected
@@ -1286,6 +1292,76 @@ fn tile_hash(seed: u64, tile_x: u32, tile_y: u32) -> u64 {
     value ^ (value >> 31)
 }
 
+/// OLA (overlap-add) audio resynthesis for the granular pool renderer.
+///
+/// For each output video frame `i`, every selected grain (one per spatial tile)
+/// contributes its source audio window at carrier position `grain.frame_index ×
+/// hop_size`. All tile windows land at the same output time (`i × hop_size`), so
+/// they are mixed (summed then divided by the contributing tile count). A
+/// rectangular window is used — no Hann — because there is no inter-frame temporal
+/// overlap to smooth; adjacent output frames do not share samples.
+///
+/// The video frames are NOT touched here: this function only produces audio, so the
+/// video output remains byte-identical to a run without a carrier WAV.
+///
+/// # Arguments
+/// - `carrier_samples` — interleaved PCM (f32), `channels × audio-frames` layout.
+/// - `carrier_channels` — number of interleaved channels (1 or 2 typical).
+/// - `carrier_total_frames` — total audio frames in `carrier_samples`.
+/// - `frame_selections` — one `GrainSelection` per output video frame.
+/// - `pool` — the grain pool (used for `frame_index` lookups).
+/// - `hop_size` — audio frames per video frame (`round(sample_rate / frame_rate)`).
+///
+/// # Returns
+/// Interleaved f32 PCM with `frame_count × hop_size × channels` samples.
+pub fn ola_resynthesis_cpu(
+    carrier_samples: &[f32],
+    carrier_channels: usize,
+    carrier_total_frames: usize,
+    frame_selections: &[GrainSelection],
+    pool: &GrainPool,
+    hop_size: usize,
+) -> Vec<f32> {
+    if hop_size == 0 || carrier_channels == 0 || frame_selections.is_empty() {
+        return Vec::new();
+    }
+    let output_len = frame_selections.len() * hop_size * carrier_channels;
+    let mut acc = vec![0.0_f32; output_len];
+
+    for (out_frame, selection) in frame_selections.iter().enumerate() {
+        let out_offset = out_frame * hop_size;
+        let mut tile_count: u32 = 0;
+        for &global_idx in &selection.indices {
+            let grain = match pool.grains.get(global_idx as usize) {
+                Some(g) => g,
+                None => continue,
+            };
+            let src_start = grain.frame_index as usize * hop_size;
+            for k in 0..hop_size {
+                let src_frame = src_start + k;
+                if src_frame >= carrier_total_frames {
+                    break;
+                }
+                for ch in 0..carrier_channels {
+                    acc[(out_offset + k) * carrier_channels + ch] +=
+                        carrier_samples[src_frame * carrier_channels + ch];
+                }
+            }
+            tile_count += 1;
+        }
+        // Normalise this frame's contribution by the number of contributing tiles.
+        if tile_count > 1 {
+            let scale = 1.0 / tile_count as f32;
+            let start = out_offset * carrier_channels;
+            let end = (out_offset + hop_size) * carrier_channels;
+            for s in acc[start..end].iter_mut() {
+                *s *= scale;
+            }
+        }
+    }
+    acc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2142,5 +2218,105 @@ mod tests {
         settings.grain_size = 8;
         settings.variation = 1.1;
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn ola_resynthesis_empty_inputs_return_empty() {
+        let pool = GrainPool {
+            columns: 0,
+            rows: 0,
+            grain_size: 1,
+            frame_width: 0,
+            frame_height: 0,
+            audio_dims: 0,
+            grains: vec![],
+        };
+        let out = ola_resynthesis_cpu(&[], 1, 0, &[], &pool, 48);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn ola_resynthesis_single_grain_reproduces_dc_signal() {
+        let hop = 4_usize;
+        let frame_count = 3_usize;
+        // Carrier: DC signal at 0.5 for all samples (2 carrier frames × hop samples × 1 channel)
+        let carrier_samples: Vec<f32> = vec![0.5; 2 * hop];
+        let pool = GrainPool {
+            columns: 1,
+            rows: 1,
+            grain_size: 1,
+            frame_width: 1,
+            frame_height: 1,
+            audio_dims: 0,
+            grains: vec![
+                PooledGrainDescriptor {
+                    global_index: 0,
+                    frame_index: 0,
+                    origin_x: 0,
+                    origin_y: 0,
+                    mean_color: [0.0; 3],
+                    texture: [0.0; 2],
+                    audio: vec![],
+                },
+                PooledGrainDescriptor {
+                    global_index: 1,
+                    frame_index: 1,
+                    origin_x: 0,
+                    origin_y: 0,
+                    mean_color: [0.0; 3],
+                    texture: [0.0; 2],
+                    audio: vec![],
+                },
+            ],
+        };
+        // Selections: frame 0 picks grain 0, frame 1 picks grain 1, frame 2 picks grain 0.
+        let frame_selections: Vec<GrainSelection> = (0..frame_count)
+            .map(|i| GrainSelection {
+                columns: 1,
+                rows: 1,
+                indices: vec![if i == 1 { 1 } else { 0 }],
+            })
+            .collect();
+        let out = ola_resynthesis_cpu(&carrier_samples, 1, 2 * hop, &frame_selections, &pool, hop);
+        assert_eq!(out.len(), frame_count * hop);
+        // All source samples are 0.5, so after OLA + normalisation output should be ~0.5
+        for &s in &out {
+            assert!((s - 0.5).abs() < 1e-5, "expected ~0.5 got {s}");
+        }
+    }
+
+    #[test]
+    fn ola_resynthesis_is_deterministic() {
+        let hop = 8_usize;
+        let carrier_samples: Vec<f32> = (0..hop * 4).map(|i| i as f32 / 100.0).collect();
+        let pool = GrainPool {
+            columns: 1,
+            rows: 1,
+            grain_size: 1,
+            frame_width: 1,
+            frame_height: 1,
+            audio_dims: 0,
+            grains: (0..4)
+                .map(|i| PooledGrainDescriptor {
+                    global_index: i,
+                    frame_index: i,
+                    origin_x: 0,
+                    origin_y: 0,
+                    mean_color: [0.0; 3],
+                    texture: [0.0; 2],
+                    audio: vec![],
+                })
+                .collect(),
+        };
+        let frame_selections: Vec<GrainSelection> = (0..4)
+            .map(|i| GrainSelection {
+                columns: 1,
+                rows: 1,
+                indices: vec![i],
+            })
+            .collect();
+        let a = ola_resynthesis_cpu(&carrier_samples, 1, 4 * hop, &frame_selections, &pool, hop);
+        let b = ola_resynthesis_cpu(&carrier_samples, 1, 4 * hop, &frame_selections, &pool, hop);
+        assert_eq!(a, b);
     }
 }

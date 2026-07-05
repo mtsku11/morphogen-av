@@ -116,11 +116,12 @@ pub use grain_cache::{
 };
 pub use granular_mosaic::{
     analyze_grain_colors_cpu, analyze_grain_pool_cpu, analyze_grains_cpu, granular_mosaic_cpu,
-    granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu, select_grains_cpu,
-    select_grains_from_pool_cpu, select_grains_multimodal_cpu, AntiRepeat, GrainColorDescriptor,
-    GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, PoolSelectionWindow,
-    PooledGrainDescriptor, TemporalCoherence, GRANULAR_MOSAIC_ALGORITHM,
-    MULTIMODAL_GRAIN_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    granular_mosaic_with_pool_selection_cpu, granular_mosaic_with_selection_cpu,
+    ola_resynthesis_cpu, select_grains_cpu, select_grains_from_pool_cpu,
+    select_grains_multimodal_cpu, AntiRepeat, GrainColorDescriptor, GrainDescriptor, GrainPool,
+    GrainSelection, GranularMosaicSettings, PoolSelectionWindow, PooledGrainDescriptor,
+    TemporalCoherence, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+    POOLED_AV_AUDIO_ALGORITHM, POOLED_GRAIN_ALGORITHM,
 };
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;

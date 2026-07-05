@@ -158,6 +158,7 @@ pub(crate) fn render_showcase(request: ShowcaseRenderRequest<'_>) -> Result<(), 
         max_frames: Some(frames_per_effect),
         grain_cache_dir: None,
         backend: request.backend,
+        carrier_wav_path: None,
     })?;
 
     render_datamosh_sequence(DatamoshSequenceRequest {

@@ -1675,6 +1675,11 @@ pub(crate) enum Commands {
         grain_cache_dir: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// WAV file to resynthesise using the selected grain audio windows (OLA).
+        /// When supplied, output.wav is written beside the frame PNGs.
+        /// Video frames are byte-identical to a run without this flag.
+        #[arg(long)]
+        carrier_wav: Option<PathBuf>,
     },
     RenderFrameSequence {
         modulator_dir: PathBuf,

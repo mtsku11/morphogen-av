@@ -1439,6 +1439,7 @@ fn run() -> Result<(), CliError> {
             max_frames,
             grain_cache_dir,
             backend,
+            carrier_wav,
         } => render_granular_mosaic_pool_sequence(GranularMosaicPoolSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -1465,6 +1466,7 @@ fn run() -> Result<(), CliError> {
             max_frames,
             grain_cache_dir: grain_cache_dir.as_deref(),
             backend: backend.into(),
+            carrier_wav_path: carrier_wav.as_deref(),
         })
         .map(|_| ()),
         Commands::RenderFrameSequence {

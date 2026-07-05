@@ -4621,6 +4621,7 @@ pub(crate) fn queue_run_granular_mosaic_pool_sequence(queue_path: &Path) -> Resu
                 max_frames: max_frames.map(|value| value as usize),
                 grain_cache_dir: grain_cache_directory.as_deref().map(Path::new),
                 backend,
+                carrier_wav_path: None,
             })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())

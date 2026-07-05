@@ -4,8 +4,8 @@ use std::{
 };
 
 use morphogen_audio::{
-    load_wav_f32, rms_envelope, spectral_centroid_from_magnitudes, AudioAnalysisCache,
-    AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache,
+    load_wav_f32, rms_envelope, save_wav_f32, spectral_centroid_from_magnitudes, AudioAnalysisCache,
+    AudioBufferF32, AudioDescriptorFrame, OnsetStrengthCache, StftAnalysisCache,
 };
 use morphogen_core::{
     AnalysisKind, DatamoshBitstreamPreset, DatamoshPreset, FlowSource, GrainSelectionMode,
@@ -34,8 +34,9 @@ use morphogen_render::{
     render_channel_shift_frame, render_field_particles, render_fluid_mosaic,
     render_palette_quantize_frame, render_pixel_sort_frame, render_retro_static_frame,
     render_rutt_etra_frame, render_rutt_etra_two_source_frame, reset_residual_in_refreshed_blocks,
-    resort_fluid_mosaic_colors, select_grains_cpu, select_grains_from_pool_cpu,
-    select_grains_multimodal_cpu, synthesize_turbulence_flow, uniform_displacement_field,
+    ola_resynthesis_cpu, resort_fluid_mosaic_colors, select_grains_cpu,
+    select_grains_from_pool_cpu, select_grains_multimodal_cpu, synthesize_turbulence_flow,
+    uniform_displacement_field,
     video_vocoder_cpu, write_flow_cache, write_flow_cache_with_source_fingerprint,
     write_flow_feedback_state, write_grain_color_descriptor_cache, write_grain_descriptor_cache,
     write_grain_pool_descriptor_cache, write_grain_selection_cache, zero_flow, AntiRepeat,
@@ -52,7 +53,8 @@ use morphogen_render::{
     GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
-    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RUTT_ETRA_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_AV_AUDIO_ALGORITHM, POOLED_GRAIN_ALGORITHM,
+    RUTT_ETRA_ALGORITHM,
     RUTT_ETRA_METAL_ALGORITHM, RUTT_ETRA_TWO_SOURCE_ALGORITHM,
     RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
@@ -3947,6 +3949,9 @@ pub(crate) struct GranularMosaicPoolSequenceRequest<'a> {
     pub(crate) max_frames: Option<usize>,
     pub(crate) grain_cache_dir: Option<&'a Path>,
     pub(crate) backend: RenderBackend,
+    /// If Some, produce an OLA-resynthesised WAV at `output_dir/output.wav`.
+    /// Video frames are byte-identical to a run without this field.
+    pub(crate) carrier_wav_path: Option<&'a Path>,
 }
 
 /// Build a pool/query audio vector in fixed order `[rms?, centroid?]`, sampling
@@ -3996,6 +4001,7 @@ pub(crate) fn render_granular_mosaic_pool_sequence(
         max_frames,
         grain_cache_dir,
         backend,
+        carrier_wav_path,
     } = request;
     settings.validate()?;
     if !anti_repeat_weight.is_finite() || anti_repeat_weight < 0.0 {
@@ -4124,6 +4130,15 @@ pub(crate) fn render_granular_mosaic_pool_sequence(
         (coherence_weight > 0.0 || spatial_coherence_weight > 0.0) && coherence_reach > 0;
     let mut prev_selection: Vec<Option<u32>> = Vec::new();
 
+    // Collect per-frame grain selections for OLA audio resynthesis (only when a
+    // carrier WAV is supplied; skipped otherwise so the video-only path stays
+    // allocation-free and byte-identical).
+    let mut frame_selections: Vec<GrainSelection> = if carrier_wav_path.is_some() {
+        Vec::with_capacity(frame_count)
+    } else {
+        Vec::new()
+    };
+
     for index in 0..frame_count {
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = &pool_frames[index];
@@ -4175,6 +4190,9 @@ pub(crate) fn render_granular_mosaic_pool_sequence(
                 last_used_frame[grain_index as usize] = Some(index as u32);
             }
         }
+        if carrier_wav_path.is_some() {
+            frame_selections.push(selection.clone());
+        }
         let image = render_granular_mosaic_pool_output(
             &pool_frames,
             &pool,
@@ -4184,6 +4202,32 @@ pub(crate) fn render_granular_mosaic_pool_sequence(
             backend,
         )?;
         save_png(&image, &output_dir.join(format!("frame_{index:06}.png")))?;
+    }
+
+    // OLA audio resynthesis: each grain's source-frame audio window is Hann-windowed
+    // and overlap-added at the grain's output frame time. Written as output.wav beside
+    // the frame PNGs. Video frames are unaffected.
+    if let Some(wav_path) = carrier_wav_path {
+        let carrier_wav = load_wav_f32(wav_path)?;
+        let hop_size =
+            ((carrier_wav.sample_rate as f64 / frame_rate).round() as usize).max(1);
+        let samples = ola_resynthesis_cpu(
+            &carrier_wav.samples,
+            carrier_wav.channels,
+            carrier_wav.frames,
+            &frame_selections,
+            &pool,
+            hop_size,
+        );
+        let output_wav = AudioBufferF32::new(carrier_wav.channels, carrier_wav.sample_rate, samples)
+            .map_err(|e| CliError::Message(e.to_string()))?;
+        let wav_out_path = output_dir.join("output.wav");
+        save_wav_f32(&wav_out_path, &output_wav)?;
+        println!(
+            "wrote OLA audio resynthesis ({}) to {}",
+            POOLED_AV_AUDIO_ALGORITHM,
+            wav_out_path.display()
+        );
     }
 
     if modulator_frames.len() != pool_frames.len() {
