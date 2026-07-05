@@ -18,9 +18,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChannelShiftSettings, CoagulationSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
-    RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
+    ChannelShiftSettings, CoagulationSettings, FieldParticleSettings, FlowFeedbackSettings,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, PaletteQuantizeSettings, PixelSortSettings,
+    QuantizeMode, RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis,
+    SortDirection,
 };
 
 /// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
@@ -494,6 +495,13 @@ pub const FLUID_ADVECT_MODULATION_TARGETS: &[&str] = &[
 /// `render-optical-flow-advect-sequence`.
 pub const FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS: &[&str] = &["advect", "reinject"];
 
+/// Field particles — the field/flow knobs (same four as fluid-advect; the grid
+/// geometry `spacing`/`particle_size`, `live_color`, and `seed` are structural
+/// and excluded). Field particles advect across frames with no checkpoint path,
+/// so routes are provenance-only (the fluid-advect precedent).
+pub const FIELD_PARTICLES_MODULATION_TARGETS: &[&str] =
+    &["advect", "turbulence_scale", "turbulence_speed", "detail"];
+
 /// Coagulated flow blend — the look-driving continuous knobs (memory
 /// `coagulated-flow-blend`: push bias/strength/edge for the bold glitch).
 /// Structural knobs (patch_size, coherence_passes, seed) restructure the field
@@ -700,6 +708,31 @@ pub fn apply_fluid_advect_two_source_modulation(
 const COAGULATION_STRENGTH_RANGE: (f32, f32) = (0.0, 64.0);
 const COAGULATION_BIAS_RANGE: (f32, f32) = (-8.0, 8.0);
 
+/// Overwrite one routed field-particles knob with a mapped value. Clamps mirror
+/// the fluid-advect field knobs (advect/detail non-negative; turbulence signed);
+/// finiteness is what `FieldParticleSettings::validate` requires, so any finite
+/// clamp is safe (clamp-never-error).
+pub fn apply_field_particle_modulation(
+    settings: &mut FieldParticleSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "advect" => settings.advect = value.clamp(0.0, SHIFT_RANGE.1),
+        "turbulence_scale" => settings.turbulence_scale = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "turbulence_speed" => settings.turbulence_speed = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "detail" => settings.detail = value.clamp(0.0, SHIFT_RANGE.1),
+        _ => {
+            return Err(unknown_target(
+                "field-particles",
+                target,
+                FIELD_PARTICLES_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// Overwrite one routed coagulated-blend knob with a mapped value (clamped).
 pub fn apply_coagulation_modulation(
     settings: &mut CoagulationSettings,
@@ -886,6 +919,28 @@ mod tests {
         assert!(!json.contains("sampling"));
         let decoded: ModulationRoute = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, unsuffixed);
+    }
+
+    #[test]
+    fn field_particle_modulation_sets_clamps_and_rejects_unknown() {
+        let mut settings = FieldParticleSettings::default();
+
+        apply_field_particle_modulation(&mut settings, "advect", 3.0).unwrap();
+        assert_eq!(settings.advect, 3.0);
+        apply_field_particle_modulation(&mut settings, "detail", 0.5).unwrap();
+        assert_eq!(settings.detail, 0.5);
+        // advect/detail clamp non-negative; turbulence stays signed.
+        apply_field_particle_modulation(&mut settings, "advect", -10.0).unwrap();
+        assert_eq!(settings.advect, 0.0);
+        apply_field_particle_modulation(&mut settings, "detail", -10.0).unwrap();
+        assert_eq!(settings.detail, 0.0);
+        apply_field_particle_modulation(&mut settings, "turbulence_speed", -2.0).unwrap();
+        assert_eq!(settings.turbulence_speed, -2.0);
+        assert!(settings.validate().is_ok());
+
+        for structural in ["spacing", "particle_size", "live_color", "seed", "nope"] {
+            assert!(apply_field_particle_modulation(&mut settings, structural, 1.0).is_err());
+        }
     }
 
     #[test]
