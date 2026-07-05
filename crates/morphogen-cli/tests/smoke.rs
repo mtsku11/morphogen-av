@@ -969,16 +969,16 @@ fn render_composition_rejects_invalid_specs() {
         ),
         "a cut has no overlap",
     );
-    // Non-zero crossfades (the pixel blending) are the next slice.
+    // A crossfade longer than the scene it consumes is a spec error.
     run_case(
-        "crossfade-deferred",
+        "crossfade-too-long",
         &format!(
             r#"{{"version": 1, "fps": 12, "scenes": [
-                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "crossfade", "frames": 1}}}},
+                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "crossfade", "frames": 3}}}},
                 {{"name": "b", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}
             ]}}"#
         ),
-        "crossfade blending lands in Slice 3",
+        "exceed its duration_frames",
     );
     // Duplicate names caught in the multi-scene shape.
     run_case(
@@ -1107,6 +1107,128 @@ fn render_composition_rejects_duration_mismatch() {
         .stderr(predicate::str::contains(
             "declares duration_frames 5 but its chain rendered 3 frame(s)",
         ));
+}
+
+fn write_solid_frames(dir: &Path, count: usize, color: [u8; 4]) {
+    fs::create_dir_all(dir).expect("create solid frame dir");
+    for index in 0..count {
+        let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_pixel(8, 8, Rgba(color));
+        image
+            .save(dir.join(format!("frame_{:06}.png", index + 1)))
+            .expect("save solid frame");
+    }
+}
+
+fn read_pixel(path: &Path, x: u32, y: u32) -> [u8; 4] {
+    image::open(path).expect("open frame").to_rgba8().get_pixel(x, y).0
+}
+
+#[test]
+fn render_composition_crossfade_zero_is_byte_identical_to_cut() {
+    // Anchor A3: a crossfade of 0 frames produces byte-identical output to cut.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+
+    let spec_for = |transition: &str| {
+        format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "quant", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 4}}]}},
+                  "transition_out": {transition}}},
+                {{"name": "scan", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false}}]}}}}
+            ]}}"#
+        )
+    };
+
+    let render = |name: &str, transition: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, &spec_for(transition));
+        let out_dir = temp_dir.path().join(format!("{name}-out"));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .success();
+        out_dir
+    };
+
+    let cut_out = render("cut", r#"{"type": "cut"}"#);
+    let xfade0_out = render("xfade0", r#"{"type": "crossfade", "frames": 0}"#);
+
+    // No overlap in either case: 3 + 3 = 6 timeline frames, byte-identical.
+    assert_png_frames_identical(&cut_out.join("frames"), &xfade0_out.join("frames"), 6);
+}
+
+#[test]
+fn render_composition_crossfade_blends_the_overlap_window() {
+    // The visual/number proof, pinned to an exact value: a 1-frame crossfade
+    // between a solid-red scene and a solid-blue scene has a single blend frame
+    // at weight 1/2 — exactly the midpoint colour (128, 0, 128).
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let red_dir = temp_dir.path().join("red-frames");
+    let blue_dir = temp_dir.path().join("blue-frames");
+    write_solid_frames(&red_dir, 3, [255, 0, 0, 255]);
+    write_solid_frames(&blue_dir, 3, [0, 0, 255, 255]);
+    let red = serde_json::to_string(&red_dir.to_string_lossy().to_string()).expect("encode red");
+    let blue = serde_json::to_string(&blue_dir.to_string_lossy().to_string()).expect("encode blue");
+
+    // channel_shift with zero shifts is an identity passthrough, so each scene
+    // renders its solid input verbatim.
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(
+        &spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "warm", "duration_frames": 3, "input_dir": {red},
+                  "chain": {{"version": 1, "stages": [{{"effect": "channel_shift"}}]}},
+                  "transition_out": {{"type": "crossfade", "frames": 1}}}},
+                {{"name": "cool", "duration_frames": 3, "input_dir": {blue},
+                  "chain": {{"version": 1, "stages": [{{"effect": "channel_shift"}}]}}}}
+            ]}}"#
+        ),
+    );
+    let out_dir = temp_dir.path().join("comp-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered composition with 2 scene(s) (5 frame(s))",
+        ));
+
+    let frames = out_dir.join("frames");
+    // Solo red, blend, solo blue: 5 frames, with the blend at global index 2.
+    assert_eq!(read_pixel(&frames.join("frame_000001.png"), 4, 4), [255, 0, 0, 255]);
+    assert_eq!(
+        read_pixel(&frames.join("frame_000002.png"), 4, 4),
+        [128, 0, 128, 255],
+        "the crossfade frame must be the weight-1/2 midpoint of red and blue"
+    );
+    assert_eq!(read_pixel(&frames.join("frame_000003.png"), 4, 4), [0, 0, 255, 255]);
+    assert!(
+        !frames.join("frame_000005.png").exists(),
+        "the crossfade removes one frame: 3 + 3 - 1 = 5"
+    );
+
+    let manifest = read_json(&out_dir.join("composition-manifest.json"));
+    assert_eq!(manifest["frame_count"], 5);
+    assert_eq!(manifest["scenes"][0]["start_frame"], 0);
+    assert_eq!(manifest["scenes"][0]["transition_out"]["type"], "crossfade");
+    assert_eq!(manifest["scenes"][0]["transition_out"]["frames"], 1);
+    assert_eq!(manifest["scenes"][1]["start_frame"], 2);
 }
 
 #[test]

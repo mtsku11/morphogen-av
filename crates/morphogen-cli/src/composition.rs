@@ -20,11 +20,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use morphogen_render::ImageBufferF32;
 use serde::{Deserialize, Serialize};
 
 use crate::chain::{run_chain_spec, validate_chain_spec, ChainSpec};
 use crate::error::CliError;
-use crate::imaging::collect_image_frames;
+use crate::imaging::{collect_image_frames, load_image_f32, save_png};
 
 /// Only composition spec version this build understands. The field exists so a
 /// future format change is a clear error, not a silent best-effort parse (the
@@ -167,12 +168,33 @@ pub(crate) fn validate_composition_spec(spec: &CompositionSpec) -> Result<(), Cl
         validate_chain_spec(&scene.chain)?;
     }
 
+    // A scene's incoming (previous scene's crossfade) and outgoing crossfade
+    // windows must not collide: their combined length can't exceed the scene's
+    // frames, or a single frame would have to be both a head-blend and a
+    // tail-blend at once. This also subsumes "a transition longer than either
+    // adjacent scene" (the milestone rule).
+    for (index, scene) in spec.scenes.iter().enumerate() {
+        let incoming = if index == 0 {
+            0
+        } else {
+            crossfade_frames(&spec.scenes[index - 1].transition_out)
+        };
+        let outgoing = crossfade_frames(&scene.transition_out);
+        if incoming + outgoing > scene.duration_frames {
+            return Err(CliError::Message(format!(
+                "scene {:?} has overlapping transitions: incoming crossfade {incoming} + \
+                 outgoing crossfade {outgoing} exceed its duration_frames {}",
+                scene.name, scene.duration_frames
+            )));
+        }
+    }
+
     Ok(())
 }
 
-/// Slice 2 assembles cuts only (a `crossfade` of 0 frames ≡ cut). Non-zero
-/// crossfades — the actual pixel blending — land in Slice 3, so they are
-/// refused here rather than silently degraded to a cut.
+/// A `cut` has no overlap, so a non-zero `frames` on it is a spec error. A
+/// `crossfade` of any length is well-formed here; whether it fits the adjacent
+/// scenes is the overlap-bounds check in [`validate_composition_spec`].
 fn validate_transition(scene_name: &str, transition: &Transition) -> Result<(), CliError> {
     match transition.kind {
         TransitionKind::Cut if transition.frames != 0 => Err(CliError::Message(format!(
@@ -180,12 +202,19 @@ fn validate_transition(scene_name: &str, transition: &Transition) -> Result<(), 
              remove the frames field",
             transition.frames
         ))),
-        TransitionKind::Crossfade if transition.frames != 0 => Err(CliError::Message(format!(
-            "scene {scene_name:?} declares a {}-frame crossfade; crossfade blending lands in \
-             Slice 3 — use a cut (or crossfade with frames 0) for now",
-            transition.frames
-        ))),
         _ => Ok(()),
+    }
+}
+
+/// The overlap length a transition contributes: a crossfade's frame count, or 0
+/// for a cut (and for an absent transition, i.e. an implicit cut).
+fn crossfade_frames(transition: &Option<Transition>) -> u32 {
+    match transition {
+        Some(Transition {
+            kind: TransitionKind::Crossfade,
+            frames,
+        }) => *frames,
+        _ => 0,
     }
 }
 
@@ -202,25 +231,6 @@ pub(crate) fn parse_and_validate_composition_spec(
 // Mechanic
 // ---------------------------------------------------------------------------
 
-/// Copy a scene's final frames into `<out>/frames/` starting at the given
-/// global timeline index. With cut transitions this is a straight
-/// concatenation (renumbering only) of the per-scene renders — anchor A2. The
-/// single-scene case (start 0) is a verbatim copy — anchor A1.
-fn assemble_frames(
-    final_frames_dir: &Path,
-    frames_dir: &Path,
-    start_index: usize,
-) -> Result<usize, CliError> {
-    let scene_frames = collect_image_frames(final_frames_dir)?;
-    fs::create_dir_all(frames_dir)?;
-    for (offset, source) in scene_frames.iter().enumerate() {
-        let global_index = start_index + offset;
-        let destination = frames_dir.join(format!("frame_{global_index:06}.png"));
-        fs::copy(source, &destination)?;
-    }
-    Ok(scene_frames.len())
-}
-
 /// The chain manifest a scene render leaves in its directory, embedded whole in
 /// the composition manifest so the piece is reproducible from that one file.
 fn read_scene_chain_manifest(scene_dir: &Path) -> Result<serde_json::Value, CliError> {
@@ -228,20 +238,69 @@ fn read_scene_chain_manifest(scene_dir: &Path) -> Result<serde_json::Value, CliE
     Ok(serde_json::from_str(&fs::read_to_string(&path)?)?)
 }
 
+/// A rendered scene, carried from the render pass into the assembly pass.
+struct RenderedScene {
+    name: String,
+    directory: String,
+    /// Final-stage frames, sorted; length == `duration` == the scene's
+    /// declared `duration_frames`.
+    frames: Vec<PathBuf>,
+    duration: usize,
+    /// Outgoing crossfade overlap in frames (0 for a cut or the last scene).
+    out_frames: usize,
+    transition_out: Option<Transition>,
+    chain_manifest: serde_json::Value,
+}
+
+/// Blend `tail` toward `head` per pixel in f32 on the decoded RGBA, weight
+/// `weight` on `head` (the incoming scene): `out = (1 − w)·tail + w·head`.
+/// Written as an 8-bit PNG (round half away from zero, the `save_png`
+/// convention). The two frames must share dimensions.
+fn crossfade_frame(
+    tail: &Path,
+    head: &Path,
+    weight: f32,
+    destination: &Path,
+) -> Result<(), CliError> {
+    let tail_image = load_image_f32(tail)?;
+    let head_image = load_image_f32(head)?;
+    if tail_image.width != head_image.width || tail_image.height != head_image.height {
+        return Err(CliError::Message(format!(
+            "crossfade frames differ in size ({}x{} vs {}x{}); scenes in a composition must \
+             share dimensions",
+            tail_image.width, tail_image.height, head_image.width, head_image.height
+        )));
+    }
+    let blended = ImageBufferF32::from_fn(tail_image.width, tail_image.height, |x, y| {
+        let a = tail_image.pixel(x, y).unwrap_or([0.0; 4]);
+        let b = head_image.pixel(x, y).unwrap_or([0.0; 4]);
+        [
+            (1.0 - weight) * a[0] + weight * b[0],
+            (1.0 - weight) * a[1] + weight * b[1],
+            (1.0 - weight) * a[2] + weight * b[2],
+            (1.0 - weight) * a[3] + weight * b[3],
+        ]
+    })
+    .map_err(CliError::from)?;
+    save_png(&blended, destination)
+}
+
 /// `render-composition <spec.json> <output-dir>`.
 ///
 /// Validates the whole spec, renders each scene via the existing chain path
 /// into `<output-dir>/scene_<NN>_<name>/`, assembles the scenes onto the global
-/// timeline in `<output-dir>/frames/` (cut transitions only in this slice), and
-/// writes `<output-dir>/composition-manifest.json`.
+/// timeline in `<output-dir>/frames/` — cut transitions concatenate, a
+/// crossfade of N frames blends the last N frames of a scene with the first N
+/// of the next (weight `(i+1)/(N+1)` on the incoming frame) — and writes
+/// `<output-dir>/composition-manifest.json`.
 pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<(), CliError> {
     let spec_text = fs::read_to_string(spec_path)?;
     let spec = parse_and_validate_composition_spec(&spec_text)?;
 
-    let frames_dir = output_dir.join("frames");
-    let mut global_frame = 0usize;
-    let mut manifest_scenes = Vec::with_capacity(spec.scenes.len());
-
+    // Pass 1: render every scene and collect its final frames. A crossfade
+    // needs the *next* scene's head frames, so assembly is a second pass over
+    // all scenes rather than interleaved with rendering.
+    let mut scenes: Vec<RenderedScene> = Vec::with_capacity(spec.scenes.len());
     for (index, scene) in spec.scenes.iter().enumerate() {
         let scene_number = index + 1;
         let directory = format!("scene_{scene_number:02}_{}", scene.name);
@@ -249,8 +308,8 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
         let summary = run_chain_spec(&scene.chain, &scene.input_dir, &scene_dir)?;
 
         // The declared timeline length must match what the scene actually
-        // rendered so global numbering (and, later, overlap and master-offset
-        // math) is exact rather than silently drifting from the spec.
+        // rendered so global numbering and overlap math are exact rather than
+        // silently drifting from the spec.
         if summary.frame_count != scene.duration_frames as usize {
             return Err(CliError::Message(format!(
                 "scene {:?} declares duration_frames {} but its chain rendered {} frame(s); \
@@ -259,24 +318,65 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
             )));
         }
 
-        let start_frame = global_frame;
-        let assembled = assemble_frames(&summary.final_frames_dir, &frames_dir, start_frame)?;
-        global_frame += assembled;
+        scenes.push(RenderedScene {
+            name: scene.name.clone(),
+            directory,
+            frames: collect_image_frames(&summary.final_frames_dir)?,
+            duration: summary.frame_count,
+            out_frames: crossfade_frames(&scene.transition_out) as usize,
+            transition_out: scene.transition_out.clone(),
+            chain_manifest: read_scene_chain_manifest(&scene_dir)?,
+        });
+    }
+
+    // Pass 2: walk the timeline. Each scene writes its frames not consumed by
+    // the *previous* transition; the last `out_frames` of those are blended
+    // with the next scene's head (which are therefore skipped there).
+    let frames_dir = output_dir.join("frames");
+    fs::create_dir_all(&frames_dir)?;
+    let mut global = 0usize;
+    let mut start = 0usize;
+    let mut manifest_scenes = Vec::with_capacity(scenes.len());
+    for k in 0..scenes.len() {
+        let scene = &scenes[k];
+        let in_frames = if k == 0 { 0 } else { scenes[k - 1].out_frames };
+        let out_frames = scene.out_frames;
+
+        // Solo zone: frames owned outright by this scene.
+        for j in in_frames..(scene.duration - out_frames) {
+            let destination = frames_dir.join(format!("frame_{global:06}.png"));
+            fs::copy(&scene.frames[j], &destination)?;
+            global += 1;
+        }
+        // Tail-overlap zone: blend into the next scene's head (validation
+        // guarantees a next scene exists whenever out_frames > 0).
+        if out_frames > 0 {
+            let next = &scenes[k + 1];
+            for i in 0..out_frames {
+                let tail = &scene.frames[scene.duration - out_frames + i];
+                let head = &next.frames[i];
+                let weight = (i as f32 + 1.0) / (out_frames as f32 + 1.0);
+                let destination = frames_dir.join(format!("frame_{global:06}.png"));
+                crossfade_frame(tail, head, weight, &destination)?;
+                global += 1;
+            }
+        }
 
         manifest_scenes.push(serde_json::json!({
             "name": scene.name,
-            "directory": directory,
-            "start_frame": start_frame,
-            "length": assembled,
+            "directory": scene.directory,
+            "start_frame": start,
+            "length": scene.duration,
             "transition_out": scene.transition_out,
-            "chain_manifest": read_scene_chain_manifest(&scene_dir)?,
+            "chain_manifest": scene.chain_manifest,
         }));
+        start += scene.duration - out_frames;
     }
 
     let composition_manifest = serde_json::json!({
         "version": spec.version,
         "fps": spec.fps,
-        "frame_count": global_frame,
+        "frame_count": global,
         "scenes": manifest_scenes,
     });
     fs::write(
@@ -287,7 +387,7 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
     println!(
         "rendered composition with {} scene(s) ({} frame(s)) from {} to {}; timeline frames: {}",
         spec.scenes.len(),
-        global_frame,
+        global,
         spec_path.display(),
         output_dir.display(),
         frames_dir.display(),
