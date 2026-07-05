@@ -18,10 +18,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChannelShiftSettings, CoagulationSettings, FieldParticleSettings, FlowFeedbackSettings,
-    FluidAdvectSettings, FluidAdvectTwoSourceSettings, PaletteQuantizeSettings, PixelSortSettings,
-    QuantizeMode, RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis,
-    SortDirection,
+    CascadeCollageSettings, CascadeTrailSettings, ChannelShiftSettings, CoagulationSettings,
+    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
+    RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
@@ -510,6 +510,18 @@ pub const FIELD_PARTICLES_MODULATION_TARGETS: &[&str] =
 pub const COAGULATION_MODULATION_TARGETS: &[&str] =
     &["coagulation_strength", "edge_hardness", "bias"];
 
+/// Cascade trails — the look-driving continuous knobs.
+/// Structural knobs (tile_size, grid_spacing, seed, field, temporal_tiles)
+/// are excluded. No checkpoint path → provenance-only.
+pub const CASCADE_TRAILS_MODULATION_TARGETS: &[&str] =
+    &["advect", "turbulence_scale", "detail", "decay"];
+
+/// Cascade collage — the look-driving continuous knobs.
+/// Structural knobs (seed, block_blend, shapes, hue_steps, tile_scale,
+/// detail_tiles) are excluded. Stateless per-frame → provenance-only.
+pub const CASCADE_COLLAGE_MODULATION_TARGETS: &[&str] =
+    &["scrib_amp_scale", "morph_rate", "edge_strength", "face_strength"];
+
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
 const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
@@ -757,6 +769,54 @@ pub fn apply_coagulation_modulation(
     Ok(())
 }
 
+/// Overwrite one routed cascade-trails knob (clamped). No checkpoint path →
+/// provenance-only. `decay` is clamped to [0, 0.999] to stay in the valid [0, 1)
+/// window; all others use the bilateral SHIFT_RANGE.
+pub fn apply_cascade_trails_modulation(
+    settings: &mut CascadeTrailSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "advect" => settings.advect = value.clamp(0.0, SHIFT_RANGE.1),
+        "turbulence_scale" => settings.turbulence_scale = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "detail" => settings.detail = value.clamp(0.0, SHIFT_RANGE.1),
+        "decay" => settings.decay = value.clamp(0.0, 0.999),
+        _ => {
+            return Err(unknown_target(
+                "cascade-trails",
+                target,
+                CASCADE_TRAILS_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed cascade-collage knob (clamped). Stateless per-frame →
+/// provenance-only. `edge_strength` and `face_strength` are [0, 1];
+/// `scrib_amp_scale` and `morph_rate` use the bilateral SHIFT_RANGE.
+pub fn apply_cascade_collage_modulation(
+    settings: &mut CascadeCollageSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "scrib_amp_scale" => settings.scrib_amp_scale = value.clamp(0.0, SHIFT_RANGE.1),
+        "morph_rate" => settings.morph_rate = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "edge_strength" => settings.edge_strength = value.clamp(0.0, 1.0),
+        "face_strength" => settings.face_strength = value.clamp(0.0, 1.0),
+        _ => {
+            return Err(unknown_target(
+                "cascade-collage",
+                target,
+                CASCADE_COLLAGE_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// Overwrite one routed palette-quantize knob with a mapped value. `levels`
 /// is the first integer target (clamped to `[2, 256]`, then rounded per the
 /// contracted rule); `mode` selects posterize/palette by variant index
@@ -969,6 +1029,68 @@ mod tests {
         // Structural knobs are not targets.
         for structural in ["patch_size", "coherence_passes", "seed", "not_a_knob"] {
             assert!(apply_coagulation_modulation(&mut settings, structural, 1.0).is_err());
+        }
+    }
+
+    #[test]
+    fn cascade_trails_modulation_sets_clamps_and_rejects_unknown() {
+        let mut settings = CascadeTrailSettings::default();
+
+        apply_cascade_trails_modulation(&mut settings, "advect", 2.0).unwrap();
+        assert_eq!(settings.advect, 2.0);
+        apply_cascade_trails_modulation(&mut settings, "turbulence_scale", 0.01).unwrap();
+        assert_eq!(settings.turbulence_scale, 0.01);
+        apply_cascade_trails_modulation(&mut settings, "detail", 0.5).unwrap();
+        assert_eq!(settings.detail, 0.5);
+        apply_cascade_trails_modulation(&mut settings, "decay", 0.1).unwrap();
+        assert_eq!(settings.decay, 0.1);
+
+        // advect/detail clamp non-negative; decay clamps to [0, 0.999].
+        apply_cascade_trails_modulation(&mut settings, "advect", -5.0).unwrap();
+        assert_eq!(settings.advect, 0.0);
+        apply_cascade_trails_modulation(&mut settings, "detail", -1.0).unwrap();
+        assert_eq!(settings.detail, 0.0);
+        apply_cascade_trails_modulation(&mut settings, "decay", 2.0).unwrap();
+        assert_eq!(settings.decay, 0.999);
+        apply_cascade_trails_modulation(&mut settings, "decay", -1.0).unwrap();
+        assert_eq!(settings.decay, 0.0);
+        // turbulence_scale accepts negative.
+        apply_cascade_trails_modulation(&mut settings, "turbulence_scale", -0.005).unwrap();
+        assert_eq!(settings.turbulence_scale, -0.005);
+        assert!(settings.validate().is_ok());
+
+        for structural in ["tile_size", "grid_spacing", "seed", "temporal_tiles", "nope"] {
+            assert!(apply_cascade_trails_modulation(&mut settings, structural, 1.0).is_err());
+        }
+    }
+
+    #[test]
+    fn cascade_collage_modulation_sets_clamps_and_rejects_unknown() {
+        let mut settings = CascadeCollageSettings::default();
+
+        apply_cascade_collage_modulation(&mut settings, "scrib_amp_scale", 1.5).unwrap();
+        assert_eq!(settings.scrib_amp_scale, 1.5);
+        apply_cascade_collage_modulation(&mut settings, "morph_rate", 0.12).unwrap();
+        assert_eq!(settings.morph_rate, 0.12);
+        apply_cascade_collage_modulation(&mut settings, "edge_strength", 0.75).unwrap();
+        assert_eq!(settings.edge_strength, 0.75);
+        apply_cascade_collage_modulation(&mut settings, "face_strength", 0.5).unwrap();
+        assert_eq!(settings.face_strength, 0.5);
+
+        // edge/face_strength clamp to [0, 1]; scrib_amp_scale clamps to [0, ∞).
+        apply_cascade_collage_modulation(&mut settings, "edge_strength", 5.0).unwrap();
+        assert_eq!(settings.edge_strength, 1.0);
+        apply_cascade_collage_modulation(&mut settings, "face_strength", -1.0).unwrap();
+        assert_eq!(settings.face_strength, 0.0);
+        apply_cascade_collage_modulation(&mut settings, "scrib_amp_scale", -2.0).unwrap();
+        assert_eq!(settings.scrib_amp_scale, 0.0);
+        // morph_rate accepts negative (reverse drift).
+        apply_cascade_collage_modulation(&mut settings, "morph_rate", -0.05).unwrap();
+        assert_eq!(settings.morph_rate, -0.05);
+        assert!(settings.validate().is_ok());
+
+        for structural in ["seed", "block_blend", "hue_steps", "tile_scale", "nope"] {
+            assert!(apply_cascade_collage_modulation(&mut settings, structural, 1.0).is_err());
         }
     }
 

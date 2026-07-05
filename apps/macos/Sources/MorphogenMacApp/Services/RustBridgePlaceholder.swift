@@ -644,6 +644,14 @@ enum RustBridgePlaceholder {
       withProject.append("--project-path")
       withProject.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &withProject,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
     return withProject
   }
 
@@ -804,6 +812,14 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
 
     return arguments
   }
@@ -3408,6 +3424,11 @@ struct CascadeTrailsSequenceRenderQueueCommandRequest {
   let temporalTiles: Bool
   let decay: Double
   let projectURL: URL?
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct CascadeCollageSequenceRenderQueueCommandRequest {
@@ -3427,6 +3448,11 @@ struct CascadeCollageSequenceRenderQueueCommandRequest {
   let blockOpacity: Double
   let seed: UInt64
   let projectURL: URL?
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 /// One modulation-matrix patch cable passed to `queue-add-…` as a

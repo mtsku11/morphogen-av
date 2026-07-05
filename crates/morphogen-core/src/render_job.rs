@@ -398,6 +398,18 @@ pub enum RenderJobTask {
         temporal_tiles: bool,
         #[serde(default)]
         decay: f32,
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     /// Scribbled-edge tile cascade — a procedural/textured collage of rect/L tiles,
     /// each re-stamped in an in-frame cascade with one scribbled morphing edge. Tiles
@@ -440,6 +452,18 @@ pub enum RenderJobTask {
         block_opacity: f32,
         #[serde(default)]
         seed: u64,
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     /// Retro static — deliberate scanline-filter misread glitch: simulate a
     /// PNG-style adaptive filter, then deliberately decode it at the wrong

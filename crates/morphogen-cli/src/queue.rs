@@ -16,6 +16,7 @@ use morphogen_core::{
     VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
+    apply_cascade_collage_modulation, apply_cascade_trails_modulation,
     apply_channel_shift_modulation, apply_coagulation_modulation,
     apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation,
@@ -775,6 +776,12 @@ pub(crate) struct QueueAddCascadeTrailsSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
     pub(crate) project_path: Option<&'a Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
+    pub(crate) named_modulator_audio: &'a [String],
+    pub(crate) named_modulator_frames: &'a [String],
 }
 
 pub(crate) fn queue_add_cascade_trails_sequence(
@@ -788,9 +795,27 @@ pub(crate) fn queue_add_cascade_trails_sequence(
         frames,
         frame_rate,
         project_path,
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
     } = request;
     settings.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let modulation = parse_queue_modulation_routes(
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        named_modulator_audio,
+        named_modulator_frames,
+        |target| {
+            let mut probe = settings;
+            apply_cascade_trails_modulation(&mut probe, target, 0.0).map_err(CliError::from)
+        },
+    )?;
 
     let mut queue = load_or_default_queue(queue_path)?;
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
@@ -818,6 +843,12 @@ pub(crate) fn queue_add_cascade_trails_sequence(
             river_turbulence: settings.river_turbulence,
             temporal_tiles: settings.temporal_tiles,
             decay: settings.decay,
+            modulation_routes: modulation.routes,
+            modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: modulator_frames.map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(modulation_sampling),
+            named_modulator_audio: modulation.named_audio,
+            named_modulator_frames: modulation.named_frames,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -860,6 +891,12 @@ pub(crate) struct QueueAddCascadeCollageSequenceRequest<'a> {
     pub(crate) block_opacity: f32,
     pub(crate) seed: u64,
     pub(crate) project_path: Option<&'a Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
+    pub(crate) named_modulator_audio: &'a [String],
+    pub(crate) named_modulator_frames: &'a [String],
 }
 
 pub(crate) fn queue_add_cascade_collage_sequence(
@@ -890,6 +927,18 @@ pub(crate) fn queue_add_cascade_collage_sequence(
         request.hue_rotate,
     );
     probe_settings.validate()?;
+
+    let modulation = parse_queue_modulation_routes(
+        request.modulate,
+        request.modulator_audio,
+        request.modulator_frames,
+        request.named_modulator_audio,
+        request.named_modulator_frames,
+        |target| {
+            let mut probe = probe_settings.clone();
+            apply_cascade_collage_modulation(&mut probe, target, 0.0).map_err(CliError::from)
+        },
+    )?;
 
     let mut queue = load_or_default_queue(request.queue_path)?;
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
@@ -922,6 +971,16 @@ pub(crate) fn queue_add_cascade_collage_sequence(
             block_blend: cascade_block_blend_label(request.block_blend),
             block_opacity: request.block_opacity,
             seed: request.seed,
+            modulation_routes: modulation.routes,
+            modulator_audio_path: request
+                .modulator_audio
+                .map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: request
+                .modulator_frames
+                .map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(request.modulation_sampling),
+            named_modulator_audio: modulation.named_audio,
+            named_modulator_frames: modulation.named_frames,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -983,6 +1042,12 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
         block_blend,
         block_opacity,
         seed,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -992,6 +1057,10 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
     let output_dir = PathBuf::from(output_directory);
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
+
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
+    let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
+    let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
 
     let mut settings = CascadeCollageSettings {
         scrib_amp_scale,
@@ -1019,7 +1088,31 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
             height: 0,
             frames,
             settings: settings.clone(),
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(Path::new),
+                modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                fps: frame_rate,
+                cache_dir: None,
+                named_modulator_audio: &named_modulator_audio_specs,
+                named_modulator_frames: &named_modulator_frames_specs,
+            },
         })?;
+        let mut effect = serde_json::json!({
+            "algorithm": CASCADE_COLLAGE_ALGORITHM,
+            "settings": settings,
+            "backend": "CPU"
+        });
+        if let Some(modulation) = modulation_manifest_json(
+            &modulation_routes,
+            modulator_audio_path.as_deref(),
+            modulator_frames_directory.as_deref(),
+            modulation_sampling,
+            frame_rate,
+        ) {
+            effect["modulation"] = modulation;
+        }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
             output_dir: &output_dir,
@@ -1027,11 +1120,7 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
             frame_rate,
             task: "frame_sequence_cascade_collage",
             effect_key: "cascade_collage",
-            effect: serde_json::json!({
-                "algorithm": CASCADE_COLLAGE_ALGORITHM,
-                "settings": settings,
-                "backend": "CPU"
-            }),
+            effect,
             provenance: provenance.as_ref(),
         })
     })();
@@ -2402,6 +2491,12 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         river_turbulence,
         temporal_tiles,
         decay,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2411,6 +2506,10 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
     let output_dir = PathBuf::from(output_directory);
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
+
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
+    let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
+    let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
 
     let settings = CascadeTrailSettings {
         tile_size,
@@ -2433,7 +2532,31 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
             output_dir: &output_dir.join("frames"),
             settings,
             frames: frames as usize,
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(Path::new),
+                modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                fps: frame_rate,
+                cache_dir: None,
+                named_modulator_audio: &named_modulator_audio_specs,
+                named_modulator_frames: &named_modulator_frames_specs,
+            },
         })?;
+        let mut effect = serde_json::json!({
+            "algorithm": CASCADE_TRAIL_ALGORITHM,
+            "settings": settings,
+            "backend": "CPU"
+        });
+        if let Some(modulation) = modulation_manifest_json(
+            &modulation_routes,
+            modulator_audio_path.as_deref(),
+            modulator_frames_directory.as_deref(),
+            modulation_sampling,
+            frame_rate,
+        ) {
+            effect["modulation"] = modulation;
+        }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
             output_dir: &output_dir,
@@ -2441,11 +2564,7 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
             frame_rate,
             task: "frame_sequence_cascade_trails",
             effect_key: "trail_cascade",
-            effect: serde_json::json!({
-                "algorithm": CASCADE_TRAIL_ALGORITHM,
-                "settings": settings,
-                "backend": "CPU"
-            }),
+            effect,
             provenance: provenance.as_ref(),
         })
     })();

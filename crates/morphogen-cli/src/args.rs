@@ -814,6 +814,24 @@ pub(crate) enum Commands {
         /// fades to black in ~25 frames). Keeps SquarePop density stable instead of filling solid.
         #[arg(long, default_value_t = 0.0)]
         decay: f32,
+        /// Modulation route (repeatable). Targets: advect, turbulence_scale, detail, decay.
+        /// Sources: audio-*/luma/flow/lfo(...). Provenance-only (no checkpoint path).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render a hard binary tile collage (experimental, deterministic; CPU-only).
     /// The canvas is divided into NxN blocks; each block independently shows Source A
@@ -918,6 +936,24 @@ pub(crate) enum Commands {
         block_opacity: f32,
         #[arg(long, default_value_t = 71)]
         seed: u64,
+        /// Modulation route (repeatable). Targets: scrib_amp_scale, morph_rate, edge_strength, face_strength.
+        /// Sources: audio-*/luma/flow/lfo(...). Stateless per-frame → provenance-only.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render a pixel-sort effect — per-line threshold-bounded span sorting (CPU, deterministic).
     /// Within each row or column, contiguous runs of pixels whose sort key falls in
@@ -2024,6 +2060,22 @@ pub(crate) enum Commands {
         temporal_tiles: bool,
         #[arg(long, default_value_t = 0.0)]
         decay: f32,
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -2069,6 +2121,22 @@ pub(crate) enum Commands {
         block_opacity: f32,
         #[arg(long, default_value_t = 71)]
         seed: u64,
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },

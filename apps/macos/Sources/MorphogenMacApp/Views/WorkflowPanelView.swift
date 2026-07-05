@@ -637,6 +637,62 @@ struct WorkflowPanelView: View {
         }
       }
 
+      // Cascade trails mod slots
+      ModulationSlotRow(
+        label: "Tr Advect",
+        source: $state.trailsModAdvectSource,
+        scale: $state.trailsModAdvectScale,
+        offset: $state.trailsModAdvectOffset,
+        samplingOverride: $state.trailsModAdvectSamplingOverride,
+        scaleRange: -48...48, scaleStep: 1, offsetRange: -48...48, offsetStep: 1,
+        modulator: $state.trailsModAdvectModulator,
+        modulatorNames: state.cascadeTrailsDeclaredModulatorNames
+      )
+
+      ModulationSlotRow(
+        label: "Tr TurbSc",
+        source: $state.trailsModTurbScaleSource,
+        scale: $state.trailsModTurbScaleScale,
+        offset: $state.trailsModTurbScaleOffset,
+        samplingOverride: $state.trailsModTurbScaleSamplingOverride,
+        scaleRange: -0.05...0.05, scaleStep: 0.002,
+        modulator: $state.trailsModTurbScaleModulator,
+        modulatorNames: state.cascadeTrailsDeclaredModulatorNames
+      )
+
+      ModulationSlotRow(
+        label: "Tr Detail",
+        source: $state.trailsModDetailSource,
+        scale: $state.trailsModDetailScale,
+        offset: $state.trailsModDetailOffset,
+        samplingOverride: $state.trailsModDetailSamplingOverride,
+        modulator: $state.trailsModDetailModulator,
+        modulatorNames: state.cascadeTrailsDeclaredModulatorNames
+      )
+
+      ModulationSlotRow(
+        label: "Tr Decay",
+        source: $state.trailsModDecaySource,
+        scale: $state.trailsModDecayScale,
+        offset: $state.trailsModDecayOffset,
+        samplingOverride: $state.trailsModDecaySamplingOverride,
+        scaleRange: -0.5...0.5, scaleStep: 0.01,
+        modulator: $state.trailsModDecayModulator,
+        modulatorNames: state.cascadeTrailsDeclaredModulatorNames
+      )
+
+      ModulationMediaRow(
+        sources: [
+          state.trailsModAdvectSource, state.trailsModTurbScaleSource,
+          state.trailsModDetailSource, state.trailsModDecaySource
+        ],
+        audioURL: state.cascadeTrailsModulatorAudioURL,
+        framesURL: state.cascadeTrailsModulatorFramesURL,
+        sampling: $state.cascadeTrailsModSampling,
+        chooseAudio: { state.chooseCascadeTrailsModulatorWAV() },
+        chooseFrames: { state.chooseCascadeTrailsModulatorFrames() }
+      )
+
     case .bitstreamDatamosh:
       HStack(spacing: 16) {
         Stepper(value: $state.bitstreamFps, in: 1...120, step: 1) {

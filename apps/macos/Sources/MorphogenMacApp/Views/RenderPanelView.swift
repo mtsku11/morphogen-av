@@ -737,6 +737,62 @@ struct RenderPanelView: View {
             .frame(width: 195, alignment: .leading)
           }
 
+          // Cascade collage mod slots
+          ModulationSlotRow(
+            label: "Cc Scrib",
+            source: $state.collageModScribSource,
+            scale: $state.collageModScribScale,
+            offset: $state.collageModScribOffset,
+            samplingOverride: $state.collageModScribSamplingOverride,
+            modulator: $state.collageModScribModulator,
+            modulatorNames: state.cascadeCollageDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Cc Morph",
+            source: $state.collageModMorphSource,
+            scale: $state.collageModMorphScale,
+            offset: $state.collageModMorphOffset,
+            samplingOverride: $state.collageModMorphSamplingOverride,
+            scaleRange: -0.5...0.5, scaleStep: 0.01,
+            modulator: $state.collageModMorphModulator,
+            modulatorNames: state.cascadeCollageDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Cc Edge",
+            source: $state.collageModEdgeSource,
+            scale: $state.collageModEdgeScale,
+            offset: $state.collageModEdgeOffset,
+            samplingOverride: $state.collageModEdgeSamplingOverride,
+            scaleRange: -1...1, scaleStep: 0.05,
+            modulator: $state.collageModEdgeModulator,
+            modulatorNames: state.cascadeCollageDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Cc Face",
+            source: $state.collageModFaceSource,
+            scale: $state.collageModFaceScale,
+            offset: $state.collageModFaceOffset,
+            samplingOverride: $state.collageModFaceSamplingOverride,
+            scaleRange: -1...1, scaleStep: 0.05,
+            modulator: $state.collageModFaceModulator,
+            modulatorNames: state.cascadeCollageDeclaredModulatorNames
+          )
+
+          ModulationMediaRow(
+            sources: [
+              state.collageModScribSource, state.collageModMorphSource,
+              state.collageModEdgeSource, state.collageModFaceSource
+            ],
+            audioURL: state.cascadeCollageModulatorAudioURL,
+            framesURL: state.cascadeCollageModulatorFramesURL,
+            sampling: $state.cascadeCollageModSampling,
+            chooseAudio: { state.chooseCascadeCollageModulatorWAV() },
+            chooseFrames: { state.chooseCascadeCollageModulatorFrames() }
+          )
+
           Text(state.cascadeCollageSummary)
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -2334,7 +2390,7 @@ where
 
 /// The modulator media + sampling controls shared by an effect's mod slots;
 /// hidden until any slot picks a source.
-private struct ModulationMediaRow: View {
+struct ModulationMediaRow: View {
   let sources: [ModulationSourceOption]
   let audioURL: URL?
   let framesURL: URL?

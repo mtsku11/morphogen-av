@@ -57,6 +57,7 @@ use morphogen_render::{
     RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
 use morphogen_render::{
+    apply_cascade_collage_modulation, apply_cascade_trails_modulation,
     apply_channel_shift_modulation, apply_coagulation_modulation,
     apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
@@ -2432,6 +2433,7 @@ pub(crate) struct CascadeTrailsSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: CascadeTrailSettings,
     pub(crate) frames: usize,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the persistent-trail vector-field cascade: a grid of source-image tiles is advected
@@ -2459,6 +2461,17 @@ pub(crate) fn render_cascade_trails_sequence(
     let seed_frame = load_image_f32(&source_frames[0])?;
     fs::create_dir_all(request.output_dir)?;
 
+    // Modulation (provenance-only — no checkpoint path). Probe at frame 0 so an
+    // unknown target fails before any frame renders.
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_cascade_trails_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     let mut state = initialize_cascade_trails(&seed_frame, request.settings)?;
 
     if request.settings.temporal_tiles {
@@ -2472,11 +2485,17 @@ pub(crate) fn render_cascade_trails_sequence(
     }
 
     for index in 0..request.frames {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_cascade_trails_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         if index > 0 {
             // With temporal_tiles the patches are frozen — advance positions only (live_refresh
             // is implicitly off).  Without it, live_refresh is controlled by the setting.
             let current = load_image_f32(&source_frames[index % source_frames.len()])?;
-            advance_cascade_trails(&mut state, &current, request.settings, index as u32)?;
+            advance_cascade_trails(&mut state, &current, frame_settings, index as u32)?;
         }
         let rendered = render_cascade_trails(&state);
         save_png(
@@ -2510,6 +2529,7 @@ pub(crate) struct CascadeCollageSequenceRequest<'a> {
     pub(crate) height: u32,
     pub(crate) frames: u32,
     pub(crate) settings: CascadeCollageSettings,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Apply the high-level generative knobs to the default composition: tile size
@@ -2535,13 +2555,25 @@ pub(crate) fn apply_cascade_generative(
 pub(crate) fn render_cascade_collage_sequence(
     request: CascadeCollageSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
-    request.settings.validate()?;
+    let base_settings = request.settings.clone();
+    base_settings.validate()?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
         ));
     }
     fs::create_dir_all(request.output_dir)?;
+
+    // Modulation (provenance-only — stateless per-frame). Probe at frame 0 so an
+    // unknown target fails before any frame renders.
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        let mut probe = base_settings.clone();
+        for (target, value) in plan.frame_values(0) {
+            apply_cascade_collage_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
 
     let frame_count = if let Some(src_dir) = request.source_dir {
         // texture mode: tiles carry crops of the source video (texture + colour)
@@ -2554,11 +2586,17 @@ pub(crate) fn render_cascade_collage_sequence(
         let count = (request.frames as usize).min(source_frames.len());
         for (index, frame_path) in source_frames.iter().enumerate().take(count) {
             let source = load_image_f32(frame_path)?;
+            let mut frame_settings = base_settings.clone();
+            if let Some(plan) = &modulation_plan {
+                for (target, value) in plan.frame_values(index) {
+                    apply_cascade_collage_modulation(&mut frame_settings, target, value)?;
+                }
+            }
             let rendered = render_cascade_collage_frame(
                 source.width,
                 source.height,
                 Some(&source),
-                &request.settings,
+                &frame_settings,
                 index as u32,
             )?;
             save_png(
@@ -2570,8 +2608,8 @@ pub(crate) fn render_cascade_collage_sequence(
             "rendered cascade collage sequence with {} frame(s) (texture from {}, scrib_amp_scale {:.2}, morph_rate {:.3}) to {}",
             count,
             src_dir.display(),
-            request.settings.scrib_amp_scale,
-            request.settings.morph_rate,
+            base_settings.scrib_amp_scale,
+            base_settings.morph_rate,
             request.output_dir.display()
         );
         count
@@ -2583,11 +2621,17 @@ pub(crate) fn render_cascade_collage_sequence(
             ));
         }
         for index in 0..request.frames {
+            let mut frame_settings = base_settings.clone();
+            if let Some(plan) = &modulation_plan {
+                for (target, value) in plan.frame_values(index as usize) {
+                    apply_cascade_collage_modulation(&mut frame_settings, target, value)?;
+                }
+            }
             let rendered = render_cascade_collage_frame(
                 request.width,
                 request.height,
                 None,
-                &request.settings,
+                &frame_settings,
                 index,
             )?;
             save_png(
@@ -2600,9 +2644,9 @@ pub(crate) fn render_cascade_collage_sequence(
             request.frames,
             request.width,
             request.height,
-            request.settings.scrib_amp_scale,
-            request.settings.morph_rate,
-            request.settings.frame_hue_rate,
+            base_settings.scrib_amp_scale,
+            base_settings.morph_rate,
+            base_settings.frame_hue_rate,
             request.output_dir.display()
         );
         request.frames as usize

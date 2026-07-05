@@ -258,6 +258,56 @@ final class AppState: ObservableObject {
   @Published var cascadeCollageBlockOpacity = 1.0
   @Published var cascadeCollageSeed = 71
   @Published var cascadeCollageSummary = "No cascade-collage sequence rendered"
+  // Cascade Trails mod slots (advect / turbulence_scale / detail / decay).
+  @Published var cascadeTrailsModulatorAudioURL: URL? = nil
+  @Published var cascadeTrailsModulatorFramesURL: URL? = nil
+  @Published var cascadeTrailsModSampling: ModulationSamplingOption = .hold
+  @Published var cascadeTrailsNamedModulators: [NamedModulatorEntry] = []
+  @Published var trailsModAdvectSource = ModulationSourceOption.off
+  @Published var trailsModAdvectScale = 1.0
+  @Published var trailsModAdvectOffset = 0.0
+  @Published var trailsModAdvectSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var trailsModAdvectModulator = ""
+  @Published var trailsModTurbScaleSource = ModulationSourceOption.off
+  @Published var trailsModTurbScaleScale = 1.0
+  @Published var trailsModTurbScaleOffset = 0.0
+  @Published var trailsModTurbScaleSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var trailsModTurbScaleModulator = ""
+  @Published var trailsModDetailSource = ModulationSourceOption.off
+  @Published var trailsModDetailScale = 1.0
+  @Published var trailsModDetailOffset = 0.0
+  @Published var trailsModDetailSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var trailsModDetailModulator = ""
+  @Published var trailsModDecaySource = ModulationSourceOption.off
+  @Published var trailsModDecayScale = 1.0
+  @Published var trailsModDecayOffset = 0.0
+  @Published var trailsModDecaySamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var trailsModDecayModulator = ""
+  // Cascade Collage mod slots (scrib_amp_scale / morph_rate / edge_strength / face_strength).
+  @Published var cascadeCollageModulatorAudioURL: URL? = nil
+  @Published var cascadeCollageModulatorFramesURL: URL? = nil
+  @Published var cascadeCollageModSampling: ModulationSamplingOption = .hold
+  @Published var cascadeCollageNamedModulators: [NamedModulatorEntry] = []
+  @Published var collageModScribSource = ModulationSourceOption.off
+  @Published var collageModScribScale = 1.0
+  @Published var collageModScribOffset = 0.0
+  @Published var collageModScribSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var collageModScribModulator = ""
+  @Published var collageModMorphSource = ModulationSourceOption.off
+  @Published var collageModMorphScale = 1.0
+  @Published var collageModMorphOffset = 0.0
+  @Published var collageModMorphSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var collageModMorphModulator = ""
+  @Published var collageModEdgeSource = ModulationSourceOption.off
+  @Published var collageModEdgeScale = 1.0
+  @Published var collageModEdgeOffset = 0.0
+  @Published var collageModEdgeSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var collageModEdgeModulator = ""
+  @Published var collageModFaceSource = ModulationSourceOption.off
+  @Published var collageModFaceScale = 1.0
+  @Published var collageModFaceOffset = 0.0
+  @Published var collageModFaceSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var collageModFaceModulator = ""
   // Retro Static — deliberate scanline-filter misread glitch.
   @Published var retroStaticRealBpp = 4
   @Published var retroStaticAssumedBpp = 3
@@ -1959,7 +2009,20 @@ final class AppState: ObservableObject {
       return
     }
 
-    let request = CascadeTrailsSequenceRenderQueueCommandRequest(
+    guard let routes = modulationRoutes(
+      slots: [
+        ("advect", trailsModAdvectSource, trailsModAdvectScale, trailsModAdvectOffset, trailsModAdvectSamplingOverride),
+        ("turbulence_scale", trailsModTurbScaleSource, trailsModTurbScaleScale, trailsModTurbScaleOffset, trailsModTurbScaleSamplingOverride),
+        ("detail", trailsModDetailSource, trailsModDetailScale, trailsModDetailOffset, trailsModDetailSamplingOverride),
+        ("decay", trailsModDecaySource, trailsModDecayScale, trailsModDecayOffset, trailsModDecaySamplingOverride),
+      ],
+      modulatorAudioURL: cascadeTrailsModulatorAudioURL,
+      modulatorFramesURL: cascadeTrailsModulatorFramesURL,
+      namedModulators: cascadeTrailsNamedModulators,
+      slotModulators: [trailsModAdvectModulator, trailsModTurbScaleModulator, trailsModDetailModulator, trailsModDecayModulator],
+      effectLabel: "cascade trails"
+    ) else { return }
+    var request = CascadeTrailsSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultCascadeTrailsSequenceRenderQueueURL(),
       sourceDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("trail-cascade", isDirectory: true),
@@ -1980,6 +2043,11 @@ final class AppState: ObservableObject {
       decay: cascadeDecay,
       projectURL: projectURL
     )
+    request.modulationRoutes = routes
+    request.modulatorAudioURL = cascadeTrailsModulatorAudioURL
+    request.modulatorFramesURL = cascadeTrailsModulatorFramesURL
+    request.modulationSampling = cascadeTrailsModSampling
+    request.namedModulators = namedModulatorSpecs(cascadeTrailsNamedModulators)
 
     runFluidAdvectionQueue(
       label: "Trail cascade",
@@ -1999,7 +2067,20 @@ final class AppState: ObservableObject {
       return
     }
 
-    let request = CascadeCollageSequenceRenderQueueCommandRequest(
+    guard let routes = modulationRoutes(
+      slots: [
+        ("scrib_amp_scale", collageModScribSource, collageModScribScale, collageModScribOffset, collageModScribSamplingOverride),
+        ("morph_rate", collageModMorphSource, collageModMorphScale, collageModMorphOffset, collageModMorphSamplingOverride),
+        ("edge_strength", collageModEdgeSource, collageModEdgeScale, collageModEdgeOffset, collageModEdgeSamplingOverride),
+        ("face_strength", collageModFaceSource, collageModFaceScale, collageModFaceOffset, collageModFaceSamplingOverride),
+      ],
+      modulatorAudioURL: cascadeCollageModulatorAudioURL,
+      modulatorFramesURL: cascadeCollageModulatorFramesURL,
+      namedModulators: cascadeCollageNamedModulators,
+      slotModulators: [collageModScribModulator, collageModMorphModulator, collageModEdgeModulator, collageModFaceModulator],
+      effectLabel: "cascade collage"
+    ) else { return }
+    var request = CascadeCollageSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultCascadeCollageSequenceRenderQueueURL(),
       sourceDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("cascade-collage", isDirectory: true),
@@ -2017,6 +2098,11 @@ final class AppState: ObservableObject {
       seed: UInt64(max(0, cascadeCollageSeed)),
       projectURL: projectURL
     )
+    request.modulationRoutes = routes
+    request.modulatorAudioURL = cascadeCollageModulatorAudioURL
+    request.modulatorFramesURL = cascadeCollageModulatorFramesURL
+    request.modulationSampling = cascadeCollageModSampling
+    request.namedModulators = namedModulatorSpecs(cascadeCollageNamedModulators)
 
     statusMessage = "Queueing cascade collage through morphogen-cli..."
     DispatchQueue.global(qos: .userInitiated).async {
@@ -2469,6 +2555,84 @@ final class AppState: ObservableObject {
     if pixelSortModHighModulator == name { pixelSortModHighModulator = "" }
     if pixelSortModDirectionModulator == name { pixelSortModDirectionModulator = "" }
     if pixelSortModAxisModulator == name { pixelSortModAxisModulator = "" }
+  }
+
+  var cascadeTrailsDeclaredModulatorNames: [String] {
+    cascadeTrailsNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addCascadeTrailsNamedModulator() { appendNamedModulator(to: &cascadeTrailsNamedModulators) }
+  func chooseCascadeTrailsNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &cascadeTrailsNamedModulators, id: id) }
+  func chooseCascadeTrailsNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &cascadeTrailsNamedModulators, id: id) }
+  func removeCascadeTrailsNamedModulator(id: UUID) {
+    guard let entry = cascadeTrailsNamedModulators.first(where: { $0.id == id }) else { return }
+    cascadeTrailsNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if trailsModAdvectModulator == name { trailsModAdvectModulator = "" }
+    if trailsModTurbScaleModulator == name { trailsModTurbScaleModulator = "" }
+    if trailsModDetailModulator == name { trailsModDetailModulator = "" }
+    if trailsModDecayModulator == name { trailsModDecayModulator = "" }
+  }
+
+  func chooseCascadeTrailsModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    cascadeTrailsModulatorAudioURL = url
+    statusMessage = "Cascade trails modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseCascadeTrailsModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frame Directory"
+    ) else {
+      statusMessage = "Modulator frame directory selection cancelled."
+      return
+    }
+    cascadeTrailsModulatorFramesURL = url
+    statusMessage = "Cascade trails modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  var cascadeCollageDeclaredModulatorNames: [String] {
+    cascadeCollageNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addCascadeCollageNamedModulator() { appendNamedModulator(to: &cascadeCollageNamedModulators) }
+  func chooseCascadeCollageNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &cascadeCollageNamedModulators, id: id) }
+  func chooseCascadeCollageNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &cascadeCollageNamedModulators, id: id) }
+  func removeCascadeCollageNamedModulator(id: UUID) {
+    guard let entry = cascadeCollageNamedModulators.first(where: { $0.id == id }) else { return }
+    cascadeCollageNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if collageModScribModulator == name { collageModScribModulator = "" }
+    if collageModMorphModulator == name { collageModMorphModulator = "" }
+    if collageModEdgeModulator == name { collageModEdgeModulator = "" }
+    if collageModFaceModulator == name { collageModFaceModulator = "" }
+  }
+
+  func chooseCascadeCollageModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    cascadeCollageModulatorAudioURL = url
+    statusMessage = "Cascade collage modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseCascadeCollageModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frame Directory"
+    ) else {
+      statusMessage = "Modulator frame directory selection cancelled."
+      return
+    }
+    cascadeCollageModulatorFramesURL = url
+    statusMessage = "Cascade collage modulator frames selected: \(url.lastPathComponent)"
   }
 
   func choosePaletteQuantizeModulatorWAV() {

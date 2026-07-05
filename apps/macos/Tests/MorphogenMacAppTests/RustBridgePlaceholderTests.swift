@@ -606,6 +606,75 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedCascadeTrailsSequenceArgumentsIncludeModulationRoute() throws {
+    var request = CascadeTrailsSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-trails-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/trail-cascade", isDirectory: true),
+      frames: 48,
+      frameRate: 24.0,
+      tileSize: 28,
+      gridSpacing: 60,
+      advect: 1.6,
+      turbulenceScale: 0.008,
+      detail: 0.1,
+      liveRefresh: true,
+      seed: 0,
+      field: "vortex",
+      riverDirection: 0,
+      riverSpeed: 3,
+      riverTurbulence: 0.8,
+      temporalTiles: false,
+      decay: 0,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "advect", source: "audio-rms", scale: 48, offset: 0)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/score.wav")
+
+    let arguments = try RustBridgePlaceholder.queueAddCascadeTrailsSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--modulate"))
+    XCTAssertTrue(arguments.contains("advect=audio-rms:48,0"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("/tmp/score.wav"))
+    XCTAssertFalse(arguments.contains("--project-path"))
+  }
+
+  func testQueuedCascadeCollageSequenceArgumentsIncludeModulationRoute() throws {
+    var request = CascadeCollageSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/cascade-collage-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/cascade-collage", isDirectory: true),
+      frames: 48,
+      frameRate: 24.0,
+      scribAmpScale: 1.0,
+      edgeStrength: 0.85,
+      faceStrength: 0.55,
+      edgeDetect: 0.0,
+      tileScale: 1.0,
+      detailTiles: 4,
+      hueRotate: 0.0,
+      blockBlend: .normal,
+      blockOpacity: 1.0,
+      seed: 71,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "edge_strength", source: "audio-rms", scale: 1, offset: 0)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/score.wav")
+
+    let arguments = try RustBridgePlaceholder.queueAddCascadeCollageSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--modulate"))
+    XCTAssertTrue(arguments.contains("edge_strength=audio-rms:1,0"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("/tmp/score.wav"))
+    XCTAssertFalse(arguments.contains("--project-path"))
+  }
+
   func testQueuedRetroStaticSequenceArgumentsIncludeGlitchControls() throws {
     let request = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),
