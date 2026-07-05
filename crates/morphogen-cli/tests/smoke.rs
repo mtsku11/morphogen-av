@@ -839,7 +839,7 @@ fn render_composition_single_scene_is_byte_identical_to_direct_chain() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "rendered composition with 1 scene (3 frame(s))",
+            "rendered composition with 1 scene(s) (3 frame(s))",
         ));
 
     let chain_spec_path = temp_dir.path().join("chain.json");
@@ -958,19 +958,29 @@ fn render_composition_rejects_invalid_specs() {
         ),
         "unknown field `bogus`",
     );
-    // Multi-scene assembly is the next slice; refuse rather than silently
-    // rendering only scene 1.
+    // A cut has no overlap — a non-zero frames field on it is a spec error.
     run_case(
-        "multi-scene",
+        "cut-with-frames",
         &format!(
             r#"{{"version": 1, "fps": 12, "scenes": [
-                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "cut"}}}},
+                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "cut", "frames": 4}}}},
                 {{"name": "b", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}
             ]}}"#
         ),
-        "multi-scene compositions are not implemented yet",
+        "a cut has no overlap",
     );
-    // Duplicate names caught even in the (deferred) multi-scene shape.
+    // Non-zero crossfades (the pixel blending) are the next slice.
+    run_case(
+        "crossfade-deferred",
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "a", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}, "transition_out": {{"type": "crossfade", "frames": 1}}}},
+                {{"name": "b", "duration_frames": 2, "input_dir": {source}, "chain": {good_chain}}}
+            ]}}"#
+        ),
+        "crossfade blending lands in Slice 3",
+    );
+    // Duplicate names caught in the multi-scene shape.
     run_case(
         "duplicate-names",
         &format!(
@@ -981,6 +991,122 @@ fn render_composition_rejects_invalid_specs() {
         ),
         "duplicate scene name",
     );
+}
+
+#[test]
+fn render_composition_cut_is_concat_of_scene_renders() {
+    // Anchor A2: with cut transitions, <out>/frames/ is byte-identical to the
+    // concatenation (renumbering only) of the per-scene renders.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]); // 3 frames
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+
+    // Two distinct scenes (different effects) so the concat is falsifiable.
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(
+        &spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "quant", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 4}}]}},
+                  "transition_out": {{"type": "cut"}}}},
+                {{"name": "scan", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false}}]}}}}
+            ]}}"#
+        ),
+    );
+    let out_dir = temp_dir.path().join("comp-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered composition with 2 scene(s) (6 frame(s))",
+        ));
+
+    // frames/ 0..2 = scene 1's render; frames/ 3..5 = scene 2's render, renumbered.
+    let scene1 = out_dir.join("scene_01_quant/stage_01_palette_quantize");
+    let scene2 = out_dir.join("scene_02_scan/stage_01_rutt_etra");
+    let frames = out_dir.join("frames");
+    for i in 0..3 {
+        assert_eq!(
+            fs::read(frames.join(format!("frame_{i:06}.png"))).expect("global frame"),
+            fs::read(scene1.join(format!("frame_{i:06}.png"))).expect("scene1 frame"),
+            "timeline frame {i} must equal scene 1 frame {i}"
+        );
+    }
+    for i in 0..3 {
+        let global = 3 + i;
+        assert_eq!(
+            fs::read(frames.join(format!("frame_{global:06}.png"))).expect("global frame"),
+            fs::read(scene2.join(format!("frame_{i:06}.png"))).expect("scene2 frame"),
+            "timeline frame {global} must equal scene 2 frame {i}"
+        );
+    }
+    assert!(
+        !frames.join("frame_000006.png").exists(),
+        "the timeline must be exactly 6 frames"
+    );
+
+    // composition-manifest.json: global timeline + embedded chain manifests.
+    let manifest = read_json(&out_dir.join("composition-manifest.json"));
+    assert_eq!(manifest["version"], 1);
+    assert_eq!(manifest["fps"], 12.0);
+    assert_eq!(manifest["frame_count"], 6);
+    assert_eq!(manifest["scenes"][0]["name"], "quant");
+    assert_eq!(manifest["scenes"][0]["start_frame"], 0);
+    assert_eq!(manifest["scenes"][0]["length"], 3);
+    assert_eq!(manifest["scenes"][0]["transition_out"]["type"], "cut");
+    assert_eq!(
+        manifest["scenes"][0]["chain_manifest"]["stages"][0]["algorithm"],
+        "palette_quantize_posterize_cpu_v1"
+    );
+    assert_eq!(manifest["scenes"][1]["name"], "scan");
+    assert_eq!(manifest["scenes"][1]["start_frame"], 3);
+    assert_eq!(manifest["scenes"][1]["length"], 3);
+    // The last scene transitions to nothing.
+    assert!(manifest["scenes"][1]["transition_out"].is_null());
+}
+
+#[test]
+fn render_composition_rejects_duration_mismatch() {
+    // A post-render refusal: the declared timeline length must equal what the
+    // scene actually rendered (a 3-frame source cannot be a 5-frame scene).
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]); // 3 frames, not 5
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(
+        &spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "solo", "duration_frames": 5, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 4}}]}}}}
+            ]}}"#
+        ),
+    );
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            temp_dir.path().join("comp-out").to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "declares duration_frames 5 but its chain rendered 3 frame(s)",
+        ));
 }
 
 #[test]

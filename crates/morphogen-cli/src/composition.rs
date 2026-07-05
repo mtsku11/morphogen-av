@@ -151,28 +151,42 @@ pub(crate) fn validate_composition_spec(spec: &CompositionSpec) -> Result<(), Cl
                 scene.name
             )));
         }
-        // The last (or only) scene transitions to nothing.
-        if index == last_index && scene.transition_out.is_some() {
-            return Err(CliError::Message(format!(
-                "scene {:?} is the last scene and must omit transition_out \
-                 (transitions join a scene to the next one)",
-                scene.name
-            )));
+        // The last (or only) scene transitions to nothing; a non-last scene
+        // may declare a transition (an absent one is an implicit cut).
+        match (&scene.transition_out, index == last_index) {
+            (Some(_), true) => {
+                return Err(CliError::Message(format!(
+                    "scene {:?} is the last scene and must omit transition_out \
+                     (transitions join a scene to the next one)",
+                    scene.name
+                )));
+            }
+            (Some(transition), false) => validate_transition(&scene.name, transition)?,
+            (None, _) => {}
         }
         validate_chain_spec(&scene.chain)?;
     }
 
-    // Slice 1 renders and assembles a single scene. Multi-scene cut assembly is
-    // the next slice; refuse rather than silently rendering only scene 1.
-    if spec.scenes.len() > 1 {
-        return Err(CliError::Message(
-            "multi-scene compositions are not implemented yet (Slice 2: cut assembly + \
-             manifest); this build renders a single-scene composition"
-                .to_string(),
-        ));
-    }
-
     Ok(())
+}
+
+/// Slice 2 assembles cuts only (a `crossfade` of 0 frames ≡ cut). Non-zero
+/// crossfades — the actual pixel blending — land in Slice 3, so they are
+/// refused here rather than silently degraded to a cut.
+fn validate_transition(scene_name: &str, transition: &Transition) -> Result<(), CliError> {
+    match transition.kind {
+        TransitionKind::Cut if transition.frames != 0 => Err(CliError::Message(format!(
+            "scene {scene_name:?} has a cut transition with frames {} — a cut has no overlap; \
+             remove the frames field",
+            transition.frames
+        ))),
+        TransitionKind::Crossfade if transition.frames != 0 => Err(CliError::Message(format!(
+            "scene {scene_name:?} declares a {}-frame crossfade; crossfade blending lands in \
+             Slice 3 — use a cut (or crossfade with frames 0) for now",
+            transition.frames
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Parse + whole-spec validation in one step.
@@ -188,40 +202,92 @@ pub(crate) fn parse_and_validate_composition_spec(
 // Mechanic
 // ---------------------------------------------------------------------------
 
-/// Copy a scene's final frames into `<out>/frames/` with global timeline
-/// numbering. For the single scene of Slice 1 the global index equals the
-/// scene's own frame index, so each frame is a verbatim copy (this keeps the
-/// assembled `frames/` byte-identical to the scene render — anchor A1).
-fn assemble_frames(final_frames_dir: &Path, frames_dir: &Path) -> Result<usize, CliError> {
+/// Copy a scene's final frames into `<out>/frames/` starting at the given
+/// global timeline index. With cut transitions this is a straight
+/// concatenation (renumbering only) of the per-scene renders — anchor A2. The
+/// single-scene case (start 0) is a verbatim copy — anchor A1.
+fn assemble_frames(
+    final_frames_dir: &Path,
+    frames_dir: &Path,
+    start_index: usize,
+) -> Result<usize, CliError> {
     let scene_frames = collect_image_frames(final_frames_dir)?;
     fs::create_dir_all(frames_dir)?;
-    for (global_index, source) in scene_frames.iter().enumerate() {
+    for (offset, source) in scene_frames.iter().enumerate() {
+        let global_index = start_index + offset;
         let destination = frames_dir.join(format!("frame_{global_index:06}.png"));
         fs::copy(source, &destination)?;
     }
     Ok(scene_frames.len())
 }
 
+/// The chain manifest a scene render leaves in its directory, embedded whole in
+/// the composition manifest so the piece is reproducible from that one file.
+fn read_scene_chain_manifest(scene_dir: &Path) -> Result<serde_json::Value, CliError> {
+    let path = scene_dir.join("chain-manifest.json");
+    Ok(serde_json::from_str(&fs::read_to_string(&path)?)?)
+}
+
 /// `render-composition <spec.json> <output-dir>`.
 ///
-/// Validates the whole spec, renders the (single, in this slice) scene via the
-/// existing chain path into `<output-dir>/scene_01_<name>/`, and assembles its
-/// final frames into `<output-dir>/frames/`.
+/// Validates the whole spec, renders each scene via the existing chain path
+/// into `<output-dir>/scene_<NN>_<name>/`, assembles the scenes onto the global
+/// timeline in `<output-dir>/frames/` (cut transitions only in this slice), and
+/// writes `<output-dir>/composition-manifest.json`.
 pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<(), CliError> {
     let spec_text = fs::read_to_string(spec_path)?;
     let spec = parse_and_validate_composition_spec(&spec_text)?;
 
-    // Validation guarantees exactly one scene in this slice.
-    let scene = &spec.scenes[0];
-    let scene_dir = output_dir.join(format!("scene_01_{}", scene.name));
-    let summary = run_chain_spec(&scene.chain, &scene.input_dir, &scene_dir)?;
-
     let frames_dir = output_dir.join("frames");
-    let assembled = assemble_frames(&summary.final_frames_dir, &frames_dir)?;
+    let mut global_frame = 0usize;
+    let mut manifest_scenes = Vec::with_capacity(spec.scenes.len());
+
+    for (index, scene) in spec.scenes.iter().enumerate() {
+        let scene_number = index + 1;
+        let directory = format!("scene_{scene_number:02}_{}", scene.name);
+        let scene_dir = output_dir.join(&directory);
+        let summary = run_chain_spec(&scene.chain, &scene.input_dir, &scene_dir)?;
+
+        // The declared timeline length must match what the scene actually
+        // rendered so global numbering (and, later, overlap and master-offset
+        // math) is exact rather than silently drifting from the spec.
+        if summary.frame_count != scene.duration_frames as usize {
+            return Err(CliError::Message(format!(
+                "scene {:?} declares duration_frames {} but its chain rendered {} frame(s); \
+                 the declared length must match the render",
+                scene.name, scene.duration_frames, summary.frame_count
+            )));
+        }
+
+        let start_frame = global_frame;
+        let assembled = assemble_frames(&summary.final_frames_dir, &frames_dir, start_frame)?;
+        global_frame += assembled;
+
+        manifest_scenes.push(serde_json::json!({
+            "name": scene.name,
+            "directory": directory,
+            "start_frame": start_frame,
+            "length": assembled,
+            "transition_out": scene.transition_out,
+            "chain_manifest": read_scene_chain_manifest(&scene_dir)?,
+        }));
+    }
+
+    let composition_manifest = serde_json::json!({
+        "version": spec.version,
+        "fps": spec.fps,
+        "frame_count": global_frame,
+        "scenes": manifest_scenes,
+    });
+    fs::write(
+        output_dir.join("composition-manifest.json"),
+        serde_json::to_string_pretty(&composition_manifest)?,
+    )?;
 
     println!(
-        "rendered composition with 1 scene ({assembled} frame(s)) from {} to {}; \
-         timeline frames: {}",
+        "rendered composition with {} scene(s) ({} frame(s)) from {} to {}; timeline frames: {}",
+        spec.scenes.len(),
+        global_frame,
         spec_path.display(),
         output_dir.display(),
         frames_dir.display(),
