@@ -38,6 +38,7 @@ struct ContentView: View {
               NodeGraphPlaceholderView()
               AnalysisPanelView()
               CompositionPanelView(state: state)
+              CoagulatedBlendPanelView(state: state)
               RenderPanelView(state: state)
             }
             .padding(.top, 8)

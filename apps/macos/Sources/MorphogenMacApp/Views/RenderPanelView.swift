@@ -2125,7 +2125,7 @@ struct RenderPanelView: View {
 
 /// One knob's modulation slot: source picker (Off = no route) plus the affine
 /// scale/offset mapping, shown only when a source is chosen.
-private struct ModulationSlotRow: View {
+struct ModulationSlotRow: View {
   let label: String
   @Binding var source: ModulationSourceOption
   @Binding var scale: Double

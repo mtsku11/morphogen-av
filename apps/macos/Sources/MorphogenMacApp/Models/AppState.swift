@@ -58,6 +58,50 @@ final class AppState: ObservableObject {
   @Published var compositionOutputURL: URL?
   @Published var compositionOutputPath = "No composition output directory selected"
   @Published var compositionSummary = "No composition rendered yet"
+  // Coagulated flow blend (Tier 1.1). Two-source: A/B come from the shared
+  // Source A/B slots; modulation drives coagulation_strength/edge_hardness/bias.
+  @Published var coagOutputURL: URL?
+  @Published var coagOutputPath = "No coagulated-blend output directory selected"
+  @Published var coagSummary = "No coagulated blend rendered yet"
+  @Published var coagPatchSize = 16
+  @Published var coagColorWeight = 1.0
+  @Published var coagTextureWeight = 0.0
+  @Published var coagCoherencePasses = 2
+  @Published var coagCoherenceStrength = 0.5
+  @Published var coagRandomness = 0.0
+  @Published var coagCoagulationStrength = 0.0
+  @Published var coagEdgeHardness = 0.0
+  @Published var coagEdgeDither = 0.0
+  @Published var coagBlockJitter = 0.0
+  @Published var coagBias = 0.0
+  @Published var coagSeed = 0
+  @Published var coagAdvectSource = CoagulationFlowSourceOption.aFlow
+  @Published var coagAdvectAmount = 0.0
+  @Published var coagRefresh = 1.0
+  @Published var coagTurbulence = 1.0
+  @Published var coagSmear = 0.0
+  @Published var coagSmearDecay = 0.9
+  @Published var coagBackend = FeedbackRenderBackendOption.cpu
+  @Published var coagMaxFrames = 120
+  @Published var coagStrengthModSource = ModulationSourceOption.off
+  @Published var coagStrengthModScale = 1.0
+  @Published var coagStrengthModOffset = 0.0
+  @Published var coagStrengthModSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var coagStrengthModModulator = ""
+  @Published var coagEdgeModSource = ModulationSourceOption.off
+  @Published var coagEdgeModScale = 1.0
+  @Published var coagEdgeModOffset = 0.0
+  @Published var coagEdgeModSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var coagEdgeModModulator = ""
+  @Published var coagBiasModSource = ModulationSourceOption.off
+  @Published var coagBiasModScale = 1.0
+  @Published var coagBiasModOffset = 0.0
+  @Published var coagBiasModSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var coagBiasModModulator = ""
+  @Published var coagModulatorAudioURL: URL?
+  @Published var coagModulatorFramesURL: URL?
+  @Published var coagModulationSampling = ModulationSamplingOption.hold
+  @Published var coagNamedModulators: [NamedModulatorEntry] = []
   @Published var frameSequenceAmount = 16.0
   @Published var frameSequenceMaxFrames = 120
   @Published var frameSequenceWritesFlowCache = true
@@ -935,6 +979,107 @@ final class AppState: ObservableObject {
     frameSequenceOutputURL = url
     frameSequenceOutputPath = url.path
     statusMessage = "Frame sequence output selected: \(url.lastPathComponent)"
+  }
+
+  // MARK: - Coagulated flow blend (Tier 1.1)
+
+  func chooseCoagulatedOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameSequenceOutputDirectory() else {
+      statusMessage = "Coagulated-blend output selection cancelled."
+      return
+    }
+    coagOutputURL = url
+    coagOutputPath = url.path
+    statusMessage = "Coagulated-blend output selected: \(url.lastPathComponent)"
+  }
+
+  func chooseCoagModulatorAudio() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Audio-* coagulated modulation routes read this WAV."
+    ) else {
+      statusMessage = "Coagulated modulator audio selection cancelled."
+      return
+    }
+    coagModulatorAudioURL = url
+    statusMessage = "Coagulated modulator audio: \(url.lastPathComponent)"
+  }
+
+  func runCoagulatedBlendSequenceRender() {
+    guard let sourceAURL = effectiveModulatorURL() else {
+      statusMessage = "Select Source A frame directory before rendering coagulated blend."
+      return
+    }
+    guard let sourceBURL = effectiveCarrierURL() else {
+      statusMessage = "Select Source B frame directory before rendering coagulated blend."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(coagOutputURL) else {
+      statusMessage = "Choose a coagulated-blend output directory before rendering."
+      return
+    }
+    guard let routes = modulationRoutes(
+      slots: [
+        (
+          "coagulation_strength", coagStrengthModSource,
+          coagStrengthModScale, coagStrengthModOffset, coagStrengthModSamplingOverride
+        ),
+        (
+          "edge_hardness", coagEdgeModSource,
+          coagEdgeModScale, coagEdgeModOffset, coagEdgeModSamplingOverride
+        ),
+        (
+          "bias", coagBiasModSource,
+          coagBiasModScale, coagBiasModOffset, coagBiasModSamplingOverride
+        )
+      ],
+      modulatorAudioURL: coagModulatorAudioURL,
+      modulatorFramesURL: coagModulatorFramesURL,
+      namedModulators: coagNamedModulators,
+      slotModulators: [coagStrengthModModulator, coagEdgeModModulator, coagBiasModModulator],
+      effectLabel: "coagulated blend"
+    ) else { return }
+
+    let request = CoagulatedBlendSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultCoagulatedBlendSequenceRenderQueueURL(),
+      sourceADirectoryURL: sourceAURL,
+      sourceBDirectoryURL: sourceBURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("coagulated-blend", isDirectory: true),
+      frameRate: proResFrameRate.framesPerSecond,
+      patchSize: coagPatchSize,
+      colorWeight: coagColorWeight,
+      textureWeight: coagTextureWeight,
+      coherencePasses: coagCoherencePasses,
+      coherenceStrength: coagCoherenceStrength,
+      randomness: coagRandomness,
+      coagulationStrength: coagCoagulationStrength,
+      edgeHardness: coagEdgeHardness,
+      edgeDither: coagEdgeDither,
+      blockJitter: coagBlockJitter,
+      bias: coagBias,
+      seed: UInt64(max(0, coagSeed)),
+      advectSource: coagAdvectSource,
+      advectAmount: coagAdvectAmount,
+      refresh: coagRefresh,
+      turbulence: coagTurbulence,
+      smear: coagSmear,
+      smearDecay: coagSmearDecay,
+      backend: coagBackend,
+      maxFrames: coagMaxFrames > 0 ? coagMaxFrames : nil,
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: coagModulatorAudioURL,
+      modulatorFramesURL: coagModulatorFramesURL,
+      modulationSampling: coagModulationSampling,
+      namedModulators: namedModulatorSpecs(coagNamedModulators)
+    )
+
+    runFluidAdvectionQueue(
+      label: "Coagulated blend",
+      requestDescription: "Queueing coagulated blend through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedCoagulatedBlendSequenceRender(request: request)
+    }
   }
 
   // MARK: - Composition timeline (docs/COMPOSITION_MILESTONE.md)
