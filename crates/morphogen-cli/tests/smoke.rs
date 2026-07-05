@@ -623,6 +623,73 @@ fn write_chain_spec(path: &Path, spec_json: &str) {
 }
 
 #[test]
+fn field_particles_modulation_continuity_and_queue_match_direct() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("src");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let src = source_dir.to_string_lossy().to_string();
+
+    // Continuity identity: routed advect scale-0 offset-4 ≡ constant --advect 4.
+    let constant_dir = temp_dir.path().join("const");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-field-particles-sequence", &src,
+            constant_dir.to_string_lossy().as_ref(),
+            "--frames", "3", "--seed", "1", "--advect", "4",
+        ])
+        .assert()
+        .success();
+    let routed_dir = temp_dir.path().join("routed");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-field-particles-sequence", &src,
+            routed_dir.to_string_lossy().as_ref(),
+            "--frames", "3", "--seed", "1",
+            "--modulate", "advect=lfo(sine,1):0,4",
+        ])
+        .assert()
+        .success();
+    assert_png_frames_identical(&constant_dir, &routed_dir, 3);
+
+    // Queue add→run byte-identical to a direct modulated render (frame_rate 12
+    // matches the direct default --modulation-fps 12 so the LFO samples equal).
+    let queue_path = temp_dir.path().join("queue.json");
+    let queued_root = temp_dir.path().join("queued-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-field-particles-sequence", queue_path.to_string_lossy().as_ref(),
+            &src, queued_root.to_string_lossy().as_ref(),
+            "--frames", "3", "--seed", "1", "--frame-rate", "12",
+            "--modulate", "advect=lfo(sine,0.5):3,6",
+        ])
+        .assert()
+        .success();
+    let task = read_json(&queue_path)["jobs"][0]["task"].clone();
+    assert_eq!(task["type"], "frame_sequence_field_particles");
+    assert_eq!(task["modulation_routes"][0]["target"], "advect");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-field-particles-sequence", queue_path.to_string_lossy().as_ref()])
+        .assert()
+        .success();
+    let direct_mod = temp_dir.path().join("direct-mod");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-field-particles-sequence", &src,
+            direct_mod.to_string_lossy().as_ref(),
+            "--frames", "3", "--seed", "1",
+            "--modulate", "advect=lfo(sine,0.5):3,6",
+        ])
+        .assert()
+        .success();
+    assert_png_frames_identical(&direct_mod, &queued_root.join("job-0001/frames"), 3);
+}
+
+#[test]
 fn queue_coagulated_add_run_matches_direct() {
     // The queued run (queue-add → queue-run) is byte-identical to a direct
     // render-coagulated-blend-sequence with the same knobs + modulation.

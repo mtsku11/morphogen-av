@@ -57,8 +57,8 @@ use morphogen_render::{
     RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
 use morphogen_render::{
-    apply_channel_shift_modulation, apply_coagulation_modulation, apply_flow_feedback_modulation,
-    apply_fluid_advect_modulation,
+    apply_channel_shift_modulation, apply_coagulation_modulation,
+    apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
     apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
     ModulationRoute, ModulationSampling,
@@ -2331,6 +2331,7 @@ pub(crate) struct FieldParticlesSequenceRequest<'a> {
     pub(crate) settings: FieldParticleSettings,
     pub(crate) frames: usize,
     pub(crate) backend: RenderBackend,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the discrete-carrier particle advection: a grid of coloured particles seeded from
@@ -2356,13 +2357,33 @@ pub(crate) fn render_field_particles_sequence(
         ));
     }
 
+    // Modulation (provenance-only — field particles advect with no checkpoint
+    // path). Probe frame 0 so an unknown target fails before rendering.
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_field_particle_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     let seed_frame = load_image_f32(&source_frames[0])?;
     fs::create_dir_all(request.output_dir)?;
 
+    // The grid seeding is structural (spacing/particle_size), so it uses the
+    // base settings; the routed field knobs (advect/turbulence/detail) drive the
+    // per-frame advection below.
     let mut field = initialize_field_particles(&seed_frame, request.settings)?;
     for index in 0..request.frames {
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_field_particle_modulation(&mut frame_settings, target, value)?;
+            }
+        }
         if index > 0 {
-            advance_field_particles(&mut field, index as u32, request.settings)?;
+            advance_field_particles(&mut field, index as u32, frame_settings)?;
         }
         // Live colour: each particle re-samples its origin cell from the current source frame
         // (frames cycle if the render outlasts the clip) so the video plays through the flow.
@@ -2370,7 +2391,7 @@ pub(crate) fn render_field_particles_sequence(
             let current = load_image_f32(&source_frames[index % source_frames.len()])?;
             refresh_field_particle_colors(&mut field, &current);
         }
-        let rendered = render_field_particles_frame(&field, request.settings, request.backend)?;
+        let rendered = render_field_particles_frame(&field, frame_settings, request.backend)?;
         save_png(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),

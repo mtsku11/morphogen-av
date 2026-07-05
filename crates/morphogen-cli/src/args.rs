@@ -737,6 +737,25 @@ pub(crate) enum Commands {
         /// first gather kernel; for a dense grid the CPU scatter is faster).
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// Modulation route (repeatable). Targets: advect, turbulence_scale,
+        /// turbulence_speed, detail. Sources: audio-*/luma/flow/lfo(...).
+        /// Provenance-only (no checkpoint path).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render a persistent-trail vector-field cascade (experimental, deterministic; CPU-only):
     /// a grid of source-image tiles is advected along the shared steady-vortex field and stamped
@@ -1954,6 +1973,20 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// Modulation route (repeatable). Targets: advect, turbulence_scale,
+        /// turbulence_speed, detail.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     QueueAddCascadeTrailsSequence {
         queue_path: PathBuf,

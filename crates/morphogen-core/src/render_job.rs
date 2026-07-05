@@ -358,6 +358,20 @@ pub enum RenderJobTask {
         seed: u64,
         #[serde(default)]
         backend: RenderBackend,
+        /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
+        /// deserialize to empty). Envelope times sample against `frame_rate`.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
     },
     FrameSequenceCascadeTrails {
         source_frame_directory: String,

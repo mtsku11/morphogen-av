@@ -16,8 +16,9 @@ use morphogen_core::{
     VectorRemixMode, VideoVocoderMode,
 };
 use morphogen_render::{
-    apply_channel_shift_modulation, apply_coagulation_modulation, apply_flow_feedback_modulation,
-    apply_fluid_advect_modulation, apply_fluid_advect_two_source_modulation,
+    apply_channel_shift_modulation, apply_coagulation_modulation,
+    apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
+    apply_fluid_advect_two_source_modulation,
     apply_palette_quantize_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
     apply_rutt_etra_modulation, flow_displace_cpu, parse_modulation_route, validate_route_targets,
     BlendMode, BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
@@ -679,6 +680,12 @@ pub(crate) struct QueueAddFieldParticlesSequenceRequest<'a> {
     pub(crate) frame_rate: f64,
     pub(crate) backend: RenderBackend,
     pub(crate) project_path: Option<&'a Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
+    pub(crate) named_modulator_audio: &'a [String],
+    pub(crate) named_modulator_frames: &'a [String],
 }
 
 pub(crate) fn queue_add_field_particles_sequence(
@@ -693,9 +700,26 @@ pub(crate) fn queue_add_field_particles_sequence(
         frame_rate,
         backend,
         project_path,
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
     } = request;
     settings.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
+    let modulation = parse_queue_modulation_routes(
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        named_modulator_audio,
+        named_modulator_frames,
+        |target| {
+            let mut probe = settings;
+            apply_field_particle_modulation(&mut probe, target, 0.0).map_err(CliError::from)
+        },
+    )?;
 
     let mut queue = load_or_default_queue(queue_path)?;
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
@@ -719,6 +743,12 @@ pub(crate) fn queue_add_field_particles_sequence(
             live_color: settings.live_color,
             seed: settings.seed,
             backend,
+            modulation_routes: modulation.routes,
+            modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: modulator_frames.map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(modulation_sampling),
+            named_modulator_audio: modulation.named_audio,
+            named_modulator_frames: modulation.named_frames,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -2248,6 +2278,12 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
         live_color,
         seed,
         backend,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2268,6 +2304,9 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
         live_color,
         seed,
     };
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
+    let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
+    let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_field_particles_sequence(FieldParticlesSequenceRequest {
             source_dir: Path::new(&source_frame_directory),
@@ -2275,7 +2314,31 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
             settings,
             frames: frames as usize,
             backend,
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(Path::new),
+                modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                fps: frame_rate,
+                cache_dir: None,
+                named_modulator_audio: &named_modulator_audio_specs,
+                named_modulator_frames: &named_modulator_frames_specs,
+            },
         })?;
+        let mut effect = serde_json::json!({
+            "algorithm": FIELD_PARTICLES_ALGORITHM,
+            "settings": settings,
+            "backend": render_backend_label(backend)
+        });
+        if let Some(modulation) = modulation_manifest_json(
+            &modulation_routes,
+            modulator_audio_path.as_deref(),
+            modulator_frames_directory.as_deref(),
+            modulation_sampling,
+            frame_rate,
+        ) {
+            effect["modulation"] = modulation;
+        }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
             output_dir: &output_dir,
@@ -2283,11 +2346,7 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
             frame_rate,
             task: "frame_sequence_field_particles",
             effect_key: "field_particles",
-            effect: serde_json::json!({
-                "algorithm": FIELD_PARTICLES_ALGORITHM,
-                "settings": settings,
-                "backend": render_backend_label(backend)
-            }),
+            effect,
             provenance: provenance.as_ref(),
         })
     })();
