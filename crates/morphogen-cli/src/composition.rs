@@ -20,7 +20,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use morphogen_render::ImageBufferF32;
+use morphogen_audio::{load_wav_f32, save_wav_f32, AudioBufferF32};
+use morphogen_render::{parse_modulation_route, ImageBufferF32, ModulationSource};
 use serde::{Deserialize, Serialize};
 
 use crate::chain::{run_chain_spec, validate_chain_spec, ChainSpec};
@@ -39,6 +40,13 @@ const COMPOSITION_SPEC_VERSION: u32 = 1;
 /// chain's own reconciliation.
 const COMPOSITION_RECORD_FILE: &str = "composition-record.json";
 
+/// Reserved named-modulator name that binds a scene route to the composition's
+/// master clock (`displacement_depth = master.audio-rms @smooth`). The
+/// composition injects this modulator's media per scene, trimmed by the scene's
+/// global-frame offset, so a route reads the master at its position on the
+/// timeline. A scene may not declare its own `master` modulator.
+const MASTER_MODULATOR_NAME: &str = "master";
+
 // ---------------------------------------------------------------------------
 // Spec types
 // ---------------------------------------------------------------------------
@@ -51,9 +59,26 @@ const COMPOSITION_RECORD_FILE: &str = "composition-record.json";
 #[serde(deny_unknown_fields)]
 pub(crate) struct CompositionSpec {
     pub version: u32,
-    /// Global frame rate; every scene (and, later, master media) must agree.
+    /// Global frame rate; every scene (and the master media) shares it.
     pub fps: f64,
+    /// Optional composition-level modulator (the master clock). A scene routes
+    /// from it via the reserved `master.<source>` modulator; the composition
+    /// binds it per scene, offset to the scene's timeline position. Absent for
+    /// compositions with only per-scene modulation. Skipped when unset so
+    /// master-free specs serialize unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master: Option<MasterSpec>,
     pub scenes: Vec<Scene>,
+}
+
+/// The master clock's media. Audio only for now — a video master (`source_a`,
+/// driving `master.luma` / `master.flow`) is a declared follow-up; a scene that
+/// routes a frame descriptor from master is refused with that message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MasterSpec {
+    /// One audio track analyzed as the master modulator (RMS/onset/centroid).
+    pub audio: PathBuf,
 }
 
 /// One scene: a name (becomes `scene_<NN>_<name>/`), a pre-overlap length, the
@@ -172,7 +197,7 @@ pub(crate) fn validate_composition_spec(spec: &CompositionSpec) -> Result<(), Cl
             (Some(transition), false) => validate_transition(&scene.name, transition)?,
             (None, _) => {}
         }
-        validate_chain_spec(&scene.chain)?;
+        validate_scene_chain(scene, spec.master.as_ref())?;
     }
 
     // A scene's incoming (previous scene's crossfade) and outgoing crossfade
@@ -223,6 +248,50 @@ fn crossfade_frames(transition: &Option<Transition>) -> u32 {
         }) => *frames,
         _ => 0,
     }
+}
+
+/// Validate a scene's chain, resolving any `master.<source>` routes against the
+/// composition master audio (injected under the reserved name so the route's
+/// media resolves). Refuses a master route when the composition declares no
+/// master, when the scene collides with the reserved name, or when the route
+/// needs a not-yet-supported video master.
+fn validate_scene_chain(scene: &Scene, master: Option<&MasterSpec>) -> Result<(), CliError> {
+    let sources = scene_master_sources(scene)?;
+    if sources.is_empty() {
+        return validate_chain_spec(&scene.chain);
+    }
+    let Some(master) = master else {
+        return Err(CliError::Message(format!(
+            "scene {:?} routes from the master clock (master.<source>) but the composition \
+             declares no \"master\"",
+            scene.name
+        )));
+    };
+    if scene_declares_master_modulator(scene) {
+        return Err(CliError::Message(format!(
+            "scene {:?} declares its own \"{MASTER_MODULATOR_NAME}\" modulator, which is \
+             reserved for the composition master clock",
+            scene.name
+        )));
+    }
+    for source in &sources {
+        if source.needs_frames() {
+            return Err(CliError::Message(format!(
+                "scene {:?} routes {} from the master clock, but a video master (source_a) is \
+                 not supported yet — master routes must use audio sources",
+                scene.name,
+                source.name()
+            )));
+        }
+    }
+    // Inject the master audio under the reserved name (its original path —
+    // validation only needs the route's media to resolve, not the trimmed
+    // per-scene copy) and validate the chain as usual.
+    let mut chain = scene.chain.clone();
+    for stage in &mut chain.stages {
+        stage.inject_named_modulator_media(MASTER_MODULATOR_NAME, Some(&master.audio), None);
+    }
+    validate_chain_spec(&chain)
 }
 
 /// Parse + whole-spec validation in one step.
@@ -300,7 +369,11 @@ fn source_content_hash(input_dir: &Path) -> Result<String, CliError> {
 /// Deliberately excludes `duration_frames` / `transition_out` / `name`: those
 /// drive the timeline *assembly* (always redone) or are structural (a
 /// name/order change refuses), not the pixels the scene renders.
-fn scene_fingerprint(scene: &Scene, fps: f64) -> Result<String, CliError> {
+fn scene_fingerprint(
+    scene: &Scene,
+    fps: f64,
+    master: Option<&MasterBinding>,
+) -> Result<String, CliError> {
     let chain_json = serde_json::to_string(&scene.chain)?;
     let content = source_content_hash(&scene.input_dir)?;
     let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
@@ -309,7 +382,96 @@ fn scene_fingerprint(scene: &Scene, fps: f64) -> Result<String, CliError> {
     update_fnv1a(&mut checksum, content.as_bytes());
     update_fnv1a(&mut checksum, &[0]);
     update_fnv1a(&mut checksum, &fps.to_bits().to_le_bytes());
+    // A master-driven scene depends on the master's content AND its global
+    // offset (the offset changes which stretch of the master the scene reads,
+    // so it changes the render). Master-free scenes fold nothing, keeping their
+    // fingerprints byte-identical to a composition without a master.
+    if let Some(master) = master {
+        update_fnv1a(&mut checksum, &[0]);
+        update_fnv1a(&mut checksum, master.content_hash.as_bytes());
+        update_fnv1a(&mut checksum, &master.offset_frames.to_le_bytes());
+    }
     Ok(format!("fnv1a64:{checksum:016x}"))
+}
+
+/// Per-scene binding of the master clock: the master audio's content hash and
+/// this scene's global-frame offset into it. Present only for scenes that
+/// actually route from master.
+struct MasterBinding {
+    content_hash: String,
+    offset_frames: u32,
+}
+
+/// fnv1a64 over a whole file's bytes — the master audio's content fingerprint.
+fn file_content_hash(path: &Path) -> Result<String, CliError> {
+    let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+    update_fnv1a(&mut checksum, &fs::read(path)?);
+    Ok(format!("fnv1a64:{checksum:016x}"))
+}
+
+/// The distinct descriptor sources a scene routes from the master clock (empty
+/// when the scene doesn't reference master). Routes are parsed here for
+/// detection; the chain validates them again during its own validation.
+fn scene_master_sources(scene: &Scene) -> Result<Vec<ModulationSource>, CliError> {
+    let mut sources = Vec::new();
+    for stage in &scene.chain.stages {
+        let Some(modulation) = stage.modulation_spec() else {
+            continue;
+        };
+        for spec in &modulation.routes {
+            let route = parse_modulation_route(spec)?;
+            if route.modulator.as_deref() == Some(MASTER_MODULATOR_NAME)
+                && !sources.contains(&route.source)
+            {
+                sources.push(route.source);
+            }
+        }
+    }
+    Ok(sources)
+}
+
+/// Whether a scene already declares its own `master` named modulator — a
+/// collision with the reserved name, refused so the injected master can't be
+/// silently shadowed.
+fn scene_declares_master_modulator(scene: &Scene) -> bool {
+    let prefix = format!("{MASTER_MODULATOR_NAME}=");
+    scene.chain.stages.iter().any(|stage| {
+        stage.modulation_spec().is_some_and(|modulation| {
+            modulation
+                .named_modulator_audio
+                .iter()
+                .chain(&modulation.named_modulator_frames)
+                .any(|entry| entry.trim_start().starts_with(&prefix))
+        })
+    })
+}
+
+/// Write the master audio trimmed so its sample 0 aligns with global frame
+/// `offset_frames` — the whole master-clock offset mechanism. A per-scene route
+/// over this trimmed track therefore reads the master at the scene's timeline
+/// position (anchor A5: offset F ≡ the master trimmed by F frames). An offset
+/// past the master's end yields an empty tail (the scene simply gets silence).
+fn write_trimmed_master_audio(
+    master_audio: &Path,
+    offset_frames: u32,
+    fps: f64,
+    out_path: &Path,
+) -> Result<(), CliError> {
+    let buffer = load_wav_f32(master_audio)?;
+    let sample_offset = ((offset_frames as f64) * (buffer.sample_rate as f64) / fps)
+        .round()
+        .max(0.0) as usize;
+    let start = sample_offset.min(buffer.frames) * buffer.channels;
+    let trimmed = AudioBufferF32::new(
+        buffer.channels,
+        buffer.sample_rate,
+        buffer.samples[start..].to_vec(),
+    )?;
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    save_wav_f32(out_path, &trimmed)?;
+    Ok(())
 }
 
 /// A rendered scene, carried from the render pass into the assembly pass.
@@ -417,11 +579,42 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
     // crossfade needs the *next* scene's head frames, so assembly is a second
     // pass over all scenes rather than interleaved with rendering.
     let mut scenes: Vec<RenderedScene> = Vec::with_capacity(spec.scenes.len());
+    // The scene's global start frame — the master-clock offset. Advances by
+    // each scene's owned length (duration minus its outgoing crossfade overlap),
+    // exactly like the assembly `start` in pass 2.
+    let mut global_start = 0usize;
     for (index, scene) in spec.scenes.iter().enumerate() {
         let scene_number = index + 1;
         let directory = format!("scene_{scene_number:02}_{}", scene.name);
         let scene_dir = output_dir.join(&directory);
-        let fingerprint = scene_fingerprint(scene, spec.fps)?;
+
+        // Bind the master clock for this scene, if it routes from master: the
+        // master audio, trimmed so its sample 0 aligns with the scene's global
+        // start frame (the offset assumes the modulation timeline runs at the
+        // composition fps — the default 12 for stateless stages).
+        let master_sources = scene_master_sources(scene)?;
+        let master_binding = if master_sources.is_empty() {
+            None
+        } else {
+            let Some(master) = spec.master.as_ref() else {
+                return Err(CliError::Message(format!(
+                    "scene {:?} routes from the master clock but the composition declares no \
+                     \"master\"",
+                    scene.name
+                )));
+            };
+            Some((
+                master,
+                MasterBinding {
+                    content_hash: file_content_hash(&master.audio)?,
+                    offset_frames: u32::try_from(global_start).map_err(|_| {
+                        CliError::Message("scene start frame exceeds u32::MAX".to_string())
+                    })?,
+                },
+            ))
+        };
+        let fingerprint =
+            scene_fingerprint(scene, spec.fps, master_binding.as_ref().map(|(_, b)| b))?;
 
         // Reuse only when the recorded fingerprint matches AND the render is
         // complete on disk (the chain writes chain-manifest.json last). Disk is
@@ -439,9 +632,36 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
             fs::remove_dir_all(&scene_dir)?;
         }
 
+        // Bind the master clock into a per-scene copy of the chain (the clean
+        // spec stays the cache key). The trimmed master lives outside the scene
+        // directory so the chain's own reconciliation sees a pristine dir.
+        let chain = match &master_binding {
+            None => scene.chain.clone(),
+            Some((master, binding)) => {
+                let trimmed = output_dir
+                    .join("master-cache")
+                    .join(format!("scene_{scene_number:02}.wav"));
+                write_trimmed_master_audio(
+                    &master.audio,
+                    binding.offset_frames,
+                    spec.fps,
+                    &trimmed,
+                )?;
+                let mut chain = scene.chain.clone();
+                for stage in &mut chain.stages {
+                    stage.inject_named_modulator_media(
+                        MASTER_MODULATOR_NAME,
+                        Some(&trimmed),
+                        None,
+                    );
+                }
+                chain
+            }
+        };
+
         // Cheap when reusing: the chain fast-skips completed stages and returns
         // the summary without re-rendering.
-        let summary = run_chain_spec(&scene.chain, &scene.input_dir, &scene_dir)?;
+        let summary = run_chain_spec(&chain, &scene.input_dir, &scene_dir)?;
 
         // The declared timeline length must match what the scene actually
         // rendered so global numbering and overlap math are exact rather than
@@ -462,15 +682,17 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
             if reuse { "reused from cache" } else { "rendered" }
         );
 
+        let out_frames = crossfade_frames(&scene.transition_out) as usize;
         scenes.push(RenderedScene {
             name: scene.name.clone(),
             directory,
             frames: collect_image_frames(&summary.final_frames_dir)?,
             duration: summary.frame_count,
-            out_frames: crossfade_frames(&scene.transition_out) as usize,
+            out_frames,
             transition_out: scene.transition_out.clone(),
             chain_manifest: read_scene_chain_manifest(&scene_dir)?,
         });
+        global_start += summary.frame_count - out_frames;
     }
 
     // Pass 2: walk the timeline. Each scene writes its frames not consumed by

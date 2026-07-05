@@ -169,13 +169,50 @@ impl ChainStage {
     }
 
     /// This stage's modulation block, if any (Slice 3).
-    fn modulation_spec(&self) -> Option<&StageModulationSpec> {
+    pub(crate) fn modulation_spec(&self) -> Option<&StageModulationSpec> {
         match self {
             ChainStage::RetroStatic(spec) => spec.modulation.as_ref(),
             ChainStage::ChannelShift(spec) => spec.modulation.as_ref(),
             ChainStage::PaletteQuantize(spec) => spec.modulation.as_ref(),
             ChainStage::RuttEtra(spec) => spec.modulation.as_ref(),
             ChainStage::FlowFeedback(spec) => spec.modulation.as_ref(),
+        }
+    }
+
+    /// This stage's modulation block, mutably (composition master-clock support).
+    fn modulation_spec_mut(&mut self) -> Option<&mut StageModulationSpec> {
+        match self {
+            ChainStage::RetroStatic(spec) => spec.modulation.as_mut(),
+            ChainStage::ChannelShift(spec) => spec.modulation.as_mut(),
+            ChainStage::PaletteQuantize(spec) => spec.modulation.as_mut(),
+            ChainStage::RuttEtra(spec) => spec.modulation.as_mut(),
+            ChainStage::FlowFeedback(spec) => spec.modulation.as_mut(),
+        }
+    }
+
+    /// Make `<name>` resolvable as a named modulator on this stage by pointing
+    /// it at the given media — the seam the composition uses to bind its master
+    /// clock into a scene's chain. A no-op on a stage with no modulation block
+    /// (it has no routes to resolve). Not exposed in the chain's own CLI/queue
+    /// surface: only the composition layer calls it.
+    pub(crate) fn inject_named_modulator_media(
+        &mut self,
+        name: &str,
+        audio: Option<&Path>,
+        frames: Option<&Path>,
+    ) {
+        let Some(modulation) = self.modulation_spec_mut() else {
+            return;
+        };
+        if let Some(audio) = audio {
+            modulation
+                .named_modulator_audio
+                .push(format!("{name}={}", audio.display()));
+        }
+        if let Some(frames) = frames {
+            modulation
+                .named_modulator_frames
+                .push(format!("{name}={}", frames.display()));
         }
     }
 

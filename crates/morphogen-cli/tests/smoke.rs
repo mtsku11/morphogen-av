@@ -1403,6 +1403,253 @@ fn render_composition_refuses_structural_change_into_existing_dir() {
     );
 }
 
+// A varying master signal (quiet first `quiet_frames` frames, loud after) at
+// 512 samples/frame for fps 12, so trimming by whole frames shifts whole hops
+// and the RMS route visibly moves the render.
+fn master_wav_samples(total_frames: usize, quiet_frames: usize) -> Vec<f32> {
+    let per_frame = 512usize;
+    (0..total_frames * per_frame)
+        .map(|i| {
+            let amp = if i < quiet_frames * per_frame { 0.08 } else { 0.9 };
+            if i % 2 == 0 {
+                amp
+            } else {
+                -amp
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn render_composition_master_route_matches_named_modulator() {
+    // A5 (half 1): a one-scene composition routing from master.<source> is
+    // byte-identical to the same scene routing the same file via an ordinary
+    // named modulator — master is a view over the named-modulator engine.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4, 6]); // 4 frames
+    let wav = temp_dir.path().join("score.wav");
+    write_test_wav_at(&wav, 6144, &master_wav_samples(6, 3));
+
+    let stage = |modulation: serde_json::Value| {
+        serde_json::json!({
+            "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0,
+            "line_thickness": 1, "mono": false, "modulation": modulation
+        })
+    };
+    let scene = |chain_modulation: serde_json::Value| {
+        serde_json::json!({
+            "name": "main", "duration_frames": 4,
+            "input_dir": source_dir.to_string_lossy(),
+            "chain": {"version": 1, "stages": [stage(chain_modulation)]}
+        })
+    };
+
+    let master_spec = serde_json::json!({
+        "version": 1, "fps": 12, "master": {"audio": wav.to_string_lossy()},
+        "scenes": [scene(serde_json::json!({"routes": ["displacement_depth=master.audio-rms:40"]}))]
+    });
+    let named_spec = serde_json::json!({
+        "version": 1, "fps": 12,
+        "scenes": [scene(serde_json::json!({
+            "routes": ["displacement_depth=clk.audio-rms:40"],
+            "named_modulator_audio": [format!("clk={}", wav.to_string_lossy())]
+        }))]
+    });
+
+    let render = |spec: &serde_json::Value, name: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, &spec.to_string());
+        let out = temp_dir.path().join(format!("{name}-out"));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .success();
+        out
+    };
+
+    let master_out = render(&master_spec, "master");
+    let named_out = render(&named_spec, "named");
+    assert_png_frames_identical(
+        &named_out.join("scene_01_main/stage_01_rutt_etra"),
+        &master_out.join("scene_01_main/stage_01_rutt_etra"),
+        4,
+    );
+}
+
+#[test]
+fn render_composition_master_offset_equals_trimmed_media() {
+    // A5 (half 2): a scene at global offset F reading master.<source> is
+    // byte-identical to the same scene reading the master trimmed by F frames —
+    // and differs from reading the master at offset 0 (the offset is live).
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let intro_src = temp_dir.path().join("intro");
+    let main_src = temp_dir.path().join("main");
+    write_texture_sequence(&intro_src, &[0, 2, 4]); // 3 frames
+    write_texture_sequence(&main_src, &[0, 2, 4, 6]); // 4 frames
+
+    // 9-frame master: frames 0-2 quiet, 3-8 loud. Scene "main" (4 frames) at
+    // global offset 3 reads the loud stretch; at offset 0 the quiet stretch.
+    let samples = master_wav_samples(9, 3);
+    let full_wav = temp_dir.path().join("score.wav");
+    write_test_wav_at(&full_wav, 6144, &samples);
+    // Trim by 3 frames = 3 * 6144/12 = 1536 samples (matches the engine's trim).
+    let trimmed_wav = temp_dir.path().join("score_trimmed.wav");
+    write_test_wav_at(&trimmed_wav, 6144, &samples[1536..]);
+
+    let main_scene = serde_json::json!({
+        "name": "main", "duration_frames": 4, "input_dir": main_src.to_string_lossy(),
+        "chain": {"version": 1, "stages": [{
+            "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0,
+            "line_thickness": 1, "mono": false,
+            "modulation": {"routes": ["displacement_depth=master.audio-rms:40"]}
+        }]}
+    });
+    let one_scene = |audio: &Path| {
+        serde_json::json!({
+            "version": 1, "fps": 12, "master": {"audio": audio.to_string_lossy()},
+            "scenes": [main_scene]
+        })
+    };
+    let offset3 = serde_json::json!({
+        "version": 1, "fps": 12, "master": {"audio": full_wav.to_string_lossy()},
+        "scenes": [
+            {"name": "intro", "duration_frames": 3, "input_dir": intro_src.to_string_lossy(),
+             "chain": {"version": 1, "stages": [{"effect": "channel_shift"}]},
+             "transition_out": {"type": "cut"}},
+            main_scene
+        ]
+    });
+
+    let render = |spec: &serde_json::Value, name: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, &spec.to_string());
+        let out = temp_dir.path().join(format!("{name}-out"));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .success();
+        out
+    };
+
+    let offset3_out = render(&offset3, "offset3");
+    let trimmed_out = render(&one_scene(&trimmed_wav), "trimmed");
+    let offset0_out = render(&one_scene(&full_wav), "offset0");
+
+    let offset3_main = offset3_out.join("scene_02_main/stage_01_rutt_etra");
+    let trimmed_main = trimmed_out.join("scene_01_main/stage_01_rutt_etra");
+    let offset0_main = offset0_out.join("scene_01_main/stage_01_rutt_etra");
+
+    // Offset F ≡ master trimmed by F frames.
+    assert_png_frames_identical(&trimmed_main, &offset3_main, 4);
+    // ...and the offset actually shifts which stretch is read (frame 0: loud vs quiet).
+    assert_ne!(
+        fs::read(offset3_main.join("frame_000000.png")).expect("offset3 frame"),
+        fs::read(offset0_main.join("frame_000000.png")).expect("offset0 frame"),
+        "the master offset must change which part of the track drives the scene"
+    );
+}
+
+#[test]
+fn render_composition_master_is_additive_and_refuses_misuse() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]); // 3 frames
+    let wav = temp_dir.path().join("score.wav");
+    write_test_wav_at(&wav, 6144, &master_wav_samples(3, 1));
+    let src = source_dir.to_string_lossy().to_string();
+
+    let render = |spec: &serde_json::Value, name: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, &spec.to_string());
+        let out = temp_dir.path().join(format!("{name}-out"));
+        let assert = Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out.to_string_lossy().as_ref(),
+            ])
+            .assert();
+        (assert, out)
+    };
+
+    // Additive: a master present but not used by a scene leaves that scene
+    // byte-identical to the same composition without any master.
+    let plain_scene = serde_json::json!({
+        "name": "solo", "duration_frames": 3, "input_dir": src,
+        "chain": {"version": 1, "stages": [{"effect": "palette_quantize", "mode": "posterize", "levels": 4}]}
+    });
+    let with_master = serde_json::json!({
+        "version": 1, "fps": 12, "master": {"audio": wav.to_string_lossy()}, "scenes": [plain_scene]
+    });
+    let no_master = serde_json::json!({ "version": 1, "fps": 12, "scenes": [plain_scene] });
+    let (a, with_out) = render(&with_master, "with-master");
+    a.success();
+    let (b, no_out) = render(&no_master, "no-master");
+    b.success();
+    assert_png_frames_identical(
+        &no_out.join("scene_01_solo/stage_01_palette_quantize"),
+        &with_out.join("scene_01_solo/stage_01_palette_quantize"),
+        3,
+    );
+
+    // Refusals (all pre-render → nothing written).
+    let refuse = |spec: &serde_json::Value, name: &str, needle: &str| {
+        let (assert, out) = render(spec, name);
+        assert
+            .failure()
+            .stderr(predicate::str::contains(needle));
+        assert!(!out.exists(), "{name}: nothing written on a refused spec");
+    };
+    let master_route_stage = serde_json::json!({
+        "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0,
+        "line_thickness": 1, "mono": false,
+        "modulation": {"routes": ["displacement_depth=master.audio-rms:40"]}
+    });
+    // A master route with no master declared.
+    refuse(
+        &serde_json::json!({"version": 1, "fps": 12, "scenes": [{
+            "name": "a", "duration_frames": 3, "input_dir": src, "chain": {"version": 1, "stages": [master_route_stage]}
+        }]}),
+        "no-master-declared",
+        "declares no \"master\"",
+    );
+    // A scene colliding with the reserved name.
+    refuse(
+        &serde_json::json!({"version": 1, "fps": 12, "master": {"audio": wav.to_string_lossy()}, "scenes": [{
+            "name": "a", "duration_frames": 3, "input_dir": src, "chain": {"version": 1, "stages": [{
+                "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0, "line_thickness": 1, "mono": false,
+                "modulation": {"routes": ["displacement_depth=master.audio-rms:40"],
+                               "named_modulator_audio": [format!("master={}", wav.to_string_lossy())]}
+            }]}
+        }]}),
+        "reserved-name",
+        "reserved for the composition master clock",
+    );
+    // A video (frame-descriptor) master route — not supported yet.
+    refuse(
+        &serde_json::json!({"version": 1, "fps": 12, "master": {"audio": wav.to_string_lossy()}, "scenes": [{
+            "name": "a", "duration_frames": 3, "input_dir": src, "chain": {"version": 1, "stages": [{
+                "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0, "line_thickness": 1, "mono": false,
+                "modulation": {"routes": ["displacement_depth=master.luma:40"]}
+            }]}
+        }]}),
+        "video-master",
+        "video master (source_a) is not supported yet",
+    );
+}
+
 #[test]
 fn render_chain_same_spec_twice_is_byte_identical() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
