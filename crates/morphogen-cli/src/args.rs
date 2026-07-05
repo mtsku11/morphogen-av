@@ -2239,6 +2239,24 @@ pub(crate) enum Commands {
     QueueRunChain {
         queue_path: PathBuf,
     },
+    /// Queue a composition from a spec JSON (see docs/COMPOSITION_MILESTONE.md).
+    /// The whole spec — every scene's chain, transitions, and master routing —
+    /// is validated at add time; rejection persists nothing. The job records the
+    /// resolved spec, so queue-run shares the direct render-composition code
+    /// path byte for byte. Sources are per-scene inside the spec (no top-level
+    /// input directory).
+    QueueAddComposition {
+        queue_path: PathBuf,
+        /// Composition spec JSON
+        /// (`{"version": 1, "fps": 12, "scenes": [...]}`).
+        spec_path: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long = "project-path")]
+        project_path: Option<PathBuf>,
+    },
+    QueueRunComposition {
+        queue_path: PathBuf,
+    },
     QueueAddGranularMosaicSequence {
         queue_path: PathBuf,
         modulator_dir: PathBuf,

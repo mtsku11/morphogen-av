@@ -3136,6 +3136,118 @@ pub(crate) fn queue_run_chain(queue_path: &Path) -> Result<(), CliError> {
     )
 }
 
+pub(crate) fn queue_add_composition(
+    queue_path: &Path,
+    spec_path: &Path,
+    output_root_dir: &Path,
+    project_path: Option<&Path>,
+) -> Result<(), CliError> {
+    let spec_text = fs::read_to_string(spec_path)?;
+    let spec = crate::composition::parse_and_validate_composition_spec(&spec_text)?;
+    let spec_value = crate::composition::resolved_composition_spec_value(&spec)?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|p| p.to_string_lossy().to_string()),
+        settings: png_sequence_settings(spec.fps),
+        task: RenderJobTask::RenderComposition {
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            spec: spec_value,
+        },
+        // Sources are per-scene inside the spec; there is no single top-level
+        // source to record as provenance.
+        provenance: None,
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued composition render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn queue_run_composition(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::RenderComposition { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running composition jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::RenderComposition {
+        output_directory,
+        spec,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a composition render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let spec = crate::composition::composition_spec_from_value(&spec)?;
+        let fps = spec.fps;
+        let summary = crate::composition::run_composition_spec(&spec, &output_dir)?;
+        let frame_count = u32::try_from(summary.frame_count).map_err(|_| {
+            CliError::Message("composition output contains more than u32::MAX frames".to_string())
+        })?;
+        let frames_prefix = summary
+            .frames_dir
+            .strip_prefix(&output_dir)
+            .unwrap_or(&summary.frames_dir)
+            .to_string_lossy()
+            .to_string();
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths: (0..frame_count)
+                .map(|index| format!("{frames_prefix}/frame_{index:06}.png"))
+                .collect(),
+            audio_stem_paths: Vec::new(),
+            timing: RenderTimingMetadata {
+                frame_rate: fps,
+                frame_count,
+                start_seconds: 0.0,
+                duration_seconds: frame_count as f64 / fps,
+                sample_rate: 48_000,
+                audio_sample_count: 0,
+            },
+        })
+    })();
+
+    finish_frame_sequence_queue_job(
+        &mut queue,
+        queue_path,
+        job_index,
+        &job_id,
+        &output_dir,
+        outcome,
+        "composition",
+    )
+}
+
 pub(crate) struct QueueAddBlockCollageSequenceRequest<'a> {
     pub(crate) queue_path: &'a Path,
     pub(crate) source_a_dir: &'a Path,
@@ -5535,6 +5647,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::FrameSequencePaletteQuantize { .. } => "frame_sequence_palette_quantize",
             RenderJobTask::FrameSequenceRuttEtra { .. } => "frame_sequence_rutt_etra",
             RenderJobTask::RenderChain { .. } => "render_chain",
+            RenderJobTask::RenderComposition { .. } => "render_composition",
             RenderJobTask::FrameSequenceBlockCollage { .. } => "frame_sequence_block_collage",
             RenderJobTask::FrameSequencePixelSort { .. } => "frame_sequence_pixel_sort",
             RenderJobTask::FrameSequenceGranularMosaic { .. } => "frame_sequence_granular_mosaic",

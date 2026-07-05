@@ -294,13 +294,30 @@ fn validate_scene_chain(scene: &Scene, master: Option<&MasterSpec>) -> Result<()
     validate_chain_spec(&chain)
 }
 
-/// Parse + whole-spec validation in one step.
+/// Parse + whole-spec validation in one step (the add-time gate shared by the
+/// direct command and `queue-add-composition`).
 pub(crate) fn parse_and_validate_composition_spec(
     spec_text: &str,
 ) -> Result<CompositionSpec, CliError> {
     let spec = parse_composition_spec(spec_text)?;
     validate_composition_spec(&spec)?;
     Ok(spec)
+}
+
+/// The resolved spec (defaults filled) as a JSON document — what a queue job
+/// persists. Serialized through the string form so f32 knobs inside embedded
+/// chain specs keep their shortest representation (the chain-spec precedent).
+pub(crate) fn resolved_composition_spec_value(
+    spec: &CompositionSpec,
+) -> Result<serde_json::Value, CliError> {
+    Ok(serde_json::from_str(&serde_json::to_string(spec)?)?)
+}
+
+/// Rebuild + re-validate a composition spec from a persisted queue-job document.
+pub(crate) fn composition_spec_from_value(
+    value: &serde_json::Value,
+) -> Result<CompositionSpec, CliError> {
+    parse_and_validate_composition_spec(&serde_json::to_string(value)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -532,7 +549,30 @@ fn crossfade_frame(
 pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<(), CliError> {
     let spec_text = fs::read_to_string(spec_path)?;
     let spec = parse_and_validate_composition_spec(&spec_text)?;
+    let summary = run_composition_spec(&spec, output_dir)?;
+    println!(
+        "rendered composition with {} scene(s) ({} frame(s)) from {} to {}; timeline frames: {}",
+        spec.scenes.len(),
+        summary.frame_count,
+        spec_path.display(),
+        output_dir.display(),
+        summary.frames_dir.display(),
+    );
+    Ok(())
+}
 
+pub(crate) struct CompositionRunSummary {
+    pub(crate) frame_count: usize,
+    pub(crate) frames_dir: PathBuf,
+}
+
+/// The composition mechanic proper, on an already-validated spec: the scene
+/// render/reuse pass, the timeline assembly pass, and the manifest. Shared by
+/// the direct command and `queue-run-composition` (same code, not a mirror).
+pub(crate) fn run_composition_spec(
+    spec: &CompositionSpec,
+    output_dir: &Path,
+) -> Result<CompositionRunSummary, CliError> {
     fs::create_dir_all(output_dir)?;
     let record_path = output_dir.join(COMPOSITION_RECORD_FILE);
     let prior = read_composition_record(&record_path);
@@ -755,13 +795,8 @@ pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<
         serde_json::to_string_pretty(&composition_manifest)?,
     )?;
 
-    println!(
-        "rendered composition with {} scene(s) ({} frame(s)) from {} to {}; timeline frames: {}",
-        spec.scenes.len(),
-        global,
-        spec_path.display(),
-        output_dir.display(),
-        frames_dir.display(),
-    );
-    Ok(())
+    Ok(CompositionRunSummary {
+        frame_count: global,
+        frames_dir,
+    })
 }

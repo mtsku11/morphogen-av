@@ -560,6 +560,17 @@ pub enum RenderJobTask {
         output_directory: String,
         spec: serde_json::Value,
     },
+    /// A composition — an ordered list of scenes (each a chain over its own
+    /// source) on a global timeline, from a resolved composition-spec document
+    /// (`docs/COMPOSITION_MILESTONE.md`). Like `RenderChain`, the spec is
+    /// persisted verbatim as JSON rather than mirrored into typed core fields
+    /// (it is the canonical, versioned, add-time-validated form owned by the
+    /// CLI). Sources are per-scene inside the spec, so there is no top-level
+    /// input directory.
+    RenderComposition {
+        output_directory: String,
+        spec: serde_json::Value,
+    },
     /// Hard binary tile collage: each NxN block independently shows Source A or
     /// Source B based on a spatially-coherent value-noise ownership field.
     /// No blending — hard cuts at every tile boundary.

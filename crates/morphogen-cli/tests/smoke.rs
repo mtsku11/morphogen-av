@@ -2295,6 +2295,121 @@ fn queue_chain_add_run_matches_direct_and_validates_at_add() {
 }
 
 #[test]
+fn queue_composition_add_run_matches_direct_and_validates_at_add() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]); // 3 frames
+    let src = source_dir.to_string_lossy().to_string();
+    let queue_path = temp_dir.path().join("queue.json");
+
+    // Add-time validation is the whole-spec gate: a master route with no master
+    // declared rejects and persists no queue file.
+    let bad_spec_path = temp_dir.path().join("bad.json");
+    write_chain_spec(
+        &bad_spec_path,
+        &serde_json::json!({
+            "version": 1, "fps": 12, "scenes": [{
+                "name": "a", "duration_frames": 3, "input_dir": src,
+                "chain": {"version": 1, "stages": [{
+                    "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0,
+                    "line_thickness": 1, "mono": false,
+                    "modulation": {"routes": ["displacement_depth=master.audio-rms:40"]}
+                }]}
+            }]
+        })
+        .to_string(),
+    );
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-composition",
+            queue_path.to_string_lossy().as_ref(),
+            bad_spec_path.to_string_lossy().as_ref(),
+            temp_dir.path().join("queued-out").to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("declares no \"master\""));
+    assert!(
+        !queue_path.exists(),
+        "rejected composition spec must persist no queue file"
+    );
+
+    // A two-scene composition (cut) queues; the task records the resolved spec.
+    let spec = serde_json::json!({
+        "version": 1, "fps": 12, "scenes": [
+            {"name": "a", "duration_frames": 3, "input_dir": src,
+             "chain": {"version": 1, "stages": [{"effect": "palette_quantize", "mode": "posterize", "levels": 4}]},
+             "transition_out": {"type": "cut"}},
+            {"name": "b", "duration_frames": 3, "input_dir": src,
+             "chain": {"version": 1, "stages": [{"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false}]}}
+        ]
+    });
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(&spec_path, &spec.to_string());
+    let queued_root = temp_dir.path().join("queued-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-composition",
+            queue_path.to_string_lossy().as_ref(),
+            spec_path.to_string_lossy().as_ref(),
+            queued_root.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+    let task = read_json(&queue_path)["jobs"][0]["task"].clone();
+    assert_eq!(task["type"], "render_composition");
+    assert_eq!(task["spec"]["version"], 1);
+    assert_eq!(task["spec"]["fps"], 12.0);
+    assert_eq!(task["spec"]["scenes"][0]["name"], "a");
+    // A resolved default is filled in the persisted document.
+    assert_eq!(task["spec"]["scenes"][0]["chain"]["stages"][0]["levels"], 4);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-composition", queue_path.to_string_lossy().as_ref()])
+        .assert()
+        .success();
+
+    // The queued run is byte-identical to a direct render-composition — every
+    // artifact: assembled frames, both manifests, the record, scene renders.
+    let direct_dir = temp_dir.path().join("direct-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            direct_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+    for relative in [
+        "composition-manifest.json",
+        "composition-record.json",
+        "frames/frame_000000.png",
+        "frames/frame_000005.png",
+        "scene_01_a/chain-manifest.json",
+        "scene_02_b/stage_01_rutt_etra/frame_000000.png",
+    ] {
+        assert_eq!(
+            fs::read(queued_root.join("job-0001").join(relative))
+                .unwrap_or_else(|_| panic!("queued {relative}")),
+            fs::read(direct_dir.join(relative)).unwrap_or_else(|_| panic!("direct {relative}")),
+            "queued composition must be byte-identical to the direct run ({relative})"
+        );
+    }
+
+    let finished = read_json(&queue_path);
+    assert_eq!(finished["jobs"][0]["status"], "complete");
+    assert_eq!(
+        finished["jobs"][0]["output"]["frame_paths"][0],
+        "frames/frame_000000.png"
+    );
+    assert_eq!(finished["jobs"][0]["output"]["frame_paths"][5], "frames/frame_000005.png");
+}
+
+#[test]
 fn render_two_source_writes_png_from_real_image_inputs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let modulator_path = temp_dir.path().join("modulator.png");
