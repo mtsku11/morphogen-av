@@ -887,11 +887,16 @@ pub(crate) enum Commands {
     /// `--morph-rate 0 --frame-hue-rate 0` makes all frames identical.
     RenderCascadeCollageSequence {
         output_dir: PathBuf,
-        /// Source video frames (PNG sequence) whose texture + colour fill the tiles.
+        /// Source A video frames (PNG sequence) whose texture + colour fill the tiles.
         /// When given, output dimensions match the source and `--width`/`--height` are
         /// ignored; when omitted, tiles use the flat HSV palette at `--width`×`--height`.
         #[arg(long)]
         source_dir: Option<PathBuf>,
+        /// Source B video frames (PNG sequence) for A→B cross-synth mode: each shape's
+        /// face colour is sampled from B at the shape's origin cell, replacing the HSV
+        /// palette. Requires `--source-dir` to be absent; dimensions follow B.
+        #[arg(long)]
+        carrier_dir: Option<PathBuf>,
         /// Output width in pixels (palette mode only; ignored when `--source-dir` is set).
         #[arg(long, default_value_t = 360)]
         width: u32,

@@ -48,8 +48,8 @@ use morphogen_render::{
     GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, MaskSource,
     PaletteQuantizeSettings, ParticleField, PixelSortSettings, PoolSelectionWindow, QuantizeMode,
     RetroStaticSettings, RmsDisplacementEnvelope, RuttEtraSettings, ScanlineSmearSettings,
-    TemporalCoherence, VectorRemixMode, VideoVocoderSettings, DATAMOSH_CODEC_ENGRAVE_ALGORITHM,
-    DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
+    TemporalCoherence, VectorRemixMode, VideoVocoderSettings, CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
+    DATAMOSH_CODEC_ENGRAVE_ALGORITHM, DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
     GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
     GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
@@ -2543,6 +2543,10 @@ pub(crate) fn render_cascade_trails_sequence(
 
 pub(crate) struct CascadeCollageSequenceRequest<'a> {
     pub(crate) source_dir: Option<&'a Path>,
+    /// Source B directory for A→B cross-synth mode: each shape's face colour is
+    /// sampled from B at the shape's origin cell. Only active when `source_dir` is
+    /// None (palette mode); if `source_dir` is Some, Source A texture takes priority.
+    pub(crate) carrier_dir: Option<&'a Path>,
     pub(crate) output_dir: &'a Path,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -2595,7 +2599,7 @@ pub(crate) fn render_cascade_collage_sequence(
     }
 
     let frame_count = if let Some(src_dir) = request.source_dir {
-        // texture mode: tiles carry crops of the source video (texture + colour)
+        // texture mode: tiles carry crops of Source A video (texture + colour)
         let source_frames = collect_image_frames(src_dir)?;
         if source_frames.is_empty() {
             return Err(CliError::Message(
@@ -2611,10 +2615,12 @@ pub(crate) fn render_cascade_collage_sequence(
                     apply_cascade_collage_modulation(&mut frame_settings, target, value)?;
                 }
             }
+            // Source A texture takes priority; carrier B is not used in texture mode.
             let rendered = render_cascade_collage_frame(
                 source.width,
                 source.height,
                 Some(&source),
+                None,
                 &frame_settings,
                 index as u32,
             )?;
@@ -2632,8 +2638,48 @@ pub(crate) fn render_cascade_collage_sequence(
             request.output_dir.display()
         );
         count
+    } else if let Some(car_dir) = request.carrier_dir {
+        // A→B cross-synth mode: shape face colour sampled from Source B at origin cell.
+        let carrier_frames = collect_image_frames(car_dir)?;
+        if carrier_frames.is_empty() {
+            return Err(CliError::Message(
+                "cascade collage carrier directory contains no PNG frames".to_string(),
+            ));
+        }
+        let count = (request.frames as usize).min(carrier_frames.len());
+        for (index, frame_path) in carrier_frames.iter().enumerate().take(count) {
+            let carrier = load_image_f32(frame_path)?;
+            let mut frame_settings = base_settings.clone();
+            if let Some(plan) = &modulation_plan {
+                for (target, value) in plan.frame_values(index) {
+                    apply_cascade_collage_modulation(&mut frame_settings, target, value)?;
+                }
+            }
+            let rendered = render_cascade_collage_frame(
+                carrier.width,
+                carrier.height,
+                None,
+                Some(&carrier),
+                &frame_settings,
+                index as u32,
+            )?;
+            save_png(
+                &rendered,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
+        }
+        println!(
+            "rendered cascade collage sequence with {} frame(s) ({}, B colour from {}, scrib_amp_scale {:.2}, morph_rate {:.3}) to {}",
+            count,
+            CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
+            car_dir.display(),
+            base_settings.scrib_amp_scale,
+            base_settings.morph_rate,
+            request.output_dir.display()
+        );
+        count
     } else {
-        // palette mode: source-less procedural generator
+        // palette mode: source-less procedural generator (no carrier)
         if request.width == 0 || request.height == 0 {
             return Err(CliError::Message(
                 "width and height must be greater than zero".to_string(),
@@ -2649,6 +2695,7 @@ pub(crate) fn render_cascade_collage_sequence(
             let rendered = render_cascade_collage_frame(
                 request.width,
                 request.height,
+                None,
                 None,
                 &frame_settings,
                 index,

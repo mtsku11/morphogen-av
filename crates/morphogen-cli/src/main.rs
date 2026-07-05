@@ -712,6 +712,7 @@ fn run() -> Result<(), CliError> {
         Commands::RenderCascadeCollageSequence {
             output_dir,
             source_dir,
+            carrier_dir,
             width,
             height,
             frames,
@@ -759,6 +760,7 @@ fn run() -> Result<(), CliError> {
             apply_cascade_generative(&mut settings, tile_scale, detail_tiles, hue_rotate);
             render_cascade_collage_sequence(CascadeCollageSequenceRequest {
                 source_dir: source_dir.as_deref(),
+                carrier_dir: carrier_dir.as_deref(),
                 output_dir: &output_dir,
                 width,
                 height,

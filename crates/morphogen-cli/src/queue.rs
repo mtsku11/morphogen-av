@@ -1201,6 +1201,7 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_cascade_collage_sequence(CascadeCollageSequenceRequest {
             source_dir: Some(Path::new(&source_frame_directory)),
+            carrier_dir: None,
             output_dir: &output_dir.join("frames"),
             width: 0,
             height: 0,

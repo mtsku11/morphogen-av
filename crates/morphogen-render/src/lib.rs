@@ -39,7 +39,7 @@ pub use block_collage::{
 };
 pub use cascade_collage::{
     render_cascade_collage_frame, BlendMode, CascadeCollageSettings, CascadeShape, Notch,
-    ScribbleEdge, CASCADE_COLLAGE_ALGORITHM,
+    ScribbleEdge, CASCADE_COLLAGE_ALGORITHM, CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
 };
 pub use cascade_trails::{
     advance_cascade_trails, assign_temporal_patches, initialize_cascade_trails,

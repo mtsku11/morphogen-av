@@ -31,6 +31,10 @@ use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 /// colour model changes so stale caches/checkpoints invalidate.
 pub const CASCADE_COLLAGE_ALGORITHM: &str = "cascade_collage_scribble_cpu_v7";
 
+/// Algorithm identifier for the A→B cross-synth mode: Source A drives texture/motion,
+/// Source B supplies per-shape origin-cell colour (replaces the HSV palette).
+pub const CASCADE_COLLAGE_B_SAMPLER_ALGORITHM: &str = "cascade_collage_b_sampler_cpu_v8";
+
 /// Lifts the small per-pixel footage gradients (Sobel magnitude ~0.05–0.3) into
 /// visible contour lines, so `edge_detect ≈ 1` already exposes lines on the face.
 const EDGE_DETECT_GAIN: f32 = 5.0;
@@ -563,10 +567,17 @@ fn composite(dst: [f32; 4], src: [f32; 3], mode: BlendMode, opacity: f32) -> [f3
 /// its home position (texture + colour come from the video); output dimensions match
 /// the source. When `source` is `None`, tiles are flat HSV palette colours and the
 /// output is `width × height` (the source-less generator).
+/// Render one frame of the cascade collage effect.
+///
+/// - `source` — Source A: when Some, tile faces are footage crops of A (texture mode).
+/// - `carrier` — Source B: when Some (and `source` is None), tile face colour is sampled
+///   from B at each shape's origin cell `(scx, scy)`, replacing the HSV palette.
+///   Both None → palette-only (procedural generator mode).
 pub fn render_cascade_collage_frame(
     width: u32,
     height: u32,
     source: Option<&ImageBufferF32>,
+    carrier: Option<&ImageBufferF32>,
     settings: &CascadeCollageSettings,
     frame: u32,
 ) -> Result<ImageBufferF32, RenderError> {
@@ -717,8 +728,14 @@ pub fn render_cascade_collage_frame(
                         continue;
                     }
 
-                    // face: footage crop (texture mode) or flat palette colour, plus a
-                    // detected-contour line amount (Sobel) to expose lines ON the face.
+                    // face: footage crop (A texture mode), B-sampled origin-cell colour
+                    // (A→B cross-synth mode), or flat HSV palette (procedural mode).
+                    let b_origin_col: [f32; 4] = if let Some(car) = carrier {
+                        let s = sample_bilinear_clamped(car, scx, scy);
+                        [s[0], s[1], s[2], 1.0]
+                    } else {
+                        palette_col
+                    };
                     let (base, det_line) = match source {
                         Some(src) => {
                             let s = sample_bilinear_clamped(src, scx + u, scy + v);
@@ -764,7 +781,7 @@ pub fn render_cascade_collage_frame(
                             };
                             (face, det)
                         }
-                        None => (palette_col, 0.0),
+                        None => (b_origin_col, 0.0),
                     };
                     // both the geometric edge band and the detected footage contours glow
                     // in the same neon edge colour → unified line language on the face.
@@ -811,8 +828,8 @@ mod tests {
     #[test]
     fn same_inputs_are_byte_identical() {
         let s = CascadeCollageSettings::default();
-        let a = render_cascade_collage_frame(180, 240, None, &s, 3).unwrap();
-        let b = render_cascade_collage_frame(180, 240, None, &s, 3).unwrap();
+        let a = render_cascade_collage_frame(180, 240, None, None, &s, 3).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, None, &s, 3).unwrap();
         assert_eq!(
             a, b,
             "A1: identical (settings, frame) must be byte-identical"
@@ -822,7 +839,7 @@ mod tests {
     #[test]
     fn default_composition_leaves_no_background() {
         let s = CascadeCollageSettings::default();
-        let out = render_cascade_collage_frame(180, 240, None, &s, 0).unwrap();
+        let out = render_cascade_collage_frame(180, 240, None, None, &s, 0).unwrap();
         let bg = [s.background[0], s.background[1], s.background[2], 1.0];
         let gaps = out.pixels.iter().filter(|p| **p == bg).count();
         assert_eq!(
@@ -838,8 +855,8 @@ mod tests {
             frame_hue_rate: 0.0,
             ..Default::default()
         };
-        let f0 = render_cascade_collage_frame(160, 200, None, &s, 0).unwrap();
-        let f9 = render_cascade_collage_frame(160, 200, None, &s, 9).unwrap();
+        let f0 = render_cascade_collage_frame(160, 200, None, None, &s, 0).unwrap();
+        let f9 = render_cascade_collage_frame(160, 200, None, None, &s, 9).unwrap();
         assert_eq!(
             f0, f9,
             "A3: no per-frame drift ⇒ frames identical to frame 0"
@@ -853,8 +870,8 @@ mod tests {
             scrib_amp_scale: 0.0,
             ..Default::default()
         };
-        let a = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
-        let b = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
+        let a = render_cascade_collage_frame(180, 240, None, None, &on, 0).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, None, &off, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(
             d > 0.0,
@@ -878,7 +895,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let out = render_cascade_collage_frame(0, 0, Some(&src), &s, 0).unwrap();
+        let out = render_cascade_collage_frame(0, 0, Some(&src), None, &s, 0).unwrap();
         assert_eq!(out.width, 180, "texture mode output matches source dims");
         // a covered pixel near the tile centre must equal the source colour
         let p = out.pixel(54, 72).unwrap();
@@ -896,8 +913,8 @@ mod tests {
             edge_strength: 0.0,
             ..Default::default()
         };
-        let a = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
-        let b = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
+        let a = render_cascade_collage_frame(180, 240, None, None, &on, 0).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, None, &off, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(
             d > 0.0,
@@ -918,8 +935,8 @@ mod tests {
             face_strength: 0.8,
             ..Default::default()
         };
-        let a = render_cascade_collage_frame(0, 0, Some(&src), &off, 0).unwrap();
-        let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
+        let a = render_cascade_collage_frame(0, 0, Some(&src), None, &off, 0).unwrap();
+        let b = render_cascade_collage_frame(0, 0, Some(&src), None, &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(
             d > 0.0,
@@ -949,8 +966,8 @@ mod tests {
             face_strength: 0.0,
             ..Default::default()
         };
-        let a = render_cascade_collage_frame(0, 0, Some(&src), &off, 0).unwrap();
-        let b = render_cascade_collage_frame(0, 0, Some(&src), &on, 0).unwrap();
+        let a = render_cascade_collage_frame(0, 0, Some(&src), None, &off, 0).unwrap();
+        let b = render_cascade_collage_frame(0, 0, Some(&src), None, &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(
             d > 0.0,
@@ -969,8 +986,8 @@ mod tests {
             block_opacity: 0.5,
             ..Default::default()
         };
-        let a = render_cascade_collage_frame(180, 240, None, &off, 0).unwrap();
-        let b = render_cascade_collage_frame(180, 240, None, &on, 0).unwrap();
+        let a = render_cascade_collage_frame(180, 240, None, None, &off, 0).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, None, &on, 0).unwrap();
         let d = a.max_channel_difference(&b).expect("comparable");
         assert!(
             d > 0.0,
@@ -982,12 +999,38 @@ mod tests {
     fn texture_mode_is_deterministic() {
         let src = solid(160, 200, [0.5, 0.25, 0.75, 1.0]);
         let s = CascadeCollageSettings::default();
-        let a = render_cascade_collage_frame(0, 0, Some(&src), &s, 2).unwrap();
-        let b = render_cascade_collage_frame(0, 0, Some(&src), &s, 2).unwrap();
+        let a = render_cascade_collage_frame(0, 0, Some(&src), None, &s, 2).unwrap();
+        let b = render_cascade_collage_frame(0, 0, Some(&src), None, &s, 2).unwrap();
         assert_eq!(
             a, b,
             "texture mode must be byte-identical for identical inputs"
         );
+    }
+
+    #[test]
+    fn b_sampler_differs_from_palette_mode() {
+        // B-sampler (carrier Some) must produce different output from palette (None, None).
+        let s = CascadeCollageSettings::default();
+        // carrier: saturated green — visually very different from HSV palette
+        let carrier = solid(180, 240, [0.0, 0.9, 0.1, 1.0]);
+        let palette_out = render_cascade_collage_frame(180, 240, None, None, &s, 0).unwrap();
+        let b_out = render_cascade_collage_frame(180, 240, None, Some(&carrier), &s, 0).unwrap();
+        let d = palette_out
+            .max_channel_difference(&b_out)
+            .expect("comparable");
+        assert!(
+            d > 0.01,
+            "B-sampler output must differ from palette output (d={d})"
+        );
+    }
+
+    #[test]
+    fn b_sampler_is_deterministic() {
+        let s = CascadeCollageSettings::default();
+        let carrier = solid(180, 240, [0.4, 0.6, 0.2, 1.0]);
+        let a = render_cascade_collage_frame(180, 240, None, Some(&carrier), &s, 0).unwrap();
+        let b = render_cascade_collage_frame(180, 240, None, Some(&carrier), &s, 0).unwrap();
+        assert_eq!(a, b, "B-sampler must be byte-identical for identical inputs");
     }
 
     #[test]
