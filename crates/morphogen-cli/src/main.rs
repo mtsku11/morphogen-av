@@ -1072,6 +1072,14 @@ fn run() -> Result<(), CliError> {
             smear_decay,
             backend,
             max_frames,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulation_sampling,
+            modulation_fps,
+            modulation_cache_dir,
+            named_modulator_audio,
+            named_modulator_frames,
         } => render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -1098,6 +1106,16 @@ fn run() -> Result<(), CliError> {
             smear_decay,
             backend: backend.into(),
             max_frames,
+            modulation: ModulationCliArgs {
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                sampling: modulation_sampling.into(),
+                fps: modulation_fps,
+                cache_dir: modulation_cache_dir.as_deref(),
+                named_modulator_audio: &named_modulator_audio,
+                named_modulator_frames: &named_modulator_frames,
+            },
         })
         .map(|_| ()),
         Commands::RenderGranularMosaicPoolSequence {

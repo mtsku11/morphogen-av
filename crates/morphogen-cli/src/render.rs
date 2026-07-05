@@ -57,7 +57,8 @@ use morphogen_render::{
     RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
 use morphogen_render::{
-    apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
+    apply_channel_shift_modulation, apply_coagulation_modulation, apply_flow_feedback_modulation,
+    apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
     apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
     ModulationRoute, ModulationSampling,
@@ -3006,6 +3007,7 @@ pub(crate) struct CoagulatedBlendSequenceRequest<'a> {
     pub(crate) smear_decay: f32,
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the descriptor-coagulated flow blend over a paired PNG sequence. Slice 1
@@ -3039,6 +3041,18 @@ pub(crate) fn render_coagulated_blend_sequence(
         .unwrap_or(paired_count);
     fs::create_dir_all(request.output_dir)?;
 
+    // Modulation (provenance-only — coagulated has no checkpoint path). Probe the
+    // routes against a scratch settings copy at frame 0 so an unknown target
+    // fails before any frame renders, then print the resolved routes.
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_coagulation_modulation(&mut probe, target, value)?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+
     // Stateless when advection is off, the field re-seeds fully every frame, and
     // there is no history smear; this keeps the Slice-1 path byte-identical to its
     // dedicated frame function.
@@ -3054,10 +3068,19 @@ pub(crate) fn render_coagulated_blend_sequence(
         let source_a = load_image_f32(&source_a_frames[index])?;
         let source_b = load_image_f32(&source_b_frames[index])?;
 
+        // Per-frame routed settings (a copy; structural knobs stay from the base).
+        // With no routes this is `request.settings` unchanged ⇒ byte-identical.
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_coagulation_modulation(&mut frame_settings, target, value)?;
+            }
+        }
+
         // Build (or advance) the ownership field on the CPU, then composite it on
         // the selected backend.
         let field = if !temporal {
-            coagulation_field(&source_a, &source_b, request.settings)?
+            coagulation_field(&source_a, &source_b, frame_settings)?
         } else {
             let cols = source_a.width.div_ceil(patch);
             let rows = source_a.height.div_ceil(patch);
@@ -3084,7 +3107,7 @@ pub(crate) fn render_coagulated_blend_sequence(
                 &source_b,
                 cell_flow.as_ref(),
                 previous_field.as_ref(),
-                request.settings,
+                frame_settings,
                 request.advect_amount,
                 request.refresh,
             )?
@@ -3094,7 +3117,7 @@ pub(crate) fn render_coagulated_blend_sequence(
             &source_a,
             &source_b,
             &field,
-            request.settings,
+            frame_settings,
             request.backend,
         )?;
         if temporal {

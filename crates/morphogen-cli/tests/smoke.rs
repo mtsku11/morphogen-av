@@ -623,6 +623,49 @@ fn write_chain_spec(path: &Path, spec_json: &str) {
 }
 
 #[test]
+fn coagulated_modulation_scale_zero_matches_constant_knob() {
+    // Continuity identity: a route with scale 0, offset K is byte-identical to
+    // the constant knob K — routing perturbs the engine only by the knob value.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_a = temp_dir.path().join("A");
+    let source_b = temp_dir.path().join("B");
+    write_texture_sequence(&source_a, &[0, 2, 4]);
+    write_texture_sequence(&source_b, &[1, 3, 5]);
+
+    let render = |out: &Path, extra: &[&str]| {
+        let mut args = [
+            "render-coagulated-blend-sequence",
+            source_a.to_string_lossy().as_ref(),
+            source_b.to_string_lossy().as_ref(),
+            out.to_string_lossy().as_ref(),
+            "--bias",
+            "1",
+            "--edge-hardness",
+            "1",
+            "--max-frames",
+            "3",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+        args.extend(extra.iter().map(|s| s.to_string()));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+            .success();
+    };
+
+    let constant_dir = temp_dir.path().join("constant");
+    render(&constant_dir, &["--coagulation-strength", "4"]);
+    let routed_dir = temp_dir.path().join("routed");
+    // lfo(sine,1) scaled by 0, offset 4 ⇒ the constant 4 at every frame.
+    render(&routed_dir, &["--modulate", "coagulation_strength=lfo(sine,1):0,4"]);
+
+    assert_png_frames_identical(&constant_dir, &routed_dir, 3);
+}
+
+#[test]
 fn render_chain_spec_round_trips_and_writes_manifest_shape() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");

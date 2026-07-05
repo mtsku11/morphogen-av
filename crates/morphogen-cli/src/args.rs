@@ -1476,6 +1476,35 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
+        /// Targets: coagulation_strength, edge_hardness, bias.
+        /// Sources: audio-rms/audio-onset/audio-centroid (need --modulator-audio),
+        /// luma/flow (need --modulator-frames), lfo(...). Coagulated has no checkpoint
+        /// path, so routes are printed provenance only (the fluid-advect precedent).
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Frame rate mapping output frame index → seconds for envelope sampling.
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
     /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's

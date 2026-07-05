@@ -125,7 +125,8 @@ pub use granular_mosaic::{
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
 pub use modulation::{
-    apply_channel_shift_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
+    apply_channel_shift_modulation, apply_coagulation_modulation, apply_flow_feedback_modulation,
+    apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
     apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
     modulated_value, parse_modulation_route, peak_normalize, sample_envelope,
