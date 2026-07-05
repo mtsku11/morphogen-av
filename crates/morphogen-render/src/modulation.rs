@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CascadeCollageSettings, CascadeTrailSettings, ChannelShiftSettings, CoagulationSettings,
-    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode,
     RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
 };
@@ -522,6 +522,12 @@ pub const CASCADE_TRAILS_MODULATION_TARGETS: &[&str] =
 pub const CASCADE_COLLAGE_MODULATION_TARGETS: &[&str] =
     &["scrib_amp_scale", "morph_rate", "edge_strength", "face_strength"];
 
+/// Dispersion blend — the look-driving continuous knobs.
+/// Structural knobs (block_size, coherence_passes, seed) excluded.
+/// Has checkpoint path → full stateful modulation.
+pub const DISPERSION_MODULATION_TARGETS: &[&str] =
+    &["coagulation_strength", "bias", "scatter_amount", "damping"];
+
 /// Posterize levels range: 2 = harshest, 256 = the documented byte-identical
 /// passthrough (deliberately reachable by modulation).
 const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
@@ -817,6 +823,34 @@ pub fn apply_cascade_collage_modulation(
     Ok(())
 }
 
+/// Overwrite one routed dispersion-blend knob (clamped). `coagulation_strength`
+/// and `bias` reuse the same ranges as the coagulation modulation; `scatter_amount`
+/// is non-negative pixel scatter; `damping` is clamped to [0, 0.999] so it stays
+/// in the valid [0, 1) window for the frame loop.
+pub fn apply_dispersion_modulation(
+    settings: &mut DispersionSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "coagulation_strength" => {
+            settings.coagulation_strength =
+                value.clamp(COAGULATION_STRENGTH_RANGE.0, COAGULATION_STRENGTH_RANGE.1)
+        }
+        "bias" => settings.bias = value.clamp(COAGULATION_BIAS_RANGE.0, COAGULATION_BIAS_RANGE.1),
+        "scatter_amount" => settings.scatter_amount = value.clamp(0.0, SHIFT_RANGE.1),
+        "damping" => settings.damping = value.clamp(0.0, 0.999),
+        _ => {
+            return Err(unknown_target(
+                "dispersion",
+                target,
+                DISPERSION_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// Overwrite one routed palette-quantize knob with a mapped value. `levels`
 /// is the first integer target (clamped to `[2, 256]`, then rounded per the
 /// contracted rule); `mode` selects posterize/palette by variant index
@@ -1091,6 +1125,32 @@ mod tests {
 
         for structural in ["seed", "block_blend", "hue_steps", "tile_scale", "nope"] {
             assert!(apply_cascade_collage_modulation(&mut settings, structural, 1.0).is_err());
+        }
+    }
+
+    #[test]
+    fn dispersion_modulation_sets_clamps_and_rejects_unknown() {
+        let mut settings = DispersionSettings::default();
+
+        apply_dispersion_modulation(&mut settings, "coagulation_strength", 8.0).unwrap();
+        assert_eq!(settings.coagulation_strength, 8.0);
+        apply_dispersion_modulation(&mut settings, "bias", -1.5).unwrap();
+        assert_eq!(settings.bias, -1.5);
+        apply_dispersion_modulation(&mut settings, "scatter_amount", 5.0).unwrap();
+        assert_eq!(settings.scatter_amount, 5.0);
+        apply_dispersion_modulation(&mut settings, "damping", 0.85).unwrap();
+        assert_eq!(settings.damping, 0.85);
+
+        // coagulation_strength clamps to [0, 64]; damping clamps to [0, 0.999].
+        apply_dispersion_modulation(&mut settings, "coagulation_strength", 200.0).unwrap();
+        assert_eq!(settings.coagulation_strength, 64.0);
+        apply_dispersion_modulation(&mut settings, "damping", 1.5).unwrap();
+        assert_eq!(settings.damping, 0.999);
+        apply_dispersion_modulation(&mut settings, "scatter_amount", -5.0).unwrap();
+        assert_eq!(settings.scatter_amount, 0.0);
+
+        for structural in ["block_size", "coherence_passes", "seed", "nope"] {
+            assert!(apply_dispersion_modulation(&mut settings, structural, 1.0).is_err());
         }
     }
 

@@ -39,6 +39,7 @@ struct ContentView: View {
               AnalysisPanelView()
               CompositionPanelView(state: state)
               CoagulatedBlendPanelView(state: state)
+              DispersionBlendPanelView(state: state)
               RenderPanelView(state: state)
             }
             .padding(.top, 8)

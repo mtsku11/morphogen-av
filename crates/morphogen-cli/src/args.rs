@@ -512,6 +512,23 @@ pub(crate) enum Commands {
         seed: u64,
         #[arg(long)]
         max_frames: Option<usize>,
+        /// Modulation route (repeatable). Targets: coagulation_strength, bias, scatter_amount, damping.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long, default_value_t = 12.0)]
+        modulation_fps: f64,
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
     },
     /// Render a faux-fluid dye advection (experimental, deterministic; CPU reference with
     /// an optional parity-gated Metal backend).
@@ -2456,6 +2473,66 @@ pub(crate) enum Commands {
         named_modulator_frames: Vec<String>,
     },
     QueueRunCoagulatedBlendSequence {
+        queue_path: PathBuf,
+    },
+    QueueAddDispersionBlendSequence {
+        queue_path: PathBuf,
+        source_a_dir: PathBuf,
+        source_b_dir: PathBuf,
+        output_root_dir: PathBuf,
+        #[arg(long, default_value_t = 12.0)]
+        frame_rate: f64,
+        #[arg(long, default_value_t = 8)]
+        block_size: u32,
+        #[arg(long, default_value_t = 1.0)]
+        color_weight: f32,
+        #[arg(long, default_value_t = 0.4)]
+        texture_weight: f32,
+        #[arg(long, default_value_t = 1.6)]
+        coagulation_strength: f32,
+        #[arg(long, default_value_t = 0.5)]
+        randomness: f32,
+        #[arg(long, default_value_t = 2)]
+        coherence_passes: u32,
+        #[arg(long, default_value_t = 0.5)]
+        coherence_strength: f32,
+        #[arg(long, default_value_t = 0.4)]
+        bias: f32,
+        #[arg(long, default_value_t = 0.4)]
+        ownership_refresh: f32,
+        #[arg(long, default_value_t = 1.0)]
+        coherent_amount: f32,
+        #[arg(long, default_value_t = 3.0)]
+        scatter_amount: f32,
+        #[arg(long, default_value_t = 0.9)]
+        damping: f32,
+        #[arg(long, default_value_t = 24)]
+        dispersion_ramp: u32,
+        #[arg(long, default_value_t = 0.0)]
+        smear: f32,
+        #[arg(long, default_value_t = 0.85)]
+        smear_decay: f32,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long)]
+        max_frames: Option<u32>,
+        #[arg(long = "project-path")]
+        project_path: Option<PathBuf>,
+        /// Modulation route (repeatable). Targets: coagulation_strength, bias, scatter_amount, damping.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
+    },
+    QueueRunDispersionBlendSequence {
         queue_path: PathBuf,
     },
     QueueAddGranularMosaicSequence {

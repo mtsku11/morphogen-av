@@ -308,6 +308,43 @@ final class AppState: ObservableObject {
   @Published var collageModFaceOffset = 0.0
   @Published var collageModFaceSamplingOverride = ModulationSamplingOverrideOption.default
   @Published var collageModFaceModulator = ""
+  // Dispersion blend — colour-group tile dispersion two-source.
+  @Published var disperseOutputURL: URL?
+  @Published var disperseOutputPath = "No dispersion-blend output directory selected"
+  @Published var disperseSummary = "No dispersion blend rendered yet"
+  @Published var disperseBlockSize = 8
+  @Published var disperseCoagulationStrength = 1.6
+  @Published var disperseBias = 0.4
+  @Published var disperseScatterAmount = 3.0
+  @Published var disperseDamping = 0.9
+  @Published var disperseDispersionRamp = 24
+  @Published var disperseOwnershipRefresh = 0.4
+  @Published var disperseSmear = 0.0
+  @Published var disperseMaxFrames = 120
+  @Published var disperseModSampling = ModulationSamplingOption.hold
+  @Published var disperseModulatorAudioURL: URL?
+  @Published var disperseModulatorFramesURL: URL?
+  @Published var disperseNamedModulators: [NamedModulatorEntry] = []
+  @Published var disperseModStrengthSource = ModulationSourceOption.off
+  @Published var disperseModStrengthScale = 1.0
+  @Published var disperseModStrengthOffset = 0.0
+  @Published var disperseModStrengthSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var disperseModStrengthModulator = ""
+  @Published var disperseModBiasSource = ModulationSourceOption.off
+  @Published var disperseModBiasScale = 1.0
+  @Published var disperseModBiasOffset = 0.0
+  @Published var disperseModBiasSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var disperseModBiasModulator = ""
+  @Published var disperseModScatterSource = ModulationSourceOption.off
+  @Published var disperseModScatterScale = 1.0
+  @Published var disperseModScatterOffset = 0.0
+  @Published var disperseModScatterSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var disperseModScatterModulator = ""
+  @Published var disperseModDampingSource = ModulationSourceOption.off
+  @Published var disperseModDampingScale = 1.0
+  @Published var disperseModDampingOffset = 0.0
+  @Published var disperseModDampingSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var disperseModDampingModulator = ""
   // Retro Static — deliberate scanline-filter misread glitch.
   @Published var retroStaticRealBpp = 4
   @Published var retroStaticAssumedBpp = 3
@@ -2633,6 +2670,114 @@ final class AppState: ObservableObject {
     }
     cascadeCollageModulatorFramesURL = url
     statusMessage = "Cascade collage modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  var disperseDeclaredModulatorNames: [String] {
+    disperseNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addDisperseNamedModulator() { appendNamedModulator(to: &disperseNamedModulators) }
+  func chooseDisperseNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &disperseNamedModulators, id: id) }
+  func chooseDisperseNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &disperseNamedModulators, id: id) }
+  func removeDisperseNamedModulator(id: UUID) {
+    guard let entry = disperseNamedModulators.first(where: { $0.id == id }) else { return }
+    disperseNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if disperseModStrengthModulator == name { disperseModStrengthModulator = "" }
+    if disperseModBiasModulator == name { disperseModBiasModulator = "" }
+    if disperseModScatterModulator == name { disperseModScatterModulator = "" }
+    if disperseModDampingModulator == name { disperseModDampingModulator = "" }
+  }
+
+  func chooseDispersionBlendOutputDirectory() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Dispersion Blend Output Directory"
+    ) else {
+      statusMessage = "Dispersion blend output directory selection cancelled."
+      return
+    }
+    disperseOutputURL = url
+    disperseOutputPath = url.path
+    statusMessage = "Dispersion blend output directory selected: \(url.lastPathComponent)"
+  }
+
+  func chooseDisperseModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    disperseModulatorAudioURL = url
+    statusMessage = "Dispersion modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseDisperseModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frame Directory"
+    ) else {
+      statusMessage = "Modulator frame directory selection cancelled."
+      return
+    }
+    disperseModulatorFramesURL = url
+    statusMessage = "Dispersion modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func runDispersionBlendRender() {
+    guard let sourceAURL = effectiveModulatorURL() else {
+      statusMessage = "Select Source A frame directory before rendering dispersion blend."
+      return
+    }
+    guard let sourceBURL = effectiveCarrierURL() else {
+      statusMessage = "Select Source B frame directory before rendering dispersion blend."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(disperseOutputURL) else {
+      statusMessage = "Choose a dispersion-blend output directory before rendering."
+      return
+    }
+    guard let routes = modulationRoutes(
+      slots: [
+        ("coagulation_strength", disperseModStrengthSource, disperseModStrengthScale, disperseModStrengthOffset, disperseModStrengthSamplingOverride),
+        ("bias", disperseModBiasSource, disperseModBiasScale, disperseModBiasOffset, disperseModBiasSamplingOverride),
+        ("scatter_amount", disperseModScatterSource, disperseModScatterScale, disperseModScatterOffset, disperseModScatterSamplingOverride),
+        ("damping", disperseModDampingSource, disperseModDampingScale, disperseModDampingOffset, disperseModDampingSamplingOverride),
+      ],
+      modulatorAudioURL: disperseModulatorAudioURL,
+      modulatorFramesURL: disperseModulatorFramesURL,
+      namedModulators: disperseNamedModulators,
+      slotModulators: [disperseModStrengthModulator, disperseModBiasModulator, disperseModScatterModulator, disperseModDampingModulator],
+      effectLabel: "dispersion blend"
+    ) else { return }
+
+    let request = DispersionBlendSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultDispersionBlendSequenceRenderQueueURL(),
+      sourceADirectoryURL: sourceAURL,
+      sourceBDirectoryURL: sourceBURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("dispersion-blend", isDirectory: true),
+      blockSize: disperseBlockSize,
+      coagulationStrength: Float(disperseCoagulationStrength),
+      bias: Float(disperseBias),
+      scatterAmount: Float(disperseScatterAmount),
+      damping: Float(disperseDamping),
+      dispersionRamp: disperseDispersionRamp,
+      ownershipRefresh: Float(disperseOwnershipRefresh),
+      smear: Float(disperseSmear),
+      maxFrames: disperseMaxFrames > 0 ? disperseMaxFrames : nil,
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: disperseModulatorAudioURL,
+      modulatorFramesURL: disperseModulatorFramesURL,
+      modulationSampling: disperseModSampling,
+      namedModulators: namedModulatorSpecs(disperseNamedModulators)
+    )
+
+    runFluidAdvectionQueue(
+      label: "Dispersion blend",
+      requestDescription: "Queueing dispersion blend through morphogen-cli..."
+    ) {
+      try RustBridgePlaceholder.runQueuedDispersionBlendSequenceRender(request: request)
+    }
   }
 
   func choosePaletteQuantizeModulatorWAV() {

@@ -58,7 +58,7 @@ use morphogen_render::{
 };
 use morphogen_render::{
     apply_cascade_collage_modulation, apply_cascade_trails_modulation,
-    apply_channel_shift_modulation, apply_coagulation_modulation,
+    apply_channel_shift_modulation, apply_coagulation_modulation, apply_dispersion_modulation,
     apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_palette_quantize_modulation,
     apply_pixel_sort_modulation, apply_retro_static_modulation, apply_rutt_etra_modulation,
@@ -1836,6 +1836,7 @@ pub(crate) struct DispersionBlendSequenceRequest<'a> {
     pub(crate) smear: f32,
     pub(crate) smear_decay: f32,
     pub(crate) max_frames: Option<usize>,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render the colour-group dispersion blend over a paired PNG sequence. Carries two
@@ -1851,6 +1852,14 @@ pub(crate) fn render_dispersion_blend_sequence(
         return Err(CliError::Message(
             "max-frames must be greater than zero".to_string(),
         ));
+    }
+
+    let modulation_plan = request.modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        let mut probe = request.settings;
+        for (target, value) in plan.frame_values(0) {
+            apply_dispersion_modulation(&mut probe, target, value)?;
+        }
     }
 
     let source_a_frames = collect_image_frames(request.source_a_dir)?;
@@ -1869,7 +1878,6 @@ pub(crate) fn render_dispersion_blend_sequence(
     fs::create_dir_all(request.output_dir)?;
 
     let block = request.settings.block_size;
-    let ownership_settings = request.settings.ownership_settings();
     let mut previous_ownership: Option<CoagulationField> = None;
     let mut previous_dispersion: Option<DispersionField> = None;
     let mut previous_a: Option<ImageBufferF32> = None;
@@ -1880,6 +1888,13 @@ pub(crate) fn render_dispersion_blend_sequence(
         let source_b = load_image_f32(&source_b_frames[index])?;
         let cols = source_a.width.div_ceil(block);
         let rows = source_a.height.div_ceil(block);
+
+        let mut frame_settings = request.settings;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_dispersion_modulation(&mut frame_settings, target, value)?;
+            }
+        }
 
         // The directional current = Source A's optical flow, downsampled to the tile
         // grid (cell units). Drives both the ownership advection and the content offset.
@@ -1902,13 +1917,14 @@ pub(crate) fn render_dispersion_blend_sequence(
             Some(downsample_flow_to_cells(&flow, block)?)
         };
 
+        let ownership_settings = frame_settings.ownership_settings();
         let ownership = advance_coagulation_field(
             &source_a,
             &source_b,
             cell_flow.as_ref(),
             previous_ownership.as_ref(),
             ownership_settings,
-            request.settings.coherent_amount,
+            frame_settings.coherent_amount,
             request.ownership_refresh,
         )?;
 
@@ -1923,7 +1939,7 @@ pub(crate) fn render_dispersion_blend_sequence(
             cols,
             rows,
             dispersion,
-            request.settings,
+            frame_settings,
             index as u32,
         )?;
 

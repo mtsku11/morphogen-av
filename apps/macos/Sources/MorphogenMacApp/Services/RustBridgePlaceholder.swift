@@ -2507,6 +2507,88 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  static func defaultDispersionBlendSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("dispersion-blend-queue.json")
+  }
+
+  static func runQueuedDispersionBlendSequenceRender(
+    request: DispersionBlendSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddDispersionBlendSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: try queueRunDispersionBlendSequenceArguments(queueURL: request.queueURL),
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddDispersionBlendSequenceArguments(
+    request: DispersionBlendSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.blockSize >= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("block size must be >= 1")
+    }
+    guard request.dispersionRamp >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("dispersion ramp must be >= 0")
+    }
+
+    var arguments = [
+      "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+      "queue-add-dispersion-blend-sequence",
+      request.queueURL.path,
+      request.sourceADirectoryURL.path,
+      request.sourceBDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--block-size", String(request.blockSize),
+      "--coagulation-strength", cliNumber(Double(request.coagulationStrength)),
+      "--bias", cliNumber(Double(request.bias)),
+      "--scatter-amount", cliNumber(Double(request.scatterAmount)),
+      "--damping", cliNumber(Double(request.damping)),
+      "--dispersion-ramp", String(request.dispersionRamp),
+      "--ownership-refresh", cliNumber(Double(request.ownershipRefresh)),
+      "--smear", cliNumber(Double(request.smear)),
+    ]
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
+    return arguments
+  }
+
+  static func queueRunDispersionBlendSequenceArguments(queueURL: URL) throws -> [String] {
+    [
+      "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+      "queue-run-dispersion-blend-sequence",
+      queueURL.path,
+    ]
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -3867,6 +3949,28 @@ struct CoagulatedBlendSequenceRenderQueueCommandRequest {
   let smear: Double
   let smearDecay: Double
   let backend: FeedbackRenderBackendOption
+  let maxFrames: Int?
+  let projectURL: URL?
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
+}
+
+struct DispersionBlendSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceADirectoryURL: URL
+  let sourceBDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let blockSize: Int
+  let coagulationStrength: Float
+  let bias: Float
+  let scatterAmount: Float
+  let damping: Float
+  let dispersionRamp: Int
+  let ownershipRefresh: Float
+  let smear: Float
   let maxFrames: Int?
   let projectURL: URL?
   var modulationRoutes: [ModulationRouteSpec] = []
