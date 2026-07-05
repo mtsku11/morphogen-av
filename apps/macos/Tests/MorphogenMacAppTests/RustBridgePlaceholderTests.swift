@@ -25,6 +25,62 @@ final class RustBridgePlaceholderTests: XCTestCase {
     // No top-level input directory: sources are per-scene inside the spec.
   }
 
+  func testQueuedCoagulatedBlendArgumentsIncludeKnobsAndModulation() throws {
+    let request = CoagulatedBlendSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/coag-queue.json"),
+      sourceADirectoryURL: URL(fileURLWithPath: "/tmp/A", isDirectory: true),
+      sourceBDirectoryURL: URL(fileURLWithPath: "/tmp/B", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/coag-out", isDirectory: true),
+      frameRate: 24.0,
+      patchSize: 16,
+      colorWeight: 1.0,
+      textureWeight: 0.0,
+      coherencePasses: 2,
+      coherenceStrength: 0.5,
+      randomness: 0.0,
+      coagulationStrength: 0.0,
+      edgeHardness: 0.6,
+      edgeDither: 0.0,
+      blockJitter: 0.0,
+      bias: 1.0,
+      seed: 7,
+      advectSource: .mixed,
+      advectAmount: 0.0,
+      refresh: 1.0,
+      turbulence: 1.0,
+      smear: 0.0,
+      smearDecay: 0.9,
+      backend: .cpu,
+      maxFrames: 30,
+      projectURL: URL(fileURLWithPath: "/tmp/project.morphogen.json"),
+      modulationRoutes: [
+        ModulationRouteSpec(target: "coagulation_strength", source: "audio-rms", scale: 30, offset: 0, sampling: nil, modulator: nil)
+      ],
+      modulatorAudioURL: URL(fileURLWithPath: "/tmp/score.wav")
+    )
+
+    let arguments = try RustBridgePlaceholder.queueAddCoagulatedBlendSequenceArguments(request: request)
+
+    XCTAssertEqual(
+      arguments.prefix(9),
+      ["cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--", "queue-add-coagulated-blend-sequence", "/tmp/coag-queue.json"]
+    )
+    XCTAssertEqual(arguments[9], "/tmp/A")
+    XCTAssertEqual(arguments[10], "/tmp/B")
+    XCTAssertEqual(arguments[11], "/tmp/coag-out")
+    XCTAssertTrue(arguments.contains("--advect-source"))
+    XCTAssertTrue(arguments.contains("mixed"))
+    XCTAssertTrue(arguments.contains("--bias"))
+    XCTAssertTrue(arguments.contains("--max-frames"))
+    XCTAssertTrue(arguments.contains("30"))
+    XCTAssertTrue(arguments.contains("--project-path"))
+    // Modulation route + its media flag.
+    XCTAssertTrue(arguments.contains("--modulate"))
+    XCTAssertTrue(arguments.contains("coagulation_strength=audio-rms:30,0"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("/tmp/score.wav"))
+  }
+
   func testQueuedFrameSequenceArgumentsIncludeSelectedInputsAndOptions() throws {
     let request = FrameSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/frame-sequence-queue.json"),

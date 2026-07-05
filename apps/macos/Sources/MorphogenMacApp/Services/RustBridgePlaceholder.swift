@@ -2391,6 +2391,99 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  // MARK: - Coagulated flow blend (Tier 1.1 modulation)
+
+  static func defaultCoagulatedBlendSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-coagulated-blend-queue.json"
+    )
+  }
+
+  static func runQueuedCoagulatedBlendSequenceRender(
+    request: CoagulatedBlendSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddCoagulatedBlendSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+        "queue-run-coagulated-blend-sequence", request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddCoagulatedBlendSequenceArguments(
+    request: CoagulatedBlendSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    guard request.frameRate.isFinite && request.frameRate > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("frame rate must be positive and finite")
+    }
+    guard request.patchSize >= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("patch size must be >= 1")
+    }
+
+    var arguments = [
+      "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+      "queue-add-coagulated-blend-sequence",
+      request.queueURL.path,
+      request.sourceADirectoryURL.path,
+      request.sourceBDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frame-rate", cliNumber(request.frameRate),
+      "--patch-size", String(request.patchSize),
+      "--color-weight", cliNumber(request.colorWeight),
+      "--texture-weight", cliNumber(request.textureWeight),
+      "--coherence-passes", String(request.coherencePasses),
+      "--coherence-strength", cliNumber(request.coherenceStrength),
+      "--randomness", cliNumber(request.randomness),
+      "--coagulation-strength", cliNumber(request.coagulationStrength),
+      "--edge-hardness", cliNumber(request.edgeHardness),
+      "--edge-dither", cliNumber(request.edgeDither),
+      "--block-jitter", cliNumber(request.blockJitter),
+      "--bias", cliNumber(request.bias),
+      "--seed", String(request.seed),
+      "--advect-source", request.advectSource.cliValue,
+      "--advect-amount", cliNumber(request.advectAmount),
+      "--refresh", cliNumber(request.refresh),
+      "--turbulence", cliNumber(request.turbulence),
+      "--smear", cliNumber(request.smear),
+      "--smear-decay", cliNumber(request.smearDecay),
+      "--backend", request.backend.cliValue
+    ]
+    if let maxFrames = request.maxFrames {
+      arguments.append("--max-frames")
+      arguments.append(String(maxFrames))
+    }
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
+    return arguments
+  }
+
   static func queueAddConvolutionalBlendSequenceArguments(
     request: ConvolutionalBlendSequenceRenderQueueCommandRequest
   ) throws -> [String] {
@@ -3683,6 +3776,61 @@ struct RuttEtraSequenceRenderQueueCommandRequest {
   var backend: FeedbackRenderBackendOption = .cpu
   // Modulation-matrix routes; defaulted off so call sites predating slice 3
   // keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
+}
+
+enum CoagulationFlowSourceOption: String, CaseIterable, Identifiable {
+  case aFlow, bFlow, mixed, turbulence
+  var id: String { rawValue }
+  var cliValue: String {
+    switch self {
+    case .aFlow: return "a-flow"
+    case .bFlow: return "b-flow"
+    case .mixed: return "mixed"
+    case .turbulence: return "turbulence"
+    }
+  }
+  var label: String {
+    switch self {
+    case .aFlow: return "A Flow"
+    case .bFlow: return "B Flow"
+    case .mixed: return "Mixed"
+    case .turbulence: return "Turbulence"
+    }
+  }
+}
+
+struct CoagulatedBlendSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let sourceADirectoryURL: URL
+  let sourceBDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frameRate: Double
+  let patchSize: Int
+  let colorWeight: Double
+  let textureWeight: Double
+  let coherencePasses: Int
+  let coherenceStrength: Double
+  let randomness: Double
+  let coagulationStrength: Double
+  let edgeHardness: Double
+  let edgeDither: Double
+  let blockJitter: Double
+  let bias: Double
+  let seed: UInt64
+  let advectSource: CoagulationFlowSourceOption
+  let advectAmount: Double
+  let refresh: Double
+  let turbulence: Double
+  let smear: Double
+  let smearDecay: Double
+  let backend: FeedbackRenderBackendOption
+  let maxFrames: Int?
+  let projectURL: URL?
   var modulationRoutes: [ModulationRouteSpec] = []
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
