@@ -508,9 +508,52 @@ struct RenderPanelView: View {
               .toggleStyle(.checkbox)
           }
 
+          ModulationSlotRow(
+            label: "Prt Advect",
+            source: $state.particleModAdvectSource,
+            scale: $state.particleModAdvectScale,
+            offset: $state.particleModAdvectOffset,
+            samplingOverride: $state.particleModAdvectSamplingOverride,
+            scaleRange: -48...48, scaleStep: 1, offsetRange: -48...48, offsetStep: 1,
+            modulator: $state.particleModAdvectModulator,
+            modulatorNames: state.fluidDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Prt TurbSc",
+            source: $state.particleModTurbScaleSource,
+            scale: $state.particleModTurbScaleScale,
+            offset: $state.particleModTurbScaleOffset,
+            samplingOverride: $state.particleModTurbScaleSamplingOverride,
+            scaleRange: -0.05...0.05, scaleStep: 0.002, offsetRange: -0.05...0.05, offsetStep: 0.002,
+            modulator: $state.particleModTurbScaleModulator,
+            modulatorNames: state.fluidDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Prt TurbSp",
+            source: $state.particleModTurbSpeedSource,
+            scale: $state.particleModTurbSpeedScale,
+            offset: $state.particleModTurbSpeedOffset,
+            samplingOverride: $state.particleModTurbSpeedSamplingOverride,
+            scaleRange: -0.5...0.5, scaleStep: 0.01, offsetRange: -0.5...0.5, offsetStep: 0.01,
+            modulator: $state.particleModTurbSpeedModulator,
+            modulatorNames: state.fluidDeclaredModulatorNames
+          )
+
+          ModulationSlotRow(
+            label: "Prt Detail",
+            source: $state.particleModDetailSource,
+            scale: $state.particleModDetailScale,
+            offset: $state.particleModDetailOffset,
+            samplingOverride: $state.particleModDetailSamplingOverride,
+            modulator: $state.particleModDetailModulator,
+            modulatorNames: state.fluidDeclaredModulatorNames
+          )
+
           // Procedural Fluid consumes all six slots; A-to-B Fluid and
           // Self-Flow consume only Flow Advect + Reinject (their commands
-          // have no turbulence targets). Particles has no routes yet.
+          // have no turbulence targets).
           ModulationSlotRow(
             label: "Proc Advect",
             source: $state.fluidModProceduralAdvectSource,
@@ -577,6 +620,8 @@ struct RenderPanelView: View {
 
           ModulationMediaRow(
             sources: [
+              state.particleModAdvectSource, state.particleModTurbScaleSource,
+              state.particleModTurbSpeedSource, state.particleModDetailSource,
               state.fluidModProceduralAdvectSource, state.fluidModMotionAdvectSource,
               state.fluidModTurbulenceScaleSource, state.fluidModTurbulenceSpeedSource,
               state.fluidModDetailSource, state.fluidModReinjectSource

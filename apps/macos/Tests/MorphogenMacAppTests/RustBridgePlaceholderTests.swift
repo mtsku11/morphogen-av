@@ -414,6 +414,38 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(arguments.contains("--project-path"))
   }
 
+  func testQueuedFieldParticlesSequenceArgumentsIncludeModulationRoute() throws {
+    var request = FieldParticlesSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/particles-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/particles", isDirectory: true),
+      frames: 24,
+      frameRate: 24.0,
+      spacing: 8,
+      particleSize: 8,
+      advect: 6.0,
+      turbulenceScale: 0.01,
+      turbulenceSpeed: 0.1,
+      detail: 0.5,
+      liveColour: false,
+      seed: 0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "advect", source: "audio-rms", scale: 48, offset: 0, sampling: nil, modulator: nil)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/score.wav")
+
+    let arguments = try RustBridgePlaceholder.queueAddFieldParticlesSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--modulate"))
+    XCTAssertTrue(arguments.contains("advect=audio-rms:48,0"))
+    XCTAssertTrue(arguments.contains("--modulator-audio"))
+    XCTAssertTrue(arguments.contains("/tmp/score.wav"))
+    XCTAssertFalse(arguments.contains("--project-path"))
+  }
+
   func testQueuedCascadeTrailsSequenceArgumentsIncludeCascadeControls() throws {
     let request = CascadeTrailsSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/cascade-queue.json"),

@@ -1025,7 +1025,14 @@ enum RustBridgePlaceholder {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
     }
-
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
     return arguments
   }
 
@@ -3374,6 +3381,11 @@ struct FieldParticlesSequenceRenderQueueCommandRequest {
   let seed: UInt64
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 struct CascadeTrailsSequenceRenderQueueCommandRequest {

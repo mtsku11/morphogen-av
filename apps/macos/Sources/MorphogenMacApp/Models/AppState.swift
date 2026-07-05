@@ -168,6 +168,28 @@ final class AppState: ObservableObject {
   @Published var fieldParticleSize = 8
   @Published var fieldParticleAdvect = 6.0
   @Published var fieldParticleLiveColour = true
+  // Field-particles mod slots (advect / turbulence_scale / turbulence_speed / detail).
+  // Shares the fluid panel's modulator audio/frames pickers and named modulators.
+  @Published var particleModAdvectSource = ModulationSourceOption.off
+  @Published var particleModAdvectScale = 1.0
+  @Published var particleModAdvectOffset = 0.0
+  @Published var particleModAdvectSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var particleModAdvectModulator = ""
+  @Published var particleModTurbScaleSource = ModulationSourceOption.off
+  @Published var particleModTurbScaleScale = 1.0
+  @Published var particleModTurbScaleOffset = 0.0
+  @Published var particleModTurbScaleSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var particleModTurbScaleModulator = ""
+  @Published var particleModTurbSpeedSource = ModulationSourceOption.off
+  @Published var particleModTurbSpeedScale = 1.0
+  @Published var particleModTurbSpeedOffset = 0.0
+  @Published var particleModTurbSpeedSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var particleModTurbSpeedModulator = ""
+  @Published var particleModDetailSource = ModulationSourceOption.off
+  @Published var particleModDetailScale = 1.0
+  @Published var particleModDetailOffset = 0.0
+  @Published var particleModDetailSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var particleModDetailModulator = ""
   @Published var fluidBackend = AppState.stickyBackend("backend.fluid", default: .metal) {
     didSet { AppState.persistBackend("backend.fluid", fluidBackend) }
   }
@@ -1875,7 +1897,28 @@ final class AppState: ObservableObject {
       return
     }
 
-    let request = FieldParticlesSequenceRenderQueueCommandRequest(
+    guard let routes = modulationRoutes(
+      slots: [
+        ("advect", particleModAdvectSource, particleModAdvectScale, particleModAdvectOffset,
+         particleModAdvectSamplingOverride),
+        ("turbulence_scale", particleModTurbScaleSource, particleModTurbScaleScale, particleModTurbScaleOffset,
+         particleModTurbScaleSamplingOverride),
+        ("turbulence_speed", particleModTurbSpeedSource, particleModTurbSpeedScale, particleModTurbSpeedOffset,
+         particleModTurbSpeedSamplingOverride),
+        ("detail", particleModDetailSource, particleModDetailScale, particleModDetailOffset,
+         particleModDetailSamplingOverride),
+      ],
+      modulatorAudioURL: fluidModulatorAudioURL,
+      modulatorFramesURL: fluidModulatorFramesURL,
+      namedModulators: fluidNamedModulators,
+      slotModulators: [
+        particleModAdvectModulator, particleModTurbScaleModulator,
+        particleModTurbSpeedModulator, particleModDetailModulator,
+      ],
+      effectLabel: "field particles"
+    ) else { return }
+
+    var request = FieldParticlesSequenceRenderQueueCommandRequest(
       queueURL: RustBridgePlaceholder.defaultFieldParticlesSequenceRenderQueueURL(),
       sourceDirectoryURL: carrierURL,
       outputRootDirectoryURL: outputURL.appendingPathComponent("field-particles", isDirectory: true),
@@ -1892,6 +1935,11 @@ final class AppState: ObservableObject {
       backend: fluidBackend,
       projectURL: projectURL
     )
+    request.modulationRoutes = routes
+    request.modulatorAudioURL = fluidModulatorAudioURL
+    request.modulatorFramesURL = fluidModulatorFramesURL
+    request.modulationSampling = fluidModSampling
+    request.namedModulators = namedModulatorSpecs(fluidNamedModulators)
 
     runFluidAdvectionQueue(
       label: "Field particles",
