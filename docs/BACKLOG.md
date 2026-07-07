@@ -174,9 +174,10 @@ alignment guard) and **F5** (real-footage two-scene acceptance render) remain
 Morphogenesis. **Tier 5 arc in flight (user-directed 2026-07-07: "all remaining
 Tier 5"): 5.2 oscillator bank DONE
 ([OSCILLATOR_BANK_MILESTONE.md](OSCILLATOR_BANK_MILESTONE.md) — `generate-frames`
-CLI, 4 presets, f64 phase law, rate-0/phase-drift anchors); next 5.5 capture
+CLI, 4 presets, f64 phase law, rate-0/phase-drift anchors); 5.5 capture DONE
 ([PERFORMANCE_CAPTURE_MILESTONE.md](PERFORMANCE_CAPTURE_MILESTONE.md), MVP-only
-scope user-confirmed) → 5.3 MIDI
+scope user-confirmed; gesture → inline breakpoints route, zero Rust); next
+5.3 MIDI
 ([MIDI_MODULATION_MILESTONE.md](MIDI_MODULATION_MILESTONE.md)) → 5.4 mattes →
 5.6 colour; 5.7 canvas stays user-gated.**
 

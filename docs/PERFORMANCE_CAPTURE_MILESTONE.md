@@ -1,6 +1,16 @@
 # Performance Capture Milestone — play the preview, keep the render
 
 Tier 5.5 of `docs/DEFERRED_WORK_HANDOFF.md`. Contract written 2026-07-07.
+**MILESTONE COMPLETE (2026-07-07).** Built inline by the orchestrator after
+the builder agent hit its session limit (only `GestureRecorder.swift` was on
+disk — kept, verified). Evidence: swift 123 → **132/0** (recorder rules, spec
+emission, bridge token sequence `displacement_depth=breakpoints(0:0;2:1):96,0`
+with zero media flags, capture lifecycle incl. re-record replacement); cargo
+**611/0** untouched (zero Rust changes, as contracted); end-to-end queue-add →
+run on a `generate-frames gradient --rate 0` static carrier: manifest records
+the breakpoints route, within-off **0.000** / within-on **19.722**, frame 0
+**byte-identical** to the depth-0 constant render (envelope-0 exactness), and
+frames Read flat → steeply raked.
 Scope confirmed with the user 2026-07-07: **MVP only** (one-knob capture),
 landing on the **Rutt-Etra slots** (the LFO opt-in precedent). Multi-knob
 capture and overdub/re-record are explicitly deferred until the user has

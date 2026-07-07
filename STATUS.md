@@ -15,7 +15,7 @@ _Last updated: 2026-07-07_
   Homebrew rustc 1.96 fmt drift again — verified pre-existing by identical
   per-file diff counts with all 2026-07-07 changes stashed; new code adds zero
   fmt diffs). Reconcile in its own commit when convenient, not mid-feature.
-- `swift test`: **123 passing, 0 failing.**
+- `swift test`: **132 passing, 0 failing** (was 123; Tier 5.5 capture tests).
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -40,7 +40,7 @@ coagulated-blend were fully wired; OLA audio resynthesis (1.2), cascade B-sample
 this session.
 
 **In flight (user-directed 2026-07-07): "do all remaining work on Tier 5"** —
-the arc runs 5.1 combinators ✅ → **5.2 oscillators ✅** → 5.5 capture →
+the arc runs 5.1 combinators ✅ → **5.2 oscillators ✅** → **5.5 capture ✅** →
 5.3 MIDI → 5.4 mattes → 5.6 colour; **5.7 canvas stays user-gated (excluded
 from "remaining")**. Orchestration model: Opus architect writes each
 `docs/*_MILESTONE.md` contract, a Sonnet agent builds, the architect verifies
@@ -49,6 +49,22 @@ already written ahead: `PERFORMANCE_CAPTURE_MILESTONE.md` (5.5, MVP-only +
 Rutt-Etra slots per user answers 2026-07-07) and `MIDI_MODULATION_MILESTONE.md`
 (5.3, three slices). Composition follow-ups **F4/F5** are deferred behind the
 Tier 5 arc; then gated 2.x → blocked 3.x → **Morphogenesis** (directive holds).
+
+### Tier 5.5 — performance capture DONE (2026-07-07)
+
+Record a knob gesture against the looping preview; it becomes an inline
+`breakpoints(...)` route on a Rutt-Etra mod slot — bit-exact offline replay,
+**zero Rust changes** (the Tier 1.7 render half + the LFO media-guard finding
+made the bridge free). `GestureRecorder` pure model (clamp/decimation/one-pass
+rules pinned), `capturedSourceSpec` beside `lfoSourceSpec`, Captured source
+opt-in on the three Rutt-Etra slots, capture strip in the Workflow preview
+band, `slotCaptures` parallel param (slotLfos precedent — other panels
+untouched). Built inline (builder agent died on session limit with only
+GestureRecorder.swift on disk). swift 123 → **132**, cargo 611 intact;
+e2e: within-off 0.000 / on 19.722, frame-0 byte-identical to the depth-0
+render, manifest records the route. Contract
+`docs/PERFORMANCE_CAPTURE_MILESTONE.md` (MVP scope user-confirmed; multi-knob/
+overdub deferred until played with).
 
 ### Tier 5.2 — oscillator bank DONE (2026-07-07)
 

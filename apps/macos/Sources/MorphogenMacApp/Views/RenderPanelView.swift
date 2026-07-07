@@ -1197,7 +1197,8 @@ struct RenderPanelView: View {
             modulatorNames: state.ruttEtraDeclaredModulatorNames,
             lfoShape: $state.ruttEtraModDepthLfoShape,
             lfoRate: $state.ruttEtraModDepthLfoRate,
-            lfoPhase: $state.ruttEtraModDepthLfoPhase
+            lfoPhase: $state.ruttEtraModDepthLfoPhase,
+            captureAvailable: true
           )
 
           ModulationSlotRow(
@@ -1211,7 +1212,8 @@ struct RenderPanelView: View {
             modulatorNames: state.ruttEtraDeclaredModulatorNames,
             lfoShape: $state.ruttEtraModPitchLfoShape,
             lfoRate: $state.ruttEtraModPitchLfoRate,
-            lfoPhase: $state.ruttEtraModPitchLfoPhase
+            lfoPhase: $state.ruttEtraModPitchLfoPhase,
+            captureAvailable: true
           )
 
           ModulationSlotRow(
@@ -1225,7 +1227,8 @@ struct RenderPanelView: View {
             modulatorNames: state.ruttEtraDeclaredModulatorNames,
             lfoShape: $state.ruttEtraModThicknessLfoShape,
             lfoRate: $state.ruttEtraModThicknessLfoRate,
-            lfoPhase: $state.ruttEtraModThicknessLfoPhase
+            lfoPhase: $state.ruttEtraModThicknessLfoPhase,
+            captureAvailable: true
           )
 
           ModulationMediaRow(
@@ -2248,11 +2251,19 @@ struct ModulationSlotRow: View {
   var lfoShape: Binding<LfoShapeOption>? = nil
   var lfoRate: Binding<Double>? = nil
   var lfoPhase: Binding<Double>? = nil
+  // Performance-capture opt-in; false (the default) omits Captured from the
+  // source picker so panels without a capture story are unchanged. Mirrors
+  // the LFO opt-in.
+  var captureAvailable = false
 
   var body: some View {
     HStack(spacing: 16) {
       Picker("Mod \(label)", selection: $source) {
-        ForEach(ModulationSourceOption.allCases.filter { $0 != .lfo || lfoShape != nil }) { option in
+        ForEach(
+          ModulationSourceOption.allCases.filter {
+            ($0 != .lfo || lfoShape != nil) && ($0 != .captured || captureAvailable)
+          }
+        ) { option in
           Text(option.rawValue).tag(option)
         }
       }
@@ -2260,6 +2271,13 @@ struct ModulationSlotRow: View {
       .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
 
       if source != .off {
+        if source == .captured {
+          Text("Record a take in the Workflow Preview band")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(width: 220, alignment: .leading)
+            .help("Arm this slot, then use the capture strip under the preview to record a gesture.")
+        }
         if source == .lfo, let lfoShape, let lfoRate, let lfoPhase {
           Picker("Shape", selection: lfoShape) {
             ForEach(LfoShapeOption.allCases) { option in
@@ -2280,7 +2298,7 @@ struct ModulationSlotRow: View {
           }
           .frame(width: 150, alignment: .leading)
           .help("Phase offset in cycles (0.25 = a quarter cycle).")
-        } else if let modulator, !modulatorNames.isEmpty {
+        } else if source != .captured, let modulator, !modulatorNames.isEmpty {
           Picker("Modulator", selection: modulator) {
             Text("Default").tag("")
             ForEach(modulatorNames, id: \.self) { name in
@@ -2336,9 +2354,9 @@ where
 
   var body: some View {
     HStack(spacing: 16) {
-      // Enum slots don't opt in to LFO (this slice), so filter it out.
+      // Enum slots don't opt in to LFO or capture (this slice), so filter both out.
       Picker("Mod \(label)", selection: $source) {
-        ForEach(ModulationSourceOption.allCases.filter { $0 != .lfo }) { option in
+        ForEach(ModulationSourceOption.allCases.filter { $0 != .lfo && $0 != .captured }) { option in
           Text(option.rawValue).tag(option)
         }
       }

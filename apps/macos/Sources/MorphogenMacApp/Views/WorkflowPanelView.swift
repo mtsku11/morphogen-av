@@ -876,6 +876,59 @@ struct WorkflowPanelView: View {
             Spacer()
           }
 
+          // Performance capture (docs/PERFORMANCE_CAPTURE_MILESTONE.md):
+          // record a [0,1] gesture against the looping preview; the take
+          // becomes a breakpoints(...) route on the armed Rutt-Etra slot.
+          if !state.ruttEtraArmedCaptureTargets.isEmpty {
+            HStack(spacing: 10) {
+              Button {
+                if state.isCapturing {
+                  state.endCaptureTake()
+                } else {
+                  let fps = state.previewPlaybackFps
+                  guard fps.isFinite, fps > 0 else { return }
+                  // Restart playback at frame 0 in the same action, so the
+                  // recorder's t == 0 is frame 0 by construction.
+                  previewPlayer.start(frameCount: frames.count, fps: fps)
+                  state.beginCaptureTake(loopDuration: Double(frames.count) / fps)
+                }
+              } label: {
+                Image(systemName: state.isCapturing ? "stop.circle.fill" : "record.circle")
+                  .foregroundStyle(state.isCapturing ? .primary : Color.red)
+              }
+              .help(state.isCapturing
+                ? "Stop the take (it also auto-stops after one loop)"
+                : "Record a gesture on the armed slot from frame 0")
+
+              Picker("Capture", selection: $state.captureTargetSelection) {
+                ForEach(state.ruttEtraArmedCaptureTargets, id: \.self) { target in
+                  Text(target).tag(target)
+                }
+              }
+              .frame(width: 260)
+              .disabled(state.isCapturing)
+              .help("Which armed Rutt-Etra slot this take records onto.")
+
+              Slider(value: $state.captureSlider, in: 0...1)
+                .frame(maxWidth: 260)
+                .onChange(of: state.captureSlider) { _, newValue in
+                  state.ingestCaptureSample(t: previewPlayer.elapsed(), v: newValue)
+                }
+                .help("The capture control — scrub while the preview loops.")
+
+              Text(captureTakeLabel)
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+              Spacer()
+            }
+            .onAppear {
+              if !state.ruttEtraArmedCaptureTargets.contains(state.captureTargetSelection) {
+                state.captureTargetSelection = state.ruttEtraArmedCaptureTargets.first ?? ""
+              }
+            }
+          }
+
           ScrollView(.horizontal, showsIndicators: true) {
             HStack(spacing: 8) {
               ForEach(Array(frames.enumerated()), id: \.offset) { index, image in
@@ -919,6 +972,19 @@ struct WorkflowPanelView: View {
         previewPlayer.stop()
       }
     }
+  }
+
+  /// Take status for the capture strip: recording, a stored take's knot count,
+  /// or the arm-and-record hint.
+  private var captureTakeLabel: String {
+    if state.isCapturing {
+      return "recording…"
+    }
+    let target = state.captureTargetSelection
+    if let take = state.ruttEtraCapturedTakes[target], let last = take.last {
+      return "\(take.count) knot(s) / \(String(format: "%.1f", last.t))s"
+    }
+    return "no take yet"
   }
 
   private var statusBand: some View {

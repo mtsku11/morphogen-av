@@ -1901,6 +1901,32 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--modulator-audio"))
   }
 
+  func testQueuedRuttEtraSequenceArgumentsCarryCapturedRouteWithoutMediaFlags() throws {
+    var request = makeRuttEtraRequest()
+    // A captured take emits an inline breakpoints(...) clause — no media, no
+    // modulator name (docs/PERFORMANCE_CAPTURE_MILESTONE.md anchor 1: this is
+    // string-identical to a hand-written breakpoints route of the same knots,
+    // so the offline render byte-matches by construction).
+    let spec = try XCTUnwrap(
+      capturedSourceSpec([
+        GestureKnot(t: 0.0, v: 0.0),
+        GestureKnot(t: 2.0, v: 1.0),
+      ])
+    )
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "displacement_depth", source: spec, scale: 96, offset: 0)
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--modulate"))
+    XCTAssertTrue(arguments.contains("displacement_depth=breakpoints(0:0;2:1):96,0"))
+    XCTAssertFalse(arguments.contains("--modulator-audio"))
+    XCTAssertFalse(arguments.contains("--modulator-frames"))
+    XCTAssertFalse(arguments.contains("--named-modulator-audio"))
+    XCTAssertFalse(arguments.contains("--named-modulator-frames"))
+  }
+
   func testLfoSourceSpecFormatsAndValidates() {
     // Valid params spell the exact route-grammar clause.
     XCTAssertEqual(

@@ -527,6 +527,15 @@ final class AppState: ObservableObject {
   @Published var ruttEtraModulatorFramesURL: URL?
   @Published var ruttEtraModSampling = ModulationSamplingOption.hold
   @Published var ruttEtraNamedModulators: [NamedModulatorEntry] = []
+  // Performance capture (docs/PERFORMANCE_CAPTURE_MILESTONE.md): recorded
+  // takes keyed by Rutt-Etra target name; re-recording replaces (the MVP edit
+  // story). The strip state lives here (not the view) so takes survive view
+  // reconstruction and the recorder rules stay unit-testable.
+  @Published var ruttEtraCapturedTakes: [String: [GestureKnot]] = [:]
+  @Published var captureSlider = 0.5
+  @Published var captureTargetSelection = ""
+  @Published var isCapturing = false
+  private var captureRecorder: GestureRecorder?
   @Published var ruttEtraBackend = AppState.stickyBackend("backend.ruttEtra", default: .cpu) {
     didSet { AppState.persistBackend("backend.ruttEtra", ruttEtraBackend) }
   }
@@ -2222,10 +2231,31 @@ final class AppState: ObservableObject {
     // Empty (the default) leaves every slot media-sourced, so callers whose
     // panels don't opt in to LFO need no change.
     slotLfos: [(shape: LfoShapeOption, rate: Double, phase: Double)?] = [],
+    // Parallel to `slots`: the pre-formatted `breakpoints(...)` clause for a
+    // slot whose source is `.captured` (via `capturedSourceSpec`). Empty (the
+    // default) leaves every slot untouched, so callers whose panels don't opt
+    // in to capture need no change — the `slotLfos` churn-avoider precedent.
+    slotCaptures: [String?] = [],
     effectLabel: String
   ) -> [ModulationRouteSpec]? {
     var routes: [ModulationRouteSpec] = []
     for (index, slot) in slots.enumerated() {
+      if slot.source == .captured {
+        // No media, no modulator name — the knots live in the source clause.
+        guard let spec = index < slotCaptures.count ? slotCaptures[index] : nil else {
+          statusMessage =
+            "Record a capture take for the \(effectLabel) \(slot.target) slot in the Preview band."
+          return nil
+        }
+        routes.append(
+          ModulationRouteSpec(
+            target: slot.target, source: spec, scale: slot.scale, offset: slot.offset,
+            sampling: slot.sampling.spec,
+            modulator: nil
+          )
+        )
+        continue
+      }
       if slot.source == .lfo {
         // No media, no modulator name — the params live in the source clause.
         guard let lfo = index < slotLfos.count ? slotLfos[index] : nil else {
@@ -2587,6 +2617,74 @@ final class AppState: ObservableObject {
 
   var ruttEtraDeclaredModulatorNames: [String] {
     ruttEtraNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+
+  // MARK: Performance capture (docs/PERFORMANCE_CAPTURE_MILESTONE.md)
+
+  /// Rutt-Etra targets whose slot is armed for capture (source == .captured),
+  /// in slot order. The Workflow capture strip is visible while non-empty.
+  var ruttEtraArmedCaptureTargets: [String] {
+    var targets: [String] = []
+    if ruttEtraModDepthSource == .captured { targets.append("displacement_depth") }
+    if ruttEtraModPitchSource == .captured { targets.append("line_pitch") }
+    if ruttEtraModThicknessSource == .captured { targets.append("line_thickness") }
+    return targets
+  }
+
+  /// The stored take's spec clause for one Rutt-Etra target, or nil when no
+  /// take has been recorded (the run path then refuses with a status message).
+  func ruttEtraCapturedSpec(_ target: String) -> String? {
+    ruttEtraCapturedTakes[target].flatMap(capturedSourceSpec)
+  }
+
+  /// Begin a take for the currently selected armed target. The caller (the
+  /// capture strip) restarts preview playback from frame 0 in the same action,
+  /// so recorder time 0 == frame 0. The current slider value is ingested at
+  /// t = 0 so a held-still take records a constant.
+  func beginCaptureTake(loopDuration: TimeInterval) {
+    let armed = ruttEtraArmedCaptureTargets
+    guard !armed.isEmpty else {
+      statusMessage = "Arm a Rutt-Etra mod slot (source: Captured) before recording."
+      return
+    }
+    if !armed.contains(captureTargetSelection) {
+      captureTargetSelection = armed[0]
+    }
+    let recorder = GestureRecorder(loopDuration: loopDuration)
+    recorder.ingest(t: 0, v: captureSlider)
+    captureRecorder = recorder
+    isCapturing = true
+    statusMessage = "Recording \(captureTargetSelection) — scrub the capture slider…"
+  }
+
+  /// Offer one slider sample at the preview player's elapsed play time. Ends
+  /// the take automatically once the loop duration is passed (one pass, no
+  /// wrap — the recorder also drops out-of-window samples by contract).
+  func ingestCaptureSample(t: TimeInterval, v: Double) {
+    guard isCapturing, let recorder = captureRecorder else { return }
+    if t > recorder.loopDuration {
+      endCaptureTake()
+      return
+    }
+    recorder.ingest(t: t, v: v)
+  }
+
+  /// Close the take and store it on the selected target (replacing any prior
+  /// take — delete + re-record is the MVP edit story). An empty take stores
+  /// nothing and leaves any existing take untouched.
+  func endCaptureTake() {
+    guard let recorder = captureRecorder else { return }
+    recorder.finish()
+    captureRecorder = nil
+    isCapturing = false
+    guard !recorder.knots.isEmpty else {
+      statusMessage = "Capture take was empty — nothing recorded."
+      return
+    }
+    ruttEtraCapturedTakes[captureTargetSelection] = recorder.knots
+    let seconds = recorder.knots.last.map { String(format: "%.1f", $0.t) } ?? "0"
+    statusMessage =
+      "Captured \(recorder.knots.count) knot(s) over \(seconds)s on \(captureTargetSelection)."
   }
   func addRuttEtraNamedModulator() { appendNamedModulator(to: &ruttEtraNamedModulators) }
   func chooseRuttEtraNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &ruttEtraNamedModulators, id: id) }
@@ -3298,6 +3396,11 @@ final class AppState: ObservableObject {
           ruttEtraModThicknessLfoShape, ruttEtraModThicknessLfoRate,
           ruttEtraModThicknessLfoPhase
         ),
+      ],
+      slotCaptures: [
+        ruttEtraCapturedSpec("displacement_depth"),
+        ruttEtraCapturedSpec("line_pitch"),
+        ruttEtraCapturedSpec("line_thickness"),
       ],
       effectLabel: "rutt-etra"
     ) else { return }
@@ -4513,11 +4616,16 @@ enum ModulationSourceOption: String, CaseIterable, Identifiable {
   /// (pass LFO bindings) offer it; `modulationRoutes` spells it per-slot via
   /// `lfoSourceSpec`, so it never goes through `cliValue`.
   case lfo = "LFO"
+  /// A recorded performance-capture take — no media. Only slot rows that opt
+  /// in (`captureAvailable`) offer it; `modulationRoutes` spells it per-slot
+  /// via `capturedSourceSpec` (a `breakpoints(...)` clause), so it never goes
+  /// through `cliValue`. See `docs/PERFORMANCE_CAPTURE_MILESTONE.md`.
+  case captured = "Captured"
 
   var id: String { rawValue }
 
-  /// CLI route-grammar spelling; `nil` for `off` (and for `lfo`, whose
-  /// spelling is per-slot — see `lfoSourceSpec`).
+  /// CLI route-grammar spelling; `nil` for `off` (and for `lfo`/`captured`,
+  /// whose spelling is per-slot — see `lfoSourceSpec`/`capturedSourceSpec`).
   var cliValue: String? {
     switch self {
     case .off:
@@ -4533,6 +4641,8 @@ enum ModulationSourceOption: String, CaseIterable, Identifiable {
     case .flow:
       return "flow"
     case .lfo:
+      return nil
+    case .captured:
       return nil
     }
   }
@@ -4662,6 +4772,20 @@ func lfoSourceSpec(shape: LfoShapeOption, rate: Double, phase: Double) -> String
     String(format: "%.6g", locale: Locale(identifier: "en_US_POSIX"), value)
   }
   return "lfo(\(shape.cliValue),\(number(rate)),\(number(phase)))"
+}
+
+/// The exact `breakpoints(<t>:<v>[;<t>:<v>...])` source clause for a recorded
+/// performance-capture take, or `nil` for an empty take. Knots are emitted
+/// sorted ascending by `t` (the recorder already ingests in order; sorting is
+/// the parser's contract, so it is enforced here too). Free function for
+/// testability — the `lfoSourceSpec` precedent.
+func capturedSourceSpec(_ knots: [GestureKnot]) -> String? {
+  guard !knots.isEmpty else { return nil }
+  func number(_ value: Double) -> String {
+    String(format: "%.6g", locale: Locale(identifier: "en_US_POSIX"), value)
+  }
+  let pairs = knots.sorted { $0.t < $1.t }.map { "\(number($0.t)):\(number($0.v))" }
+  return "breakpoints(\(pairs.joined(separator: ";")))"
 }
 
 enum PaletteQuantizeModeOption: String, CaseIterable, Identifiable {
