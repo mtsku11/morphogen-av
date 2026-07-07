@@ -4,11 +4,13 @@ Session-resume checkpoint. Update at the end of any working session so a fresh
 session (or a fresh agent) can pick up in seconds. Keep it short; durable detail
 lives in `docs/`, cross-session findings live in `/memory/`.
 
-_Last updated: 2026-07-05_
+_Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **582 passing across 7 crates, 0 failing.**
+- `cargo test --workspace`: **596 passing across 7 crates, 0 failing** (was 582
+  in the last checkpoint; Tier 5.1 combinators + composition F1/F3 regression
+  tests account for the delta).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **123 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
@@ -34,13 +36,19 @@ coagulated-blend were fully wired; OLA audio resynthesis (1.2), cascade B-sample
 (1.4), edge-density source (1.6), and breakpoints envelope source (1.7) landed in
 this session.
 
-**Next: Tier 5 "it's a synth now" arc** — present the Tier 5 menu to the user and
-get a pick before writing a contract and building. Order by ROI:
-5.1 combinators (highest — multiplies the whole matrix) → 5.2 oscillators →
+**Next (decided 2026-07-07): close out the composition flagship, then resume the
+Tier 5 arc.** Immediate work is the composition post-build follow-ups —
+**F1 ✅ and F3 ✅ done** (cross-scene dims refusal; persist scene fingerprint
+before render) — leaving **F2** (`--scene <name>` single-scene render), **F4**
+(master-clock fps alignment guard), **F5** (real-footage two-scene acceptance
+render on the gitignored cello/harp clips). All four are recorded in
+`docs/COMPOSITION_MILESTONE.md` §Post-build review. Then continue the Tier 5
+"it's a synth now" arc by ROI: 5.1 combinators ✅ → **5.2 oscillators** →
 5.5 capture → 5.3 MIDI → 5.4 mattes → 5.6 colour → then gated 2.x → blocked 3.x
-→ **Morphogenesis**.
+→ **Morphogenesis**. The "every Tier before Morphogenesis" directive still holds;
+the composition close-out is small correctness debt slotted ahead of 5.2.
 
-### Composition timeline — MILESTONE COMPLETE (S1–S7), pushed to origin/main
+### Composition timeline — MILESTONE BUILT (S1–S7); F1/F3 follow-ups done
 
 The flagship binder. Scenes (each a verbatim `render-chain` spec) on a global
 timeline → deterministic cut/crossfade transitions → scene-fingerprint cache →
@@ -48,9 +56,10 @@ optional master audio clock (reserved `master.` named modulator, offset via
 per-scene trimming). CLI `render-composition` + queue pair
 (`RenderJobTask::RenderComposition`) + SwiftUI spec-file runner panel. Contract
 `docs/COMPOSITION_MILESTONE.md`; findings in memory `composition-timeline`.
-Commits `cdeab6a`/`45d60d4`/`1ddff52`/`858933c`/`7780070`/`9663ede`/`52b0c61`
-(all on origin/main). Two planning-doc contracts also pushed:
-`COMPOSITION_MILESTONE.md`, `MORPHOGENESIS_MILESTONE.md`.
+Post-build review (independent, on the now-absorbed `opus-progress-review`
+branch) logged deviations + follow-ups F1–F6; **F1** (cut-only cross-scene dims
+refusal) and **F3** (fingerprint persisted before render → real mid-scene
+resume) landed 2026-07-07 with regression tests. Remaining: F2, F4, F5, F6.
 
 ## Earlier history
 
