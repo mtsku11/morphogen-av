@@ -17,6 +17,7 @@ pub mod flow;
 pub mod flow_cache;
 pub mod fluid_advect;
 pub mod fluid_mosaic;
+pub mod generators;
 pub mod grain_cache;
 pub mod granular_mosaic;
 pub mod image_buffer;
@@ -103,6 +104,11 @@ pub use fluid_mosaic::{
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
     render_fluid_mosaic, resort_fluid_mosaic_colors, FluidMosaicSettings, FluidMosaicState,
     TileOrigin, TilePatch, FLUID_MOSAIC_ALGORITHM,
+};
+pub use generators::{
+    render_generator_frame, render_gradient_frame, render_plasma_frame, render_radial_frame,
+    render_scan_bars_frame, GeneratorPreset, GeneratorSettings, OSCILLATOR_GRADIENT_ALGORITHM,
+    OSCILLATOR_PLASMA_ALGORITHM, OSCILLATOR_RADIAL_ALGORITHM, OSCILLATOR_SCAN_BARS_ALGORITHM,
 };
 pub use grain_cache::{
     read_grain_color_descriptor_cache, read_grain_descriptor_cache,

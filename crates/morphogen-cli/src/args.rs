@@ -14,8 +14,8 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    BlendMode, CoagulationFlowSource, ModulationSampling, ScanlineFilter, StructureMode,
-    VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
+    BlendMode, CoagulationFlowSource, GeneratorPreset, ModulationSampling, ScanlineFilter,
+    StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
     GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
@@ -976,6 +976,33 @@ pub(crate) enum Commands {
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+    },
+    /// Render a deterministic video oscillator preset — a source-less pattern generator
+    /// writing an ordinary PNG frame dir, so any existing effect/route/queue/chain can
+    /// consume it as a source. **Off case:** `--rate 0` holds every frame at frame 0.
+    GenerateFrames {
+        preset: CliGeneratorPreset,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 640)]
+        width: u32,
+        #[arg(long, default_value_t = 360)]
+        height: u32,
+        /// Number of output frames to render.
+        #[arg(long, default_value_t = 48)]
+        frames: u32,
+        /// Phase advance per frame. `0` = static frames (the off case).
+        #[arg(long, default_value_t = 0.02)]
+        rate: f32,
+        /// Initial phase.
+        #[arg(long, default_value_t = 0.0)]
+        phase: f32,
+        /// Spatial frequency / pattern density (bar count, ring density, plasma cell size).
+        /// Accepted but unused by `gradient`.
+        #[arg(long, default_value_t = 4.0)]
+        scale: f32,
+        /// Plasma noise lattice key. Ignored by the other presets.
+        #[arg(long, default_value_t = 71)]
+        seed: u64,
     },
     /// Render a pixel-sort effect — per-line threshold-bounded span sorting (CPU, deterministic).
     /// Within each row or column, contiguous runs of pixels whose sort key falls in
@@ -3204,6 +3231,26 @@ impl From<CliWindowFunction> for WindowFunction {
             CliWindowFunction::Hann => Self::Hann,
             CliWindowFunction::Hamming => Self::Hamming,
             CliWindowFunction::Rectangular => Self::Rectangular,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliGeneratorPreset {
+    #[default]
+    ScanBars,
+    Radial,
+    Plasma,
+    Gradient,
+}
+
+impl From<CliGeneratorPreset> for GeneratorPreset {
+    fn from(value: CliGeneratorPreset) -> Self {
+        match value {
+            CliGeneratorPreset::ScanBars => Self::ScanBars,
+            CliGeneratorPreset::Radial => Self::Radial,
+            CliGeneratorPreset::Plasma => Self::Plasma,
+            CliGeneratorPreset::Gradient => Self::Gradient,
         }
     }
 }

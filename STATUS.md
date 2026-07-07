@@ -8,10 +8,13 @@ _Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **598 passing across 7 crates, 0 failing** (was 582
-  in the last checkpoint; Tier 5.1 combinators + composition F1/F3/F2 regression
-  tests account for the delta).
+- `cargo test --workspace`: **611 passing across 7 crates, 0 failing** (was 598
+  in the last checkpoint; Tier 5.2 oscillator-bank tests account for the delta).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
+- `cargo fmt --all -- --check` is **dirty on ~54 pre-existing lines** (the
+  Homebrew rustc 1.96 fmt drift again — verified pre-existing by identical
+  per-file diff counts with all 2026-07-07 changes stashed; new code adds zero
+  fmt diffs). Reconcile in its own commit when convenient, not mid-feature.
 - `swift test`: **123 passing, 0 failing.**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
@@ -36,17 +39,33 @@ coagulated-blend were fully wired; OLA audio resynthesis (1.2), cascade B-sample
 (1.4), edge-density source (1.6), and breakpoints envelope source (1.7) landed in
 this session.
 
-**Next (decided 2026-07-07): close out the composition flagship, then resume the
-Tier 5 arc.** Immediate work is the composition post-build follow-ups —
-**F1 ✅, F3 ✅, and F2 ✅ done** (cross-scene dims refusal; persist scene
-fingerprint before render; `--scene <name>` single-scene render at timeline
-offset) — leaving **F4** (master-clock fps alignment guard) and **F5**
-(real-footage two-scene acceptance render on the gitignored cello/harp clips).
-All are recorded in `docs/COMPOSITION_MILESTONE.md` §Post-build review. Then continue the Tier 5
-"it's a synth now" arc by ROI: 5.1 combinators ✅ → **5.2 oscillators** →
-5.5 capture → 5.3 MIDI → 5.4 mattes → 5.6 colour → then gated 2.x → blocked 3.x
-→ **Morphogenesis**. The "every Tier before Morphogenesis" directive still holds;
-the composition close-out is small correctness debt slotted ahead of 5.2.
+**In flight (user-directed 2026-07-07): "do all remaining work on Tier 5"** —
+the arc runs 5.1 combinators ✅ → **5.2 oscillators ✅** → 5.5 capture →
+5.3 MIDI → 5.4 mattes → 5.6 colour; **5.7 canvas stays user-gated (excluded
+from "remaining")**. Orchestration model: Opus architect writes each
+`docs/*_MILESTONE.md` contract, a Sonnet agent builds, the architect verifies
+(baseline→delta, frames Read, frame-delta numbers) and checkpoints. Contracts
+already written ahead: `PERFORMANCE_CAPTURE_MILESTONE.md` (5.5, MVP-only +
+Rutt-Etra slots per user answers 2026-07-07) and `MIDI_MODULATION_MILESTONE.md`
+(5.3, three slices). Composition follow-ups **F4/F5** are deferred behind the
+Tier 5 arc; then gated 2.x → blocked 3.x → **Morphogenesis** (directive holds).
+
+### Tier 5.2 — oscillator bank DONE (2026-07-07)
+
+`generate-frames <preset> <out>` — 4 deterministic source-less pattern
+oscillators (scan-bars / radial / plasma / gradient) in
+`morphogen-render/src/generators.rs`, f64 phase law (`phase0 + rate*frame`,
+recompute-from-index), splitmix64 2-D value noise, per-preset algorithm ids,
+manifest.json with all knobs. Contract `docs/OSCILLATOR_BANK_MILESTONE.md`.
+Anchors pinned: rate-0 identity, phase-drift equivalence (incl. plasma noise
+path), two-run determinism, plasma seed sensitivity, generated-dir feeds
+rutt-etra (smoke). Verified: 598 → **611** cargo, clippy clean, frames Read
+(bars scroll / rings breathe / plasma drifts / gradient sweeps), frame-delta
+default-rate 7.652 vs rate-0 **0.000**. One necessary deviation, reproduced
+independently before acceptance: clap's debug-mode `debug_assert` overflows
+the 8 MiB main stack now the `Commands` enum is this large (any +1 field
+crashes every debug invocation, exit 134) — `main()` now runs the CLI on a
+64 MiB worker thread.
 
 ### Composition timeline — MILESTONE BUILT (S1–S7); F1/F2/F3 follow-ups done
 

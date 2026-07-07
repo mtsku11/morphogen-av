@@ -32,7 +32,8 @@ use morphogen_render::{
     refresh_field_particle_colors, refresh_fluid_mosaic_colors, remix_block_vectors,
     render_block_collage_frame, render_cascade_collage_frame, render_cascade_trails,
     render_channel_shift_frame, render_field_particles, render_fluid_mosaic,
-    render_palette_quantize_frame, render_pixel_sort_frame, render_retro_static_frame,
+    render_generator_frame, render_palette_quantize_frame, render_pixel_sort_frame,
+    render_retro_static_frame,
     render_rutt_etra_frame, render_rutt_etra_two_source_frame, reset_residual_in_refreshed_blocks,
     ola_resynthesis_cpu, resort_fluid_mosaic_colors, select_grains_cpu,
     select_grains_from_pool_cpu, select_grains_multimodal_cpu, synthesize_turbulence_flow,
@@ -44,11 +45,12 @@ use morphogen_render::{
     CoagulationField, CoagulationFlowSource, CoagulationSettings, CodecEngraveSettings,
     ConvolutionBlendSettings, ConvolutionKernel, DispersionField, DispersionSettings,
     FieldParticleSettings, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
-    FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GrainColorDescriptor,
-    GrainDescriptor, GrainPool, GrainSelection, GranularMosaicSettings, ImageBufferF32, MaskSource,
-    PaletteQuantizeSettings, ParticleField, PixelSortSettings, PoolSelectionWindow, QuantizeMode,
-    RetroStaticSettings, RmsDisplacementEnvelope, RuttEtraSettings, ScanlineSmearSettings,
-    TemporalCoherence, VectorRemixMode, VideoVocoderSettings, CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GeneratorPreset,
+    GeneratorSettings, GrainColorDescriptor, GrainDescriptor, GrainPool, GrainSelection,
+    GranularMosaicSettings, ImageBufferF32, MaskSource, PaletteQuantizeSettings, ParticleField,
+    PixelSortSettings, PoolSelectionWindow, QuantizeMode, RetroStaticSettings,
+    RmsDisplacementEnvelope, RuttEtraSettings, ScanlineSmearSettings, TemporalCoherence,
+    VectorRemixMode, VideoVocoderSettings, CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
     DATAMOSH_CODEC_ENGRAVE_ALGORITHM, DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
     GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
@@ -2719,6 +2721,67 @@ pub(crate) fn render_cascade_collage_sequence(
     };
 
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+pub(crate) struct GenerateFramesRequest<'a> {
+    pub(crate) preset: GeneratorPreset,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) settings: GeneratorSettings,
+    pub(crate) frames: u32,
+}
+
+/// Render a deterministic oscillator preset — a source-less generator writing an
+/// ordinary PNG frame dir (see `docs/OSCILLATOR_BANK_MILESTONE.md`).
+pub(crate) fn generate_frames(
+    request: GenerateFramesRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    request.settings.validate()?;
+    if request.frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+    fs::create_dir_all(request.output_dir)?;
+
+    for index in 0..request.frames {
+        let rendered = render_generator_frame(request.preset, &request.settings, index)?;
+        save_png(
+            &rendered,
+            &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    let algorithm = request.preset.algorithm_id();
+    let manifest = serde_json::json!({
+        "algorithm": algorithm,
+        "preset": request.preset,
+        "width": request.settings.width,
+        "height": request.settings.height,
+        "frames": request.frames,
+        "rate": request.settings.rate,
+        "phase": request.settings.phase,
+        "scale": request.settings.scale,
+        "seed": request.settings.seed,
+    });
+    fs::write(
+        request.output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+
+    println!(
+        "rendered {} frame(s) of {:?} oscillator (algorithm {}, rate {:.3}, phase {:.3}, scale {:.2}) to {}",
+        request.frames,
+        request.preset,
+        algorithm,
+        request.settings.rate,
+        request.settings.phase,
+        request.settings.scale,
+        request.output_dir.display()
+    );
+
+    Ok(FrameSequenceRenderResult {
+        frame_count: request.frames as usize,
+    })
 }
 
 pub(crate) struct BlockCollageSequenceRequest<'a> {

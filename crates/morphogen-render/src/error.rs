@@ -36,6 +36,8 @@ pub enum RenderError {
     InvalidPaletteQuantizeSettings(String),
     #[error("invalid rutt-etra settings: {0}")]
     InvalidRuttEtraSettings(String),
+    #[error("invalid generator settings: {0}")]
+    InvalidGeneratorSettings(String),
     #[error("invalid modulation route: {0}")]
     InvalidModulationRoute(String),
     #[error("render inputs are incompatible: {0}")]

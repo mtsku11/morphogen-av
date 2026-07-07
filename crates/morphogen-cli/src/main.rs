@@ -4,8 +4,8 @@ use morphogen_render::{
     BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
     ChannelShiftSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
     FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
-    FluidMosaicSettings, GranularMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
-    RetroStaticSettings, RuttEtraSettings, StructureMode, VideoVocoderSettings,
+    FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings, PaletteQuantizeSettings,
+    PixelSortSettings, RetroStaticSettings, RuttEtraSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -30,6 +30,20 @@ use render::*;
 use showcase::*;
 
 fn main() {
+    // The derived `Commands` enum has grown large enough that clap's debug-mode
+    // `Command::debug_assert()` (which recursively validates the whole derived
+    // command tree on every `Cli::parse()` call) can overflow the default 8 MiB
+    // main-thread stack in debug builds — reproducible by adding a single field
+    // to *any* subcommand, not specific to one variant. Run the real entry point
+    // on a worker thread with a larger stack instead of shrinking the CLI surface.
+    let worker = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(run_and_exit)
+        .expect("failed to spawn CLI worker thread");
+    worker.join().expect("CLI worker thread panicked");
+}
+
+fn run_and_exit() {
     if let Err(error) = run() {
         eprintln!("error: {error}");
         std::process::exit(1);
@@ -779,6 +793,30 @@ fn run() -> Result<(), CliError> {
             })
             .map(|_| ())
         }
+        Commands::GenerateFrames {
+            preset,
+            output_dir,
+            width,
+            height,
+            frames,
+            rate,
+            phase,
+            scale,
+            seed,
+        } => generate_frames(GenerateFramesRequest {
+            preset: preset.into(),
+            output_dir: &output_dir,
+            settings: GeneratorSettings {
+                width,
+                height,
+                rate,
+                phase,
+                scale,
+                seed,
+            },
+            frames,
+        })
+        .map(|_| ()),
         Commands::RenderPixelSortSequence {
             source_a_dir,
             source_b_dir,

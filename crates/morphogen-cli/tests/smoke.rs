@@ -118,6 +118,76 @@ fn render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs() {
     assert_eq!(manifest["frame_count"], 2);
 }
 
+/// `generate-frames` writes a manifest with every knob and PNG frames; a generated
+/// dir is "just a frame dir" — feeding it straight into `render-rutt-etra-sequence`
+/// must render without complaint (the oscillator bank's engine-integration anchor).
+#[test]
+fn generate_frames_writes_manifest_and_feeds_rutt_etra_sequence() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let generated_dir = temp_dir.path().join("scan-bars-frames");
+    let rutt_etra_dir = temp_dir.path().join("rutt-etra-from-generated");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "scan-bars",
+            generated_dir.to_string_lossy().as_ref(),
+            "--width",
+            "16",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.25",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rendered 3 frame(s)"));
+
+    for index in 0..3 {
+        assert!(
+            generated_dir.join(format!("frame_{index:06}.png")).exists(),
+            "generated frame {index} must be written"
+        );
+    }
+
+    let manifest = read_json(&generated_dir.join("manifest.json"));
+    assert_eq!(manifest["algorithm"], "oscillator_scan_bars_cpu_v1");
+    assert_eq!(manifest["preset"], "scan_bars");
+    assert_eq!(manifest["width"], 16);
+    assert_eq!(manifest["height"], 16);
+    assert_eq!(manifest["frames"], 3);
+    assert_eq!(manifest["rate"], 0.25);
+    assert_eq!(manifest["phase"], 0.0);
+    assert_eq!(manifest["scale"], 4.0);
+    assert_eq!(manifest["seed"], 71);
+
+    // "just a frame dir": feed it straight into an existing effect.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            generated_dir.to_string_lossy().as_ref(),
+            rutt_etra_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered rutt-etra scanline sequence with 3 frame(s)",
+        ));
+
+    for index in 0..3 {
+        let path = rutt_etra_dir.join(format!("frame_{index:06}.png"));
+        assert!(path.exists(), "rutt-etra output frame {index} must exist");
+        let image = image::open(&path).expect("decode rutt-etra output frame");
+        assert_eq!((image.width(), image.height()), (16, 16));
+    }
+}
+
 /// Two-source A→B: `--source-a-dir` pointing at the same dir as B is
 /// byte-identical to the single-source render (the continuity identity);
 /// a distinct A switches the algorithm id, records `source_a`, and diverges.

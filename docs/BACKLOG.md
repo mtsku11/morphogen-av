@@ -169,9 +169,16 @@ queue pair, SwiftUI spec-runner panel. Post-build review follow-ups live in
 **F1 (cut-only cross-scene dims refusal), F3 (fingerprint persisted before
 render → real mid-scene resume), and F2 (`--scene <name>` single-scene render at
 timeline offset, no assembly) are DONE (2026-07-07)**; **F4** (master-fps
-alignment guard) and **F5** (real-footage two-scene acceptance render) remain and
-are the immediate next work (decided 2026-07-07), ahead of resuming the Tier 5
-arc (next: 5.2 oscillators; 5.1 combinators done) and then Morphogenesis.
+alignment guard) and **F5** (real-footage two-scene acceptance render) remain
+(deferred behind the Tier 5 arc by user direction 2026-07-07), then
+Morphogenesis. **Tier 5 arc in flight (user-directed 2026-07-07: "all remaining
+Tier 5"): 5.2 oscillator bank DONE
+([OSCILLATOR_BANK_MILESTONE.md](OSCILLATOR_BANK_MILESTONE.md) — `generate-frames`
+CLI, 4 presets, f64 phase law, rate-0/phase-drift anchors); next 5.5 capture
+([PERFORMANCE_CAPTURE_MILESTONE.md](PERFORMANCE_CAPTURE_MILESTONE.md), MVP-only
+scope user-confirmed) → 5.3 MIDI
+([MIDI_MODULATION_MILESTONE.md](MIDI_MODULATION_MILESTONE.md)) → 5.4 mattes →
+5.6 colour; 5.7 canvas stays user-gated.**
 
 **The wild experimental plan (user-requested 2026-07-05) is the morphogenesis
 engine — contract ready in
