@@ -99,7 +99,16 @@ named-modulator fingerprint lists. Envelope sidecar cache: **not extended**
   `--modulator-midi`/named flags on the modulatable commands + tempo-map and
   envelope unit tests (SMF fixtures built as byte arrays in test code — no
   binary fixtures in the repo) + a readout render (below).
-- **S2 — queue + checkpoint.** Queue tasks persist `modulator_midi` /
+- **S2 — queue + checkpoint. DONE (2026-07-07,** Sonnet build,
+  orchestrator-verified: cargo 630 → **633/0**, clippy clean, zero new fmt
+  diffs; both S1 deviations reversed — queue-add persists MIDI media on all
+  16 modulatable tasks (Option fields follow the existing null-serialized
+  `modulator_audio_path` convention, Vecs skip-when-empty) and the feedback
+  checkpoint contract fingerprints default+named MIDI (datamosh composes
+  free via the shared contract type). Smokes: add→run byte-identical with a
+  `midi-cc(74)` named route (+ real `diff -r` re-run: empty), add-time
+  missing-media rejection persists nothing, changed-MIDI-content refuses
+  resume / restored content resumes byte-identical.) Queue tasks persist `modulator_midi` /
   named-MIDI vectors (serde skip-when-none/empty — pre-slice JSON
   byte-identical, pinned); add-time validation through the shared resolver
   (rejection persists nothing); add→run byte-identical smoke; stateful

@@ -2025,6 +2025,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2035,6 +2038,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueAddFluidAdvectSequence {
         queue_path: PathBuf,
@@ -2072,6 +2078,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2082,6 +2091,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueAddFluidAdvectTwoSourceSequence {
         queue_path: PathBuf,
@@ -2111,6 +2123,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2121,6 +2136,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueAddOpticalFlowAdvectSequence {
         queue_path: PathBuf,
@@ -2149,6 +2167,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2159,6 +2180,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueAddFieldParticlesSequence {
         queue_path: PathBuf,
@@ -2196,12 +2220,18 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long = "named-modulator-audio")]
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueAddCascadeTrailsSequence {
         queue_path: PathBuf,
@@ -2245,6 +2275,9 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long, default_value_t = 12.0)]
@@ -2255,6 +2288,9 @@ pub(crate) enum Commands {
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -2306,6 +2342,9 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long, default_value_t = 12.0)]
@@ -2316,6 +2355,9 @@ pub(crate) enum Commands {
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
         #[arg(long)]
         project_path: Option<PathBuf>,
     },
@@ -2353,6 +2395,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2363,6 +2408,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Queue a channel-shift (RGB split) sequence job. Constant per-channel
     /// offsets, optional A-flow per-row shifts, and modulation-matrix routes.
@@ -2410,6 +2458,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2420,6 +2471,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunChannelShiftSequence {
         queue_path: PathBuf,
@@ -2456,6 +2510,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2466,6 +2523,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunPaletteQuantizeSequence {
         queue_path: PathBuf,
@@ -2517,6 +2577,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -2527,6 +2590,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunRuttEtraSequence {
         queue_path: PathBuf,
@@ -2627,12 +2693,18 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long = "named-modulator-audio")]
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunCoagulatedBlendSequence {
         queue_path: PathBuf,
@@ -2687,12 +2759,18 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long = "named-modulator-audio")]
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunDispersionBlendSequence {
         queue_path: PathBuf,
@@ -2752,10 +2830,16 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long = "named-modulator-audio")]
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunFluidMosaicSequence {
         queue_path: PathBuf,
@@ -3027,6 +3111,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -3037,6 +3124,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunDatamoshSequence {
         queue_path: PathBuf,
@@ -3192,6 +3282,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -3202,6 +3295,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueRunPixelSortSequence {
         queue_path: PathBuf,

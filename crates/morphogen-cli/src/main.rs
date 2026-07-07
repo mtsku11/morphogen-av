@@ -1156,6 +1156,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue::queue_add_coagulated_blend_sequence(
             queue::QueueAddCoagulatedBlendSequenceRequest {
                 queue_path: &queue_path,
@@ -1192,6 +1194,8 @@ fn run() -> Result<(), CliError> {
                 modulation_sampling: modulation_sampling.into(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         ),
         Commands::QueueRunCoagulatedBlendSequence { queue_path } => {
@@ -1227,6 +1231,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue::queue_add_dispersion_blend_sequence(
             queue::QueueAddDispersionBlendSequenceRequest {
                 queue_path: &queue_path,
@@ -1260,6 +1266,8 @@ fn run() -> Result<(), CliError> {
                 modulation_sampling: modulation_sampling.into(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         ),
         Commands::QueueRunDispersionBlendSequence { queue_path } => {
@@ -1295,6 +1303,8 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue::queue_add_fluid_mosaic_sequence(queue::QueueAddFluidMosaicSequenceRequest {
             queue_path: &queue_path,
             source_a_dir: &source_a_dir,
@@ -1325,6 +1335,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueRunFluidMosaicSequence { queue_path } => {
             queue::queue_run_fluid_mosaic_sequence(&queue_path)
@@ -1758,6 +1770,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_feedback_sequence(QueueAddFeedbackSequenceRequest {
             queue_path: &queue_path,
             modulator_dir: &modulator_dir,
@@ -1790,6 +1804,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueAddFluidAdvectSequence {
             queue_path,
@@ -1811,6 +1827,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_fluid_advect_sequence(QueueAddFluidAdvectSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -1833,6 +1851,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueAddFluidAdvectTwoSourceSequence {
             queue_path,
@@ -1851,6 +1871,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_fluid_advect_two_source_sequence(
             QueueAddFluidAdvectTwoSourceSequenceRequest {
                 queue_path: &queue_path,
@@ -1868,6 +1890,8 @@ fn run() -> Result<(), CliError> {
                 modulation_sampling: modulation_sampling.into(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         ),
         Commands::QueueAddOpticalFlowAdvectSequence {
@@ -1886,6 +1910,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_optical_flow_advect_sequence(QueueAddOpticalFlowAdvectSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -1901,6 +1927,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueAddFieldParticlesSequence {
             queue_path,
@@ -1924,6 +1952,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_field_particles_sequence(QueueAddFieldParticlesSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -1948,6 +1978,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueAddCascadeTrailsSequence {
             queue_path,
@@ -1977,6 +2009,8 @@ fn run() -> Result<(), CliError> {
             named_modulator_audio,
             named_modulator_frames,
             project_path,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_cascade_trails_sequence(QueueAddCascadeTrailsSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -2012,6 +2046,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueAddCascadeCollageSequence {
             queue_path,
@@ -2044,6 +2080,8 @@ fn run() -> Result<(), CliError> {
             named_modulator_audio,
             named_modulator_frames,
             project_path,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_cascade_collage_sequence(QueueAddCascadeCollageSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -2073,6 +2111,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueAddRetroStaticSequence {
             queue_path,
@@ -2092,6 +2132,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_retro_static_sequence(QueueAddRetroStaticSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -2110,6 +2152,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueAddChannelShiftSequence {
             queue_path,
@@ -2134,6 +2178,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_channel_shift_sequence(QueueAddChannelShiftSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2159,6 +2205,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueRunChannelShiftSequence { queue_path } => {
             queue_run_channel_shift_sequence(&queue_path)
@@ -2179,6 +2227,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_palette_quantize_sequence(QueueAddPaletteQuantizeSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2197,6 +2247,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueRunPaletteQuantizeSequence { queue_path } => {
             queue_run_palette_quantize_sequence(&queue_path)
@@ -2220,6 +2272,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_rutt_etra_sequence(QueueAddRuttEtraSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2241,6 +2295,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueRunRuttEtraSequence { queue_path } => {
             queue_run_rutt_etra_sequence(&queue_path)
@@ -2532,6 +2588,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_datamosh_sequence(QueueAddDatamoshSequenceRequest {
             queue_path: &queue_path,
             modulator_dir: &modulator_dir,
@@ -2556,6 +2614,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueRunDatamoshSequence { queue_path } => {
             queue_run_datamosh_sequence(&queue_path)
@@ -2672,6 +2732,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => queue_add_pixel_sort_sequence(QueueAddPixelSortSequenceRequest {
             queue_path: &queue_path,
             source_a_dir: &source_a_dir,
@@ -2695,6 +2757,8 @@ fn run() -> Result<(), CliError> {
             modulation_sampling: modulation_sampling.into(),
             named_modulator_audio: &named_modulator_audio,
             named_modulator_frames: &named_modulator_frames,
+            modulator_midi: modulator_midi.as_deref(),
+            named_modulator_midi: &named_modulator_midi,
         }),
         Commands::QueueRunPixelSortSequence { queue_path } => {
             queue_run_pixel_sort_sequence(&queue_path)

@@ -7901,6 +7901,56 @@ fn write_test_wav_at(path: &Path, sample_rate: u32, samples: &[f32]) {
     writer.finalize().expect("finalize wav");
 }
 
+// ── Minimal SMF byte-array builder for queue/checkpoint MIDI smokes ─────────
+// Duplicates the small helper set from `morphogen-cli/src/modulate.rs`'s own
+// `#[cfg(test)]` module (private, unreachable from this integration-test
+// crate) — the S1 "no binary fixtures in the repo" precedent
+// (`docs/MIDI_MODULATION_MILESTONE.md`).
+
+fn midi_vlq(mut value: u32) -> Vec<u8> {
+    let mut bytes = vec![(value & 0x7F) as u8];
+    value >>= 7;
+    while value > 0 {
+        bytes.push(((value & 0x7F) as u8) | 0x80);
+        value >>= 7;
+    }
+    bytes.reverse();
+    bytes
+}
+
+fn midi_chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(id);
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    out.extend_from_slice(body);
+    out
+}
+
+fn midi_control_change(channel: u8, controller: u8, value: u8) -> Vec<u8> {
+    vec![0xB0 | channel, controller, value]
+}
+
+/// A format-0, single-track, PPQ-480 SMF (default 120 BPM tempo) built from
+/// `(delta_ticks, event_bytes)` pairs, with an End-of-Track appended.
+fn write_test_smf(path: &Path, events: &[(u32, Vec<u8>)]) {
+    let mut header = Vec::new();
+    header.extend_from_slice(&0u16.to_be_bytes()); // format 0
+    header.extend_from_slice(&1u16.to_be_bytes()); // ntrks
+    header.extend_from_slice(&480u16.to_be_bytes()); // PPQ division
+    let mut bytes = midi_chunk(b"MThd", &header);
+
+    let mut track_body = Vec::new();
+    for (delta, data) in events {
+        track_body.extend_from_slice(&midi_vlq(*delta));
+        track_body.extend_from_slice(data);
+    }
+    track_body.extend_from_slice(&midi_vlq(0));
+    track_body.extend_from_slice(&[0xFF, 0x2F, 0x00]); // end-of-track
+    bytes.extend_from_slice(&midi_chunk(b"MTrk", &track_body));
+
+    fs::write(path, bytes).expect("write test SMF");
+}
+
 #[test]
 fn pixel_sort_metal_parity_real_footage() {
     use image::ImageReader;
@@ -9188,11 +9238,14 @@ fn modulation_route_and_task_named_fields_skip_serialization_when_unset() {
         modulation_sampling: CoreModulationSampling::Hold,
         named_modulator_audio: Vec::new(),
         named_modulator_frames: Vec::new(),
+        modulator_midi_path: None,
+        named_modulator_midi: Vec::new(),
     };
     let task_json = serde_json::to_string(&task).expect("serialize task");
     assert!(
         !task_json.contains("named_modulator_audio")
-            && !task_json.contains("named_modulator_frames"),
+            && !task_json.contains("named_modulator_frames")
+            && !task_json.contains("named_modulator_midi"),
         "empty named-modulator vectors must be skipped from the JSON: {task_json}"
     );
     let decoded_task: RenderJobTask = serde_json::from_str(&task_json).expect("deserialize task");
@@ -9684,6 +9737,318 @@ fn downscale_frames_feeds_rutt_etra_sequence_at_reduced_dimensions() {
             (decoded.width(), decoded.height()),
             (4, 4),
             "16x16 source at scale 4 must render at the downscaled 4x4 dimensions"
+        );
+    }
+}
+
+// ── Tier 5.3 S2: MIDI modulation on the queue path + checkpoint contract ────
+// (`docs/MIDI_MODULATION_MILESTONE.md`, anchors 4-5). Mirrors the named-
+// modulator-audio queue precedent (`queue_channel_shift_named_modulators_
+// matches_direct_and_records_routes` et al.) with a `midi-cc(74)` route.
+
+#[test]
+fn queue_channel_shift_named_modulator_midi_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        let frame_arg = source_dir.join(frame_name).to_string_lossy().to_string();
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(["render-test", frame_arg.as_str()])
+            .assert()
+            .success();
+    }
+
+    // CC 74 ramps 0 -> 64 -> 127 at ticks 240/480 (120 BPM default: quarter
+    // note = 0.5s, so the events land at 0.25s/0.5s — spanning the three
+    // output frames at --frame-rate 4).
+    let midi_path = temp_dir.path().join("ramp.mid");
+    write_test_smf(
+        &midi_path,
+        &[
+            (0, midi_control_change(0, 74, 0)),
+            (240, midi_control_change(0, 74, 64)),
+            (240, midi_control_change(0, 74, 127)),
+        ],
+    );
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let midi_arg = midi_path.to_string_lossy().to_string();
+    let route = "shift_r_x=ramp.midi-cc(74):12,0";
+
+    let direct_dir = temp_dir.path().join("direct");
+    let direct_arg = direct_dir.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-channel-shift-sequence",
+            source_arg.as_str(),
+            direct_arg.as_str(),
+            "--frames",
+            "3",
+            "--modulate",
+            route,
+            "--named-modulator-midi",
+            &format!("ramp={midi_arg}"),
+            "--modulation-fps",
+            "4",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    let output_root_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-channel-shift-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "3",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            route,
+            "--named-modulator-midi",
+            &format!("ramp={midi_arg}"),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-channel-shift-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    // Byte-identical add→run vs the direct render (path-independent) —
+    // anchor 4.
+    assert_png_frames_identical(&direct_dir, &output_root.join("job-0001/frames"), 3);
+
+    // Manifest records the route with its modulator name.
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(output_root.join("job-0001/manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    let modulation = &manifest["channel_shift"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "shift_r_x");
+    assert_eq!(modulation["routes"][0]["source"]["midi-cc"], 74);
+    assert_eq!(modulation["routes"][0]["modulator"], "ramp");
+
+    // The persisted job also records the named-modulator MIDI media itself.
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue json");
+    let task = &queue_json["jobs"][0]["task"];
+    assert_eq!(task["named_modulator_midi"][0]["name"], "ramp");
+    assert_eq!(task["named_modulator_midi"][0]["path"], midi_arg.as_str());
+}
+
+#[test]
+fn queue_channel_shift_named_modulator_midi_missing_media_rejects_at_add_and_persists_nothing() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+    let source_dir = temp_dir.path().join("source-b-frames");
+    let frame_arg = source_dir
+        .join("frame_000001.png")
+        .to_string_lossy()
+        .to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["render-test", frame_arg.as_str()])
+        .assert()
+        .success();
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root_arg = temp_dir.path().join("out").to_string_lossy().to_string();
+    // "ramp" is referenced by the route but never supplied via
+    // --named-modulator-midi: add-time validation must reject this before
+    // the job (or the queue file) is ever written — the S1 rejection this
+    // slice reverses becomes a real media-presence check instead.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-channel-shift-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root_arg.as_str(),
+            "--frames",
+            "1",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            "shift_r_x=ramp.midi-cc(74)",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "requires --named-modulator-midi ramp=<path>",
+        ));
+    assert!(!queue_path.exists());
+}
+
+#[test]
+fn render_feedback_sequence_midi_route_joins_checkpoint_contract_and_refuses_on_changed_content() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"] {
+        for dir in [&modulator_dir, &carrier_dir] {
+            let frame_arg = dir.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    // CC 74 ramps 0 -> 64 -> 127 at ticks 240/480 (120 BPM default: quarter
+    // note = 0.5s, so the events land at 0.25s/0.5s), driving feedback_mix
+    // across the three output frames at --frame-rate 4.
+    let midi_path = temp_dir.path().join("ramp.mid");
+    write_test_smf(
+        &midi_path,
+        &[
+            (0, midi_control_change(0, 74, 0)),
+            (240, midi_control_change(0, 74, 64)),
+            (240, midi_control_change(0, 74, 127)),
+        ],
+    );
+
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let midi_arg = midi_path.to_string_lossy().to_string();
+    let route = "feedback_mix=midi-cc(74):0.5,0.25";
+    let base_args = |output_dir: &str| {
+        vec![
+            "render-feedback-sequence".to_string(),
+            modulator_arg.clone(),
+            carrier_arg.clone(),
+            output_dir.to_string(),
+            "--carrier-amount".to_string(),
+            "8".to_string(),
+            "--feedback-amount".to_string(),
+            "12".to_string(),
+            "--feedback-mix".to_string(),
+            "0.7".to_string(),
+            "--decay".to_string(),
+            "0.95".to_string(),
+            "--max-frames".to_string(),
+            "3".to_string(),
+            "--frame-rate".to_string(),
+            "4".to_string(),
+            "--flow-source".to_string(),
+            "luminance".to_string(),
+        ]
+    };
+    let modulated_args = |output_dir: &str| {
+        let mut args = base_args(output_dir);
+        args.extend([
+            "--modulate".to_string(),
+            route.to_string(),
+            "--modulator-midi".to_string(),
+            midi_arg.clone(),
+        ]);
+        args
+    };
+
+    let off_dir = temp_dir.path().join("off-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&off_dir.to_string_lossy()))
+        .assert()
+        .success();
+    let uninterrupted_dir = temp_dir.path().join("uninterrupted-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(modulated_args(&uninterrupted_dir.to_string_lossy()))
+        .assert()
+        .success();
+
+    // The route actually drives the state evolution.
+    assert_ne!(
+        fs::read(uninterrupted_dir.join("frames/frame_000002.png")).expect("modulated frame"),
+        fs::read(off_dir.join("frames/frame_000002.png")).expect("unmodulated frame"),
+        "routed midi-cc feedback_mix must change the rendered sequence"
+    );
+
+    let resumed_dir = temp_dir.path().join("resumed-output");
+    let resumed_args = modulated_args(&resumed_dir.to_string_lossy());
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed flow-feedback sequence after frame 0",
+        ));
+
+    // The checkpoint's contract carries the MIDI file's content fingerprint
+    // (anchor 5) alongside the route.
+    let checkpoint_path = resumed_dir.join("checkpoint.json");
+    let checkpoint: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).expect("read checkpoint"))
+            .expect("parse checkpoint");
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["source"]["midi-cc"], 74);
+    assert_eq!(modulation["modulator_midi"]["path"], midi_arg.as_str());
+    assert!(modulation["modulator_midi"]["checksum"]
+        .as_str()
+        .expect("midi checksum")
+        .starts_with("fnv1a64:"));
+
+    // Changing the MIDI file's content at the same path must refuse to
+    // resume — the knob history would differ.
+    write_test_smf(
+        &midi_path,
+        &[
+            (0, midi_control_change(0, 74, 127)),
+            (240, midi_control_change(0, 74, 64)),
+            (240, midi_control_change(0, 74, 0)),
+        ],
+    );
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+
+    // Restoring the original MIDI content lets the resume proceed, and the
+    // result is byte-identical to the uninterrupted render.
+    write_test_smf(
+        &midi_path,
+        &[
+            (0, midi_control_change(0, 74, 0)),
+            (240, midi_control_change(0, 74, 64)),
+            (240, midi_control_change(0, 74, 127)),
+        ],
+    );
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered flow-feedback sequence with 3 frame(s)",
+        ));
+    for frame_name in ["frame_000000.png", "frame_000001.png", "frame_000002.png"] {
+        assert_eq!(
+            fs::read(resumed_dir.join("frames").join(frame_name)).expect("resumed frame"),
+            fs::read(uninterrupted_dir.join("frames").join(frame_name))
+                .expect("uninterrupted frame"),
+            "resumed modulated render must be byte-identical ({frame_name})"
         );
     }
 }

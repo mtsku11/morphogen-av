@@ -205,6 +205,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceFluidAdvect {
         source_frame_directory: String,
@@ -236,6 +240,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceFluidAdvectTwoSource {
         modulator_frame_directory: String,
@@ -266,6 +274,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceOpticalFlowAdvect {
         source_frame_directory: String,
@@ -293,6 +305,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// Descriptor-coagulated flow blend (two-source) over a paired PNG sequence.
     /// Modulation targets coagulation_strength/edge_hardness/bias are
@@ -341,6 +357,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceDispersionBlend {
         source_a_directory: String,
@@ -377,6 +397,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceFluidMosaic {
         source_a_directory: String,
@@ -414,6 +438,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceFieldParticles {
         source_frame_directory: String,
@@ -445,6 +473,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceCascadeTrails {
         source_frame_directory: String,
@@ -483,6 +515,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// Scribbled-edge tile cascade — a procedural/textured collage of rect/L tiles,
     /// each re-stamped in an in-frame cascade with one scribbled morphing edge. Tiles
@@ -537,6 +573,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// Retro static — deliberate scanline-filter misread glitch: simulate a
     /// PNG-style adaptive filter, then deliberately decode it at the wrong
@@ -574,6 +614,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// Channel shift (RGB split / chromatic aberration): each colour channel is
     /// sampled from the carrier at an independently offset position. Optional
@@ -624,6 +668,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// Palette quantize / posterize: collapse the carrier's colours to discrete
     /// per-channel levels (posterize) or the built-in neon palette. Stateless
@@ -659,6 +707,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// Rutt-Etra scanline: re-render the carrier as sparse horizontal
     /// scanlines on black, each displaced vertically by its own luminance.
@@ -707,6 +759,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// An effect chain run from a resolved chain-spec document
     /// (`docs/EFFECT_CHAIN_MILESTONE.md`). The spec is persisted verbatim as
@@ -797,6 +853,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
@@ -999,6 +1059,10 @@ pub enum RenderJobTask {
         named_modulator_audio: Vec<NamedModulatorMedia>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
     },
     /// Real bitstream datamosh via AVI chunk surgery: ffmpeg encodes to MPEG-4,
     /// pure-Rust RIFF surgery duplicates/removes/splices chunks, ffmpeg decodes to
@@ -1831,6 +1895,8 @@ mod tests {
             modulation_sampling: ModulationSampling::Hold,
             named_modulator_audio: Vec::new(),
             named_modulator_frames: Vec::new(),
+            modulator_midi_path: None,
+            named_modulator_midi: Vec::new(),
         };
 
         let json = serde_json::to_string(&task).expect("serialize feedback task");
@@ -1890,6 +1956,8 @@ mod tests {
             modulation_sampling: ModulationSampling::Hold,
             named_modulator_audio: Vec::new(),
             named_modulator_frames: Vec::new(),
+            modulator_midi_path: None,
+            named_modulator_midi: Vec::new(),
         };
 
         let json = serde_json::to_string(&task).expect("serialize fluid task");

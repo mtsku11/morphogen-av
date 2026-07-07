@@ -284,9 +284,11 @@ pub(crate) struct QueueAddFluidAdvectSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_fluid_advect_sequence(
@@ -304,9 +306,11 @@ pub(crate) fn queue_add_fluid_advect_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     settings.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
@@ -314,8 +318,10 @@ pub(crate) fn queue_add_fluid_advect_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_fluid_advect_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -348,6 +354,8 @@ pub(crate) fn queue_add_fluid_advect_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -379,9 +387,11 @@ pub(crate) struct QueueAddFluidAdvectTwoSourceSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_fluid_advect_two_source_sequence(
@@ -400,9 +410,11 @@ pub(crate) fn queue_add_fluid_advect_two_source_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     settings.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
@@ -410,8 +422,10 @@ pub(crate) fn queue_add_fluid_advect_two_source_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_fluid_advect_two_source_modulation(&mut probe, target, 0.0)
@@ -442,6 +456,8 @@ pub(crate) fn queue_add_fluid_advect_two_source_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -475,9 +491,11 @@ pub(crate) struct QueueAddCoagulatedBlendSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_coagulated_blend_sequence(
@@ -502,9 +520,11 @@ pub(crate) fn queue_add_coagulated_blend_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     settings.validate()?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
@@ -521,8 +541,10 @@ pub(crate) fn queue_add_coagulated_blend_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_coagulation_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -568,6 +590,8 @@ pub(crate) fn queue_add_coagulated_blend_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -598,9 +622,11 @@ pub(crate) struct QueueAddDispersionBlendSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_dispersion_blend_sequence(
@@ -622,9 +648,11 @@ pub(crate) fn queue_add_dispersion_blend_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     settings.validate()?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
@@ -641,8 +669,10 @@ pub(crate) fn queue_add_dispersion_blend_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_dispersion_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -685,6 +715,8 @@ pub(crate) fn queue_add_dispersion_blend_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -711,9 +743,11 @@ pub(crate) struct QueueAddOpticalFlowAdvectSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_optical_flow_advect_sequence(
@@ -731,9 +765,11 @@ pub(crate) fn queue_add_optical_flow_advect_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     settings.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
@@ -741,8 +777,10 @@ pub(crate) fn queue_add_optical_flow_advect_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_fluid_advect_two_source_modulation(&mut probe, target, 0.0)
@@ -772,6 +810,8 @@ pub(crate) fn queue_add_optical_flow_advect_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -802,9 +842,11 @@ pub(crate) struct QueueAddFieldParticlesSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_field_particles_sequence(
@@ -822,9 +864,11 @@ pub(crate) fn queue_add_field_particles_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     settings.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
@@ -832,8 +876,10 @@ pub(crate) fn queue_add_field_particles_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_field_particle_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -868,6 +914,8 @@ pub(crate) fn queue_add_field_particles_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -897,9 +945,11 @@ pub(crate) struct QueueAddCascadeTrailsSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_cascade_trails_sequence(
@@ -916,9 +966,11 @@ pub(crate) fn queue_add_cascade_trails_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     settings.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
@@ -927,8 +979,10 @@ pub(crate) fn queue_add_cascade_trails_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_cascade_trails_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -967,6 +1021,8 @@ pub(crate) fn queue_add_cascade_trails_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -1012,9 +1068,11 @@ pub(crate) struct QueueAddCascadeCollageSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_cascade_collage_sequence(
@@ -1050,8 +1108,10 @@ pub(crate) fn queue_add_cascade_collage_sequence(
         request.modulate,
         request.modulator_audio,
         request.modulator_frames,
+        request.modulator_midi,
         request.named_modulator_audio,
         request.named_modulator_frames,
+        request.named_modulator_midi,
         |target| {
             let mut probe = probe_settings.clone();
             apply_cascade_collage_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -1099,6 +1159,10 @@ pub(crate) fn queue_add_cascade_collage_sequence(
             modulation_sampling: core_modulation_sampling(request.modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: request
+                .modulator_midi
+                .map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -1163,9 +1227,11 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1179,6 +1245,7 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let mut settings = CascadeCollageSettings {
         scrib_amp_scale,
@@ -1216,8 +1283,8 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -1685,9 +1752,11 @@ pub(crate) struct QueueAddFeedbackSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_feedback_sequence(
@@ -1711,9 +1780,11 @@ pub(crate) fn queue_add_feedback_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
 
     settings.validate()?;
@@ -1732,8 +1803,10 @@ pub(crate) fn queue_add_feedback_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_flow_feedback_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -1792,6 +1865,8 @@ pub(crate) fn queue_add_feedback_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -2005,9 +2080,11 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2029,6 +2106,7 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_fluid_advect_sequence(FluidAdvectSequenceRequest {
             source_dir: Path::new(&source_frame_directory),
@@ -2048,8 +2126,8 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2125,9 +2203,11 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2142,6 +2222,7 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result =
             render_fluid_advect_two_source_sequence(FluidAdvectTwoSourceSequenceRequest {
@@ -2162,8 +2243,8 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
                     cache_dir: None,
                     named_modulator_audio: &named_modulator_audio_specs,
                     named_modulator_frames: &named_modulator_frames_specs,
-                    modulator_midi: None,
-                    named_modulator_midi: &[],
+                    modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                    named_modulator_midi: &named_modulator_midi_specs,
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2253,9 +2334,11 @@ pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2283,6 +2366,7 @@ pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
             source_a_dir: Path::new(&source_a_directory),
@@ -2307,8 +2391,8 @@ pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2396,9 +2480,11 @@ pub(crate) fn queue_run_dispersion_blend_sequence(queue_path: &Path) -> Result<(
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2426,6 +2512,7 @@ pub(crate) fn queue_run_dispersion_blend_sequence(queue_path: &Path) -> Result<(
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_dispersion_blend_sequence(DispersionBlendSequenceRequest {
             source_a_dir: Path::new(&source_a_directory),
@@ -2446,8 +2533,8 @@ pub(crate) fn queue_run_dispersion_blend_sequence(queue_path: &Path) -> Result<(
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2513,9 +2600,11 @@ pub(crate) struct QueueAddFluidMosaicSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_fluid_mosaic_sequence(
@@ -2548,9 +2637,11 @@ pub(crate) fn queue_add_fluid_mosaic_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     if frames == 0 {
         return Err(CliError::Message(
@@ -2582,8 +2673,10 @@ pub(crate) fn queue_add_fluid_mosaic_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_fluid_mosaic_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -2628,6 +2721,8 @@ pub(crate) fn queue_add_fluid_mosaic_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -2691,9 +2786,11 @@ pub(crate) fn queue_run_fluid_mosaic_sequence(queue_path: &Path) -> Result<(), C
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2728,6 +2825,7 @@ pub(crate) fn queue_run_fluid_mosaic_sequence(queue_path: &Path) -> Result<(), C
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result =
             render_fluid_mosaic_sequence(crate::render::FluidMosaicSequenceRequest {
@@ -2745,8 +2843,8 @@ pub(crate) fn queue_run_fluid_mosaic_sequence(queue_path: &Path) -> Result<(), C
                     cache_dir: None,
                     named_modulator_audio: &named_modulator_audio_specs,
                     named_modulator_frames: &named_modulator_frames_specs,
-                    modulator_midi: None,
-                    named_modulator_midi: &[],
+                    modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                    named_modulator_midi: &named_modulator_midi_specs,
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2818,9 +2916,11 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2835,6 +2935,7 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result =
             render_optical_flow_advect_sequence(OpticalFlowAdvectSequenceRequest {
@@ -2854,8 +2955,8 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
                     cache_dir: None,
                     named_modulator_audio: &named_modulator_audio_specs,
                     named_modulator_frames: &named_modulator_frames_specs,
-                    modulator_midi: None,
-                    named_modulator_midi: &[],
+                    modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                    named_modulator_midi: &named_modulator_midi_specs,
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2935,9 +3036,11 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2961,6 +3064,7 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_field_particles_sequence(FieldParticlesSequenceRequest {
             source_dir: Path::new(&source_frame_directory),
@@ -2977,8 +3081,8 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3061,9 +3165,11 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3077,6 +3183,7 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let settings = CascadeTrailSettings {
         tile_size,
@@ -3108,8 +3215,8 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3165,9 +3272,11 @@ pub(crate) struct QueueAddRetroStaticSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_retro_static_sequence(
@@ -3186,8 +3295,10 @@ pub(crate) fn queue_add_retro_static_sequence(
         request.modulate,
         request.modulator_audio,
         request.modulator_frames,
+        request.modulator_midi,
         request.named_modulator_audio,
         request.named_modulator_frames,
+        request.named_modulator_midi,
         |target| {
             let mut probe = settings;
             apply_retro_static_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -3224,6 +3335,10 @@ pub(crate) fn queue_add_retro_static_sequence(
             modulation_sampling: core_modulation_sampling(request.modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: request
+                .modulator_midi
+                .map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3275,9 +3390,11 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3297,6 +3414,7 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_retro_static_sequence(RetroStaticSequenceRequest {
@@ -3316,8 +3434,8 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3392,9 +3510,11 @@ pub(crate) struct QueueAddChannelShiftSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_channel_shift_sequence(
@@ -3417,8 +3537,10 @@ pub(crate) fn queue_add_channel_shift_sequence(
         request.modulate,
         request.modulator_audio,
         request.modulator_frames,
+        request.modulator_midi,
         request.named_modulator_audio,
         request.named_modulator_frames,
+        request.named_modulator_midi,
         |target| {
             let mut probe = request.settings;
             apply_channel_shift_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -3462,6 +3584,10 @@ pub(crate) fn queue_add_channel_shift_sequence(
             modulation_sampling: core_modulation_sampling(request.modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: request
+                .modulator_midi
+                .map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3520,9 +3646,11 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3549,6 +3677,7 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_channel_shift_sequence(ChannelShiftSequenceRequest {
@@ -3571,8 +3700,8 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3626,9 +3755,11 @@ pub(crate) struct QueueAddPaletteQuantizeSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_palette_quantize_sequence(
@@ -3645,8 +3776,10 @@ pub(crate) fn queue_add_palette_quantize_sequence(
         request.modulate,
         request.modulator_audio,
         request.modulator_frames,
+        request.modulator_midi,
         request.named_modulator_audio,
         request.named_modulator_frames,
+        request.named_modulator_midi,
         |target| {
             let mut probe = request.settings;
             apply_palette_quantize_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -3681,6 +3814,10 @@ pub(crate) fn queue_add_palette_quantize_sequence(
             modulation_sampling: core_modulation_sampling(request.modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: request
+                .modulator_midi
+                .map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3732,9 +3869,11 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3752,6 +3891,7 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_palette_quantize_sequence(PaletteQuantizeSequenceRequest {
@@ -3771,8 +3911,8 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3841,9 +3981,11 @@ pub(crate) struct QueueAddRuttEtraSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_rutt_etra_sequence(
@@ -3856,8 +3998,10 @@ pub(crate) fn queue_add_rutt_etra_sequence(
         request.modulate,
         request.modulator_audio,
         request.modulator_frames,
+        request.modulator_midi,
         request.named_modulator_audio,
         request.named_modulator_frames,
+        request.named_modulator_midi,
         |target| {
             let mut probe = request.settings;
             apply_rutt_etra_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -3897,6 +4041,10 @@ pub(crate) fn queue_add_rutt_etra_sequence(
             modulation_sampling: core_modulation_sampling(request.modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: request
+                .modulator_midi
+                .map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3949,9 +4097,11 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3971,6 +4121,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_rutt_etra_sequence(RuttEtraSequenceRequest {
@@ -3991,8 +4142,8 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let algorithm = match (source_a_directory.is_some(), backend) {
@@ -5130,9 +5281,11 @@ pub(crate) struct QueueAddDatamoshSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 /// Map the persisted (core) vector-remix mode to the render crate's enum. A free
@@ -5170,9 +5323,11 @@ pub(crate) fn queue_add_datamosh_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     if !amount.is_finite() || amount < 0.0 {
         return Err(CliError::Message(
@@ -5205,8 +5360,10 @@ pub(crate) fn queue_add_datamosh_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = DatamoshSequenceSettings {
                 keyframe_interval,
@@ -5274,6 +5431,8 @@ pub(crate) fn queue_add_datamosh_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -5326,9 +5485,11 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -5348,6 +5509,7 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_request = DatamoshSequenceRequest {
@@ -5379,8 +5541,8 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         };
         let resolved_settings = resolve_datamosh_settings(&render_request);
@@ -6079,9 +6241,11 @@ pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliEr
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -6092,6 +6256,7 @@ pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliEr
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
     let provenance = feedback_sequence_provenance(
         Path::new(&modulator_frame_directory),
         Path::new(&carrier_frame_directory),
@@ -6144,8 +6309,8 @@ pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliEr
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
@@ -6854,6 +7019,7 @@ struct QueueModulationRoutes {
     routes: Vec<RenderJobModulationRoute>,
     named_audio: Vec<NamedModulatorMedia>,
     named_frames: Vec<NamedModulatorMedia>,
+    named_midi: Vec<NamedModulatorMedia>,
 }
 
 /// Parse and validate `--modulate` (+ `--named-modulator-*`) specs at
@@ -6862,12 +7028,15 @@ struct QueueModulationRoutes {
 /// scratch settings copy) unknown targets all fail here, before the job
 /// persists. Reuses `resolve_modulator_media` so a missing-media error is
 /// worded identically to the direct-render path.
+#[allow(clippy::too_many_arguments)]
 fn parse_queue_modulation_routes(
     specs: &[String],
     modulator_audio: Option<&Path>,
     modulator_frames: Option<&Path>,
+    modulator_midi: Option<&Path>,
     named_modulator_audio: &[String],
     named_modulator_frames: &[String],
+    named_modulator_midi: &[String],
     // CliError so CLI-side apply fns (datamosh) probe directly; render-side
     // apply fns map with `CliError::from`.
     mut probe: impl FnMut(&str) -> Result<(), CliError>,
@@ -6881,6 +7050,7 @@ fn parse_queue_modulation_routes(
         parse_named_modulator_specs(named_modulator_audio, "--named-modulator-audio")?;
     let named_frames =
         parse_named_modulator_specs(named_modulator_frames, "--named-modulator-frames")?;
+    let named_midi = parse_named_modulator_specs(named_modulator_midi, "--named-modulator-midi")?;
     for route in &routes {
         probe(&route.target)?;
         if route.source.needs_audio() {
@@ -6902,16 +7072,13 @@ fn parse_queue_modulation_routes(
             )?;
         }
         if route.source.needs_midi() {
-            // Tier 5.3 S1 deviation: MIDI modulation is direct-CLI only.
-            // Queue tasks don't yet persist a modulator-MIDI path/fingerprint
-            // (`docs/MIDI_MODULATION_MILESTONE.md` S2), so queue-add commands
-            // deliberately have no `--modulator-midi` flag; reject here with
-            // a clear error rather than silently dropping the route's media.
-            return Err(CliError::Message(format!(
-                "modulation source '{}' requires MIDI media, which queued jobs do not yet \
-                 support (direct CLI only for now — queue support is a later slice)",
-                route.source.name()
-            )));
+            resolve_modulator_media(
+                route,
+                modulator_midi,
+                &named_midi,
+                "--modulator-midi <file.mid>",
+                "--named-modulator-midi",
+            )?;
         }
     }
     let routes = routes
@@ -6938,6 +7105,7 @@ fn parse_queue_modulation_routes(
         routes,
         named_audio: to_named_media(named_audio),
         named_frames: to_named_media(named_frames),
+        named_midi: to_named_media(named_midi),
     })
 }
 
@@ -7055,9 +7223,11 @@ pub(crate) struct QueueAddPixelSortSequenceRequest<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a std::path::Path>,
     pub(crate) modulator_frames: Option<&'a std::path::Path>,
+    pub(crate) modulator_midi: Option<&'a std::path::Path>,
     pub(crate) modulation_sampling: ModulationSampling,
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 pub(crate) fn queue_add_pixel_sort_sequence(
@@ -7083,9 +7253,11 @@ pub(crate) fn queue_add_pixel_sort_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = request;
     validate_queued_sequence_timing(frames, frame_rate)?;
 
@@ -7093,8 +7265,10 @@ pub(crate) fn queue_add_pixel_sort_sequence(
         modulate,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
         |target| {
             let mut probe = PixelSortSettings::default();
             apply_pixel_sort_modulation(&mut probe, target, 0.0).map_err(CliError::from)
@@ -7130,6 +7304,8 @@ pub(crate) fn queue_add_pixel_sort_sequence(
             modulation_sampling: core_modulation_sampling(modulation_sampling),
             named_modulator_audio: modulation.named_audio,
             named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -7182,9 +7358,11 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
+        modulator_midi_path,
         modulation_sampling,
         named_modulator_audio,
         named_modulator_frames,
+        named_modulator_midi,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -7212,6 +7390,7 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
 
     let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
         let render_result = render_pixel_sort_sequence(PixelSortSequenceRequest {
@@ -7235,8 +7414,8 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
-                modulator_midi: None,
-                named_modulator_midi: &[],
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
             },
         })?;
         let mut effect = serde_json::json!({

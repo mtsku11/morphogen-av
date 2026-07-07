@@ -5095,6 +5095,12 @@ pub(crate) struct FeedbackModulationContract {
     fps: f64,
     modulator_audio: Option<FeedbackModulationMediaFingerprint>,
     modulator_frames: Option<FeedbackModulationMediaFingerprint>,
+    /// Content fingerprint of the default modulator MIDI file (Tier 5.3 S2:
+    /// `docs/MIDI_MODULATION_MILESTONE.md` anchor 5). `#[serde(default)]` so
+    /// pre-slice checkpoints (no MIDI field at all) still deserialize and
+    /// stay resumable.
+    #[serde(default)]
+    modulator_midi: Option<FeedbackModulationMediaFingerprint>,
     /// Content fingerprints of the named modulators the routes consume, in
     /// (name, kind) order. Skipped when empty so pre-slice checkpoints stay
     /// byte-identical.
@@ -5105,7 +5111,7 @@ pub(crate) struct FeedbackModulationContract {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct NamedModulationMediaFingerprint {
     name: String,
-    /// `audio` or `frames`.
+    /// `audio`, `frames`, or `midi`.
     kind: String,
     path: String,
     checksum: String,
@@ -5714,6 +5720,9 @@ fn feedback_modulation_contract(
     let uses_frames = routes
         .iter()
         .any(|route| route.modulator.is_none() && route.source.needs_frames());
+    let uses_midi = routes
+        .iter()
+        .any(|route| route.modulator.is_none() && route.source.needs_midi());
     // build_plan already required the media flags for the sources in use.
     let modulator_audio = uses_audio
         .then_some(args.modulator_audio)
@@ -5724,6 +5733,12 @@ fn feedback_modulation_contract(
         .then_some(args.modulator_frames)
         .flatten()
         .map(feedback_modulation_frames_fingerprint)
+        .transpose()?;
+    // MIDI files fingerprint the same way as WAV media (whole-file fnv1a64).
+    let modulator_midi = uses_midi
+        .then_some(args.modulator_midi)
+        .flatten()
+        .map(feedback_modulation_audio_fingerprint)
         .transpose()?;
 
     // Named modulators: fingerprint exactly the (name, kind) media the routed
@@ -5737,22 +5752,21 @@ fn feedback_modulation_contract(
         args.named_modulator_frames,
         "--named-modulator-frames",
     )?;
+    let named_midi = crate::modulate::parse_named_modulator_specs(
+        args.named_modulator_midi,
+        "--named-modulator-midi",
+    )?;
     let mut named_modulators: Vec<NamedModulationMediaFingerprint> = Vec::new();
     for route in &routes {
         let Some(name) = route.modulator.as_deref() else {
             continue;
         };
-        // MIDI named modulators are provenance-only until Tier 5.3 S2 wires
-        // their fingerprint into the checkpoint contract (`docs/
-        // MIDI_MODULATION_MILESTONE.md`, S2): skip rather than misclassify
-        // them into the audio/frames buckets below.
-        if route.source.needs_midi() {
-            continue;
-        }
         let kind = if route.source.needs_audio() {
             "audio"
-        } else {
+        } else if route.source.needs_frames() {
             "frames"
+        } else {
+            "midi"
         };
         if named_modulators
             .iter()
@@ -5762,8 +5776,10 @@ fn feedback_modulation_contract(
         }
         let named = if route.source.needs_audio() {
             &named_audio
-        } else {
+        } else if route.source.needs_frames() {
             &named_frames
+        } else {
+            &named_midi
         };
         let path = named
             .iter()
@@ -5776,8 +5792,11 @@ fn feedback_modulation_contract(
             })?;
         let fingerprint = if route.source.needs_audio() {
             feedback_modulation_audio_fingerprint(path)?
-        } else {
+        } else if route.source.needs_frames() {
             feedback_modulation_frames_fingerprint(path)?
+        } else {
+            // MIDI files fingerprint the same way as WAV media.
+            feedback_modulation_audio_fingerprint(path)?
         };
         named_modulators.push(NamedModulationMediaFingerprint {
             name: name.to_string(),
@@ -5794,6 +5813,7 @@ fn feedback_modulation_contract(
         fps: args.fps,
         modulator_audio,
         modulator_frames,
+        modulator_midi,
         named_modulators,
     })
 }
