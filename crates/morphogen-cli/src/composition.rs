@@ -546,18 +546,38 @@ fn crossfade_frame(
 /// crossfade of N frames blends the last N frames of a scene with the first N
 /// of the next (weight `(i+1)/(N+1)` on the incoming frame) — and writes
 /// `<output-dir>/composition-manifest.json`.
-pub(crate) fn render_composition(spec_path: &Path, output_dir: &Path) -> Result<(), CliError> {
+pub(crate) fn render_composition(
+    spec_path: &Path,
+    output_dir: &Path,
+    scene: Option<&str>,
+) -> Result<(), CliError> {
     let spec_text = fs::read_to_string(spec_path)?;
     let spec = parse_and_validate_composition_spec(&spec_text)?;
-    let summary = run_composition_spec(&spec, output_dir)?;
-    println!(
-        "rendered composition with {} scene(s) ({} frame(s)) from {} to {}; timeline frames: {}",
-        spec.scenes.len(),
-        summary.frame_count,
-        spec_path.display(),
-        output_dir.display(),
-        summary.frames_dir.display(),
-    );
+    match scene {
+        // F2: single-scene iteration render — no timeline assembly.
+        Some(name) => {
+            let summary = run_single_scene_spec(&spec, output_dir, name)?;
+            println!(
+                "rendered scene {:?} ({} frame(s)) at timeline offset {} from {}; scene frames: {}",
+                name,
+                summary.frame_count,
+                summary.offset_frames,
+                spec_path.display(),
+                summary.frames_dir.display(),
+            );
+        }
+        None => {
+            let summary = run_composition_spec(&spec, output_dir)?;
+            println!(
+                "rendered composition with {} scene(s) ({} frame(s)) from {} to {}; timeline frames: {}",
+                spec.scenes.len(),
+                summary.frame_count,
+                spec_path.display(),
+                output_dir.display(),
+                summary.frames_dir.display(),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -574,46 +594,7 @@ pub(crate) fn run_composition_spec(
     output_dir: &Path,
 ) -> Result<CompositionRunSummary, CliError> {
     fs::create_dir_all(output_dir)?;
-    let record_path = output_dir.join(COMPOSITION_RECORD_FILE);
-    let prior = read_composition_record(&record_path);
-
-    // Structural guard: the set and order of scene names is the composition's
-    // skeleton. A changed skeleton (rename/reorder/add/remove) refuses rather
-    // than risk reusing another scene's cached frames — the chain-refusal
-    // precedent. A changed *setting* keeps the skeleton and re-renders only its
-    // scene (below).
-    if let Some(prior) = &prior {
-        let prior_names: Vec<&str> = prior.scenes.iter().map(|s| s.name.as_str()).collect();
-        let new_names: Vec<&str> = spec.scenes.iter().map(|s| s.name.as_str()).collect();
-        if prior_names != new_names {
-            return Err(CliError::Message(format!(
-                "the composition's scenes changed (names or order) since {} was first rendered; \
-                 reusing cached scene frames would be unsound — use a fresh output directory",
-                output_dir.display()
-            )));
-        }
-    }
-
-    // The working record carries prior fingerprints forward (skeleton matches,
-    // so by index) so an unchanged scene hits the cache; each scene overwrites
-    // its own entry as it completes and the record is persisted after every
-    // scene, so an interrupted run resumes.
-    let mut record = CompositionRecord {
-        scenes: spec
-            .scenes
-            .iter()
-            .map(|scene| SceneRecord {
-                name: scene.name.clone(),
-                fingerprint: String::new(),
-            })
-            .collect(),
-    };
-    if let Some(prior) = &prior {
-        for (slot, prior_scene) in record.scenes.iter_mut().zip(&prior.scenes) {
-            slot.fingerprint = prior_scene.fingerprint.clone();
-        }
-    }
-    fs::write(&record_path, serde_json::to_string_pretty(&record)?)?;
+    let (mut record, record_path) = open_composition_record(spec, output_dir)?;
 
     // Pass 1: render (or reuse) every scene and collect its final frames. A
     // crossfade needs the *next* scene's head frames, so assembly is a second
@@ -628,146 +609,18 @@ pub(crate) fn run_composition_spec(
     // cut-only composition never reaches it — without this a mixed-dimension
     // `frames/` assembles silently and breaks ProRes/preview late.
     let mut composition_dims: Option<(u32, u32)> = None;
-    for (index, scene) in spec.scenes.iter().enumerate() {
-        let scene_number = index + 1;
-        let directory = format!("scene_{scene_number:02}_{}", scene.name);
-        let scene_dir = output_dir.join(&directory);
-
-        // Bind the master clock for this scene, if it routes from master: the
-        // master audio, trimmed so its sample 0 aligns with the scene's global
-        // start frame (the offset assumes the modulation timeline runs at the
-        // composition fps — the default 12 for stateless stages).
-        let master_sources = scene_master_sources(scene)?;
-        let master_binding = if master_sources.is_empty() {
-            None
-        } else {
-            let Some(master) = spec.master.as_ref() else {
-                return Err(CliError::Message(format!(
-                    "scene {:?} routes from the master clock but the composition declares no \
-                     \"master\"",
-                    scene.name
-                )));
-            };
-            Some((
-                master,
-                MasterBinding {
-                    content_hash: file_content_hash(&master.audio)?,
-                    offset_frames: u32::try_from(global_start).map_err(|_| {
-                        CliError::Message("scene start frame exceeds u32::MAX".to_string())
-                    })?,
-                },
-            ))
-        };
-        let fingerprint =
-            scene_fingerprint(scene, spec.fps, master_binding.as_ref().map(|(_, b)| b))?;
-
-        // Reuse only when the recorded fingerprint matches AND the render is
-        // complete on disk (the chain writes chain-manifest.json last). Disk is
-        // truth: a manually deleted scene dir re-renders even if the record
-        // still names it.
-        let same_fingerprint = record.scenes[index].fingerprint == fingerprint;
-        let complete_on_disk = scene_dir.join("chain-manifest.json").is_file();
-        let reuse = same_fingerprint && complete_on_disk;
-
-        // A stale scene dir (changed spec/input) would make the chain refuse a
-        // changed spec into it, so clear it for a fresh render. A
-        // same-fingerprint-but-incomplete dir is left intact so the chain
-        // resumes from its own stage markers/checkpoint.
-        if scene_dir.exists() && !same_fingerprint {
-            fs::remove_dir_all(&scene_dir)?;
-        }
-
-        // Persist the computed fingerprint *before* rendering, not after. If a
-        // first run is killed mid-scene, the re-run then reads
-        // `same_fingerprint == true`, so the partial scene dir is left intact
-        // (the clear above only fires on a real change) and the chain resumes
-        // from its own stage markers/checkpoint. `chain-manifest.json` presence
-        // stays the completeness gate, so cache-reuse semantics are unchanged;
-        // persisting only after completion restarted every mid-scene
-        // interruption from frame 0 and discarded stateful checkpoints.
-        record.scenes[index].fingerprint = fingerprint;
-        fs::write(&record_path, serde_json::to_string_pretty(&record)?)?;
-
-        // Bind the master clock into a per-scene copy of the chain (the clean
-        // spec stays the cache key). The trimmed master lives outside the scene
-        // directory so the chain's own reconciliation sees a pristine dir.
-        let chain = match &master_binding {
-            None => scene.chain.clone(),
-            Some((master, binding)) => {
-                let trimmed = output_dir
-                    .join("master-cache")
-                    .join(format!("scene_{scene_number:02}.wav"));
-                write_trimmed_master_audio(
-                    &master.audio,
-                    binding.offset_frames,
-                    spec.fps,
-                    &trimmed,
-                )?;
-                let mut chain = scene.chain.clone();
-                for stage in &mut chain.stages {
-                    stage.inject_named_modulator_media(
-                        MASTER_MODULATOR_NAME,
-                        Some(&trimmed),
-                        None,
-                    );
-                }
-                chain
-            }
-        };
-
-        // Cheap when reusing: the chain fast-skips completed stages and returns
-        // the summary without re-rendering.
-        let summary = run_chain_spec(&chain, &scene.input_dir, &scene_dir)?;
-
-        // The declared timeline length must match what the scene actually
-        // rendered so global numbering and overlap math are exact rather than
-        // silently drifting from the spec.
-        if summary.frame_count != scene.duration_frames as usize {
-            return Err(CliError::Message(format!(
-                "scene {:?} declares duration_frames {} but its chain rendered {} frame(s); \
-                 the declared length must match the render",
-                scene.name, scene.duration_frames, summary.frame_count
-            )));
-        }
-
-        println!(
-            "scene {scene_number:02} ({}) {}",
-            scene.name,
-            if reuse { "reused from cache" } else { "rendered" }
-        );
-
-        let out_frames = crossfade_frames(&scene.transition_out) as usize;
-        let frames = collect_image_frames(&summary.final_frames_dir)?;
-
-        // F1: refuse a cross-scene dimension mismatch here, before assembly.
-        // The first scene establishes the composition's dimensions; every
-        // later scene's first final frame must match.
-        if let Some(first) = frames.first() {
-            let image = load_image_f32(first)?;
-            let dims = (image.width, image.height);
-            match composition_dims {
-                None => composition_dims = Some(dims),
-                Some(expected) if dims != expected => {
-                    return Err(CliError::Message(format!(
-                        "scene {:?} renders at {}x{} but scene {:?} established {}x{}; \
-                         scenes in a composition must share dimensions",
-                        scene.name, dims.0, dims.1, spec.scenes[0].name, expected.0, expected.1
-                    )));
-                }
-                Some(_) => {}
-            }
-        }
-
-        scenes.push(RenderedScene {
-            name: scene.name.clone(),
-            directory,
-            frames,
-            duration: summary.frame_count,
-            out_frames,
-            transition_out: scene.transition_out.clone(),
-            chain_manifest: read_scene_chain_manifest(&scene_dir)?,
-        });
-        global_start += summary.frame_count - out_frames;
+    for index in 0..spec.scenes.len() {
+        let (rendered, _final_frames_dir) = render_composition_scene(
+            spec,
+            output_dir,
+            index,
+            global_start,
+            &mut record,
+            &record_path,
+            &mut composition_dims,
+        )?;
+        global_start += rendered.duration - rendered.out_frames;
+        scenes.push(rendered);
     }
 
     // Pass 2: walk the timeline. Each scene writes its frames not consumed by
@@ -833,5 +686,270 @@ pub(crate) fn run_composition_spec(
     Ok(CompositionRunSummary {
         frame_count: global,
         frames_dir,
+    })
+}
+
+/// Set up the composition record for an output directory: enforce the skeleton
+/// guard, carry any prior fingerprints forward by index, and persist the fresh
+/// (skeleton-complete) record. Shared by the full-composition run and the
+/// single-scene render so a `--scene` render keeps the record coherent with a
+/// later full run (same skeleton, so the full run reuses the scene it rendered).
+fn open_composition_record(
+    spec: &CompositionSpec,
+    output_dir: &Path,
+) -> Result<(CompositionRecord, PathBuf), CliError> {
+    let record_path = output_dir.join(COMPOSITION_RECORD_FILE);
+    let prior = read_composition_record(&record_path);
+
+    // Structural guard: the set and order of scene names is the composition's
+    // skeleton. A changed skeleton (rename/reorder/add/remove) refuses rather
+    // than risk reusing another scene's cached frames — the chain-refusal
+    // precedent. A changed *setting* keeps the skeleton and re-renders only its
+    // scene.
+    if let Some(prior) = &prior {
+        let prior_names: Vec<&str> = prior.scenes.iter().map(|s| s.name.as_str()).collect();
+        let new_names: Vec<&str> = spec.scenes.iter().map(|s| s.name.as_str()).collect();
+        if prior_names != new_names {
+            return Err(CliError::Message(format!(
+                "the composition's scenes changed (names or order) since {} was first rendered; \
+                 reusing cached scene frames would be unsound — use a fresh output directory",
+                output_dir.display()
+            )));
+        }
+    }
+
+    // The working record carries prior fingerprints forward (skeleton matches,
+    // so by index) so an unchanged scene hits the cache; each scene overwrites
+    // its own entry as it completes and the record is persisted after every
+    // scene, so an interrupted run resumes.
+    let mut record = CompositionRecord {
+        scenes: spec
+            .scenes
+            .iter()
+            .map(|scene| SceneRecord {
+                name: scene.name.clone(),
+                fingerprint: String::new(),
+            })
+            .collect(),
+    };
+    if let Some(prior) = &prior {
+        for (slot, prior_scene) in record.scenes.iter_mut().zip(&prior.scenes) {
+            slot.fingerprint = prior_scene.fingerprint.clone();
+        }
+    }
+    fs::write(&record_path, serde_json::to_string_pretty(&record)?)?;
+    Ok((record, record_path))
+}
+
+/// Render (or reuse) one scene into its `scene_NN_name` directory: bind the
+/// master clock at `global_start`, compute+persist the fingerprint *before*
+/// rendering (F3), run the chain, validate the declared length, and enforce
+/// cross-scene dimensions against `composition_dims` (F1). Returns the
+/// `RenderedScene` for timeline assembly plus the directory holding its final
+/// frames. Shared verbatim by the full-composition loop and the `--scene`
+/// single-scene render (F2) so the two render paths can't drift.
+fn render_composition_scene(
+    spec: &CompositionSpec,
+    output_dir: &Path,
+    index: usize,
+    global_start: usize,
+    record: &mut CompositionRecord,
+    record_path: &Path,
+    composition_dims: &mut Option<(u32, u32)>,
+) -> Result<(RenderedScene, PathBuf), CliError> {
+    let scene = &spec.scenes[index];
+    let scene_number = index + 1;
+    let directory = format!("scene_{scene_number:02}_{}", scene.name);
+    let scene_dir = output_dir.join(&directory);
+
+    // Bind the master clock for this scene, if it routes from master: the
+    // master audio, trimmed so its sample 0 aligns with the scene's global
+    // start frame (the offset assumes the modulation timeline runs at the
+    // composition fps — the default 12 for stateless stages).
+    let master_sources = scene_master_sources(scene)?;
+    let master_binding = if master_sources.is_empty() {
+        None
+    } else {
+        let Some(master) = spec.master.as_ref() else {
+            return Err(CliError::Message(format!(
+                "scene {:?} routes from the master clock but the composition declares no \
+                 \"master\"",
+                scene.name
+            )));
+        };
+        Some((
+            master,
+            MasterBinding {
+                content_hash: file_content_hash(&master.audio)?,
+                offset_frames: u32::try_from(global_start).map_err(|_| {
+                    CliError::Message("scene start frame exceeds u32::MAX".to_string())
+                })?,
+            },
+        ))
+    };
+    let fingerprint =
+        scene_fingerprint(scene, spec.fps, master_binding.as_ref().map(|(_, b)| b))?;
+
+    // Reuse only when the recorded fingerprint matches AND the render is
+    // complete on disk (the chain writes chain-manifest.json last). Disk is
+    // truth: a manually deleted scene dir re-renders even if the record
+    // still names it.
+    let same_fingerprint = record.scenes[index].fingerprint == fingerprint;
+    let complete_on_disk = scene_dir.join("chain-manifest.json").is_file();
+    let reuse = same_fingerprint && complete_on_disk;
+
+    // A stale scene dir (changed spec/input) would make the chain refuse a
+    // changed spec into it, so clear it for a fresh render. A
+    // same-fingerprint-but-incomplete dir is left intact so the chain
+    // resumes from its own stage markers/checkpoint.
+    if scene_dir.exists() && !same_fingerprint {
+        fs::remove_dir_all(&scene_dir)?;
+    }
+
+    // Persist the computed fingerprint *before* rendering, not after. If a
+    // first run is killed mid-scene, the re-run then reads
+    // `same_fingerprint == true`, so the partial scene dir is left intact
+    // (the clear above only fires on a real change) and the chain resumes
+    // from its own stage markers/checkpoint. `chain-manifest.json` presence
+    // stays the completeness gate, so cache-reuse semantics are unchanged;
+    // persisting only after completion restarted every mid-scene
+    // interruption from frame 0 and discarded stateful checkpoints.
+    record.scenes[index].fingerprint = fingerprint;
+    fs::write(record_path, serde_json::to_string_pretty(&record)?)?;
+
+    // Bind the master clock into a per-scene copy of the chain (the clean
+    // spec stays the cache key). The trimmed master lives outside the scene
+    // directory so the chain's own reconciliation sees a pristine dir.
+    let chain = match &master_binding {
+        None => scene.chain.clone(),
+        Some((master, binding)) => {
+            let trimmed = output_dir
+                .join("master-cache")
+                .join(format!("scene_{scene_number:02}.wav"));
+            write_trimmed_master_audio(&master.audio, binding.offset_frames, spec.fps, &trimmed)?;
+            let mut chain = scene.chain.clone();
+            for stage in &mut chain.stages {
+                stage.inject_named_modulator_media(MASTER_MODULATOR_NAME, Some(&trimmed), None);
+            }
+            chain
+        }
+    };
+
+    // Cheap when reusing: the chain fast-skips completed stages and returns
+    // the summary without re-rendering.
+    let summary = run_chain_spec(&chain, &scene.input_dir, &scene_dir)?;
+
+    // The declared timeline length must match what the scene actually
+    // rendered so global numbering and overlap math are exact rather than
+    // silently drifting from the spec.
+    if summary.frame_count != scene.duration_frames as usize {
+        return Err(CliError::Message(format!(
+            "scene {:?} declares duration_frames {} but its chain rendered {} frame(s); \
+             the declared length must match the render",
+            scene.name, scene.duration_frames, summary.frame_count
+        )));
+    }
+
+    println!(
+        "scene {scene_number:02} ({}) {}",
+        scene.name,
+        if reuse { "reused from cache" } else { "rendered" }
+    );
+
+    let out_frames = crossfade_frames(&scene.transition_out) as usize;
+    let final_frames_dir = summary.final_frames_dir.clone();
+    let frames = collect_image_frames(&summary.final_frames_dir)?;
+
+    // F1: refuse a cross-scene dimension mismatch here, before assembly.
+    // The first scene establishes the composition's dimensions; every
+    // later scene's first final frame must match.
+    if let Some(first) = frames.first() {
+        let image = load_image_f32(first)?;
+        let dims = (image.width, image.height);
+        match composition_dims {
+            None => *composition_dims = Some(dims),
+            Some(expected) if dims != *expected => {
+                return Err(CliError::Message(format!(
+                    "scene {:?} renders at {}x{} but scene {:?} established {}x{}; \
+                     scenes in a composition must share dimensions",
+                    scene.name, dims.0, dims.1, spec.scenes[0].name, expected.0, expected.1
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+
+    Ok((
+        RenderedScene {
+            name: scene.name.clone(),
+            directory,
+            frames,
+            duration: summary.frame_count,
+            out_frames,
+            transition_out: scene.transition_out.clone(),
+            chain_manifest: read_scene_chain_manifest(&scene_dir)?,
+        },
+        final_frames_dir,
+    ))
+}
+
+pub(crate) struct SingleSceneRunSummary {
+    pub(crate) frame_count: usize,
+    pub(crate) frames_dir: PathBuf,
+    pub(crate) offset_frames: usize,
+}
+
+/// F2 — the CLI iteration path: render (or reuse) a single named scene at its
+/// composition timeline offset, without assembling the piece. The scene's global
+/// start (the master-clock offset) is summed from the *declared* lengths of the
+/// scenes before it — owned length = `duration_frames` minus outgoing crossfade
+/// overlap — so no earlier scene is rendered. This is exact because the full
+/// loop pins each rendered length to its `duration_frames`. The record keeps the
+/// full skeleton, so a later full-composition run reuses this scene from cache.
+pub(crate) fn run_single_scene_spec(
+    spec: &CompositionSpec,
+    output_dir: &Path,
+    scene_name: &str,
+) -> Result<SingleSceneRunSummary, CliError> {
+    let index = spec
+        .scenes
+        .iter()
+        .position(|scene| scene.name == scene_name)
+        .ok_or_else(|| {
+            let names: Vec<&str> = spec.scenes.iter().map(|s| s.name.as_str()).collect();
+            CliError::Message(format!(
+                "no scene named {:?} in the composition; available scenes: {}",
+                scene_name,
+                names.join(", ")
+            ))
+        })?;
+
+    fs::create_dir_all(output_dir)?;
+    let (mut record, record_path) = open_composition_record(spec, output_dir)?;
+
+    // The scene's global start = the sum of the prior scenes' owned lengths
+    // (duration minus outgoing crossfade overlap). Validation guarantees the
+    // outgoing overlap never exceeds a scene's duration, so this can't underflow.
+    let mut global_start = 0usize;
+    for prior in &spec.scenes[..index] {
+        global_start +=
+            prior.duration_frames as usize - crossfade_frames(&prior.transition_out) as usize;
+    }
+
+    let mut composition_dims: Option<(u32, u32)> = None;
+    let (rendered, final_frames_dir) = render_composition_scene(
+        spec,
+        output_dir,
+        index,
+        global_start,
+        &mut record,
+        &record_path,
+        &mut composition_dims,
+    )?;
+
+    Ok(SingleSceneRunSummary {
+        frame_count: rendered.duration,
+        frames_dir: final_frames_dir,
+        offset_frames: global_start,
     })
 }

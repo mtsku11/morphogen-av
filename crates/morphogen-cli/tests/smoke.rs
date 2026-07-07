@@ -1852,6 +1852,137 @@ fn render_composition_master_offset_equals_trimmed_media() {
 }
 
 #[test]
+fn render_composition_single_scene_matches_full_composition_scene() {
+    // F2: `--scene <name>` renders that one scene at its composition timeline
+    // offset (so its master binding is identical to the full render) without
+    // rendering the prior scenes and without assembling the timeline.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let intro_src = temp_dir.path().join("intro");
+    let main_src = temp_dir.path().join("main");
+    write_texture_sequence(&intro_src, &[0, 2, 4]); // 3 frames
+    write_texture_sequence(&main_src, &[0, 2, 4, 6]); // 4 frames
+
+    // 9-frame master, quiet 0-2 / loud 3-8: scene "main" sits at global offset 3
+    // (after the 3-frame "intro"), so the offset materially drives its output.
+    let samples = master_wav_samples(9, 3);
+    let full_wav = temp_dir.path().join("score.wav");
+    write_test_wav_at(&full_wav, 6144, &samples);
+
+    let spec = serde_json::json!({
+        "version": 1, "fps": 12, "master": {"audio": full_wav.to_string_lossy()},
+        "scenes": [
+            {"name": "intro", "duration_frames": 3, "input_dir": intro_src.to_string_lossy(),
+             "chain": {"version": 1, "stages": [{"effect": "channel_shift"}]},
+             "transition_out": {"type": "cut"}},
+            {"name": "main", "duration_frames": 4, "input_dir": main_src.to_string_lossy(),
+             "chain": {"version": 1, "stages": [{
+                 "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0,
+                 "line_thickness": 1, "mono": false,
+                 "modulation": {"routes": ["displacement_depth=master.audio-rms:40"]}
+             }]}}
+        ]
+    });
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(&spec_path, &spec.to_string());
+
+    // Full render (assembles the whole piece) into one dir.
+    let full_out = temp_dir.path().join("full-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            full_out.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+
+    // Single-scene render of "main" into a *fresh* dir.
+    let scene_out = temp_dir.path().join("scene-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            scene_out.to_string_lossy().as_ref(),
+            "--scene",
+            "main",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered scene \"main\" (4 frame(s)) at timeline offset 3",
+        ));
+
+    // The single-scene "main" is byte-identical to "main" inside the full
+    // composition — proving it was bound to the master at the same offset 3.
+    assert_png_frames_identical(
+        &full_out.join("scene_02_main/stage_01_rutt_etra"),
+        &scene_out.join("scene_02_main/stage_01_rutt_etra"),
+        4,
+    );
+
+    // No prior scene was rendered, and the piece was not assembled.
+    assert!(
+        !scene_out.join("scene_01_intro").exists(),
+        "single-scene render must not render the scenes before it"
+    );
+    assert!(
+        !scene_out.join("frames").exists(),
+        "single-scene render must not assemble the timeline"
+    );
+    assert!(
+        !scene_out.join("composition-manifest.json").exists(),
+        "single-scene render must not write a composition manifest"
+    );
+
+    // The record keeps the full skeleton, so a later full run stays coherent
+    // and reuses the scene rendered here.
+    let record = read_json(&scene_out.join("composition-record.json"));
+    assert_eq!(record["scenes"][0]["name"], "intro");
+    assert_eq!(record["scenes"][1]["name"], "main");
+    assert!(
+        record["scenes"][1]["fingerprint"].as_str().is_some_and(|f| !f.is_empty()),
+        "the rendered scene's fingerprint must be recorded"
+    );
+}
+
+#[test]
+fn render_composition_single_scene_rejects_unknown_name() {
+    // F2: an unknown --scene name refuses and lists the available scenes.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(
+        &spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "solo", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "channel_shift"}}]}}}}
+            ]}}"#
+        ),
+    );
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            temp_dir.path().join("comp-out").to_string_lossy().as_ref(),
+            "--scene",
+            "nope",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no scene named \"nope\" in the composition; available scenes: solo",
+        ));
+}
+
+#[test]
 fn render_composition_master_is_additive_and_refuses_misuse() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");

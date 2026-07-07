@@ -241,10 +241,21 @@ Metal parity gates compile only on macOS.
   and refuses a dims mismatch against the first scene, which establishes the
   composition's dimensions
   (`render_composition_refuses_cross_scene_dimension_mismatch`).
-- **F2 — `--scene <name>` single-scene render.** Promised in S1 as the CLI
-  iteration path and never built. Renders one scene (with its master binding
-  at its timeline offset) without assembling the piece; the S7 panel gains
-  per-scene preview from it for free.
+- **F2 — `--scene <name>` single-scene render. DONE (2026-07-07).** Promised in
+  S1 as the CLI iteration path and never built. `render-composition <spec> <out>
+  --scene <name>` renders that one scene into its `scene_NN_name` directory with
+  its master binding at the scene's composition timeline offset, and skips
+  timeline assembly (no `frames/`, no `composition-manifest.json`). The offset is
+  summed from the *declared* lengths of the earlier scenes (owned length =
+  `duration_frames` − outgoing crossfade), so no earlier scene is rendered —
+  exact because the full loop pins each rendered length to its `duration_frames`.
+  The per-scene render/reuse body (master bind → fingerprint-before-render →
+  chain run → length check → F1 dims) was extracted to a shared
+  `render_composition_scene` helper so the full loop and `--scene` can't drift;
+  the record keeps the full skeleton so a later full run reuses the scene
+  rendered here. Tests: `render_composition_single_scene_matches_full_composition_scene`
+  (byte-identical to the scene inside the full piece, no prior scene rendered, no
+  assembly) and `render_composition_single_scene_rejects_unknown_name`.
 - **F3 — mid-scene resume on first runs. DONE (2026-07-07).** A scene's
   fingerprint was persisted only *after* the scene completed, so a first run
   killed mid-scene re-ran with recorded `""` ≠ computed → the partial scene dir

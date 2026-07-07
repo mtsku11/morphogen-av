@@ -8,8 +8,8 @@ _Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **596 passing across 7 crates, 0 failing** (was 582
-  in the last checkpoint; Tier 5.1 combinators + composition F1/F3 regression
+- `cargo test --workspace`: **598 passing across 7 crates, 0 failing** (was 582
+  in the last checkpoint; Tier 5.1 combinators + composition F1/F3/F2 regression
   tests account for the delta).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `swift test`: **123 passing, 0 failing.**
@@ -38,17 +38,17 @@ this session.
 
 **Next (decided 2026-07-07): close out the composition flagship, then resume the
 Tier 5 arc.** Immediate work is the composition post-build follow-ups —
-**F1 ✅ and F3 ✅ done** (cross-scene dims refusal; persist scene fingerprint
-before render) — leaving **F2** (`--scene <name>` single-scene render), **F4**
-(master-clock fps alignment guard), **F5** (real-footage two-scene acceptance
-render on the gitignored cello/harp clips). All four are recorded in
-`docs/COMPOSITION_MILESTONE.md` §Post-build review. Then continue the Tier 5
+**F1 ✅, F3 ✅, and F2 ✅ done** (cross-scene dims refusal; persist scene
+fingerprint before render; `--scene <name>` single-scene render at timeline
+offset) — leaving **F4** (master-clock fps alignment guard) and **F5**
+(real-footage two-scene acceptance render on the gitignored cello/harp clips).
+All are recorded in `docs/COMPOSITION_MILESTONE.md` §Post-build review. Then continue the Tier 5
 "it's a synth now" arc by ROI: 5.1 combinators ✅ → **5.2 oscillators** →
 5.5 capture → 5.3 MIDI → 5.4 mattes → 5.6 colour → then gated 2.x → blocked 3.x
 → **Morphogenesis**. The "every Tier before Morphogenesis" directive still holds;
 the composition close-out is small correctness debt slotted ahead of 5.2.
 
-### Composition timeline — MILESTONE BUILT (S1–S7); F1/F3 follow-ups done
+### Composition timeline — MILESTONE BUILT (S1–S7); F1/F2/F3 follow-ups done
 
 The flagship binder. Scenes (each a verbatim `render-chain` spec) on a global
 timeline → deterministic cut/crossfade transitions → scene-fingerprint cache →
@@ -58,8 +58,9 @@ per-scene trimming). CLI `render-composition` + queue pair
 `docs/COMPOSITION_MILESTONE.md`; findings in memory `composition-timeline`.
 Post-build review (independent, on the now-absorbed `opus-progress-review`
 branch) logged deviations + follow-ups F1–F6; **F1** (cut-only cross-scene dims
-refusal) and **F3** (fingerprint persisted before render → real mid-scene
-resume) landed 2026-07-07 with regression tests. Remaining: F2, F4, F5, F6.
+refusal), **F3** (fingerprint persisted before render → real mid-scene resume),
+and **F2** (`--scene <name>` single-scene render at timeline offset, no assembly)
+landed 2026-07-07 with regression tests. Remaining: F4, F5, F6.
 
 ## Earlier history
 

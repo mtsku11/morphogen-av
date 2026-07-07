@@ -1339,6 +1339,11 @@ pub(crate) enum Commands {
         /// (`{"version": 1, "fps": 12, "scenes": [...]}`).
         spec_path: PathBuf,
         output_dir: PathBuf,
+        /// Render only this one scene (by name) into its `scene_NN_name`
+        /// directory, with its master binding at its composition timeline
+        /// offset, and skip timeline assembly — the CLI/panel iteration path.
+        #[arg(long)]
+        scene: Option<String>,
     },
     /// Render a fluid colour-sort mosaic (experimental, deterministic; Slice 1 —
     /// CPU-only). Tiles of both sources are relocated by colour: local same-colour

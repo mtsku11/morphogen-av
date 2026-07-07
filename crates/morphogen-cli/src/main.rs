@@ -1005,7 +1005,8 @@ fn run() -> Result<(), CliError> {
         Commands::RenderComposition {
             spec_path,
             output_dir,
-        } => render_composition(&spec_path, &output_dir),
+            scene,
+        } => render_composition(&spec_path, &output_dir, scene.as_deref()),
         Commands::QueueAddChain {
             queue_path,
             spec_path,

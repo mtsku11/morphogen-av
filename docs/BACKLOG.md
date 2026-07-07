@@ -166,12 +166,12 @@ assembly, scene-fingerprint cache with structural refusal, master clock as the
 reserved `master.` named modulator (trim-offset, A5 exact by construction),
 queue pair, SwiftUI spec-runner panel. Post-build review follow-ups live in
 [COMPOSITION_MILESTONE.md](COMPOSITION_MILESTONE.md) §Post-build review:
-**F1 (cut-only cross-scene dims refusal) and F3 (fingerprint persisted before
-render → real mid-scene resume) are DONE (2026-07-07)**; **F2** (`--scene`
-single-scene render), **F4** (master-fps alignment guard), and **F5** (real-
-footage two-scene acceptance render) remain and are the immediate next work
-(decided 2026-07-07), ahead of resuming the Tier 5 arc (next: 5.2 oscillators;
-5.1 combinators done) and then Morphogenesis.
+**F1 (cut-only cross-scene dims refusal), F3 (fingerprint persisted before
+render → real mid-scene resume), and F2 (`--scene <name>` single-scene render at
+timeline offset, no assembly) are DONE (2026-07-07)**; **F4** (master-fps
+alignment guard) and **F5** (real-footage two-scene acceptance render) remain and
+are the immediate next work (decided 2026-07-07), ahead of resuming the Tier 5
+arc (next: 5.2 oscillators; 5.1 combinators done) and then Morphogenesis.
 
 **The wild experimental plan (user-requested 2026-07-05) is the morphogenesis
 engine — contract ready in
