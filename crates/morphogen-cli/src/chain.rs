@@ -327,6 +327,8 @@ impl ChainStage {
                 cache_dir: None,
                 named_modulator_audio: &modulation.named_modulator_audio,
                 named_modulator_frames: &modulation.named_modulator_frames,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         }
     }
@@ -710,6 +712,8 @@ fn no_modulation() -> ModulationCliArgs<'static> {
         cache_dir: None,
         named_modulator_audio: &[],
         named_modulator_frames: &[],
+        modulator_midi: None,
+        named_modulator_midi: &[],
     }
 }
 

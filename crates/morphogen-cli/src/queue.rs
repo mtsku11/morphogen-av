@@ -1216,6 +1216,8 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2046,6 +2048,8 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2158,6 +2162,8 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
                     cache_dir: None,
                     named_modulator_audio: &named_modulator_audio_specs,
                     named_modulator_frames: &named_modulator_frames_specs,
+                    modulator_midi: None,
+                    named_modulator_midi: &[],
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2301,6 +2307,8 @@ pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2438,6 +2446,8 @@ pub(crate) fn queue_run_dispersion_blend_sequence(queue_path: &Path) -> Result<(
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -2735,6 +2745,8 @@ pub(crate) fn queue_run_fluid_mosaic_sequence(queue_path: &Path) -> Result<(), C
                     cache_dir: None,
                     named_modulator_audio: &named_modulator_audio_specs,
                     named_modulator_frames: &named_modulator_frames_specs,
+                    modulator_midi: None,
+                    named_modulator_midi: &[],
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2842,6 +2854,8 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
                     cache_dir: None,
                     named_modulator_audio: &named_modulator_audio_specs,
                     named_modulator_frames: &named_modulator_frames_specs,
+                    modulator_midi: None,
+                    named_modulator_midi: &[],
                 },
             })?;
         let mut effect = serde_json::json!({
@@ -2963,6 +2977,8 @@ pub(crate) fn queue_run_field_particles_sequence(queue_path: &Path) -> Result<()
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3092,6 +3108,8 @@ pub(crate) fn queue_run_cascade_trails_sequence(queue_path: &Path) -> Result<(),
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3298,6 +3316,8 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3551,6 +3571,8 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3749,6 +3771,8 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({
@@ -3967,6 +3991,8 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let algorithm = match (source_a_directory.is_some(), backend) {
@@ -5353,6 +5379,8 @@ pub(crate) fn queue_run_datamosh_sequence(queue_path: &Path) -> Result<(), CliEr
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         };
         let resolved_settings = resolve_datamosh_settings(&render_request);
@@ -6116,6 +6144,8 @@ pub(crate) fn queue_run_feedback_sequence(queue_path: &Path) -> Result<(), CliEr
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
@@ -6755,6 +6785,10 @@ fn core_modulation_source(source: ModulationSource) -> CoreModulationSource {
         ModulationSource::Luma => CoreModulationSource::Luma,
         ModulationSource::Flow => CoreModulationSource::Flow,
         ModulationSource::EdgeDensity => CoreModulationSource::EdgeDensity,
+        ModulationSource::MidiCc(controller) => CoreModulationSource::MidiCc(controller),
+        ModulationSource::MidiVelocity => CoreModulationSource::MidiVelocity,
+        ModulationSource::MidiNoteDensity => CoreModulationSource::MidiNoteDensity,
+        ModulationSource::MidiPitch => CoreModulationSource::MidiPitch,
         ModulationSource::Breakpoints { points } => {
             CoreModulationSource::Breakpoints { points }
         }
@@ -6866,6 +6900,18 @@ fn parse_queue_modulation_routes(
                 "--modulator-frames <dir>",
                 "--named-modulator-frames",
             )?;
+        }
+        if route.source.needs_midi() {
+            // Tier 5.3 S1 deviation: MIDI modulation is direct-CLI only.
+            // Queue tasks don't yet persist a modulator-MIDI path/fingerprint
+            // (`docs/MIDI_MODULATION_MILESTONE.md` S2), so queue-add commands
+            // deliberately have no `--modulator-midi` flag; reject here with
+            // a clear error rather than silently dropping the route's media.
+            return Err(CliError::Message(format!(
+                "modulation source '{}' requires MIDI media, which queued jobs do not yet \
+                 support (direct CLI only for now — queue support is a later slice)",
+                route.source.name()
+            )));
         }
     }
     let routes = routes
@@ -7189,6 +7235,8 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
                 cache_dir: None,
                 named_modulator_audio: &named_modulator_audio_specs,
                 named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: None,
+                named_modulator_midi: &[],
             },
         })?;
         let mut effect = serde_json::json!({

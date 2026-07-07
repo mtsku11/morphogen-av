@@ -1461,6 +1461,14 @@ pub enum ModulationSource {
     Flow,
     /// Peak-normalized mean Sobel gradient magnitude per frame (edge density).
     EdgeDensity,
+    /// Controller `n`'s value from the modulator MIDI file (absolute /127).
+    MidiCc(u8),
+    /// Note-on velocity from the modulator MIDI file (absolute /127).
+    MidiVelocity,
+    /// Note-on count per sliding 1.0s window (peak-normalized).
+    MidiNoteDensity,
+    /// The most recent note-on's key (absolute /127).
+    MidiPitch,
     /// Internal deterministic modulator — a pure function of
     /// `(frame_time, params)`; no media, no sidecar, no fingerprint.
     Lfo {
@@ -1493,6 +1501,10 @@ impl ModulationSource {
             ModulationSource::Luma => "luma",
             ModulationSource::Flow => "flow",
             ModulationSource::EdgeDensity => "edge-density",
+            ModulationSource::MidiCc(_) => "midi-cc",
+            ModulationSource::MidiVelocity => "midi-velocity",
+            ModulationSource::MidiNoteDensity => "midi-note-density",
+            ModulationSource::MidiPitch => "midi-pitch",
             ModulationSource::Lfo { .. } => "lfo",
             ModulationSource::Breakpoints { .. } => "breakpoints",
             ModulationSource::Sum(..) => "sum",
@@ -1506,6 +1518,7 @@ impl ModulationSource {
 
     pub fn spec_text(&self) -> String {
         match self {
+            ModulationSource::MidiCc(controller) => format!("midi-cc({controller})"),
             ModulationSource::Lfo { shape, rate_hz, phase } =>
                 format!("lfo({},{},{})", shape.name(), rate_hz, phase),
             ModulationSource::Breakpoints { points } => {

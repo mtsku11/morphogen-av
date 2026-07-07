@@ -340,6 +340,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_datamosh_sequence(DatamoshSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -368,6 +370,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -441,6 +445,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_dispersion_blend_sequence(DispersionBlendSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -473,6 +479,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -495,6 +503,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_fluid_advect_sequence(FluidAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -517,6 +527,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -536,6 +548,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_fluid_advect_two_source_sequence(FluidAdvectTwoSourceSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -552,6 +566,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -570,6 +586,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_optical_flow_advect_sequence(OpticalFlowAdvectSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -585,6 +603,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -609,6 +629,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_field_particles_sequence(FieldParticlesSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -633,6 +655,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -661,6 +685,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_cascade_trails_sequence(CascadeTrailsSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -696,6 +722,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -754,6 +782,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => {
             let mut settings = CascadeCollageSettings {
                 scrib_amp_scale,
@@ -789,6 +819,8 @@ fn run() -> Result<(), CliError> {
                     cache_dir: modulation_cache_dir.as_deref(),
                     named_modulator_audio: &named_modulator_audio,
                     named_modulator_frames: &named_modulator_frames,
+                    modulator_midi: modulator_midi.as_deref(),
+                    named_modulator_midi: &named_modulator_midi,
                 },
             })
             .map(|_| ())
@@ -839,6 +871,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_pixel_sort_sequence(PixelSortSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -864,6 +898,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -889,6 +925,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_channel_shift_sequence(ChannelShiftSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -914,6 +952,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -934,6 +974,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_retro_static_sequence(RetroStaticSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -954,6 +996,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -975,6 +1019,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_rutt_etra_sequence(RuttEtraSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -996,6 +1042,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -1014,6 +1062,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_palette_quantize_sequence(PaletteQuantizeSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -1032,6 +1082,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -1320,6 +1372,8 @@ fn run() -> Result<(), CliError> {
             modulator_frames,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
             max_frames,
         } => {
             // When the steady-vortex flow is active it is meant to be the dominant
@@ -1382,6 +1436,8 @@ fn run() -> Result<(), CliError> {
                     cache_dir: None,
                     named_modulator_audio: &named_modulator_audio,
                     named_modulator_frames: &named_modulator_frames,
+                    modulator_midi: modulator_midi.as_deref(),
+                    named_modulator_midi: &named_modulator_midi,
                 },
             })
             .map(|_| ())
@@ -1418,6 +1474,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -1453,6 +1511,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),
@@ -1590,6 +1650,8 @@ fn run() -> Result<(), CliError> {
             modulation_cache_dir,
             named_modulator_audio,
             named_modulator_frames,
+            modulator_midi,
+            named_modulator_midi,
         } => render_feedback_sequence(FeedbackSequenceRenderRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -1626,6 +1688,8 @@ fn run() -> Result<(), CliError> {
                 cache_dir: modulation_cache_dir.as_deref(),
                 named_modulator_audio: &named_modulator_audio,
                 named_modulator_frames: &named_modulator_frames,
+                modulator_midi: modulator_midi.as_deref(),
+                named_modulator_midi: &named_modulator_midi,
             },
         })
         .map(|_| ()),

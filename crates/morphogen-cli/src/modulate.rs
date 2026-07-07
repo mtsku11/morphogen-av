@@ -12,8 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use morphogen_audio::{
-    load_wav_f32, onset_strength_from_stft, rms_envelope, spectral_centroid_from_magnitudes,
-    stft_magnitude_cache, StftConfig, WindowFunction,
+    load_wav_f32, midi_seconds_for_tick, onset_strength_from_stft, rms_envelope,
+    spectral_centroid_from_magnitudes, stft_magnitude_cache, MidiEventKind, MidiFile, StftConfig,
+    WindowFunction,
 };
 use morphogen_render::{
     modulated_value, parse_modulation_route, peak_normalize, validate_route_targets,
@@ -135,6 +136,8 @@ pub(crate) struct ModulationRequest<'a> {
     pub(crate) specs: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    /// Modulator Standard MIDI File for `midi-*` sources.
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) sampling: ModulationSampling,
     /// Maps output frame index → seconds; also the modulator frame timeline.
     pub(crate) fps: f64,
@@ -148,6 +151,7 @@ pub(crate) struct ModulationRequest<'a> {
     /// modulator.
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 /// Build the plan, or `None` when no routes are given (the exact off path).
@@ -173,6 +177,8 @@ pub(crate) fn build_modulation_plan(
         parse_named_modulator_specs(request.named_modulator_audio, "--named-modulator-audio")?;
     let named_frames =
         parse_named_modulator_specs(request.named_modulator_frames, "--named-modulator-frames")?;
+    let named_midi =
+        parse_named_modulator_specs(request.named_modulator_midi, "--named-modulator-midi")?;
 
     // Each distinct (modulator, leaf_spec_text) pair is extracted exactly once.
     // Combinator routes may have multiple media-backed leaves; each is extracted
@@ -193,7 +199,13 @@ pub(crate) fn build_modulation_plan(
                 sampling: None,
                 modulator: route.modulator.clone(),
             };
-            let samples = extract_envelope(&leaf_route, &request, &named_audio, &named_frames)?;
+            let samples = extract_envelope(
+                &leaf_route,
+                &request,
+                &named_audio,
+                &named_frames,
+                &named_midi,
+            )?;
             leaf_cache.push((key, samples));
         }
     }
@@ -280,6 +292,7 @@ fn extract_envelope(
     request: &ModulationRequest<'_>,
     named_audio: &[(String, PathBuf)],
     named_frames: &[(String, PathBuf)],
+    named_midi: &[(String, PathBuf)],
 ) -> Result<Vec<(f64, f32)>, CliError> {
     let source = route.source.clone();
     let resolve_audio = || {
@@ -298,6 +311,15 @@ fn extract_envelope(
             named_frames,
             "--modulator-frames <dir>",
             "--named-modulator-frames",
+        )
+    };
+    let resolve_midi = || {
+        resolve_modulator_media(
+            route,
+            request.modulator_midi,
+            named_midi,
+            "--modulator-midi <file.mid>",
+            "--named-modulator-midi",
         )
     };
     match source {
@@ -366,6 +388,22 @@ fn extract_envelope(
                 peak_normalize(&mut samples);
                 Ok(samples)
             })
+        }
+        ModulationSource::MidiCc(controller) => {
+            let midi = MidiFile::load(resolve_midi()?)?;
+            Ok(build_midi_cc_samples(&midi, controller))
+        }
+        ModulationSource::MidiVelocity => {
+            let midi = MidiFile::load(resolve_midi()?)?;
+            Ok(build_midi_velocity_samples(&midi))
+        }
+        ModulationSource::MidiNoteDensity => {
+            let midi = MidiFile::load(resolve_midi()?)?;
+            Ok(build_midi_note_density_samples(&midi))
+        }
+        ModulationSource::MidiPitch => {
+            let midi = MidiFile::load(resolve_midi()?)?;
+            Ok(build_midi_pitch_samples(&midi))
         }
         // Combinators are never passed to extract_envelope directly — only their
         // atomic media leaves are extracted via leaf_media_sources() in build_plan.
@@ -464,6 +502,157 @@ fn cached_frames_envelope(
     Ok(samples)
 }
 
+/// Every MIDI envelope's silence value (contract: CC/velocity/pitch all use
+/// 0 for "nothing has happened yet" / "no notes sounding").
+const MIDI_SILENCE_VALUE: f32 = 0.0;
+
+/// Note-density sliding-window parameters (contract: the RMS-hop convention).
+const MIDI_DENSITY_WINDOW_SECONDS: f64 = 1.0;
+const MIDI_DENSITY_HOP_SECONDS: f64 = 0.0625;
+
+/// The file's total duration in tempo-mapped seconds (the latest event's
+/// tick; 0 for an empty file).
+fn midi_duration_seconds(midi: &MidiFile, segments: &[(u64, u32)]) -> f64 {
+    let max_tick = midi
+        .events
+        .iter()
+        .map(|event| event.tick)
+        .max()
+        .unwrap_or(0);
+    midi_seconds_for_tick(segments, midi.division, max_tick)
+}
+
+/// Every MIDI envelope gets a sample at `t = 0` (silence value, unless an
+/// event already sits at tick 0) and a final sample holding the last value at
+/// end-of-track time, so pre-first-event and post-last-event frames are
+/// defined (contract: "Sources & envelopes").
+fn finalize_midi_envelope(samples: &mut Vec<(f64, f32)>, silence: f32, end_seconds: f64) {
+    if samples.first().map_or(true, |&(t, _)| t > 0.0) {
+        samples.insert(0, (0.0, silence));
+    }
+    if let Some(&(last_t, last_v)) = samples.last() {
+        if last_t < end_seconds {
+            samples.push((end_seconds, last_v));
+        }
+    }
+}
+
+/// `midi-cc(<n>)`: `value / 127.0` at each matching Control Change event
+/// (any channel — channels merge, last-writer-wins at equal ticks per the
+/// merge order), **absolute** normalization.
+fn build_midi_cc_samples(midi: &MidiFile, controller: u8) -> Vec<(f64, f32)> {
+    let segments = midi.tempo_segments();
+    let mut samples: Vec<(f64, f32)> = midi
+        .events
+        .iter()
+        .filter_map(|event| match event.kind {
+            MidiEventKind::ControlChange {
+                controller: c,
+                value,
+                ..
+            } if c == controller => Some((
+                midi_seconds_for_tick(&segments, midi.division, event.tick),
+                value as f32 / 127.0,
+            )),
+            _ => None,
+        })
+        .collect();
+    finalize_midi_envelope(
+        &mut samples,
+        MIDI_SILENCE_VALUE,
+        midi_duration_seconds(midi, &segments),
+    );
+    samples
+}
+
+/// `midi-velocity`: `velocity / 127.0` at each note-on; an additional 0
+/// sample when the sounding-note count (summed across all channels/keys)
+/// drops to zero. **Absolute** normalization.
+fn build_midi_velocity_samples(midi: &MidiFile) -> Vec<(f64, f32)> {
+    let segments = midi.tempo_segments();
+    let mut samples = Vec::new();
+    let mut sounding: i64 = 0;
+    for event in &midi.events {
+        let t = midi_seconds_for_tick(&segments, midi.division, event.tick);
+        match event.kind {
+            MidiEventKind::NoteOn { velocity, .. } => {
+                sounding += 1;
+                samples.push((t, velocity as f32 / 127.0));
+            }
+            MidiEventKind::NoteOff { .. } => {
+                sounding = (sounding - 1).max(0);
+                if sounding == 0 {
+                    samples.push((t, 0.0));
+                }
+            }
+            _ => {}
+        }
+    }
+    finalize_midi_envelope(
+        &mut samples,
+        MIDI_SILENCE_VALUE,
+        midi_duration_seconds(midi, &segments),
+    );
+    samples
+}
+
+/// `midi-pitch`: `key / 127.0` at each note-on, holding through note-off (no
+/// sample is emitted on note-off — the hold sampling convention does the
+/// rest). **Absolute** normalization.
+fn build_midi_pitch_samples(midi: &MidiFile) -> Vec<(f64, f32)> {
+    let segments = midi.tempo_segments();
+    let mut samples: Vec<(f64, f32)> = midi
+        .events
+        .iter()
+        .filter_map(|event| match event.kind {
+            MidiEventKind::NoteOn { key, .. } => Some((
+                midi_seconds_for_tick(&segments, midi.division, event.tick),
+                key as f32 / 127.0,
+            )),
+            _ => None,
+        })
+        .collect();
+    finalize_midi_envelope(
+        &mut samples,
+        MIDI_SILENCE_VALUE,
+        midi_duration_seconds(midi, &segments),
+    );
+    samples
+}
+
+/// `midi-note-density`: note-on count per sliding 1.0s window `[start,
+/// start+1.0)`, sampled every 62.5ms across the file's duration (the RMS-hop
+/// convention), then peak-normalized (**relative** — fixtures must span
+/// sparse→busy).
+fn build_midi_note_density_samples(midi: &MidiFile) -> Vec<(f64, f32)> {
+    let segments = midi.tempo_segments();
+    let note_on_times: Vec<f64> = midi
+        .events
+        .iter()
+        .filter(|event| matches!(event.kind, MidiEventKind::NoteOn { .. }))
+        .map(|event| midi_seconds_for_tick(&segments, midi.division, event.tick))
+        .collect();
+    let duration = midi_duration_seconds(midi, &segments);
+
+    let mut samples = Vec::new();
+    let mut index: u64 = 0;
+    loop {
+        let start = index as f64 * MIDI_DENSITY_HOP_SECONDS;
+        let end = (start + MIDI_DENSITY_WINDOW_SECONDS).min(duration.max(start));
+        let count = note_on_times
+            .iter()
+            .filter(|&&t| t >= start && t < end)
+            .count();
+        samples.push((start, count as f32));
+        if start >= duration {
+            break;
+        }
+        index += 1;
+    }
+    peak_normalize(&mut samples);
+    samples
+}
+
 fn modulation_stft_config() -> StftConfig {
     StftConfig {
         fft_size: MODULATION_WINDOW,
@@ -529,11 +718,13 @@ mod tests {
             specs: &["displacement_depth=lfo(sine,0.5):100".to_string()],
             modulator_audio: None,
             modulator_frames: None,
+            modulator_midi: None,
             sampling: ModulationSampling::Hold,
             fps: 30.0,
             cache_dir: None,
             named_modulator_audio: &[],
             named_modulator_frames: &[],
+            named_modulator_midi: &[],
         };
         let plan = build_modulation_plan(request)
             .unwrap()
@@ -549,12 +740,168 @@ mod tests {
             specs: &[],
             modulator_audio: None,
             modulator_frames: None,
+            modulator_midi: None,
             sampling: ModulationSampling::Hold,
             fps: 30.0,
             cache_dir: None,
             named_modulator_audio: &[],
             named_modulator_frames: &[],
+            named_modulator_midi: &[],
         };
         assert!(build_modulation_plan(request).unwrap().is_none());
+    }
+
+    // ── MIDI envelope-shape tests ───────────────────────────────────────────
+    // SMF fixtures are built as byte arrays in test code (no binary fixtures
+    // in the repo), mirroring the parser-level fixtures in
+    // `morphogen_audio::midi`'s own test module.
+
+    fn vlq(mut value: u32) -> Vec<u8> {
+        let mut bytes = vec![(value & 0x7F) as u8];
+        value >>= 7;
+        while value > 0 {
+            bytes.push(((value & 0x7F) as u8) | 0x80);
+            value >>= 7;
+        }
+        bytes.reverse();
+        bytes
+    }
+
+    fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(id);
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn note_on(channel: u8, key: u8, velocity: u8) -> Vec<u8> {
+        vec![0x90 | channel, key, velocity]
+    }
+
+    fn note_off(channel: u8, key: u8, velocity: u8) -> Vec<u8> {
+        vec![0x80 | channel, key, velocity]
+    }
+
+    fn control_change(channel: u8, controller: u8, value: u8) -> Vec<u8> {
+        vec![0xB0 | channel, controller, value]
+    }
+
+    fn end_of_track() -> Vec<u8> {
+        vec![0xFF, 0x2F, 0x00]
+    }
+
+    /// A format-0, single-track, PPQ-480 SMF (division stays the default
+    /// 120 BPM tempo — no Set Tempo event) built from `(delta_ticks,
+    /// event_bytes)` pairs, with an End-of-Track appended.
+    fn build_smf(events: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend_from_slice(&0u16.to_be_bytes()); // format 0
+        header.extend_from_slice(&1u16.to_be_bytes()); // ntrks
+        header.extend_from_slice(&480u16.to_be_bytes()); // PPQ division
+        let mut bytes = chunk(b"MThd", &header);
+
+        let mut track_body = Vec::new();
+        for (delta, data) in events {
+            track_body.extend_from_slice(&vlq(*delta));
+            track_body.extend_from_slice(data);
+        }
+        track_body.extend_from_slice(&vlq(0));
+        track_body.extend_from_slice(&end_of_track());
+        bytes.extend_from_slice(&chunk(b"MTrk", &track_body));
+        bytes
+    }
+
+    #[test]
+    fn midi_cc_envelope_is_a_staircase_with_leading_silence_sample() {
+        // CC 74 ramps 0 -> 64 -> 127 at ticks 240 and 480 (120 BPM default:
+        // quarter note = 0.5s, so ticks 240/480 land at 0.25s/0.5s).
+        let bytes = build_smf(&[
+            (240, control_change(0, 74, 64)),
+            (240, control_change(0, 74, 127)),
+        ]);
+        let midi = MidiFile::parse(&bytes).expect("valid fixture parses");
+        let samples = build_midi_cc_samples(&midi, 74);
+
+        // No event at tick 0 → a synthetic silence sample is prepended.
+        assert_eq!(samples[0], (0.0, 0.0));
+        assert!((samples[1].0 - 0.25).abs() < 1e-9);
+        assert!((samples[1].1 - 64.0 / 127.0).abs() < 1e-6);
+        assert!((samples[2].0 - 0.5).abs() < 1e-9);
+        assert!((samples[2].1 - 1.0).abs() < 1e-6);
+        assert_eq!(
+            samples.len(),
+            3,
+            "last event sits at end-of-track: no extra padding sample"
+        );
+
+        // A different controller number sees no events at all — just the
+        // t=0 silence sample and the end-of-track hold.
+        let empty = build_midi_cc_samples(&midi, 1);
+        assert_eq!(empty.len(), 2);
+        assert_eq!(empty[0], (0.0, 0.0));
+        assert!((empty[1].0 - 0.5).abs() < 1e-9);
+        assert_eq!(empty[1].1, 0.0);
+    }
+
+    #[test]
+    fn midi_velocity_envelope_samples_zero_when_sounding_count_hits_zero() {
+        let bytes = build_smf(&[(0, note_on(0, 60, 100)), (240, note_off(0, 60, 64))]);
+        let midi = MidiFile::parse(&bytes).expect("valid fixture parses");
+        let samples = build_midi_velocity_samples(&midi);
+
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0], (0.0, 100.0 / 127.0));
+        assert!((samples[1].0 - 0.25).abs() < 1e-9);
+        assert_eq!(samples[1].1, 0.0);
+    }
+
+    #[test]
+    fn midi_pitch_holds_through_note_off_no_new_sample() {
+        let bytes = build_smf(&[
+            (0, note_on(0, 60, 100)),
+            (240, note_off(0, 60, 64)),
+            (240, note_on(0, 72, 100)),
+        ]);
+        let midi = MidiFile::parse(&bytes).expect("valid fixture parses");
+        let samples = build_midi_pitch_samples(&midi);
+
+        // Only the two note-ons produce samples — note-off is silent, so the
+        // pitch holds across it via the ordinary hold-sampling machinery.
+        assert_eq!(samples.len(), 2);
+        let held = morphogen_render::sample_envelope(&samples, 0.3, ModulationSampling::Hold);
+        assert_eq!(
+            held,
+            60.0 / 127.0,
+            "pitch must hold through the note-off at t=0.25"
+        );
+    }
+
+    #[test]
+    fn midi_note_density_peak_normalizes_sparse_vs_busy() {
+        // One note near the start, then a cluster of five notes a second
+        // later — density must be higher (and peak-normalized to 1.0) in the
+        // busy region than in the sparse region (contract: fixtures must
+        // span sparse→busy).
+        let events: Vec<(u32, Vec<u8>)> = vec![
+            (0, note_on(0, 60, 100)),
+            (1_920, note_on(0, 61, 100)), // +4 quarter notes = +2.0s at 120bpm
+            (10, note_on(0, 62, 100)),
+            (10, note_on(0, 63, 100)),
+            (10, note_on(0, 64, 100)),
+            (10, note_on(0, 65, 100)),
+        ];
+        let bytes = build_smf(&events);
+        let midi = MidiFile::parse(&bytes).expect("valid fixture parses");
+        let samples = build_midi_note_density_samples(&midi);
+
+        let peak = samples.iter().map(|&(_, v)| v).fold(0.0_f32, f32::max);
+        assert_eq!(peak, 1.0, "peak-normalized: the busiest window reads 1.0");
+        let near_start =
+            morphogen_render::sample_envelope(&samples, 0.05, ModulationSampling::Hold);
+        assert!(
+            near_start < peak,
+            "the sparse opening window must read below the busy peak"
+        );
     }
 }

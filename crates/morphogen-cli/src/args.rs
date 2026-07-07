@@ -372,6 +372,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -390,6 +393,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// EXPERIMENTAL, NON-DETERMINISTIC: real bitstream datamosh. Encodes a video to
     /// AVI/MPEG-4 (one I-frame, then P-frames) via external ffmpeg, performs
@@ -519,6 +525,9 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long, default_value_t = 12.0)]
@@ -529,6 +538,9 @@ pub(crate) enum Commands {
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render a faux-fluid dye advection (experimental, deterministic; CPU reference with
     /// an optional parity-gated Metal backend).
@@ -582,6 +594,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -600,6 +615,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render the mutual two-source faux-fluid advection (experimental, deterministic):
     /// Source A's optical-flow motion advects Source B's colour as a continuous dye. Frame
@@ -638,6 +656,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -656,6 +677,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render the single-source optical-flow-driven advection (experimental, deterministic):
     /// the video is advected by its OWN motion. Each frame the source's Lucas-Kanade flow
@@ -694,6 +718,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -712,6 +739,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render the discrete-carrier particle advection (experimental, deterministic):
     /// a grid of coloured particles seeded from the source rides the shared steady-vortex
@@ -763,6 +793,9 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long, default_value_t = 12.0)]
@@ -773,6 +806,9 @@ pub(crate) enum Commands {
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render a persistent-trail vector-field cascade (experimental, deterministic; CPU-only):
     /// a grid of source-image tiles is advected along the shared steady-vortex field and stamped
@@ -839,6 +875,9 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long, default_value_t = 12.0)]
@@ -849,6 +888,9 @@ pub(crate) enum Commands {
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render a hard binary tile collage (experimental, deterministic; CPU-only).
     /// The canvas is divided into NxN blocks; each block independently shows Source A
@@ -966,6 +1008,9 @@ pub(crate) enum Commands {
         modulator_audio: Option<PathBuf>,
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
         #[arg(long, default_value_t = 12.0)]
@@ -976,6 +1021,9 @@ pub(crate) enum Commands {
         named_modulator_audio: Vec<String>,
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render a deterministic video oscillator preset — a source-less pattern generator
     /// writing an ordinary PNG frame dir, so any existing effect/route/queue/chain can
@@ -1059,6 +1107,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -1077,6 +1128,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render a channel-shift (RGB-split / chromatic aberration) sequence. Each
     /// colour channel is sampled from B at an independently offset position. Alpha
@@ -1132,6 +1186,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -1150,6 +1207,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render the retro-static glitch: deterministically simulate a PNG-style
     /// scanline filter, then deliberately misread it at the wrong bytes-per-pixel
@@ -1192,6 +1252,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -1210,6 +1273,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render the Rutt-Etra scanline look: the frame is re-rendered as a sparse
     /// set of horizontal scanlines on black, each displaced vertically by its
@@ -1260,6 +1326,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -1278,6 +1347,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).
@@ -1311,6 +1383,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -1329,6 +1404,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Run an ordered list of single-source effect stages from a JSON spec
     /// (see docs/EFFECT_CHAIN_MILESTONE.md). Stage 1 reads `input_dir`; each
@@ -1522,12 +1600,18 @@ pub(crate) enum Commands {
         /// Frame-sequence dir for modulation routes using frame-luma sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Named-modulator entries, audio: `name=path/to.wav` (repeatable).
         #[arg(long, action = clap::ArgAction::Append, value_name = "NAME=PATH")]
         named_modulator_audio: Vec<String>,
         /// Named-modulator entries, frames: `name=path/to/frames` (repeatable).
         #[arg(long, action = clap::ArgAction::Append, value_name = "NAME=PATH")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
         /// Max frames (limits render length when modulation sources are shorter).
         #[arg(long)]
         max_frames: Option<usize>,
@@ -1622,6 +1706,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -1638,6 +1725,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
     /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's
@@ -1826,6 +1916,9 @@ pub(crate) enum Commands {
         /// Modulator PNG frame directory for luma/flow modulation sources.
         #[arg(long)]
         modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
         /// Envelope evaluation per output frame: hold (step) or smooth (linear).
         #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
         modulation_sampling: CliModulationSampling,
@@ -1840,6 +1933,9 @@ pub(crate) enum Commands {
         /// Named modulator frame directory <name>=<dir> (repeatable).
         #[arg(long = "named-modulator-frames")]
         named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     CacheSyntheticFlow {
         output_dir: PathBuf,

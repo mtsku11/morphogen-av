@@ -7,6 +7,7 @@ pub mod cross_synth;
 pub mod descriptors;
 pub mod error;
 pub mod fft;
+pub mod midi;
 pub mod onset;
 pub mod rms;
 pub mod spectral;
@@ -28,6 +29,9 @@ pub use cross_synth::{
 pub use descriptors::{AudioAnalysisCache, AudioDescriptorFrame};
 pub use error::AudioError;
 pub use fft::convolve_via_fft;
+pub use midi::{
+    seconds_for_tick as midi_seconds_for_tick, MidiEventKind, MidiFile, MidiTimedEvent,
+};
 pub use onset::{onset_strength_from_stft, OnsetStrengthCache, OnsetStrengthFrame};
 pub use rms::rms_envelope;
 pub use spectral::{spectral_centroid, spectral_centroid_from_magnitudes};

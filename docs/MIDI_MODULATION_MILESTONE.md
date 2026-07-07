@@ -83,7 +83,19 @@ named-modulator fingerprint lists. Envelope sidecar cache: **not extended**
 
 ## Slices
 
-- **S1 — parser + sources, direct CLI.** `midi.rs` + the four extractions +
+- **S1 — parser + sources, direct CLI. DONE (2026-07-07,** Sonnet build,
+  orchestrator-verified: cargo 611 → **630/0**, clippy clean, zero new fmt
+  diffs; tempo-exactness pinned
+  (`tempo_exactness_across_a_mid_file_bpm_change`); CC-74 staircase readout
+  off **0.000** / on@hold **1.885** (plateau frames byte-identical, boundary
+  frame differs) / on@smooth **22.891**, frames Read flat → raked. Declared
+  deviations, accepted: queue-add rejects `midi-*` routes with a clear
+  "later slice" error persisting nothing (the LFO S1 precedent — S2 reverses
+  it); flow-feedback's checkpoint classifier *skips* named-MIDI (S2 adds the
+  fingerprint, anchor 5); chain stages pass no MIDI media yet. Readout trap
+  recorded: PPQ tick→seconds is f64 — a "0.5 s" CC boundary lands at
+  0.5000000000000001, so a frame sampled at literal 0.5 reads the *prior* CC
+  value; derive boundaries from computed times, never assumed decimals.) `midi.rs` + the four extractions +
   `--modulator-midi`/named flags on the modulatable commands + tempo-map and
   envelope unit tests (SMF fixtures built as byte arrays in test code — no
   binary fixtures in the repo) + a readout render (below).

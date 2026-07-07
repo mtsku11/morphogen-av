@@ -105,6 +105,19 @@ pub enum ModulationSource {
     /// (**relative**). Invariant to uniform brightness shifts — a frame with many
     /// edges is high even if its mean luma equals a plain grey frame.
     EdgeDensity,
+    /// Controller `n`'s value from the modulator MIDI file, `value / 127.0`
+    /// (**absolute** — a CC sweep to 64 must not read as full scale). Silence
+    /// value 0. `n` is validated `0..=127` at parse time.
+    MidiCc(u8),
+    /// Note-on velocity from the modulator MIDI file, `velocity / 127.0`
+    /// (**absolute**); samples 0 when the sounding-note count drops to zero.
+    MidiVelocity,
+    /// Note-on count per sliding 1.0s window (peak-normalized, **relative** —
+    /// fixtures must span sparse→busy).
+    MidiNoteDensity,
+    /// The most recent note-on's key, `key / 127.0` (**absolute**); holds
+    /// through note-off. Silence value 0.
+    MidiPitch,
     /// A pure function of `(frame_time, params)` — no media, no sidecar, no
     /// fingerprint. `rate_hz` is cycles/second on the envelope timeline;
     /// `phase` is a phase offset in cycles (`fract` applied at eval time).
@@ -153,6 +166,10 @@ impl ModulationSource {
             ModulationSource::Luma => "luma",
             ModulationSource::Flow => "flow",
             ModulationSource::EdgeDensity => "edge-density",
+            ModulationSource::MidiCc(_) => "midi-cc",
+            ModulationSource::MidiVelocity => "midi-velocity",
+            ModulationSource::MidiNoteDensity => "midi-note-density",
+            ModulationSource::MidiPitch => "midi-pitch",
             ModulationSource::Lfo { .. } => "lfo",
             ModulationSource::Breakpoints { .. } => "breakpoints",
             ModulationSource::Sum(..) => "sum",
@@ -169,6 +186,7 @@ impl ModulationSource {
     /// combinator sources spell their full recursive expression.
     pub fn spec_text(&self) -> String {
         match self {
+            ModulationSource::MidiCc(controller) => format!("midi-cc({controller})"),
             ModulationSource::Lfo { shape, rate_hz, phase } =>
                 format!("lfo({},{},{})", shape.name(), rate_hz, phase),
             ModulationSource::Breakpoints { points } => {
@@ -204,6 +222,9 @@ impl ModulationSource {
             "luma" => Some(ModulationSource::Luma),
             "flow" => Some(ModulationSource::Flow),
             "edge-density" => Some(ModulationSource::EdgeDensity),
+            "midi-velocity" => Some(ModulationSource::MidiVelocity),
+            "midi-note-density" => Some(ModulationSource::MidiNoteDensity),
+            "midi-pitch" => Some(ModulationSource::MidiPitch),
             _ => None,
         }
     }
@@ -218,6 +239,10 @@ impl ModulationSource {
             ModulationSource::Luma
             | ModulationSource::Flow
             | ModulationSource::EdgeDensity
+            | ModulationSource::MidiCc(_)
+            | ModulationSource::MidiVelocity
+            | ModulationSource::MidiNoteDensity
+            | ModulationSource::MidiPitch
             | ModulationSource::Lfo { .. }
             | ModulationSource::Breakpoints { .. } => false,
             ModulationSource::Sum(a, b)
@@ -238,6 +263,10 @@ impl ModulationSource {
             ModulationSource::AudioRms
             | ModulationSource::AudioOnset
             | ModulationSource::AudioCentroid
+            | ModulationSource::MidiCc(_)
+            | ModulationSource::MidiVelocity
+            | ModulationSource::MidiNoteDensity
+            | ModulationSource::MidiPitch
             | ModulationSource::Lfo { .. }
             | ModulationSource::Breakpoints { .. } => false,
             ModulationSource::Sum(a, b)
@@ -246,6 +275,32 @@ impl ModulationSource {
             | ModulationSource::Max(a, b) => a.needs_frames() || b.needs_frames(),
             ModulationSource::Invert(x) | ModulationSource::Gate { signal: x, .. } => {
                 x.needs_frames()
+            }
+        }
+    }
+
+    /// True when this source (or any leaf of its combinator tree) requires
+    /// `--modulator-midi`.
+    pub fn needs_midi(&self) -> bool {
+        match self {
+            ModulationSource::MidiCc(_)
+            | ModulationSource::MidiVelocity
+            | ModulationSource::MidiNoteDensity
+            | ModulationSource::MidiPitch => true,
+            ModulationSource::AudioRms
+            | ModulationSource::AudioOnset
+            | ModulationSource::AudioCentroid
+            | ModulationSource::Luma
+            | ModulationSource::Flow
+            | ModulationSource::EdgeDensity
+            | ModulationSource::Lfo { .. }
+            | ModulationSource::Breakpoints { .. } => false,
+            ModulationSource::Sum(a, b)
+            | ModulationSource::Mul(a, b)
+            | ModulationSource::Min(a, b)
+            | ModulationSource::Max(a, b) => a.needs_midi() || b.needs_midi(),
+            ModulationSource::Invert(x) | ModulationSource::Gate { signal: x, .. } => {
+                x.needs_midi()
             }
         }
     }
@@ -267,7 +322,11 @@ impl ModulationSource {
             | ModulationSource::AudioCentroid
             | ModulationSource::Luma
             | ModulationSource::Flow
-            | ModulationSource::EdgeDensity => {
+            | ModulationSource::EdgeDensity
+            | ModulationSource::MidiCc(_)
+            | ModulationSource::MidiVelocity
+            | ModulationSource::MidiNoteDensity
+            | ModulationSource::MidiPitch => {
                 let key = self.spec_text();
                 if !out.iter().any(|s| s.spec_text() == key) {
                     out.push(self.clone());
@@ -395,6 +454,9 @@ fn parse_source_expr(
     if text.starts_with("breakpoints(") {
         return parse_breakpoints_source(text, bad);
     }
+    if text.starts_with("midi-cc(") {
+        return parse_midi_cc_source(text, bad);
+    }
 
     // Binary combinators
     for prefix in &["sum(", "mul(", "min(", "max("] {
@@ -463,10 +525,35 @@ fn parse_source_expr(
     ModulationSource::parse(text).ok_or_else(|| {
         bad(&format!(
             "unknown source '{text}' (available: audio-rms, audio-onset, audio-centroid, \
-             luma, flow, edge-density, lfo(...), breakpoints(...), sum(...), mul(...), \
+             luma, flow, edge-density, midi-cc(...), midi-velocity, midi-note-density, \
+             midi-pitch, lfo(...), breakpoints(...), sum(...), mul(...), \
              invert(...), min(...), max(...), gate(...))"
         ))
     })
+}
+
+/// Parse the `midi-cc(<n>)` source body (parens included, already trimmed).
+/// `n` must be an integer in `0..=127` (the MIDI controller-number range).
+fn parse_midi_cc_source(
+    text: &str,
+    bad: &dyn Fn(&str) -> RenderError,
+) -> Result<ModulationSource, RenderError> {
+    let inner = text
+        .strip_prefix("midi-cc(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| bad(&format!("malformed midi-cc(...) source '{text}'")))?;
+    let controller: u32 = inner.trim().parse().map_err(|_| {
+        bad(&format!(
+            "invalid midi-cc controller '{}' — expected an integer 0-127",
+            inner.trim()
+        ))
+    })?;
+    if controller > 127 {
+        return Err(bad(&format!(
+            "midi-cc controller {controller} out of range (0-127)"
+        )));
+    }
+    Ok(ModulationSource::MidiCc(controller as u8))
 }
 
 /// Parse the CLI route grammar
@@ -792,7 +879,11 @@ fn eval_source(
         | ModulationSource::AudioCentroid
         | ModulationSource::Luma
         | ModulationSource::Flow
-        | ModulationSource::EdgeDensity) => {
+        | ModulationSource::EdgeDensity
+        | ModulationSource::MidiCc(_)
+        | ModulationSource::MidiVelocity
+        | ModulationSource::MidiNoteDensity
+        | ModulationSource::MidiPitch) => {
             let empty: &[(f64, f32)] = &[];
             let samples = envelopes
                 .get(&other.spec_text())
@@ -2249,5 +2340,71 @@ mod tests {
         let route = parse_modulation_route("x=sum(lfo(sine,0.5),lfo(saw,0.5)):1,0").unwrap();
         assert_eq!(route.modulator, None);
         assert!(matches!(route.source, ModulationSource::Sum(..)));
+    }
+
+    #[test]
+    fn parses_midi_atomic_sources() {
+        let route = parse_modulation_route("strength=midi-velocity:0.5").unwrap();
+        assert_eq!(route.source, ModulationSource::MidiVelocity);
+        let route = parse_modulation_route("strength=midi-note-density").unwrap();
+        assert_eq!(route.source, ModulationSource::MidiNoteDensity);
+        let route = parse_modulation_route("strength=midi-pitch").unwrap();
+        assert_eq!(route.source, ModulationSource::MidiPitch);
+    }
+
+    #[test]
+    fn midi_cc_spec_text_round_trips_verbatim() {
+        let route = parse_modulation_route("displacement_depth=midi-cc(74):96,0").unwrap();
+        assert_eq!(route.source, ModulationSource::MidiCc(74));
+        assert_eq!(route.source.spec_text(), "midi-cc(74)");
+        assert_eq!(
+            parse_modulation_route(&format!(
+                "displacement_depth={}:96,0",
+                route.source.spec_text()
+            ))
+            .unwrap()
+            .source,
+            ModulationSource::MidiCc(74)
+        );
+    }
+
+    #[test]
+    fn midi_cc_rejects_out_of_range_and_malformed() {
+        for spec in [
+            "x=midi-cc(128)", // out of 0-127 range
+            "x=midi-cc(-1)",  // negative
+            "x=midi-cc(abc)", // not an integer
+            "x=midi-cc()",    // empty
+            "x=midi-cc(74",   // unclosed paren
+        ] {
+            assert!(
+                parse_modulation_route(spec).is_err(),
+                "expected '{spec}' to be rejected"
+            );
+        }
+        assert!(parse_modulation_route("x=midi-cc(0)").is_ok());
+        assert!(parse_modulation_route("x=midi-cc(127)").is_ok());
+    }
+
+    #[test]
+    fn midi_sources_are_media_leaves_needing_midi_only() {
+        for source in [
+            ModulationSource::MidiCc(74),
+            ModulationSource::MidiVelocity,
+            ModulationSource::MidiNoteDensity,
+            ModulationSource::MidiPitch,
+        ] {
+            assert!(source.needs_midi());
+            assert!(!source.needs_audio());
+            assert!(!source.needs_frames());
+            assert_eq!(source.leaf_media_sources(), vec![source.clone()]);
+        }
+    }
+
+    #[test]
+    fn midi_named_modulator_prefix_parses() {
+        let route = parse_modulation_route("displacement_depth=drums.midi-cc(74):96,0").unwrap();
+        assert_eq!(route.modulator.as_deref(), Some("drums"));
+        assert_eq!(route.source, ModulationSource::MidiCc(74));
     }
 }

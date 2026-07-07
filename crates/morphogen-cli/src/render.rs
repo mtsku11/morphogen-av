@@ -84,6 +84,8 @@ pub(crate) struct ModulationCliArgs<'a> {
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
     pub(crate) modulator_frames: Option<&'a Path>,
+    /// Modulator Standard MIDI File for `midi-*` sources.
+    pub(crate) modulator_midi: Option<&'a Path>,
     pub(crate) sampling: ModulationSampling,
     pub(crate) fps: f64,
     /// Optional envelope-sidecar directory (luma/flow extraction reuse).
@@ -91,6 +93,7 @@ pub(crate) struct ModulationCliArgs<'a> {
     /// Raw `<name>=<path>` named-modulator specs (`<name>.<source>` routes).
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
 }
 
 impl ModulationCliArgs<'_> {
@@ -99,11 +102,13 @@ impl ModulationCliArgs<'_> {
             specs: self.modulate,
             modulator_audio: self.modulator_audio,
             modulator_frames: self.modulator_frames,
+            modulator_midi: self.modulator_midi,
             sampling: self.sampling,
             fps: self.fps,
             cache_dir: self.cache_dir,
             named_modulator_audio: self.named_modulator_audio,
             named_modulator_frames: self.named_modulator_frames,
+            named_modulator_midi: self.named_modulator_midi,
         })
     }
 }
@@ -5737,6 +5742,13 @@ fn feedback_modulation_contract(
         let Some(name) = route.modulator.as_deref() else {
             continue;
         };
+        // MIDI named modulators are provenance-only until Tier 5.3 S2 wires
+        // their fingerprint into the checkpoint contract (`docs/
+        // MIDI_MODULATION_MILESTONE.md`, S2): skip rather than misclassify
+        // them into the audio/frames buckets below.
+        if route.source.needs_midi() {
+            continue;
+        }
         let kind = if route.source.needs_audio() {
             "audio"
         } else {
