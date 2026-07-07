@@ -1541,6 +1541,117 @@ fn render_composition_resumes_after_a_scene_is_lost() {
 }
 
 #[test]
+fn render_composition_refuses_cross_scene_dimension_mismatch() {
+    // F1: a cut-only composition never reaches crossfade_frame's dimension
+    // guard, so scenes of different sizes would assemble a mixed-dimension
+    // frames/ silently and break ProRes/preview late. Pass 1 must refuse early.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let write_solid_seq = |dir: &Path, w: u32, h: u32, count: usize| {
+        fs::create_dir_all(dir).expect("create source dir");
+        for i in 0..count {
+            let image: ImageBuffer<Rgba<u8>, Vec<u8>> =
+                ImageBuffer::from_pixel(w, h, Rgba([40, 80, 160, 255]));
+            image
+                .save(dir.join(format!("frame_{:06}.png", i + 1)))
+                .expect("save source frame");
+        }
+    };
+    let src_a = temp_dir.path().join("src-a");
+    let src_b = temp_dir.path().join("src-b");
+    write_solid_seq(&src_a, 16, 16, 2);
+    write_solid_seq(&src_b, 24, 12, 2); // different dimensions than scene 1
+    let enc =
+        |p: &Path| serde_json::to_string(&p.to_string_lossy().to_string()).expect("encode path");
+    let a = enc(&src_a);
+    let b = enc(&src_b);
+    let chain = r#"{"version": 1, "stages": [{"effect": "palette_quantize", "mode": "posterize", "levels": 4}]}"#;
+
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(
+        &spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "a", "duration_frames": 2, "input_dir": {a}, "chain": {chain}, "transition_out": {{"type": "cut"}}}},
+                {{"name": "b", "duration_frames": 2, "input_dir": {b}, "chain": {chain}}}
+            ]}}"#
+        ),
+    );
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            temp_dir.path().join("comp-out").to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            r#"scene "b" renders at 24x12 but scene "a" established 16x16"#,
+        ));
+}
+
+#[test]
+fn render_composition_persists_fingerprint_before_rendering() {
+    // F3: a scene's fingerprint must be persisted to the composition record
+    // *before* its chain renders, not after. Otherwise a first run killed
+    // mid-scene records `""` for the partial scene, so the re-run sees a
+    // fingerprint mismatch, wipes the partial dir, and restarts from frame 0 —
+    // discarding the chain's stage markers and any stateful checkpoint.
+    //
+    // We provoke a post-fingerprint failure deterministically: scene 2 declares
+    // a duration that mismatches its source, which fails the post-render length
+    // check. Under the fix, scene 2's fingerprint is already in the record when
+    // the run aborts; without it, the record holds `""`.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]); // 3 frames
+    let source = serde_json::to_string(&source_dir.to_string_lossy().to_string())
+        .expect("encode source path");
+
+    // Scene 1 is well-formed; scene 2 declares 5 frames over a 3-frame source,
+    // so it renders then fails the length check *after* its fingerprint is set.
+    let spec_path = temp_dir.path().join("composition.json");
+    write_chain_spec(
+        &spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "a", "duration_frames": 3, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 4}}]}},
+                  "transition_out": {{"type": "cut"}}}},
+                {{"name": "b", "duration_frames": 5, "input_dir": {source},
+                  "chain": {{"version": 1, "stages": [{{"effect": "palette_quantize", "mode": "posterize", "levels": 4}}]}}}}
+            ]}}"#
+        ),
+    );
+    let out_dir = temp_dir.path().join("comp-out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            spec_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "declares duration_frames 5 but its chain rendered 3 frame(s)",
+        ));
+
+    // The record must carry scene 2's real fingerprint even though the run
+    // aborted before scene 2 "completed" — this is what lets a genuine
+    // mid-scene interruption resume its partial dir instead of restarting.
+    let record = read_json(&out_dir.join("composition-record.json"));
+    assert_eq!(record["scenes"][1]["name"], "b");
+    assert!(
+        record["scenes"][1]["fingerprint"]
+            .as_str()
+            .is_some_and(|f| !f.is_empty()),
+        "scene 2's fingerprint must be persisted before its render, got {:?}",
+        record["scenes"][1]["fingerprint"]
+    );
+}
+
+#[test]
 fn render_composition_refuses_structural_change_into_existing_dir() {
     // Acceptance 5: a changed scene name/order refuses (rather than reuse
     // another scene's cached frames).

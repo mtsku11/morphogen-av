@@ -1,11 +1,12 @@
 # Composition Timeline — Milestone Contract (the flagship binder)
 
-Status: **PLANNED — handoff for a future build session.** Written 2026-07-04 at
-the user's request ("plan something spectacular… a new feature or something
-that binds features together"). Nothing here is implemented. Read
-[`DEFERRED_WORK_HANDOFF.md`](DEFERRED_WORK_HANDOFF.md) §"How to use" first —
-all of its ground rules (baseline before touching, CPU-first, pixels+number
-verification, `/checkpoint` per slice) apply.
+Status: **BUILT — S1–S7 landed 2026-07-05** (`cdeab6a`…`52b0c61`, one slice per
+commit; cargo 546 → 559, swift 117 → 118, clippy clean per slice). Contract
+written 2026-07-04 at the user's request ("plan something spectacular… a new
+feature or something that binds features together"). The spec below is the
+original contract; the build's accepted deviations and the open follow-ups
+from the post-build review are in **§Post-build review (2026-07-06)** at the
+end — read that section before extending this feature.
 
 ## Why this is the flagship
 
@@ -196,3 +197,81 @@ verifiable — do not start S3 before A1/A2 are green.
 - Audio-only scenes; generative (source-less) scenes gated on Tier 5.2 landing
   in chains first.
 - Any patcher-canvas UI (Tier 5.7 stays a horizon item).
+
+## Post-build review (2026-07-06) — deviations + follow-ups
+
+Independent review of the landed S1–S7 (`crates/morphogen-cli/src/composition.rs`,
+13 composition smoke tests, queue pair, SwiftUI runner panel). Per-slice test
+deltas in the commit messages are internally consistent (546 → 559); the four
+platform-independent crates re-verified green (385/0) — the CLI smoke suite and
+Metal parity gates compile only on macOS.
+
+### Accepted deviations (the contract above is superseded on these points)
+
+- **`master:` prefix → reserved named modulator `master.<source>`.** The `:`
+  collides with the route grammar's `:scale` separator, so master routes use
+  the named-modulator dot spelling (`displacement_depth = master.audio-rms`).
+  The offset is implemented by *trimming* the master WAV to the scene's global
+  start frame, which makes anchor A5 exact by construction. Only engine touch:
+  the additive `ChainStage::inject_named_modulator_media` hook.
+- **Audio assembly (WAV concat + equal-power crossfade) deferred, not built.**
+  No chain stage emits WAVs yet, so there is no producer to blend. The
+  mechanic-step-4 formulas stand and activate with the first audio-emitting
+  scene type (e.g. audiovisual granular grains landing in chains).
+- **Video master deferred.** `master.luma`/`master.flow` (a `source_a` master)
+  refuses with a clear message; audio master only in v1.
+- **S7 shipped as a spec-file *runner* panel, not a scene-authoring UI.** The
+  user gate was about authoring UX (it depends on the still-open chain-builder
+  decision); the runner adds no authoring surface — pick a spec JSON + output
+  dir, queue-add→run, preview the assembled frames. The chain-builder panel
+  question remains open and user-gated.
+- **Acceptance-5 refusal list partly moot by design:** scenes have no
+  per-scene fps (global-only spec field), so there is no fps mismatch to
+  refuse; the WAV-rate refusal waits on audio scenes. Exercised instead:
+  overlapping-transition bounds, duration/render mismatch, structural change
+  into an existing dir, master misuse ×3, spec-grammar rejections.
+
+### Follow-ups (ordered; none block using the feature)
+
+- **F1 — cross-scene dims validation (correctness gap). DONE (2026-07-07).**
+  Dimensions were checked only inside `crossfade_frame`, so a **cut-only**
+  composition of scenes with different dimensions assembled a mixed-dimension
+  `frames/` silently — downstream ProRes/preview broke late instead of the
+  render refusing early. Fixed: pass 1 now reads each scene's first final frame
+  and refuses a dims mismatch against the first scene, which establishes the
+  composition's dimensions
+  (`render_composition_refuses_cross_scene_dimension_mismatch`).
+- **F2 — `--scene <name>` single-scene render.** Promised in S1 as the CLI
+  iteration path and never built. Renders one scene (with its master binding
+  at its timeline offset) without assembling the piece; the S7 panel gains
+  per-scene preview from it for free.
+- **F3 — mid-scene resume on first runs. DONE (2026-07-07).** A scene's
+  fingerprint was persisted only *after* the scene completed, so a first run
+  killed mid-scene re-ran with recorded `""` ≠ computed → the partial scene dir
+  was cleared and the scene restarted from frame 0. Output stayed byte-identical
+  (everything is deterministic) but the chain's stage markers and any stateful
+  checkpoint were discarded — the "chain stage-marker precedent" of acceptance 4
+  was honoured only for completed-then-lost scenes (what the smoke test
+  simulates). Fixed: the computed fingerprint is now persisted to
+  `composition-record.json` *before* the scene renders (the clear-on-mismatch
+  guard already runs first, off the prior record's value). `chain-manifest.json`
+  presence stays the completeness gate, so reuse semantics are unchanged and the
+  same-fingerprint-but-incomplete branch (dir left intact → chain resumes) is
+  now reachable for real interruptions. Regression test
+  `render_composition_persists_fingerprint_before_rendering` provokes a
+  post-fingerprint failure and asserts the record already carries the scene's
+  fingerprint.
+- **F4 — master-clock fps alignment guard.** The trim offset assumes the
+  scene's modulation timeline runs at the composition fps. A master-routed
+  stage whose envelope fps differs — a stateful stage samples at its own
+  pinned frame rate — reads the master off-time, silently. Fix: at spec
+  validation, refuse a `master.` route on a stage whose effective envelope fps
+  ≠ the composition fps (or, later, trim per stage fps).
+- **F5 — acceptance 3 on real footage.** The ramp-not-step proof ran on the
+  warm|cool synthetic fixture (cut = one 116.1 boundary spike; 6-frame
+  crossfade = ~16.5 across 7 pairs). The contract's real two-scene piece
+  (rutt_etra scene → flow_feedback scene, 12-frame crossfade on the cello/harp
+  clips) is still owed — needs macOS + the gitignored clips; Read the boundary
+  frames and report `frame-delta.py` across the window.
+- **F6 — unchanged deferrals:** morph transitions, per-scene resolutions/fps,
+  nested compositions, audio-only/generative scenes, video master (above).

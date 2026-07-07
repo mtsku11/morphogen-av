@@ -623,6 +623,11 @@ pub(crate) fn run_composition_spec(
     // each scene's owned length (duration minus its outgoing crossfade overlap),
     // exactly like the assembly `start` in pass 2.
     let mut global_start = 0usize;
+    // The composition's frame dimensions, established by the first scene and
+    // enforced across the rest (F1). `crossfade_frame` guards the blend, but a
+    // cut-only composition never reaches it — without this a mixed-dimension
+    // `frames/` assembles silently and breaks ProRes/preview late.
+    let mut composition_dims: Option<(u32, u32)> = None;
     for (index, scene) in spec.scenes.iter().enumerate() {
         let scene_number = index + 1;
         let directory = format!("scene_{scene_number:02}_{}", scene.name);
@@ -672,6 +677,17 @@ pub(crate) fn run_composition_spec(
             fs::remove_dir_all(&scene_dir)?;
         }
 
+        // Persist the computed fingerprint *before* rendering, not after. If a
+        // first run is killed mid-scene, the re-run then reads
+        // `same_fingerprint == true`, so the partial scene dir is left intact
+        // (the clear above only fires on a real change) and the chain resumes
+        // from its own stage markers/checkpoint. `chain-manifest.json` presence
+        // stays the completeness gate, so cache-reuse semantics are unchanged;
+        // persisting only after completion restarted every mid-scene
+        // interruption from frame 0 and discarded stateful checkpoints.
+        record.scenes[index].fingerprint = fingerprint;
+        fs::write(&record_path, serde_json::to_string_pretty(&record)?)?;
+
         // Bind the master clock into a per-scene copy of the chain (the clean
         // spec stays the cache key). The trimmed master lives outside the scene
         // directory so the chain's own reconciliation sees a pristine dir.
@@ -714,8 +730,6 @@ pub(crate) fn run_composition_spec(
             )));
         }
 
-        record.scenes[index].fingerprint = fingerprint;
-        fs::write(&record_path, serde_json::to_string_pretty(&record)?)?;
         println!(
             "scene {scene_number:02} ({}) {}",
             scene.name,
@@ -723,10 +737,31 @@ pub(crate) fn run_composition_spec(
         );
 
         let out_frames = crossfade_frames(&scene.transition_out) as usize;
+        let frames = collect_image_frames(&summary.final_frames_dir)?;
+
+        // F1: refuse a cross-scene dimension mismatch here, before assembly.
+        // The first scene establishes the composition's dimensions; every
+        // later scene's first final frame must match.
+        if let Some(first) = frames.first() {
+            let image = load_image_f32(first)?;
+            let dims = (image.width, image.height);
+            match composition_dims {
+                None => composition_dims = Some(dims),
+                Some(expected) if dims != expected => {
+                    return Err(CliError::Message(format!(
+                        "scene {:?} renders at {}x{} but scene {:?} established {}x{}; \
+                         scenes in a composition must share dimensions",
+                        scene.name, dims.0, dims.1, spec.scenes[0].name, expected.0, expected.1
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+
         scenes.push(RenderedScene {
             name: scene.name.clone(),
             directory,
-            frames: collect_image_frames(&summary.final_frames_dir)?,
+            frames,
             duration: summary.frame_count,
             out_frames,
             transition_out: scene.transition_out.clone(),
