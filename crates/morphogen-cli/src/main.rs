@@ -73,7 +73,8 @@ fn run() -> Result<(), CliError> {
             output_dir,
             scale,
             max_frames,
-        } => downscale_frames(&input_dir, &output_dir, scale, max_frames),
+            output_bit_depth,
+        } => downscale_frames(&input_dir, &output_dir, scale, max_frames, output_bit_depth),
         Commands::ExportAudioStem {
             input_wav,
             output_wav,
@@ -279,6 +280,7 @@ fn run() -> Result<(), CliError> {
             mode,
             backend,
             max_frames,
+            output_bit_depth,
         } => render_video_vocoder_sequence(
             &modulator_dir,
             &carrier_dir,
@@ -287,6 +289,7 @@ fn run() -> Result<(), CliError> {
             mode,
             backend.into(),
             max_frames,
+            output_bit_depth,
         )
         .map(|_| ()),
         Commands::RenderAudioVideoRouteSequence {
@@ -403,6 +406,7 @@ fn run() -> Result<(), CliError> {
             kernel_mode,
             backend,
             max_frames,
+            output_bit_depth,
         } => render_convolutional_blend_sequence(ConvolutionalBlendSequenceRequest {
             modulator_dir: &modulator_dir,
             carrier_dir: &carrier_dir,
@@ -414,6 +418,7 @@ fn run() -> Result<(), CliError> {
             kernel_mode: kernel_mode.into(),
             backend: backend.into(),
             max_frames,
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderDispersionBlendSequence {
@@ -447,6 +452,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => render_dispersion_blend_sequence(DispersionBlendSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -482,6 +488,7 @@ fn run() -> Result<(), CliError> {
                 modulator_midi: modulator_midi.as_deref(),
                 named_modulator_midi: &named_modulator_midi,
             },
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderFluidAdvectSequence {
@@ -737,6 +744,7 @@ fn run() -> Result<(), CliError> {
             cluster_scale,
             evolution_speed,
             seed,
+            output_bit_depth,
         } => render_block_collage_sequence(BlockCollageSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -749,6 +757,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             frames,
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderCascadeCollageSequence {
@@ -784,6 +793,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => {
             let mut settings = CascadeCollageSettings {
                 scrib_amp_scale,
@@ -822,6 +832,7 @@ fn run() -> Result<(), CliError> {
                     modulator_midi: modulator_midi.as_deref(),
                     named_modulator_midi: &named_modulator_midi,
                 },
+                output_bit_depth,
             })
             .map(|_| ())
         }
@@ -835,6 +846,7 @@ fn run() -> Result<(), CliError> {
             phase,
             scale,
             seed,
+            output_bit_depth,
         } => generate_frames(GenerateFramesRequest {
             preset: preset.into(),
             output_dir: &output_dir,
@@ -847,6 +859,7 @@ fn run() -> Result<(), CliError> {
                 seed,
             },
             frames,
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderPixelSortSequence {
@@ -873,6 +886,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => render_pixel_sort_sequence(PixelSortSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -901,6 +915,7 @@ fn run() -> Result<(), CliError> {
                 modulator_midi: modulator_midi.as_deref(),
                 named_modulator_midi: &named_modulator_midi,
             },
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderChannelShiftSequence {
@@ -930,6 +945,7 @@ fn run() -> Result<(), CliError> {
             matte,
             matte_frames,
             matte_gain,
+            output_bit_depth,
         } => render_channel_shift_sequence(ChannelShiftSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -961,6 +977,7 @@ fn run() -> Result<(), CliError> {
             matte: matte.map(Into::into),
             matte_frames: matte_frames.as_deref(),
             matte_gain,
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderRetroStaticSequence {
@@ -982,6 +999,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => render_retro_static_sequence(RetroStaticSequenceRequest {
             source_dir: &source_dir,
             output_dir: &output_dir,
@@ -1005,6 +1023,7 @@ fn run() -> Result<(), CliError> {
                 modulator_midi: modulator_midi.as_deref(),
                 named_modulator_midi: &named_modulator_midi,
             },
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderRuttEtraSequence {
@@ -1030,6 +1049,7 @@ fn run() -> Result<(), CliError> {
             matte,
             matte_frames,
             matte_gain,
+            output_bit_depth,
         } => render_rutt_etra_sequence(RuttEtraSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -1057,6 +1077,7 @@ fn run() -> Result<(), CliError> {
             matte: matte.map(Into::into),
             matte_frames: matte_frames.as_deref(),
             matte_gain,
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderPaletteQuantizeSequence {
@@ -1079,6 +1100,7 @@ fn run() -> Result<(), CliError> {
             matte,
             matte_frames,
             matte_gain,
+            output_bit_depth,
         } => render_palette_quantize_sequence(PaletteQuantizeSequenceRequest {
             source_b_dir: &source_b_dir,
             output_dir: &output_dir,
@@ -1103,6 +1125,7 @@ fn run() -> Result<(), CliError> {
             matte: matte.map(Into::into),
             matte_frames: matte_frames.as_deref(),
             matte_gain,
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderChain {
@@ -1176,6 +1199,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => queue::queue_add_coagulated_blend_sequence(
             queue::QueueAddCoagulatedBlendSequenceRequest {
                 queue_path: &queue_path,
@@ -1214,6 +1238,7 @@ fn run() -> Result<(), CliError> {
                 named_modulator_frames: &named_modulator_frames,
                 modulator_midi: modulator_midi.as_deref(),
                 named_modulator_midi: &named_modulator_midi,
+                output_bit_depth,
             },
         ),
         Commands::QueueRunCoagulatedBlendSequence { queue_path } => {
@@ -1251,6 +1276,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => queue::queue_add_dispersion_blend_sequence(
             queue::QueueAddDispersionBlendSequenceRequest {
                 queue_path: &queue_path,
@@ -1286,6 +1312,7 @@ fn run() -> Result<(), CliError> {
                 named_modulator_frames: &named_modulator_frames,
                 modulator_midi: modulator_midi.as_deref(),
                 named_modulator_midi: &named_modulator_midi,
+                output_bit_depth,
             },
         ),
         Commands::QueueRunDispersionBlendSequence { queue_path } => {
@@ -1323,6 +1350,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => queue::queue_add_fluid_mosaic_sequence(queue::QueueAddFluidMosaicSequenceRequest {
             queue_path: &queue_path,
             source_a_dir: &source_a_dir,
@@ -1355,6 +1383,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames: &named_modulator_frames,
             modulator_midi: modulator_midi.as_deref(),
             named_modulator_midi: &named_modulator_midi,
+            output_bit_depth,
         }),
         Commands::QueueRunFluidMosaicSequence { queue_path } => {
             queue::queue_run_fluid_mosaic_sequence(&queue_path)
@@ -1405,6 +1434,7 @@ fn run() -> Result<(), CliError> {
             modulator_midi,
             named_modulator_midi,
             max_frames,
+            output_bit_depth,
         } => {
             // When the steady-vortex flow is active it is meant to be the dominant
             // current, so the analytic fluid + jitter (which otherwise read as a wobble
@@ -1469,6 +1499,7 @@ fn run() -> Result<(), CliError> {
                     modulator_midi: modulator_midi.as_deref(),
                     named_modulator_midi: &named_modulator_midi,
                 },
+                output_bit_depth,
             })
             .map(|_| ())
         }
@@ -1506,6 +1537,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => render_coagulated_blend_sequence(CoagulatedBlendSequenceRequest {
             source_a_dir: &source_a_dir,
             source_b_dir: &source_b_dir,
@@ -1544,6 +1576,7 @@ fn run() -> Result<(), CliError> {
                 modulator_midi: modulator_midi.as_deref(),
                 named_modulator_midi: &named_modulator_midi,
             },
+            output_bit_depth,
         })
         .map(|_| ()),
         Commands::RenderGranularMosaicPoolSequence {
@@ -2100,6 +2133,7 @@ fn run() -> Result<(), CliError> {
             project_path,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => queue_add_cascade_collage_sequence(QueueAddCascadeCollageSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -2131,6 +2165,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames: &named_modulator_frames,
             modulator_midi: modulator_midi.as_deref(),
             named_modulator_midi: &named_modulator_midi,
+            output_bit_depth,
         }),
         Commands::QueueAddRetroStaticSequence {
             queue_path,
@@ -2152,6 +2187,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => queue_add_retro_static_sequence(QueueAddRetroStaticSequenceRequest {
             queue_path: &queue_path,
             source_dir: &source_dir,
@@ -2172,6 +2208,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames: &named_modulator_frames,
             modulator_midi: modulator_midi.as_deref(),
             named_modulator_midi: &named_modulator_midi,
+            output_bit_depth,
         }),
         Commands::QueueAddChannelShiftSequence {
             queue_path,
@@ -2201,6 +2238,7 @@ fn run() -> Result<(), CliError> {
             matte,
             matte_frames,
             matte_gain,
+            output_bit_depth,
         } => queue_add_channel_shift_sequence(QueueAddChannelShiftSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2231,6 +2269,7 @@ fn run() -> Result<(), CliError> {
             matte: matte.map(Into::into),
             matte_frames: matte_frames.as_deref(),
             matte_gain,
+            output_bit_depth,
         }),
         Commands::QueueRunChannelShiftSequence { queue_path } => {
             queue_run_channel_shift_sequence(&queue_path)
@@ -2256,6 +2295,7 @@ fn run() -> Result<(), CliError> {
             matte,
             matte_frames,
             matte_gain,
+            output_bit_depth,
         } => queue_add_palette_quantize_sequence(QueueAddPaletteQuantizeSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2279,6 +2319,7 @@ fn run() -> Result<(), CliError> {
             matte: matte.map(Into::into),
             matte_frames: matte_frames.as_deref(),
             matte_gain,
+            output_bit_depth,
         }),
         Commands::QueueRunPaletteQuantizeSequence { queue_path } => {
             queue_run_palette_quantize_sequence(&queue_path)
@@ -2307,6 +2348,7 @@ fn run() -> Result<(), CliError> {
             matte,
             matte_frames,
             matte_gain,
+            output_bit_depth,
         } => queue_add_rutt_etra_sequence(QueueAddRuttEtraSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2333,6 +2375,7 @@ fn run() -> Result<(), CliError> {
             matte: matte.map(Into::into),
             matte_frames: matte_frames.as_deref(),
             matte_gain,
+            output_bit_depth,
         }),
         Commands::QueueRunRuttEtraSequence { queue_path } => {
             queue_run_rutt_etra_sequence(&queue_path)
@@ -2350,6 +2393,7 @@ fn run() -> Result<(), CliError> {
             evolution_speed,
             seed,
             project_path,
+            output_bit_depth,
         } => queue_add_block_collage_sequence(QueueAddBlockCollageSequenceRequest {
             queue_path: &queue_path,
             source_a_dir: &source_a_dir,
@@ -2365,6 +2409,7 @@ fn run() -> Result<(), CliError> {
             frames,
             frame_rate,
             project_path: project_path.as_deref(),
+            output_bit_depth,
         }),
         Commands::QueueAddGranularMosaicSequence {
             queue_path,
@@ -2480,6 +2525,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             project_path,
             backend,
+            output_bit_depth,
         } => queue_add_video_vocoder_sequence(QueueAddVideoVocoderSequenceRequest {
             queue_path: &queue_path,
             modulator_dir: &modulator_dir,
@@ -2491,6 +2537,7 @@ fn run() -> Result<(), CliError> {
             frame_rate,
             project_path: project_path.as_deref(),
             backend: backend.into(),
+            output_bit_depth,
         }),
         Commands::QueueAddSpectralCrossSynth {
             queue_path,
@@ -2695,6 +2742,7 @@ fn run() -> Result<(), CliError> {
             max_frames,
             project_path,
             backend,
+            output_bit_depth,
         } => queue_add_convolutional_blend_sequence(QueueAddConvolutionalBlendSequenceRequest {
             queue_path: &queue_path,
             modulator_dir: &modulator_dir,
@@ -2708,6 +2756,7 @@ fn run() -> Result<(), CliError> {
             max_frames,
             project_path: project_path.as_deref(),
             backend: backend.into(),
+            output_bit_depth,
         }),
         Commands::QueueRunConvolutionalBlendSequence { queue_path } => {
             queue_run_convolutional_blend_sequence(&queue_path)
@@ -2770,6 +2819,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            output_bit_depth,
         } => queue_add_pixel_sort_sequence(QueueAddPixelSortSequenceRequest {
             queue_path: &queue_path,
             source_a_dir: &source_a_dir,
@@ -2795,6 +2845,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames: &named_modulator_frames,
             modulator_midi: modulator_midi.as_deref(),
             named_modulator_midi: &named_modulator_midi,
+            output_bit_depth,
         }),
         Commands::QueueRunPixelSortSequence { queue_path } => {
             queue_run_pixel_sort_sequence(&queue_path)

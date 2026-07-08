@@ -148,6 +148,169 @@ fn render_rutt_etra_sequence_no_matte_manifest_has_no_matte_block() {
     );
 }
 
+fn png_color_type(path: &Path) -> image::ColorType {
+    image::open(path).expect("open frame").color()
+}
+
+/// Tier 5.6 S2 representative shape #1: an effect (rutt-etra) whose manifest
+/// is written unconditionally. Off case: omitting `--output-bit-depth` (⇒ 8)
+/// is byte-identical to passing `--output-bit-depth 8` explicitly, and the
+/// manifest carries no `output_bit_depth` key (skip-when-default). On case:
+/// `--output-bit-depth 16` gains the manifest key and writes 16-bit PNGs.
+#[test]
+fn render_rutt_etra_sequence_output_bit_depth_off_case_pin_and_16_bit_on_case() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_solid_frames(&source_dir, 2, [200, 100, 50, 255]);
+
+    let run = |name: &str, extra_args: &[&str]| -> std::path::PathBuf {
+        let output_dir = temp_dir.path().join(name);
+        let mut args: Vec<String> = vec![
+            "render-rutt-etra-sequence".to_string(),
+            source_dir.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+            "--frames".to_string(),
+            "2".to_string(),
+            "--displacement-depth".to_string(),
+            "20".to_string(),
+        ];
+        args.extend(extra_args.iter().map(|s| s.to_string()));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+            .success();
+        output_dir
+    };
+
+    let implicit_dir = run("implicit", &[]);
+    let explicit_8_dir = run("explicit-8", &["--output-bit-depth", "8"]);
+    let explicit_16_dir = run("explicit-16", &["--output-bit-depth", "16"]);
+
+    assert_png_frames_identical(&implicit_dir, &explicit_8_dir, 2);
+    assert_eq!(
+        fs::read(implicit_dir.join("manifest.json")).expect("implicit manifest"),
+        fs::read(explicit_8_dir.join("manifest.json")).expect("explicit-8 manifest"),
+        "omitting --output-bit-depth must be byte-identical to passing 8 explicitly"
+    );
+    let manifest_8 = read_json(&implicit_dir.join("manifest.json"));
+    assert!(
+        manifest_8.get("output_bit_depth").is_none(),
+        "depth 8 (the default) must not add an output_bit_depth key to the manifest"
+    );
+    assert_eq!(
+        png_color_type(&implicit_dir.join("frame_000000.png")),
+        image::ColorType::Rgba8
+    );
+
+    let manifest_16 = read_json(&explicit_16_dir.join("manifest.json"));
+    assert_eq!(manifest_16["output_bit_depth"], 16);
+    assert_eq!(
+        png_color_type(&explicit_16_dir.join("frame_000000.png")),
+        image::ColorType::Rgba16
+    );
+}
+
+/// Tier 5.6 S2 representative shape #2: an effect (channel-shift) whose
+/// manifest is written *conditionally* — only when a matte is set OR the
+/// output bit depth is 16 (pre-slice: only on matte). Without `--matte`, the
+/// off case (depth 8) must write no manifest at all, and the on case (depth
+/// 16) must write one carrying just the `output_bit_depth` key.
+#[test]
+fn render_channel_shift_sequence_output_bit_depth_off_case_pin_and_16_bit_on_case() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_b_dir = temp_dir.path().join("source-b");
+    write_solid_frames(&source_b_dir, 2, [200, 100, 50, 255]);
+
+    let run = |name: &str, extra_args: &[&str]| -> std::path::PathBuf {
+        let output_dir = temp_dir.path().join(name);
+        let mut args: Vec<String> = vec![
+            "render-channel-shift-sequence".to_string(),
+            source_b_dir.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+            "--frames".to_string(),
+            "2".to_string(),
+        ];
+        args.extend(extra_args.iter().map(|s| s.to_string()));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+            .success();
+        output_dir
+    };
+
+    let implicit_dir = run("implicit", &[]);
+    let explicit_8_dir = run("explicit-8", &["--output-bit-depth", "8"]);
+    let explicit_16_dir = run("explicit-16", &["--output-bit-depth", "16"]);
+
+    assert_png_frames_identical(&implicit_dir, &explicit_8_dir, 2);
+    assert!(
+        !implicit_dir.join("manifest.json").exists(),
+        "depth 8 with no --matte must write no manifest at all (pre-slice shape)"
+    );
+    assert!(!explicit_8_dir.join("manifest.json").exists());
+    assert_eq!(
+        png_color_type(&implicit_dir.join("frame_000000.png")),
+        image::ColorType::Rgba8
+    );
+
+    let manifest_16 = read_json(&explicit_16_dir.join("manifest.json"));
+    assert_eq!(manifest_16["output_bit_depth"], 16);
+    assert_eq!(
+        png_color_type(&explicit_16_dir.join("frame_000000.png")),
+        image::ColorType::Rgba16
+    );
+}
+
+/// Tier 5.6 S2 representative shape #3: an effect (pixel-sort) that writes NO
+/// manifest at all (stdout-only convention) — just the flag, no new manifest.
+#[test]
+fn render_pixel_sort_sequence_output_bit_depth_off_case_pin_and_16_bit_on_case() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_a_dir = temp_dir.path().join("source-a");
+    let source_b_dir = temp_dir.path().join("source-b");
+    write_solid_frames(&source_a_dir, 2, [10, 20, 30, 255]);
+    write_solid_frames(&source_b_dir, 2, [200, 100, 50, 255]);
+
+    let run = |name: &str, extra_args: &[&str]| -> std::path::PathBuf {
+        let output_dir = temp_dir.path().join(name);
+        let mut args: Vec<String> = vec![
+            "render-pixel-sort-sequence".to_string(),
+            source_a_dir.to_string_lossy().to_string(),
+            source_b_dir.to_string_lossy().to_string(),
+            output_dir.to_string_lossy().to_string(),
+            "--frames".to_string(),
+            "2".to_string(),
+        ];
+        args.extend(extra_args.iter().map(|s| s.to_string()));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args(&args)
+            .assert()
+            .success();
+        output_dir
+    };
+
+    let implicit_dir = run("implicit", &[]);
+    let explicit_8_dir = run("explicit-8", &["--output-bit-depth", "8"]);
+    let explicit_16_dir = run("explicit-16", &["--output-bit-depth", "16"]);
+
+    assert_png_frames_identical(&implicit_dir, &explicit_8_dir, 2);
+    assert!(
+        !implicit_dir.join("manifest.json").exists(),
+        "pixel-sort writes no manifest regardless of bit depth"
+    );
+    assert_eq!(
+        png_color_type(&implicit_dir.join("frame_000000.png")),
+        image::ColorType::Rgba8
+    );
+    assert_eq!(
+        png_color_type(&explicit_16_dir.join("frame_000000.png")),
+        image::ColorType::Rgba16
+    );
+}
+
 /// Anchor 1 (matte-1 identity): an all-white `a-luma` matte (gain 1) reproduces
 /// the render without `--matte`, byte-for-byte.
 #[test]
@@ -1365,6 +1528,205 @@ fn render_chain_rejects_empty_stages_unknown_tag_unknown_field_and_bad_knob() {
 }
 
 #[test]
+fn render_chain_interchange_bit_depth_rejects_invalid_value() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+    let spec_path = temp_dir.path().join("chain.json");
+    write_chain_spec(
+        &spec_path,
+        r#"{"version": 1, "interchange_bit_depth": 12, "stages": [{"effect": "channel_shift"}]}"#,
+    );
+    let output_dir = temp_dir.path().join("chain-out");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-chain",
+            spec_path.to_string_lossy().as_ref(),
+            source_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "interchange_bit_depth must be either 8 or 16",
+        ));
+    assert!(
+        !output_dir.exists(),
+        "an invalid interchange_bit_depth must leave no output"
+    );
+}
+
+/// Tier 5.6 S1's falsifiable banding proof: a two-stage chain of near-identity
+/// effects (`retro_static` strength 0.0 and `channel_shift` with all shifts 0 —
+/// both exact f32 passthroughs) isolates the chain's *own* inter-stage PNG
+/// round-trip as the only source of quantization error. The source is written
+/// as a 16-bit PNG (near-continuous) so the loss under test is the chain's, not
+/// the source file's. Depth 16 must strictly reduce both the max per-channel
+/// error against the f32 reference and increase the distinct-value count along
+/// a shallow (low-dynamic-range) gradient where 8-bit banding is visible.
+#[test]
+fn render_chain_interchange_depth_16_reduces_quantization_error_vs_f32_reference() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    fs::create_dir_all(&source_dir).expect("create source dir");
+
+    // Shallow gradient: luma spans only [0.40, 0.42] across 256 columns — narrow
+    // enough that 8-bit PNG's 256 global levels collapse it to a handful of
+    // distinct values (visible banding), while 16-bit PNG's 65536 levels keep it
+    // effectively continuous. Written at 16-bit so the *source* itself carries
+    // near-continuous precision; load_image_f32 (image crate's to_rgba32f) reads
+    // both 8- and 16-bit PNGs at full precision, so this isolates the chain's own
+    // inter-stage bit depth rather than the source file's.
+    let width = 256u32;
+    let height = 2u32;
+    let gradient_low = 0.40f32;
+    let gradient_span = 0.02f32;
+    let source_image: ImageBuffer<image::Rgba<u16>, Vec<u16>> =
+        ImageBuffer::from_fn(width, height, |x, _y| {
+            let t = x as f32 / (width - 1) as f32;
+            let luma = gradient_low + t * gradient_span;
+            let v = (luma.clamp(0.0, 1.0) * u16::MAX as f32).round() as u16;
+            image::Rgba([v, v, v, u16::MAX])
+        });
+    let source_path = source_dir.join("frame_000000.png");
+    source_image.save(&source_path).expect("write 16-bit gradient source");
+
+    let chain_spec = |depth: u8| {
+        format!(
+            r#"{{"version": 1, "interchange_bit_depth": {depth}, "stages": [
+                {{"effect": "retro_static", "strength": 0.0}},
+                {{"effect": "channel_shift"}}
+            ]}}"#
+        )
+    };
+
+    let run_chain = |depth: u8| -> image::Rgba32FImage {
+        let spec_path = temp_dir.path().join(format!("chain-depth-{depth}.json"));
+        write_chain_spec(&spec_path, &chain_spec(depth));
+        let output_dir = temp_dir.path().join(format!("chain-out-{depth}"));
+
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-chain",
+                spec_path.to_string_lossy().as_ref(),
+                source_dir.to_string_lossy().as_ref(),
+                output_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .success();
+
+        let final_frame = output_dir.join("stage_02_channel_shift/frame_000000.png");
+        image::open(&final_frame)
+            .expect("open chain output frame")
+            .to_rgba32f()
+    };
+
+    // The f32 reference: both stages are exact passthroughs, so the reference is
+    // just the source loaded at full precision — no PNG round-trip in between.
+    let reference = image::open(&source_path)
+        .expect("open source frame")
+        .to_rgba32f();
+
+    let depth8 = run_chain(8);
+    let depth16 = run_chain(16);
+
+    let row_errors_and_distinct = |frame: &image::Rgba32FImage| -> (f32, usize) {
+        let mut max_error = 0f32;
+        let mut distinct_bits = std::collections::HashSet::new();
+        for x in 0..width {
+            let reference_r = reference.get_pixel(x, 0).0[0];
+            let sample_r = frame.get_pixel(x, 0).0[0];
+            max_error = max_error.max((sample_r - reference_r).abs());
+            distinct_bits.insert(sample_r.to_bits());
+        }
+        (max_error, distinct_bits.len())
+    };
+
+    let (max_error_8, distinct_8) = row_errors_and_distinct(&depth8);
+    let (max_error_16, distinct_16) = row_errors_and_distinct(&depth16);
+
+    println!(
+        "banding proof: depth8 max_error={max_error_8:.6} distinct={distinct_8}; \
+         depth16 max_error={max_error_16:.6} distinct={distinct_16}"
+    );
+
+    assert!(
+        max_error_16 < max_error_8,
+        "16-bit interchange must strictly reduce quantization error vs the f32 \
+         reference (depth8={max_error_8}, depth16={max_error_16})"
+    );
+    assert!(
+        distinct_16 > distinct_8,
+        "16-bit interchange must strictly increase the distinct-value count along \
+         the shallow gradient (depth8={distinct_8}, depth16={distinct_16})"
+    );
+    // The 8-bit path must show real banding on this shallow a gradient (not
+    // merely "slightly fewer" distinct values) — otherwise the proof is moot.
+    assert!(
+        distinct_8 < 16,
+        "the shallow gradient must actually band at 8-bit (got {distinct_8} distinct values)"
+    );
+}
+
+/// The off-case pin: a pre-slice spec (no `interchange_bit_depth` field at
+/// all) must render byte-identical output — stage frames and chain-manifest
+/// — to the same spec with `"interchange_bit_depth": 8"` explicit. Absent ⇒ 8.
+#[test]
+fn render_chain_without_interchange_bit_depth_is_byte_identical_to_explicit_depth_8() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2, 4]);
+
+    let implicit_spec = r#"{"version": 1, "stages": [
+        {"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false},
+        {"effect": "palette_quantize", "mode": "posterize", "levels": 4}
+    ]}"#;
+    let explicit_spec = r#"{"version": 1, "interchange_bit_depth": 8, "stages": [
+        {"effect": "rutt_etra", "line_pitch": 4, "displacement_depth": 6.0, "line_thickness": 1, "mono": false},
+        {"effect": "palette_quantize", "mode": "posterize", "levels": 4}
+    ]}"#;
+
+    let run = |name: &str, spec_json: &str| -> std::path::PathBuf {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, spec_json);
+        let output_dir = temp_dir.path().join(format!("{name}-out"));
+        Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-chain",
+                spec_path.to_string_lossy().as_ref(),
+                source_dir.to_string_lossy().as_ref(),
+                output_dir.to_string_lossy().as_ref(),
+            ])
+            .assert()
+            .success();
+        output_dir
+    };
+
+    let implicit_dir = run("implicit-depth", implicit_spec);
+    let explicit_dir = run("explicit-depth-8", explicit_spec);
+
+    assert_png_frames_identical(
+        &implicit_dir.join("stage_01_rutt_etra"),
+        &explicit_dir.join("stage_01_rutt_etra"),
+        3,
+    );
+    assert_png_frames_identical(
+        &implicit_dir.join("stage_02_palette_quantize"),
+        &explicit_dir.join("stage_02_palette_quantize"),
+        3,
+    );
+    assert_eq!(
+        fs::read(implicit_dir.join("chain-manifest.json")).expect("implicit manifest"),
+        fs::read(explicit_dir.join("chain-manifest.json")).expect("explicit manifest"),
+        "an absent interchange_bit_depth must resolve identically to an explicit 8"
+    );
+}
+
+#[test]
 fn render_chain_single_stage_is_byte_identical_to_direct_render() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");
@@ -1487,6 +1849,64 @@ fn render_composition_single_scene_is_byte_identical_to_direct_chain() {
     // The assembled timeline (`frames/`) is byte-identical to the chain's
     // final stage frames — the single-scene global numbering is a verbatim copy.
     assert_png_frames_identical(&chain_stage_dir, &comp_output_dir.join("frames"), 3);
+}
+
+/// Tier 5.6 S1 composition smoke: a scene chain-spec carries
+/// `interchange_bit_depth: 16` with zero composition changes needed (the scene
+/// spec is inherited verbatim by `run_chain_spec`). A single-scene composition
+/// has no crossfade, so its assembled `frames/` are the scene's solo-zone
+/// output `fs::copy`'d verbatim (composition.rs's existing, unmodified
+/// assembly path) — the composed output is therefore 16-bit too. Crossfade
+/// zones stay 8-bit regardless (unmodified `crossfade_frame` → `save_png`),
+/// consistent with this milestone's scope (S1 doesn't touch composition.rs).
+#[test]
+fn render_composition_scene_with_16_bit_interchange_composes_at_16_bit() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    write_texture_sequence(&source_dir, &[0, 2]);
+    let source_arg = source_dir.to_string_lossy().to_string();
+
+    let chain_json =
+        r#"{"version": 1, "interchange_bit_depth": 16, "stages": [{"effect": "channel_shift"}]}"#;
+
+    let comp_spec_path = temp_dir.path().join("composition-16bit.json");
+    write_chain_spec(
+        &comp_spec_path,
+        &format!(
+            r#"{{"version": 1, "fps": 12, "scenes": [
+                {{"name": "solo", "duration_frames": 2, "input_dir": {source}, "chain": {chain}}}
+            ]}}"#,
+            source = serde_json::to_string(&source_arg).expect("encode source path"),
+            chain = chain_json,
+        ),
+    );
+    let comp_output_dir = temp_dir.path().join("comp-out-16bit");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-composition",
+            comp_spec_path.to_string_lossy().as_ref(),
+            comp_output_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+
+    let scene_stage_frame =
+        comp_output_dir.join("scene_01_solo/stage_01_channel_shift/frame_000000.png");
+    let composed_frame = comp_output_dir.join("frames/frame_000000.png");
+    for (label, path) in [
+        ("scene stage output", &scene_stage_frame),
+        ("composed timeline", &composed_frame),
+    ] {
+        let color = image::open(path)
+            .unwrap_or_else(|e| panic!("open {label} frame: {e}"))
+            .color();
+        assert_eq!(
+            color,
+            image::ColorType::Rgba16,
+            "{label} must be a 16-bit PNG when the scene's interchange_bit_depth is 16; got {color:?}"
+        );
+    }
 }
 
 #[test]
@@ -5775,6 +6195,112 @@ fn video_vocoder_queue_job_persists_knobs_and_writes_bundle_output() {
         ));
 }
 
+/// Tier 5.6 S2's chosen representative command for the queue add→run
+/// byte-identity smoke at depth 16: `--output-bit-depth 16` persists on the
+/// queued job (serde-default-8 otherwise), queue-run writes 16-bit PNGs and a
+/// manifest carrying `output_bit_depth: 16`, and the queued render is
+/// byte-identical to a direct `render-video-vocoder-sequence` at the same
+/// knobs (queue and direct share the same render code path).
+#[test]
+fn queue_video_vocoder_sequence_output_bit_depth_16_matches_direct_render() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let modulator_dir = temp_dir.path().join("modulator-frames");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let queue_path = temp_dir.path().join("queue.json");
+    let output_root = temp_dir.path().join("queue-output");
+    let direct_output_dir = temp_dir.path().join("direct-output");
+
+    for frame_name in ["frame_000001.png", "frame_000002.png"] {
+        for directory in [&modulator_dir, &carrier_dir] {
+            let frame_arg = directory.join(frame_name).to_string_lossy().to_string();
+            Command::cargo_bin("morphogen")
+                .expect("morphogen binary")
+                .args(["render-test", frame_arg.as_str()])
+                .assert()
+                .success();
+        }
+    }
+
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let modulator_arg = modulator_dir.to_string_lossy().to_string();
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_root.to_string_lossy().to_string();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-init", queue_arg.as_str()])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-video-vocoder-sequence",
+            queue_arg.as_str(),
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--bands",
+            "8",
+            "--amount",
+            "0.5",
+            "--mode",
+            "gain",
+            "--max-frames",
+            "2",
+            "--frame-rate",
+            "12",
+            "--output-bit-depth",
+            "16",
+        ])
+        .assert()
+        .success();
+
+    let queued: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queued vocoder job"))
+            .expect("parse vocoder queue");
+    assert_eq!(queued["jobs"][0]["task"]["output_bit_depth"], 16);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-video-vocoder-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let bundle_dir = output_root.join("job-0001");
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle_dir.join("manifest.json")).expect("read vocoder manifest"),
+    )
+    .expect("parse vocoder manifest");
+    assert_eq!(manifest["video_vocoder"]["output_bit_depth"], 16);
+    assert_eq!(
+        png_color_type(&bundle_dir.join("frames/frame_000000.png")),
+        image::ColorType::Rgba16
+    );
+
+    // Direct render with the same knobs must be byte-identical (add→run
+    // byte-identity: the queue and direct commands share the render code path).
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-video-vocoder-sequence",
+            modulator_arg.as_str(),
+            carrier_arg.as_str(),
+            direct_output_dir.to_string_lossy().as_ref(),
+            "--bands",
+            "8",
+            "--amount",
+            "0.5",
+            "--mode",
+            "gain",
+            "--max-frames",
+            "2",
+            "--output-bit-depth",
+            "16",
+        ])
+        .assert()
+        .success();
+    assert_png_frames_identical(&direct_output_dir, &bundle_dir.join("frames"), 2);
+}
+
 #[test]
 fn feedback_queue_job_persists_parameters_and_writes_resumable_bundle() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -9609,6 +10135,7 @@ fn modulation_route_and_task_named_fields_skip_serialization_when_unset() {
         matte_source: None,
         matte_frames: None,
         matte_gain: None,
+        output_bit_depth: 8,
     };
     let task_json = serde_json::to_string(&task).expect("serialize task");
     assert!(

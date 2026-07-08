@@ -145,6 +145,12 @@ fn default_retro_static_strength() -> f32 {
     1.0
 }
 
+/// PNG interchange bit depth (Tier 5.6 S2): `8` on pre-slice queue JSON
+/// (byte-identical deserialization, pinned) or `16`.
+fn default_output_bit_depth() -> u8 {
+    8
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -361,6 +367,8 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     FrameSequenceDispersionBlend {
         source_a_directory: String,
@@ -401,6 +409,8 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     FrameSequenceFluidMosaic {
         source_a_directory: String,
@@ -442,6 +452,8 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     FrameSequenceFieldParticles {
         source_frame_directory: String,
@@ -577,6 +589,8 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// Retro static — deliberate scanline-filter misread glitch: simulate a
     /// PNG-style adaptive filter, then deliberately decode it at the wrong
@@ -618,6 +632,8 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// Channel shift (RGB split / chromatic aberration): each colour channel is
     /// sampled from the carrier at an independently offset position. Optional
@@ -684,6 +700,8 @@ pub enum RenderJobTask {
         /// Matte gain (defaults to `1.0` at run time when `matte_source` is set).
         #[serde(default)]
         matte_gain: Option<f32>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// Palette quantize / posterize: collapse the carrier's colours to discrete
     /// per-channel levels (posterize) or the built-in neon palette. Stateless
@@ -735,6 +753,8 @@ pub enum RenderJobTask {
         /// Matte gain (defaults to `1.0` at run time when `matte_source` is set).
         #[serde(default)]
         matte_gain: Option<f32>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// Rutt-Etra scanline: re-render the carrier as sparse horizontal
     /// scanlines on black, each displaced vertically by its own luminance.
@@ -799,6 +819,8 @@ pub enum RenderJobTask {
         /// Matte gain (defaults to `1.0` at run time when `matte_source` is set).
         #[serde(default)]
         matte_gain: Option<f32>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// An effect chain run from a resolved chain-spec document
     /// (`docs/EFFECT_CHAIN_MILESTONE.md`). The spec is persisted verbatim as
@@ -841,6 +863,8 @@ pub enum RenderJobTask {
         evolution_speed: f32,
         #[serde(default)]
         seed: u64,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// Threshold-bounded pixel sort. Source B's pixels are sorted within contiguous
     /// runs where the sortability mask (B's own key or a cross-synth A-derived mask)
@@ -893,6 +917,8 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     FrameSequenceGranularMosaic {
         modulator_frame_directory: String,
@@ -992,6 +1018,8 @@ pub enum RenderJobTask {
         /// the CPU reference. Defaults to CPU so legacy jobs keep their meaning.
         #[serde(default)]
         backend: RenderBackend,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// Audio-to-video descriptor routing: Source A's peak-normalized RMS envelope
     /// drives the per-frame displacement amount applied to Source B's frames via
@@ -1153,6 +1181,8 @@ pub enum RenderJobTask {
         /// [`KernelMode::Luma`] so jobs serialized before colour mode keep meaning.
         #[serde(default)]
         kernel_mode: KernelMode,
+        #[serde(default = "default_output_bit_depth")]
+        output_bit_depth: u8,
     },
     /// Spectral audio cross-synthesis: Source A's analysis envelope shapes Source
     /// B's audio. `gain` scales B's amplitude by A's peak-normalized RMS envelope;
@@ -1959,6 +1989,7 @@ mod tests {
             matte_source: Some("a-luma".to_string()),
             matte_frames: Some("/tmp/a".to_string()),
             matte_gain: Some(0.5),
+            output_bit_depth: 8,
         };
 
         let json = serde_json::to_string(&task).expect("serialize matte task");
@@ -2221,6 +2252,7 @@ mod tests {
             max_frames: Some(24),
             frame_rate: 24.0,
             backend: RenderBackend::Metal,
+            output_bit_depth: 8,
         };
 
         let json = serde_json::to_string(&task).expect("serialize vocoder task");
@@ -2429,11 +2461,20 @@ mod tests {
         }"#;
 
         let task: RenderJobTask = serde_json::from_str(json).expect("deserialize vocoder task");
-        let RenderJobTask::FrameSequenceVideoVocoder { mode, backend, .. } = task else {
+        let RenderJobTask::FrameSequenceVideoVocoder {
+            mode,
+            backend,
+            output_bit_depth,
+            ..
+        } = task
+        else {
             panic!("expected vocoder task");
         };
         assert_eq!(mode, VideoVocoderMode::Match);
         assert_eq!(backend, RenderBackend::Cpu);
+        // Tier 5.6 S2: pre-slice queue JSON (no output_bit_depth key at all)
+        // deserializes with the depth defaulting to 8, byte-identical in meaning.
+        assert_eq!(output_bit_depth, 8);
     }
 
     #[test]
@@ -2493,6 +2534,7 @@ mod tests {
             max_frames: Some(24),
             backend: RenderBackend::Metal,
             kernel_mode: KernelMode::Color,
+            output_bit_depth: 8,
         };
 
         let json = serde_json::to_string(&task).expect("serialize convolution-blend task");

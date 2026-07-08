@@ -171,15 +171,20 @@ render → real mid-scene resume), and F2 (`--scene <name>` single-scene render 
 timeline offset, no assembly) are DONE (2026-07-07)**; **F4** (master-fps
 alignment guard) and **F5** (real-footage two-scene acceptance render) remain
 (deferred behind the Tier 5 arc by user direction 2026-07-07), then
-Morphogenesis. **Tier 5 arc in flight (user-directed 2026-07-07: "all remaining
-Tier 5"): 5.2 oscillator bank DONE
+Morphogenesis. **Tier 5 arc COMPLETE (2026-07-08; user-directed 2026-07-07: "all remaining
+Tier 5"): 5.2 oscillator bank
 ([OSCILLATOR_BANK_MILESTONE.md](OSCILLATOR_BANK_MILESTONE.md) — `generate-frames`
-CLI, 4 presets, f64 phase law, rate-0/phase-drift anchors); 5.5 capture DONE
-([PERFORMANCE_CAPTURE_MILESTONE.md](PERFORMANCE_CAPTURE_MILESTONE.md), MVP-only
-scope user-confirmed; gesture → inline breakpoints route, zero Rust); next
-5.3 MIDI
-([MIDI_MODULATION_MILESTONE.md](MIDI_MODULATION_MILESTONE.md)) → 5.4 mattes →
-5.6 colour; 5.7 canvas stays user-gated.**
+CLI, 4 presets, f64 phase law); 5.5 capture
+([PERFORMANCE_CAPTURE_MILESTONE.md](PERFORMANCE_CAPTURE_MILESTONE.md), MVP
+scope user-confirmed; gesture → inline breakpoints route, zero Rust); 5.3 MIDI
+S1–S3 ([MIDI_MODULATION_MILESTONE.md](MIDI_MODULATION_MILESTONE.md) — SMF
+parser, 4 sources, queue + checkpoint fingerprints, SwiftUI); 5.4 mattes S1+S2
+([SPATIAL_MATTE_MILESTONE.md](SPATIAL_MATTE_MILESTONE.md) — per-pixel a-luma/
+a-flow/a-edge gating, Metal parity, queue, SwiftUI; chain-stage form flagged
+to 3.2); 5.6 colour S1–S3
+([COLOUR_PIPELINE_MILESTONE.md](COLOUR_PIPELINE_MILESTONE.md) — chain 16-bit
+interchange + --output-bit-depth rollout + Rec.709-tagged ProRes export).
+5.7 canvas stays user-gated.**
 
 **The wild experimental plan (user-requested 2026-07-05) is the morphogenesis
 engine — contract ready in

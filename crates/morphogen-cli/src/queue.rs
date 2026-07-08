@@ -497,6 +497,8 @@ pub(crate) struct QueueAddCoagulatedBlendSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_coagulated_blend_sequence(
@@ -526,8 +528,10 @@ pub(crate) fn queue_add_coagulated_blend_sequence(
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = request;
     settings.validate()?;
+    validate_output_bit_depth(output_bit_depth)?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
             "frame rate must be positive and finite".to_string(),
@@ -593,6 +597,7 @@ pub(crate) fn queue_add_coagulated_blend_sequence(
             named_modulator_frames: modulation.named_frames,
             modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            output_bit_depth,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -628,6 +633,8 @@ pub(crate) struct QueueAddDispersionBlendSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_dispersion_blend_sequence(
@@ -654,8 +661,10 @@ pub(crate) fn queue_add_dispersion_blend_sequence(
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = request;
     settings.validate()?;
+    validate_output_bit_depth(output_bit_depth)?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
             "frame rate must be positive and finite".to_string(),
@@ -718,6 +727,7 @@ pub(crate) fn queue_add_dispersion_blend_sequence(
             named_modulator_frames: modulation.named_frames,
             modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            output_bit_depth,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -1074,11 +1084,14 @@ pub(crate) struct QueueAddCascadeCollageSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_cascade_collage_sequence(
     request: QueueAddCascadeCollageSequenceRequest<'_>,
 ) -> Result<(), CliError> {
+    validate_output_bit_depth(request.output_bit_depth)?;
     validate_queued_sequence_timing(request.frames, request.frame_rate)?;
     // build-then-validate: catches invalid knobs before the job is persisted
     let mut probe_settings = CascadeCollageSettings {
@@ -1164,6 +1177,7 @@ pub(crate) fn queue_add_cascade_collage_sequence(
                 .modulator_midi
                 .map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            output_bit_depth: request.output_bit_depth,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -1233,6 +1247,7 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -1287,6 +1302,7 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            output_bit_depth,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": CASCADE_COLLAGE_ALGORITHM,
@@ -1301,6 +1317,9 @@ pub(crate) fn queue_run_cascade_collage_sequence(queue_path: &Path) -> Result<()
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -1639,6 +1658,8 @@ pub(crate) struct QueueAddVideoVocoderSequenceRequest<'a> {
     pub(crate) frame_rate: f64,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) backend: RenderBackend,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_video_vocoder_sequence(
@@ -1655,8 +1676,10 @@ pub(crate) fn queue_add_video_vocoder_sequence(
         frame_rate,
         project_path,
         backend,
+        output_bit_depth,
     } = request;
     settings.validate()?;
+    validate_output_bit_depth(output_bit_depth)?;
     if !frame_rate.is_finite() || frame_rate <= 0.0 {
         return Err(CliError::Message(
             "frame-rate must be a positive finite number".to_string(),
@@ -1721,6 +1744,7 @@ pub(crate) fn queue_add_video_vocoder_sequence(
             max_frames,
             frame_rate,
             backend,
+            output_bit_depth,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -2340,6 +2364,7 @@ pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2395,6 +2420,7 @@ pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            output_bit_depth,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": COAGULATED_BLEND_ALGORITHM,
@@ -2410,6 +2436,9 @@ pub(crate) fn queue_run_coagulated_blend_sequence(queue_path: &Path) -> Result<(
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -2486,6 +2515,7 @@ pub(crate) fn queue_run_dispersion_blend_sequence(queue_path: &Path) -> Result<(
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2537,6 +2567,7 @@ pub(crate) fn queue_run_dispersion_blend_sequence(queue_path: &Path) -> Result<(
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            output_bit_depth,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": DISPERSION_BLEND_ALGORITHM,
@@ -2550,6 +2581,9 @@ pub(crate) fn queue_run_dispersion_blend_sequence(queue_path: &Path) -> Result<(
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -2606,6 +2640,8 @@ pub(crate) struct QueueAddFluidMosaicSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_fluid_mosaic_sequence(
@@ -2643,7 +2679,9 @@ pub(crate) fn queue_add_fluid_mosaic_sequence(
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = request;
+    validate_output_bit_depth(output_bit_depth)?;
     if frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -2724,6 +2762,7 @@ pub(crate) fn queue_add_fluid_mosaic_sequence(
             named_modulator_frames: modulation.named_frames,
             modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            output_bit_depth,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -2792,6 +2831,7 @@ pub(crate) fn queue_run_fluid_mosaic_sequence(queue_path: &Path) -> Result<(), C
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -2847,6 +2887,7 @@ pub(crate) fn queue_run_fluid_mosaic_sequence(queue_path: &Path) -> Result<(), C
                     modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                     named_modulator_midi: &named_modulator_midi_specs,
                 },
+                output_bit_depth,
             })?;
         let mut effect = serde_json::json!({
             "algorithm": FLUID_MOSAIC_ALGORITHM,
@@ -2860,6 +2901,9 @@ pub(crate) fn queue_run_fluid_mosaic_sequence(queue_path: &Path) -> Result<(), C
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -3278,11 +3322,14 @@ pub(crate) struct QueueAddRetroStaticSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_retro_static_sequence(
     request: QueueAddRetroStaticSequenceRequest<'_>,
 ) -> Result<(), CliError> {
+    validate_output_bit_depth(request.output_bit_depth)?;
     validate_queued_sequence_timing(request.frames, request.frame_rate)?;
     let settings = RetroStaticSettings {
         real_bpp: request.real_bpp,
@@ -3340,6 +3387,7 @@ pub(crate) fn queue_add_retro_static_sequence(
                 .modulator_midi
                 .map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            output_bit_depth: request.output_bit_depth,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3396,6 +3444,7 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3438,6 +3487,7 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            output_bit_depth,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": RETRO_STATIC_ALGORITHM,
@@ -3452,6 +3502,9 @@ pub(crate) fn queue_run_retro_static_sequence(queue_path: &Path) -> Result<(), C
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -3522,11 +3575,14 @@ pub(crate) struct QueueAddChannelShiftSequenceRequest<'a> {
     pub(crate) matte_frames: Option<&'a Path>,
     /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
     pub(crate) matte_gain: Option<f32>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_channel_shift_sequence(
     request: QueueAddChannelShiftSequenceRequest<'_>,
 ) -> Result<(), CliError> {
+    validate_output_bit_depth(request.output_bit_depth)?;
     validate_queued_sequence_timing(request.frames, request.frame_rate)?;
     let flow_active = request.flow_gain != 0.0;
     if flow_active && request.source_a_dir.is_none() {
@@ -3611,6 +3667,7 @@ pub(crate) fn queue_add_channel_shift_sequence(
                 .matte_frames
                 .map(|p| p.to_string_lossy().to_string()),
             matte_gain: request.matte_gain,
+            output_bit_depth: request.output_bit_depth,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3677,6 +3734,7 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
         matte_source,
         matte_frames,
         matte_gain,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3735,6 +3793,7 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
                 .transpose()?,
             matte_frames: matte_frames.as_deref().map(Path::new),
             matte_gain,
+            output_bit_depth,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": algorithm,
@@ -3751,6 +3810,9 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -3799,11 +3861,14 @@ pub(crate) struct QueueAddPaletteQuantizeSequenceRequest<'a> {
     pub(crate) matte_frames: Option<&'a Path>,
     /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
     pub(crate) matte_gain: Option<f32>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_palette_quantize_sequence(
     request: QueueAddPaletteQuantizeSequenceRequest<'_>,
 ) -> Result<(), CliError> {
+    validate_output_bit_depth(request.output_bit_depth)?;
     validate_queued_sequence_timing(request.frames, request.frame_rate)?;
     if matches!(request.settings.mode, QuantizeMode::Posterize) && request.settings.levels < 2 {
         return Err(CliError::Message(
@@ -3872,6 +3937,7 @@ pub(crate) fn queue_add_palette_quantize_sequence(
                 .matte_frames
                 .map(|p| p.to_string_lossy().to_string()),
             matte_gain: request.matte_gain,
+            output_bit_depth: request.output_bit_depth,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3931,6 +3997,7 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
         matte_source,
         matte_frames,
         matte_gain,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3977,6 +4044,7 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
                 .transpose()?,
             matte_frames: matte_frames.as_deref().map(Path::new),
             matte_gain,
+            output_bit_depth,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": PALETTE_QUANTIZE_ALGORITHM,
@@ -3991,6 +4059,9 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -4055,11 +4126,14 @@ pub(crate) struct QueueAddRuttEtraSequenceRequest<'a> {
     pub(crate) matte_frames: Option<&'a Path>,
     /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
     pub(crate) matte_gain: Option<f32>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_rutt_etra_sequence(
     request: QueueAddRuttEtraSequenceRequest<'_>,
 ) -> Result<(), CliError> {
+    validate_output_bit_depth(request.output_bit_depth)?;
     validate_queued_sequence_timing(request.frames, request.frame_rate)?;
     request.settings.validate()?;
 
@@ -4129,6 +4203,7 @@ pub(crate) fn queue_add_rutt_etra_sequence(
                 .matte_frames
                 .map(|p| p.to_string_lossy().to_string()),
             matte_gain: request.matte_gain,
+            output_bit_depth: request.output_bit_depth,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -4189,6 +4264,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
         matte_source,
         matte_frames,
         matte_gain,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -4238,6 +4314,7 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
                 .transpose()?,
             matte_frames: matte_frames.as_deref().map(Path::new),
             matte_gain,
+            output_bit_depth,
         })?;
         let algorithm = match (source_a_directory.is_some(), backend) {
             (true, RenderBackend::Cpu) => RUTT_ETRA_TWO_SOURCE_ALGORITHM,
@@ -4260,6 +4337,9 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
@@ -4527,6 +4607,8 @@ pub(crate) struct QueueAddBlockCollageSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
     pub(crate) project_path: Option<&'a Path>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_block_collage_sequence(
@@ -4541,8 +4623,10 @@ pub(crate) fn queue_add_block_collage_sequence(
         frames,
         frame_rate,
         project_path,
+        output_bit_depth,
     } = request;
     settings.validate()?;
+    validate_output_bit_depth(output_bit_depth)?;
     validate_queued_sequence_timing(frames, frame_rate)?;
 
     let mut queue = load_or_default_queue(queue_path)?;
@@ -4564,6 +4648,7 @@ pub(crate) fn queue_add_block_collage_sequence(
             cluster_scale: settings.cluster_scale,
             evolution_speed: settings.evolution_speed,
             seed: settings.seed,
+            output_bit_depth,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -4611,6 +4696,7 @@ pub(crate) fn queue_run_block_collage_sequence(queue_path: &Path) -> Result<(), 
         cluster_scale,
         evolution_speed,
         seed,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -4635,7 +4721,16 @@ pub(crate) fn queue_run_block_collage_sequence(queue_path: &Path) -> Result<(), 
             output_dir: &output_dir.join("frames"),
             settings,
             frames,
+            output_bit_depth,
         })?;
+        let mut effect = serde_json::json!({
+            "algorithm": BLOCK_COLLAGE_ALGORITHM,
+            "settings": settings,
+            "backend": "CPU"
+        });
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
+        }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,
             output_dir: &output_dir,
@@ -4643,11 +4738,7 @@ pub(crate) fn queue_run_block_collage_sequence(queue_path: &Path) -> Result<(), 
             frame_rate,
             task: "frame_sequence_block_collage",
             effect_key: "block_collage",
-            effect: serde_json::json!({
-                "algorithm": BLOCK_COLLAGE_ALGORITHM,
-                "settings": settings,
-                "backend": "CPU"
-            }),
+            effect,
             provenance: provenance.as_ref(),
         })
     })();
@@ -4994,6 +5085,7 @@ pub(crate) fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), 
         max_frames,
         frame_rate,
         backend,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -5014,6 +5106,7 @@ pub(crate) fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), 
             mode.into(),
             backend,
             max_frames.map(|value| value as usize),
+            output_bit_depth,
         )?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
@@ -5033,6 +5126,16 @@ pub(crate) fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), 
             VideoVocoderMode::Match => "luma_histogram_spec_vocoder_cpu_v1",
             VideoVocoderMode::Gain => "luma_band_gain_vocoder_cpu_v1",
         };
+        let mut video_vocoder_effect = serde_json::json!({
+            "algorithm": algorithm,
+            "mode": match mode { VideoVocoderMode::Match => "match", VideoVocoderMode::Gain => "gain" },
+            "bands": bands,
+            "amount": amount,
+            "backend": render_backend_label(backend)
+        });
+        if output_bit_depth == 16 {
+            video_vocoder_effect["output_bit_depth"] = serde_json::json!(16);
+        }
         let manifest = serde_json::json!({
             "job_id": job_id,
             "status": "complete",
@@ -5047,13 +5150,7 @@ pub(crate) fn queue_run_video_vocoder_sequence(queue_path: &Path) -> Result<(), 
                 "sample_rate": timing.sample_rate,
                 "audio_sample_count": timing.audio_sample_count
             },
-            "video_vocoder": {
-                "algorithm": algorithm,
-                "mode": match mode { VideoVocoderMode::Match => "match", VideoVocoderMode::Gain => "gain" },
-                "bands": bands,
-                "amount": amount,
-                "backend": render_backend_label(backend)
-            },
+            "video_vocoder": video_vocoder_effect,
             "provenance": queue.jobs[job_index].provenance,
             "deterministic": true
         });
@@ -6078,6 +6175,8 @@ pub(crate) struct QueueAddConvolutionalBlendSequenceRequest<'a> {
     pub(crate) max_frames: Option<u32>,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) backend: RenderBackend,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_convolutional_blend_sequence(
@@ -6093,8 +6192,10 @@ pub(crate) fn queue_add_convolutional_blend_sequence(
         max_frames,
         project_path,
         backend,
+        output_bit_depth,
     } = request;
     settings.validate()?;
+    validate_output_bit_depth(output_bit_depth)?;
     if matches!(max_frames, Some(0)) {
         return Err(CliError::Message(
             "max-frames must be greater than zero".to_string(),
@@ -6147,6 +6248,7 @@ pub(crate) fn queue_add_convolutional_blend_sequence(
             max_frames,
             backend,
             kernel_mode,
+            output_bit_depth,
         },
         provenance: Some(provenance),
         status: RenderJobStatus::Queued,
@@ -6191,6 +6293,7 @@ pub(crate) fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Resul
         max_frames,
         backend,
         kernel_mode,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -6214,6 +6317,7 @@ pub(crate) fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Resul
                 kernel_mode,
                 backend,
                 max_frames: max_frames.map(|value| value as usize),
+                output_bit_depth,
             })?;
         let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
             CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
@@ -6229,6 +6333,16 @@ pub(crate) fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Resul
         let frame_paths = (0..frame_count)
             .map(|index| format!("frames/frame_{index:06}.png"))
             .collect::<Vec<_>>();
+        let mut convolution_blend = serde_json::json!({
+            "algorithm": convolution_blend_algorithm(kernel_mode),
+            "kernel_size": kernel_size,
+            "amount": amount,
+            "kernel_mode": kernel_mode_label(kernel_mode),
+            "backend": render_backend_label(backend)
+        });
+        if output_bit_depth == 16 {
+            convolution_blend["output_bit_depth"] = serde_json::json!(16);
+        }
         let manifest = serde_json::json!({
             "job_id": job_id,
             "status": "complete",
@@ -6243,13 +6357,7 @@ pub(crate) fn queue_run_convolutional_blend_sequence(queue_path: &Path) -> Resul
                 "sample_rate": timing.sample_rate,
                 "audio_sample_count": timing.audio_sample_count
             },
-            "convolution_blend": {
-                "algorithm": convolution_blend_algorithm(kernel_mode),
-                "kernel_size": kernel_size,
-                "amount": amount,
-                "kernel_mode": kernel_mode_label(kernel_mode),
-                "backend": render_backend_label(backend)
-            },
+            "convolution_blend": convolution_blend,
             "provenance": queue.jobs[job_index].provenance,
             "deterministic": true
         });
@@ -7321,6 +7429,8 @@ pub(crate) struct QueueAddPixelSortSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn queue_add_pixel_sort_sequence(
@@ -7351,7 +7461,9 @@ pub(crate) fn queue_add_pixel_sort_sequence(
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = request;
+    validate_output_bit_depth(output_bit_depth)?;
     validate_queued_sequence_timing(frames, frame_rate)?;
 
     let modulation = parse_queue_modulation_routes(
@@ -7399,6 +7511,7 @@ pub(crate) fn queue_add_pixel_sort_sequence(
             named_modulator_frames: modulation.named_frames,
             modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            output_bit_depth,
         },
         provenance: Some(two_source_provenance(source_a_dir, source_b_dir)),
         status: RenderJobStatus::Queued,
@@ -7456,6 +7569,7 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        output_bit_depth,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -7510,6 +7624,7 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            output_bit_depth,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": algorithm,
@@ -7524,6 +7639,9 @@ pub(crate) fn queue_run_pixel_sort_sequence(queue_path: &std::path::Path) -> Res
             frame_rate,
         ) {
             effect["modulation"] = modulation;
+        }
+        if output_bit_depth == 16 {
+            effect["output_bit_depth"] = serde_json::json!(16);
         }
         complete_experimental_frame_sequence_job(ExperimentalFrameSequenceManifest {
             job_id: &job_id,

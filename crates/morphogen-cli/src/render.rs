@@ -296,6 +296,7 @@ pub(crate) fn render_video_vocoder(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_video_vocoder_sequence(
     modulator_dir: &Path,
     carrier_dir: &Path,
@@ -304,8 +305,10 @@ pub(crate) fn render_video_vocoder_sequence(
     mode: CliVocoderMode,
     backend: RenderBackend,
     max_frames: Option<usize>,
+    output_bit_depth: u8,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     settings.validate()?;
+    validate_output_bit_depth(output_bit_depth)?;
     if matches!(max_frames, Some(0)) {
         return Err(CliError::Message(
             "max-frames must be greater than zero".to_string(),
@@ -330,7 +333,11 @@ pub(crate) fn render_video_vocoder_sequence(
         let modulator = load_image_f32(&modulator_frames[index])?;
         let carrier = load_image_f32(&carrier_frames[index])?;
         let rendered = render_video_vocoder_frame(&modulator, &carrier, settings, mode, backend)?;
-        save_png(&rendered, &output_dir.join(format!("frame_{index:06}.png")))?;
+        save_png_with_bit_depth(
+            &rendered,
+            &output_dir.join(format!("frame_{index:06}.png")),
+            output_bit_depth,
+        )?;
     }
 
     if modulator_frames.len() != carrier_frames.len() {
@@ -1755,12 +1762,16 @@ pub(crate) struct ConvolutionalBlendSequenceRequest<'a> {
     pub(crate) kernel_mode: KernelMode,
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn render_convolutional_blend_sequence(
     request: ConvolutionalBlendSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if matches!(request.max_frames, Some(0)) {
         return Err(CliError::Message(
             "max-frames must be greater than zero".to_string(),
@@ -1810,9 +1821,10 @@ pub(crate) fn render_convolutional_blend_sequence(
                 )?
             }
         };
-        save_png(
+        save_png_with_bit_depth(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
@@ -1848,6 +1860,9 @@ pub(crate) struct DispersionBlendSequenceRequest<'a> {
     pub(crate) smear_decay: f32,
     pub(crate) max_frames: Option<usize>,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 /// Render the colour-group dispersion blend over a paired PNG sequence. Carries two
@@ -1859,6 +1874,7 @@ pub(crate) fn render_dispersion_blend_sequence(
     request: DispersionBlendSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if matches!(request.max_frames, Some(0)) {
         return Err(CliError::Message(
             "max-frames must be greater than zero".to_string(),
@@ -1970,9 +1986,10 @@ pub(crate) fn render_dispersion_blend_sequence(
         } else {
             composite
         };
-        save_png(
+        save_png_with_bit_depth(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
 
         previous_ownership = Some(ownership);
@@ -2561,6 +2578,9 @@ pub(crate) struct CascadeCollageSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) settings: CascadeCollageSettings,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 /// Apply the high-level generative knobs to the default composition: tile size
@@ -2588,6 +2608,7 @@ pub(crate) fn render_cascade_collage_sequence(
 ) -> Result<FrameSequenceRenderResult, CliError> {
     let base_settings = request.settings.clone();
     base_settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -2632,9 +2653,10 @@ pub(crate) fn render_cascade_collage_sequence(
                 &frame_settings,
                 index as u32,
             )?;
-            save_png(
+            save_png_with_bit_depth(
                 &rendered,
                 &request.output_dir.join(format!("frame_{index:06}.png")),
+                request.output_bit_depth,
             )?;
         }
         println!(
@@ -2671,9 +2693,10 @@ pub(crate) fn render_cascade_collage_sequence(
                 &frame_settings,
                 index as u32,
             )?;
-            save_png(
+            save_png_with_bit_depth(
                 &rendered,
                 &request.output_dir.join(format!("frame_{index:06}.png")),
+                request.output_bit_depth,
             )?;
         }
         println!(
@@ -2708,9 +2731,10 @@ pub(crate) fn render_cascade_collage_sequence(
                 &frame_settings,
                 index,
             )?;
-            save_png(
+            save_png_with_bit_depth(
                 &rendered,
                 &request.output_dir.join(format!("frame_{index:06}.png")),
+                request.output_bit_depth,
             )?;
         }
         println!(
@@ -2734,6 +2758,9 @@ pub(crate) struct GenerateFramesRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: GeneratorSettings,
     pub(crate) frames: u32,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 /// Render a deterministic oscillator preset — a source-less generator writing an
@@ -2742,6 +2769,7 @@ pub(crate) fn generate_frames(
     request: GenerateFramesRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -2751,14 +2779,15 @@ pub(crate) fn generate_frames(
 
     for index in 0..request.frames {
         let rendered = render_generator_frame(request.preset, &request.settings, index)?;
-        save_png(
+        save_png_with_bit_depth(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
     let algorithm = request.preset.algorithm_id();
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "algorithm": algorithm,
         "preset": request.preset,
         "width": request.settings.width,
@@ -2769,6 +2798,9 @@ pub(crate) fn generate_frames(
         "scale": request.settings.scale,
         "seed": request.settings.seed,
     });
+    if request.output_bit_depth == 16 {
+        manifest["output_bit_depth"] = serde_json::json!(16);
+    }
     fs::write(
         request.output_dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest)?,
@@ -2796,12 +2828,16 @@ pub(crate) struct BlockCollageSequenceRequest<'a> {
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: BlockCollageSettings,
     pub(crate) frames: u32,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn render_block_collage_sequence(
     request: BlockCollageSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -2825,9 +2861,10 @@ pub(crate) fn render_block_collage_sequence(
         let source_b = load_image_f32(&source_b_frames[index])?;
         let rendered =
             render_block_collage_frame(&source_a, &source_b, &request.settings, index as u32)?;
-        save_png(
+        save_png_with_bit_depth(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
@@ -2861,12 +2898,16 @@ pub(crate) struct PixelSortSequenceRequest<'a> {
     /// LK window radius for a-flow mask mode.
     pub(crate) flow_radius: i32,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn render_pixel_sort_sequence(
     request: PixelSortSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -2963,9 +3004,10 @@ pub(crate) fn render_pixel_sort_sequence(
             RenderBackend::Cpu => render_pixel_sort_frame(&source_b, &frame_settings, &a_mask)?,
             RenderBackend::Metal => render_pixel_sort_frame_metal(&source_b, &frame_settings)?,
         };
-        save_png(
+        save_png_with_bit_depth(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
@@ -3120,6 +3162,9 @@ pub(crate) struct FluidMosaicSequenceRequest<'a> {
     pub(crate) settings: FluidMosaicSettings,
     pub(crate) frames: usize,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 /// Render the fluid colour-sort mosaic. Tiles of both sources are seeded from each
@@ -3132,6 +3177,7 @@ pub(crate) fn render_fluid_mosaic_sequence(
     request: FluidMosaicSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -3185,9 +3231,10 @@ pub(crate) fn render_fluid_mosaic_sequence(
             }
         }
         let frame = render_fluid_mosaic(&state, frame_settings)?;
-        save_png(
+        save_png_with_bit_depth(
             &frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
@@ -3223,6 +3270,9 @@ pub(crate) struct CoagulatedBlendSequenceRequest<'a> {
     pub(crate) backend: RenderBackend,
     pub(crate) max_frames: Option<usize>,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 /// Render the descriptor-coagulated flow blend over a paired PNG sequence. Slice 1
@@ -3235,6 +3285,7 @@ pub(crate) fn render_coagulated_blend_sequence(
     request: CoagulatedBlendSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if matches!(request.max_frames, Some(0)) {
         return Err(CliError::Message(
             "max-frames must be greater than zero".to_string(),
@@ -3355,9 +3406,10 @@ pub(crate) fn render_coagulated_blend_sequence(
             composite
         };
 
-        save_png(
+        save_png_with_bit_depth(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
         previous_a = Some(source_a);
         previous_b = Some(source_b);
@@ -6269,11 +6321,15 @@ pub(crate) struct ChannelShiftSequenceRequest<'a> {
     pub(crate) matte_frames: Option<&'a Path>,
     /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
     pub(crate) matte_gain: Option<f32>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn render_channel_shift_sequence(
     request: ChannelShiftSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -6382,15 +6438,21 @@ pub(crate) fn render_channel_shift_sequence(
             }
             None => rendered,
         };
-        save_png(
+        save_png_with_bit_depth(
             &final_frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
-    if let Some(config) = &matte_config {
+    if matte_config.is_some() || request.output_bit_depth == 16 {
         let mut manifest = serde_json::json!({});
-        add_matte_manifest_block(&mut manifest, config);
+        if let Some(config) = &matte_config {
+            add_matte_manifest_block(&mut manifest, config);
+        }
+        if request.output_bit_depth == 16 {
+            manifest["output_bit_depth"] = serde_json::json!(16);
+        }
         fs::write(
             request.output_dir.join("manifest.json"),
             serde_json::to_string_pretty(&manifest)?,
@@ -6428,12 +6490,16 @@ pub(crate) struct RetroStaticSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn render_retro_static_sequence(
     request: RetroStaticSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -6471,9 +6537,10 @@ pub(crate) fn render_retro_static_sequence(
         } else {
             render_retro_static_frame(&source, &frame_settings)?
         };
-        save_png(
+        save_png_with_bit_depth(
             &rendered,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
@@ -6573,11 +6640,15 @@ pub(crate) struct PaletteQuantizeSequenceRequest<'a> {
     pub(crate) matte_frames: Option<&'a Path>,
     /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
     pub(crate) matte_gain: Option<f32>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn render_palette_quantize_sequence(
     request: PaletteQuantizeSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -6650,15 +6721,21 @@ pub(crate) fn render_palette_quantize_sequence(
             }
             None => rendered,
         };
-        save_png(
+        save_png_with_bit_depth(
             &final_frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
-    if let Some(config) = &matte_config {
+    if matte_config.is_some() || request.output_bit_depth == 16 {
         let mut manifest = serde_json::json!({});
-        add_matte_manifest_block(&mut manifest, config);
+        if let Some(config) = &matte_config {
+            add_matte_manifest_block(&mut manifest, config);
+        }
+        if request.output_bit_depth == 16 {
+            manifest["output_bit_depth"] = serde_json::json!(16);
+        }
         fs::write(
             request.output_dir.join("manifest.json"),
             serde_json::to_string_pretty(&manifest)?,
@@ -6798,12 +6875,16 @@ pub(crate) struct RuttEtraSequenceRequest<'a> {
     pub(crate) matte_frames: Option<&'a Path>,
     /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
     pub(crate) matte_gain: Option<f32>,
+    /// PNG interchange bit depth (Tier 5.6 S2): `8` (default, byte-identical
+    /// to pre-slice behaviour) or `16`.
+    pub(crate) output_bit_depth: u8,
 }
 
 pub(crate) fn render_rutt_etra_sequence(
     request: RuttEtraSequenceRequest<'_>,
 ) -> Result<FrameSequenceRenderResult, CliError> {
     request.settings.validate()?;
+    validate_output_bit_depth(request.output_bit_depth)?;
     if request.frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
@@ -6900,9 +6981,10 @@ pub(crate) fn render_rutt_etra_sequence(
             }
             None => rendered,
         };
-        save_png(
+        save_png_with_bit_depth(
             &final_frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+            request.output_bit_depth,
         )?;
     }
 
@@ -6925,6 +7007,9 @@ pub(crate) fn render_rutt_etra_sequence(
     }
     if let Some(config) = &matte_config {
         add_matte_manifest_block(&mut manifest, config);
+    }
+    if request.output_bit_depth == 16 {
+        manifest["output_bit_depth"] = serde_json::json!(16);
     }
     fs::write(
         request.output_dir.join("manifest.json"),

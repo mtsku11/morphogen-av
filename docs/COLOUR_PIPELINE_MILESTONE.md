@@ -29,6 +29,25 @@ tagging** on the ProRes export so output lands correctly in Resolve/FCP.
 
 ## Slices
 
+### Status: MILESTONE COMPLETE (2026-07-08)
+
+- **S1+S2** (Sonnet build; the agent died on its session limit during the
+  final fmt check with everything built — orchestrator completed
+  verification): cargo 652 → **663/0**, clippy clean, zero new fmt diffs.
+  Banding proof pinned as a test AND reproduced:
+  shallow-gradient two-stage chain at depth 8 collapses to **6 distinct
+  values** (max quantization error **0.001953**) vs depth 16 keeping **all
+  256 columns distinct** (error **0.000000**). Live shell evidence: IHDR bit
+  depth 8 vs 16 confirmed on real chain outputs; a depth flip on the same
+  output dir **refuses** via the chain-record spec identity; both manifests
+  record `interchange_bit_depth`. Composition 16-bit scene smoke green.
+  Off-case pins: chain absent≡8 byte-identity + three sequence-command
+  off-case pins + queue add→run at 16 (video-vocoder).
+- **S3** (orchestrator-built inline): Rec.709 tagging on the writer settings
+  + per-buffer CV attachments. Observed: untagged export probes
+  `smpte170m/unknown/unknown` → tagged probes **bt709/bt709/bt709**; decoded
+  frame MD5 **identical** pre/post (metadata-only). swift 141 → **142/0**.
+
 ### S1 — chain interchange depth (where the loss actually is)
 
 `render-chain` spec gains a top-level optional `"interchange_bit_depth"`:

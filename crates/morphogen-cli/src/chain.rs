@@ -67,9 +67,11 @@ const STAGE_COMPLETE_FILE: &str = "stage-complete.json";
 const CHAIN_FEEDBACK_JOB_ID: &str = "direct-feedback-sequence";
 
 // Pinned flow-feedback export knobs (not exposed in the stage spec —
-// demand-driven vocabulary growth; these are the direct CLI defaults).
+// demand-driven vocabulary growth; these are the direct CLI defaults). The
+// stage's PNG output bit depth is not pinned here — it follows the chain's
+// `interchange_bit_depth` (Tier 5.6 S1); only its checkpoint artifacts
+// (RGBA32F state buffer) stay untouched by this milestone.
 const CHAIN_FEEDBACK_FRAME_RATE: f64 = 12.0;
-const CHAIN_FEEDBACK_OUTPUT_BIT_DEPTH: u8 = 8;
 const CHAIN_FEEDBACK_TEMPORAL_SUPERSAMPLING: u32 = 1;
 
 // ---------------------------------------------------------------------------
@@ -80,7 +82,19 @@ const CHAIN_FEEDBACK_TEMPORAL_SUPERSAMPLING: u32 = 1;
 #[serde(deny_unknown_fields)]
 pub(crate) struct ChainSpec {
     pub version: u32,
+    /// PNG interchange bit depth (Tier 5.6 S1): every stage writes PNGs at
+    /// this depth (including the final stage — the chain's output is
+    /// interchange too). Absent/`8` is the default (pre-slice specs
+    /// byte-identical, pinned); any other value is refused at whole-spec
+    /// validation. The flow-feedback stage's *checkpoint* artifacts keep
+    /// their own contracted depth — only its stage-output PNGs follow this.
+    #[serde(default = "default_interchange_bit_depth")]
+    pub interchange_bit_depth: u8,
     pub stages: Vec<ChainStage>,
+}
+
+fn default_interchange_bit_depth() -> u8 {
+    8
 }
 
 /// One stage's knobs, tagged by `"effect"`. Field names/defaults mirror the
@@ -734,6 +748,12 @@ pub(crate) fn validate_chain_spec(spec: &ChainSpec) -> Result<(), CliError> {
             "chain spec must contain at least one stage".to_string(),
         ));
     }
+    if !matches!(spec.interchange_bit_depth, 8 | 16) {
+        return Err(CliError::Message(format!(
+            "chain interchange_bit_depth must be either 8 or 16, got {}",
+            spec.interchange_bit_depth
+        )));
+    }
     for stage in &spec.stages {
         stage.validate()?;
     }
@@ -746,6 +766,7 @@ fn render_stage(
     stage: &ChainStage,
     previous_dir: &Path,
     stage_dir: &Path,
+    interchange_bit_depth: u8,
 ) -> Result<usize, CliError> {
     let frame_count = match stage {
         ChainStage::RetroStatic(spec) => {
@@ -756,6 +777,7 @@ fn render_stage(
                 frames: u32::MAX,
                 backend: RenderBackend::Cpu,
                 modulation: stage.modulation_args(),
+                output_bit_depth: interchange_bit_depth,
             })?
             .frame_count
         }
@@ -773,6 +795,7 @@ fn render_stage(
                 matte: None,
                 matte_frames: None,
                 matte_gain: None,
+                output_bit_depth: interchange_bit_depth,
             })?
             .frame_count
         }
@@ -787,6 +810,7 @@ fn render_stage(
                 matte: None,
                 matte_frames: None,
                 matte_gain: None,
+                output_bit_depth: interchange_bit_depth,
             })?
             .frame_count
         }
@@ -802,6 +826,7 @@ fn render_stage(
                 matte: None,
                 matte_frames: None,
                 matte_gain: None,
+                output_bit_depth: interchange_bit_depth,
             })?
             .frame_count
         }
@@ -815,7 +840,10 @@ fn render_stage(
                 reset_at_frame: None,
                 frame_rate: CHAIN_FEEDBACK_FRAME_RATE,
                 settings: FlowFeedbackSettings::from(spec.clone()),
-                output_bit_depth: CHAIN_FEEDBACK_OUTPUT_BIT_DEPTH,
+                // The feedback stage's checkpoint artifacts (RGBA32F state
+                // buffer) keep their own contracted depth — only its PNG
+                // *stage output* follows the chain's interchange depth.
+                output_bit_depth: interchange_bit_depth,
                 temporal_supersampling: CHAIN_FEEDBACK_TEMPORAL_SUPERSAMPLING,
                 backend: RenderBackend::Cpu,
                 flow_source: spec.flow_source,
@@ -926,7 +954,8 @@ pub(crate) fn run_chain_spec(
                 marker.frame_count
             }
             _ => {
-                let frame_count = render_stage(stage, &previous_dir, &stage_dir)?;
+                let frame_count =
+                    render_stage(stage, &previous_dir, &stage_dir, spec.interchange_bit_depth)?;
                 let marker = StageCompletionMarker {
                     effect: effect_tag.to_string(),
                     algorithm: algorithm.clone(),
@@ -950,6 +979,7 @@ pub(crate) fn run_chain_spec(
 
     let chain_manifest = serde_json::json!({
         "version": spec.version,
+        "interchange_bit_depth": spec.interchange_bit_depth,
         "frame_count": final_frame_count,
         "stages": manifest_stages,
     });

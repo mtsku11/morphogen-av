@@ -14,8 +14,8 @@ use morphogen_render::{luminance_gradient_flow_cpu, write_flow_cache};
 
 use crate::error::CliError;
 use crate::imaging::{
-    box_downscale, collect_image_frames, load_image_f32, save_png, synthetic_flow,
-    write_parent_dirs, BOX_DOWNSCALE_ALGORITHM,
+    box_downscale, collect_image_frames, load_image_f32, save_png_with_bit_depth, synthetic_flow,
+    validate_output_bit_depth, write_parent_dirs, BOX_DOWNSCALE_ALGORITHM,
 };
 pub(crate) fn init_example(output_path: &Path) -> Result<(), CliError> {
     let project = Project::example_two_source_flow_displace();
@@ -131,12 +131,14 @@ pub(crate) fn downscale_frames(
     output_dir: &Path,
     scale: u32,
     max_frames: Option<u32>,
+    output_bit_depth: u8,
 ) -> Result<(), CliError> {
     if scale == 0 {
         return Err(CliError::Message(
             "scale must be an integer >= 1".to_string(),
         ));
     }
+    validate_output_bit_depth(output_bit_depth)?;
 
     let frames = collect_image_frames(input_dir)?;
     let frame_count = match max_frames {
@@ -155,7 +157,7 @@ pub(crate) fn downscale_frames(
                 frame_path.display()
             ))
         })?;
-        save_png(&downscaled, &output_dir.join(file_name))?;
+        save_png_with_bit_depth(&downscaled, &output_dir.join(file_name), output_bit_depth)?;
     }
 
     println!(
@@ -469,6 +471,7 @@ pub(crate) fn cache_luminance_flow(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::imaging::save_png;
     use morphogen_render::ImageBufferF32;
 
     fn write_solid_frame(path: &Path, width: u32, height: u32, value: f32) {
@@ -485,7 +488,7 @@ mod tests {
         fs::create_dir_all(&input_dir).expect("create input dir");
         write_solid_frame(&input_dir.join("frame_000000.png"), 4, 4, 0.5);
 
-        let error = downscale_frames(&input_dir, &output_dir, 0, None)
+        let error = downscale_frames(&input_dir, &output_dir, 0, None, 8)
             .expect_err("scale 0 must be rejected");
         assert_eq!(error.to_string(), "scale must be an integer >= 1");
     }
@@ -505,7 +508,7 @@ mod tests {
             );
         }
 
-        downscale_frames(&input_dir, &output_dir, 2, Some(2)).expect("downscale frames");
+        downscale_frames(&input_dir, &output_dir, 2, Some(2), 8).expect("downscale frames");
 
         assert!(output_dir.join("frame_000000.png").exists());
         assert!(output_dir.join("frame_000001.png").exists());
@@ -523,7 +526,7 @@ mod tests {
         fs::create_dir_all(&input_dir).expect("create input dir");
         write_solid_frame(&input_dir.join("my_odd_name.png"), 6, 6, 0.75);
 
-        downscale_frames(&input_dir, &output_dir, 3, None).expect("downscale frames");
+        downscale_frames(&input_dir, &output_dir, 3, None, 8).expect("downscale frames");
 
         let output_path = output_dir.join("my_odd_name.png");
         assert!(

@@ -62,6 +62,10 @@ pub(crate) enum Commands {
         /// Cap how many frames (sorted order) are processed.
         #[arg(long)]
         max_frames: Option<u32>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     ExportAudioStem {
         input_wav: PathBuf,
@@ -270,6 +274,10 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render an audio-to-video descriptor-routing sequence: Source A's RMS
     /// envelope (peak-normalized) drives the per-frame displacement amount
@@ -456,6 +464,10 @@ pub(crate) enum Commands {
         backend: CliRenderBackend,
         #[arg(long)]
         max_frames: Option<usize>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render a colour-group dispersion blend (experimental, deterministic). Unlike
     /// the coagulated blend (which composites in place behind a moving mask), this
@@ -541,6 +553,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render a faux-fluid dye advection (experimental, deterministic; CPU reference with
     /// an optional parity-gated Metal backend).
@@ -921,6 +937,10 @@ pub(crate) enum Commands {
         evolution_speed: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render the scribbled-edge tile cascade — a procedural collage of rect/L tiles, each
     /// re-stamped in an in-frame cascade with one scribbled morphing edge (CPU, deterministic,
@@ -1024,6 +1044,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render a deterministic video oscillator preset — a source-less pattern generator
     /// writing an ordinary PNG frame dir, so any existing effect/route/queue/chain can
@@ -1051,6 +1075,10 @@ pub(crate) enum Commands {
         /// Plasma noise lattice key. Ignored by the other presets.
         #[arg(long, default_value_t = 71)]
         seed: u64,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render a pixel-sort effect — per-line threshold-bounded span sorting (CPU, deterministic).
     /// Within each row or column, contiguous runs of pixels whose sort key falls in
@@ -1131,6 +1159,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render a channel-shift (RGB-split / chromatic aberration) sequence. Each
     /// colour channel is sampled from B at an independently offset position. Alpha
@@ -1223,6 +1255,10 @@ pub(crate) enum Commands {
         /// clamp to [0,1]. Finite, >= 0. Error without --matte.
         #[arg(long)]
         matte_gain: Option<f32>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render the retro-static glitch: deterministically simulate a PNG-style
     /// scanline filter, then deliberately misread it at the wrong bytes-per-pixel
@@ -1289,6 +1325,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render the Rutt-Etra scanline look: the frame is re-rendered as a sparse
     /// set of horizontal scanlines on black, each displaced vertically by its
@@ -1376,6 +1416,10 @@ pub(crate) enum Commands {
         /// clamp to [0,1]. Finite, >= 0. Error without --matte.
         #[arg(long)]
         matte_gain: Option<f32>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).
@@ -1445,6 +1489,10 @@ pub(crate) enum Commands {
         /// clamp to [0,1]. Finite, >= 0. Error without --matte.
         #[arg(long)]
         matte_gain: Option<f32>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Run an ordered list of single-source effect stages from a JSON spec
     /// (see docs/EFFECT_CHAIN_MILESTONE.md). Stage 1 reads `input_dir`; each
@@ -1653,6 +1701,10 @@ pub(crate) enum Commands {
         /// Max frames (limits render length when modulation sources are shorter).
         #[arg(long)]
         max_frames: Option<usize>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render a descriptor-coagulated flow blend (experimental, deterministic;
     /// Slice 1 — CPU-only, single-frame, no advection/feedback yet). Both sources
@@ -1766,6 +1818,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Render a granular mosaic sequence whose grains are drawn from a whole-clip
     /// temporal pool (step 6b). Per-grain carrier audio matches against Source A's
@@ -2398,6 +2454,10 @@ pub(crate) enum Commands {
         named_modulator_midi: Vec<String>,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Persist a retro-static render job to the queue. Mirrors
     /// `render-retro-static-sequence`.
@@ -2449,6 +2509,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     /// Queue a channel-shift (RGB split) sequence job. Constant per-channel
     /// offsets, optional A-flow per-row shifts, and modulation-matrix routes.
@@ -2525,6 +2589,10 @@ pub(crate) enum Commands {
         /// clamp to [0,1]. Finite, >= 0. Error without --matte.
         #[arg(long)]
         matte_gain: Option<f32>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunChannelShiftSequence {
         queue_path: PathBuf,
@@ -2590,6 +2658,10 @@ pub(crate) enum Commands {
         /// clamp to [0,1]. Finite, >= 0. Error without --matte.
         #[arg(long)]
         matte_gain: Option<f32>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunPaletteQuantizeSequence {
         queue_path: PathBuf,
@@ -2670,6 +2742,10 @@ pub(crate) enum Commands {
         /// clamp to [0,1]. Finite, >= 0. Error without --matte.
         #[arg(long)]
         matte_gain: Option<f32>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunRuttEtraSequence {
         queue_path: PathBuf,
@@ -2782,6 +2858,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunCoagulatedBlendSequence {
         queue_path: PathBuf,
@@ -2848,6 +2928,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunDispersionBlendSequence {
         queue_path: PathBuf,
@@ -2917,6 +3001,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunFluidMosaicSequence {
         queue_path: PathBuf,
@@ -3038,6 +3126,10 @@ pub(crate) enum Commands {
         project_path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueAddSpectralCrossSynth {
         queue_path: PathBuf,
@@ -3255,6 +3347,10 @@ pub(crate) enum Commands {
         project_path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunConvolutionalBlendSequence {
         queue_path: PathBuf,
@@ -3314,6 +3410,10 @@ pub(crate) enum Commands {
         seed: u64,
         #[arg(long)]
         project_path: Option<PathBuf>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunBlockCollageSequence {
         queue_path: PathBuf,
@@ -3375,6 +3475,10 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// PNG interchange bit depth: 8 (default, byte-identical to pre-slice
+        /// behaviour) or 16.
+        #[arg(long, default_value_t = 8)]
+        output_bit_depth: u8,
     },
     QueueRunPixelSortSequence {
         queue_path: PathBuf,

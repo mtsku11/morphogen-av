@@ -78,6 +78,18 @@ pub(crate) fn save_png_with_bit_depth(
     }
 }
 
+/// Upfront `--output-bit-depth` validation shared by every stateless sequence
+/// command (Tier 5.6 S2): fails before any frame renders, mirroring the
+/// existing `max-frames must be greater than zero` fail-fast checks.
+pub(crate) fn validate_output_bit_depth(bit_depth: u8) -> Result<(), CliError> {
+    if !matches!(bit_depth, 8 | 16) {
+        return Err(CliError::Message(
+            "output-bit-depth must be either 8 or 16".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn save_png(image: &ImageBufferF32, output_path: &Path) -> Result<(), CliError> {
     let mut rgba: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(image.width, image.height);
 
@@ -211,6 +223,29 @@ pub(crate) fn update_fnv1a(checksum: &mut u64, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_output_bit_depth_accepts_8_and_16() {
+        assert!(validate_output_bit_depth(8).is_ok());
+        assert!(validate_output_bit_depth(16).is_ok());
+    }
+
+    #[test]
+    fn validate_output_bit_depth_rejects_everything_else() {
+        for bad in [0u8, 1, 2, 4, 7, 9, 24, 32, 255] {
+            let error = validate_output_bit_depth(bad).expect_err("must reject");
+            assert_eq!(error.to_string(), "output-bit-depth must be either 8 or 16");
+        }
+    }
+
+    #[test]
+    fn save_png_with_bit_depth_rejects_the_same_invalid_values_at_save_time() {
+        let image = ImageBufferF32::from_fn(2, 2, |_, _| [0.5, 0.5, 0.5, 1.0]).expect("image");
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let error = save_png_with_bit_depth(&image, &temp_dir.path().join("out.png"), 12)
+            .expect_err("must reject");
+        assert_eq!(error.to_string(), "PNG bit depth must be either 8 or 16");
+    }
 
     #[test]
     fn box_downscale_dimensions_divide_evenly() {
