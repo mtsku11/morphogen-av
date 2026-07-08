@@ -2338,6 +2338,7 @@ enum RustBridgePlaceholder {
       routes: request.modulationRoutes,
       modulatorAudioURL: request.modulatorAudioURL,
       modulatorFramesURL: request.modulatorFramesURL,
+      modulatorMidiURL: request.modulatorMidiURL,
       sampling: request.modulationSampling,
       namedModulators: request.namedModulators
     )
@@ -3254,6 +3255,9 @@ enum RustBridgePlaceholder {
     routes: [ModulationRouteSpec],
     modulatorAudioURL: URL?,
     modulatorFramesURL: URL?,
+    // Default modulator MIDI file; defaulted nil so the panels without a MIDI
+    // story keep their exact argument arrays (docs/MIDI_MODULATION_MILESTONE.md S3).
+    modulatorMidiURL: URL? = nil,
     sampling: ModulationSamplingOption,
     namedModulators: [NamedModulatorMediaSpec] = []
   ) throws {
@@ -3295,6 +3299,15 @@ enum RustBridgePlaceholder {
       arguments.append("--modulator-frames")
       arguments.append(framesURL.path)
     }
+    if routes.contains(where: { isDefault($0) && $0.source.hasPrefix("midi-") }) {
+      guard let midiURL = modulatorMidiURL else {
+        throw RustBridgeError.invalidFrameSequenceRequest(
+          "midi-* modulation sources require a modulator MIDI file"
+        )
+      }
+      arguments.append("--modulator-midi")
+      arguments.append(midiURL.path)
+    }
     // Emit `--named-modulator-*` only for names an actual route references,
     // and only for the media kind that route needs. A referenced name must
     // resolve to exactly one declared entry — duplicates would emit duplicate
@@ -3331,6 +3344,18 @@ enum RustBridgePlaceholder {
         }
         arguments.append("--named-modulator-frames")
         arguments.append("\(modulator.name)=\(framesURL.path)")
+      }
+      let usesMidi = routes.contains {
+        $0.modulator == modulator.name && $0.source.hasPrefix("midi-")
+      }
+      if usesMidi {
+        guard let midiURL = modulator.midiURL else {
+          throw RustBridgeError.invalidFrameSequenceRequest(
+            "named modulator '\(modulator.name)' is routed to a midi-* source but has no MIDI file selected"
+          )
+        }
+        arguments.append("--named-modulator-midi")
+        arguments.append("\(modulator.name)=\(midiURL.path)")
       }
     }
     arguments.append("--modulation-sampling")
@@ -3633,6 +3658,9 @@ struct NamedModulatorMediaSpec: Equatable {
   let name: String
   let audioURL: URL?
   let framesURL: URL?
+  // MIDI media (docs/MIDI_MODULATION_MILESTONE.md S3); defaulted so call
+  // sites predating MIDI are unchanged.
+  var midiURL: URL? = nil
 }
 
 struct RetroStaticSequenceRenderQueueCommandRequest {
@@ -3970,6 +3998,9 @@ struct RuttEtraSequenceRenderQueueCommandRequest {
   var modulationRoutes: [ModulationRouteSpec] = []
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
+  // Default modulator MIDI file for midi-* routes; defaulted so call sites
+  // predating MIDI keep their meaning (docs/MIDI_MODULATION_MILESTONE.md S3).
+  var modulatorMidiURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
   var namedModulators: [NamedModulatorMediaSpec] = []
 }

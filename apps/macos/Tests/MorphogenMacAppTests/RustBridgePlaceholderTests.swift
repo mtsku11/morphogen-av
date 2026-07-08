@@ -1927,6 +1927,79 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--named-modulator-frames"))
   }
 
+  func testQueuedRuttEtraSequenceArgumentsCarryMidiCcRouteWithMidiFlagOnly() throws {
+    var request = makeRuttEtraRequest()
+    // A midi-cc route reads the default modulator MIDI file — no WAV/frames
+    // flags (docs/MIDI_MODULATION_MILESTONE.md S3).
+    let spec = try XCTUnwrap(midiCcSourceSpec(controller: 74))
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "displacement_depth", source: spec, scale: 96, offset: 0)
+    ]
+    request.modulatorMidiURL = URL(fileURLWithPath: "/tmp/cc74.mid")
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("displacement_depth=midi-cc(74):96,0"))
+    let midiIdx = try XCTUnwrap(arguments.firstIndex(of: "--modulator-midi"))
+    XCTAssertEqual(arguments[midiIdx + 1], "/tmp/cc74.mid")
+    XCTAssertFalse(arguments.contains("--modulator-audio"))
+    XCTAssertFalse(arguments.contains("--modulator-frames"))
+  }
+
+  func testQueuedRuttEtraSequenceArgumentsCarryNamedMidiRoute() throws {
+    var request = makeRuttEtraRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(
+        target: "displacement_depth", source: "midi-velocity", scale: 64, offset: 0,
+        modulator: "keys")
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(
+        name: "keys", audioURL: nil, framesURL: nil,
+        midiURL: URL(fileURLWithPath: "/tmp/keys.mid"))
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("displacement_depth=keys.midi-velocity:64,0"))
+    let idx = try XCTUnwrap(arguments.firstIndex(of: "--named-modulator-midi"))
+    XCTAssertEqual(arguments[idx + 1], "keys=/tmp/keys.mid")
+    // The named MIDI route must not demand the default MIDI flag.
+    XCTAssertFalse(arguments.contains("--modulator-midi"))
+  }
+
+  func testQueuedRuttEtraSequenceMidiRouteWithoutMediaThrows() {
+    var request = makeRuttEtraRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "displacement_depth", source: "midi-pitch", scale: 32, offset: 0)
+    ]
+    // No modulatorMidiURL set — the bridge must refuse before any launch.
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request))
+  }
+
+  func testMidiCcSourceSpecValidatesRange() {
+    XCTAssertEqual(midiCcSourceSpec(controller: 0), "midi-cc(0)")
+    XCTAssertEqual(midiCcSourceSpec(controller: 74), "midi-cc(74)")
+    XCTAssertEqual(midiCcSourceSpec(controller: 127), "midi-cc(127)")
+    XCTAssertNil(midiCcSourceSpec(controller: -1))
+    XCTAssertNil(midiCcSourceSpec(controller: 128))
+  }
+
+  func testQueuedRuttEtraSequenceNoMidiKeepsArgumentsByteIdentical() throws {
+    // No MIDI state set ⇒ the exact pre-MIDI argument array (the no-regression
+    // shape pin; the fully-unmodulated pin lives in
+    // testQueuedRuttEtraSequenceArgumentsIncludeKnobs).
+    var request = makeRuttEtraRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "line_pitch", source: "luma", scale: 8, offset: 4)
+    ]
+    request.modulatorFramesURL = URL(fileURLWithPath: "/tmp/modulator-frames", isDirectory: true)
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+    XCTAssertFalse(arguments.contains("--modulator-midi"))
+    XCTAssertFalse(arguments.contains("--named-modulator-midi"))
+  }
+
   func testLfoSourceSpecFormatsAndValidates() {
     // Valid params spell the exact route-grammar clause.
     XCTAssertEqual(

@@ -114,10 +114,19 @@ named-modulator fingerprint lists. Envelope sidecar cache: **not extended**
   (rejection persists nothing); add→run byte-identical smoke; stateful
   checkpoint contract carries the MIDI fingerprint (changed-file refusal
   smoke on flow feedback).
-- **S3 — SwiftUI.** MIDI sources join the slot source picker (needsMidi media
-  guard beside needsAudio/needsFrames); shared + named modulator rows gain a
-  MIDI file picker; bridge emits the new flags; no-MIDI arg arrays
-  byte-identical (pinned).
+- **S3 — SwiftUI. DONE (2026-07-07 session, built inline by the orchestrator
+  after the builder agent died on its session limit with nothing on disk.**
+  swift 132 → **137/0**, cargo **633/0** untouched. MIDI sources join the
+  Rutt-Etra slots only for now (the LFO one-panel-first precedent; other
+  panels filter them like `.lfo`/`.captured`); `needsMidi` beside
+  needsAudio/needsFrames; `midi-cc(<n>)` spelled per-slot via
+  `midiCcSourceSpec` + a CC stepper (0–127, default 74) with a parallel
+  `slotMidiCcNumbers` param (the slotLfos churn-avoider); shared + named
+  modulator rows gain MIDI pickers (defaulted params — other panels' call
+  sites untouched); bridge emits `--modulator-midi`/`--named-modulator-midi`
+  keyed off the `midi-` source-string prefix. E2e: the exact bridge token
+  shape queue-add→run reproduces the S1 direct render's 1.885/255 @hold
+  delta. **MILESTONE COMPLETE.**)
 
 ## Anchors (falsifiable)
 

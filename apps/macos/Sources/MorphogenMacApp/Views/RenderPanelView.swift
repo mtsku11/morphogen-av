@@ -1198,7 +1198,9 @@ struct RenderPanelView: View {
             lfoShape: $state.ruttEtraModDepthLfoShape,
             lfoRate: $state.ruttEtraModDepthLfoRate,
             lfoPhase: $state.ruttEtraModDepthLfoPhase,
-            captureAvailable: true
+            captureAvailable: true,
+            midiAvailable: true,
+            midiCcNumber: $state.ruttEtraModDepthMidiCc
           )
 
           ModulationSlotRow(
@@ -1213,7 +1215,9 @@ struct RenderPanelView: View {
             lfoShape: $state.ruttEtraModPitchLfoShape,
             lfoRate: $state.ruttEtraModPitchLfoRate,
             lfoPhase: $state.ruttEtraModPitchLfoPhase,
-            captureAvailable: true
+            captureAvailable: true,
+            midiAvailable: true,
+            midiCcNumber: $state.ruttEtraModPitchMidiCc
           )
 
           ModulationSlotRow(
@@ -1228,7 +1232,9 @@ struct RenderPanelView: View {
             lfoShape: $state.ruttEtraModThicknessLfoShape,
             lfoRate: $state.ruttEtraModThicknessLfoRate,
             lfoPhase: $state.ruttEtraModThicknessLfoPhase,
-            captureAvailable: true
+            captureAvailable: true,
+            midiAvailable: true,
+            midiCcNumber: $state.ruttEtraModThicknessMidiCc
           )
 
           ModulationMediaRow(
@@ -1240,7 +1246,9 @@ struct RenderPanelView: View {
             framesURL: state.ruttEtraModulatorFramesURL,
             sampling: $state.ruttEtraModSampling,
             chooseAudio: { state.chooseRuttEtraModulatorWAV() },
-            chooseFrames: { state.chooseRuttEtraModulatorFrames() }
+            chooseFrames: { state.chooseRuttEtraModulatorFrames() },
+            midiURL: state.ruttEtraModulatorMidiURL,
+            chooseMidi: { state.chooseRuttEtraModulatorMIDI() }
           )
 
           NamedModulatorsSection(
@@ -1248,7 +1256,8 @@ struct RenderPanelView: View {
             onAdd: { state.addRuttEtraNamedModulator() },
             onRemove: { state.removeRuttEtraNamedModulator(id: $0) },
             chooseAudio: { state.chooseRuttEtraNamedModulatorWAV(id: $0) },
-            chooseFrames: { state.chooseRuttEtraNamedModulatorFrames(id: $0) }
+            chooseFrames: { state.chooseRuttEtraNamedModulatorFrames(id: $0) },
+            chooseMidi: { state.chooseRuttEtraNamedModulatorMIDI(id: $0) }
           )
 
           Text(state.ruttEtraSummary)
@@ -2255,6 +2264,11 @@ struct ModulationSlotRow: View {
   // source picker so panels without a capture story are unchanged. Mirrors
   // the LFO opt-in.
   var captureAvailable = false
+  // MIDI opt-in; false (the default) omits the four midi-* sources so panels
+  // without a MIDI story are unchanged. The CC-number binding shows a stepper
+  // when the source is MIDI CC (spelled per-slot as midi-cc(<n>)).
+  var midiAvailable = false
+  var midiCcNumber: Binding<Int>? = nil
 
   var body: some View {
     HStack(spacing: 16) {
@@ -2262,6 +2276,7 @@ struct ModulationSlotRow: View {
         ForEach(
           ModulationSourceOption.allCases.filter {
             ($0 != .lfo || lfoShape != nil) && ($0 != .captured || captureAvailable)
+              && (!$0.isMidi || midiAvailable)
           }
         ) { option in
           Text(option.rawValue).tag(option)
@@ -2277,6 +2292,13 @@ struct ModulationSlotRow: View {
             .foregroundStyle(.secondary)
             .frame(width: 220, alignment: .leading)
             .help("Arm this slot, then use the capture strip under the preview to record a gesture.")
+        }
+        if source == .midiCc, let midiCcNumber {
+          Stepper(value: midiCcNumber, in: 0...127, step: 1) {
+            Text("CC \(midiCcNumber.wrappedValue)")
+          }
+          .frame(width: 120, alignment: .leading)
+          .help("MIDI controller number this slot reads (route: midi-cc(<n>)).")
         }
         if source == .lfo, let lfoShape, let lfoRate, let lfoPhase {
           Picker("Shape", selection: lfoShape) {
@@ -2354,9 +2376,11 @@ where
 
   var body: some View {
     HStack(spacing: 16) {
-      // Enum slots don't opt in to LFO or capture (this slice), so filter both out.
+      // Enum slots don't opt in to LFO, capture, or MIDI (this slice) — filter all out.
       Picker("Mod \(label)", selection: $source) {
-        ForEach(ModulationSourceOption.allCases.filter { $0 != .lfo && $0 != .captured }) { option in
+        ForEach(
+          ModulationSourceOption.allCases.filter { $0 != .lfo && $0 != .captured && !$0.isMidi }
+        ) { option in
           Text(option.rawValue).tag(option)
         }
       }
@@ -2415,6 +2439,9 @@ struct ModulationMediaRow: View {
   @Binding var sampling: ModulationSamplingOption
   let chooseAudio: () -> Void
   let chooseFrames: () -> Void
+  // MIDI media; defaulted so panels without a MIDI story are unchanged.
+  var midiURL: URL? = nil
+  var chooseMidi: (() -> Void)? = nil
 
   var body: some View {
     if sources.contains(where: { $0 != .off }) {
@@ -2429,6 +2456,13 @@ struct ModulationMediaRow: View {
         if sources.contains(where: \.needsFrames) {
           Button("Modulator Frames…", action: chooseFrames)
           Text(framesURL?.lastPathComponent ?? "none selected")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        if sources.contains(where: \.needsMidi), let chooseMidi {
+          Button("Modulator MIDI…", action: chooseMidi)
+          Text(midiURL?.lastPathComponent ?? "none selected")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -2456,6 +2490,9 @@ private struct NamedModulatorsSection: View {
   let onRemove: (UUID) -> Void
   let chooseAudio: (UUID) -> Void
   let chooseFrames: (UUID) -> Void
+  // MIDI picker; nil (the default) hides the button so panels without a MIDI
+  // story are unchanged.
+  var chooseMidi: ((UUID) -> Void)? = nil
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -2482,6 +2519,13 @@ private struct NamedModulatorsSection: View {
           Text(entry.framesURL?.lastPathComponent ?? "—")
             .font(.caption)
             .foregroundStyle(.secondary)
+
+          if let chooseMidi {
+            Button("MIDI…") { chooseMidi(entry.id) }
+            Text(entry.midiURL?.lastPathComponent ?? "—")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
 
           Button(role: .destructive) { onRemove(entry.id) } label: {
             Image(systemName: "trash")

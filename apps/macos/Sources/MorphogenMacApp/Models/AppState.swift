@@ -525,6 +525,12 @@ final class AppState: ObservableObject {
   @Published var ruttEtraModThicknessLfoPhase = 0.0
   @Published var ruttEtraModulatorAudioURL: URL?
   @Published var ruttEtraModulatorFramesURL: URL?
+  @Published var ruttEtraModulatorMidiURL: URL?
+  // Per-slot CC controller numbers for the .midiCc source (0–127; 74 = the
+  // classic filter-cutoff CC, docs/MIDI_MODULATION_MILESTONE.md S3).
+  @Published var ruttEtraModDepthMidiCc = 74
+  @Published var ruttEtraModPitchMidiCc = 74
+  @Published var ruttEtraModThicknessMidiCc = 74
   @Published var ruttEtraModSampling = ModulationSamplingOption.hold
   @Published var ruttEtraNamedModulators: [NamedModulatorEntry] = []
   // Performance capture (docs/PERFORMANCE_CAPTURE_MILESTONE.md): recorded
@@ -2222,6 +2228,9 @@ final class AppState: ObservableObject {
     )],
     modulatorAudioURL: URL?,
     modulatorFramesURL: URL?,
+    // Default modulator MIDI file; nil (the default) leaves panels without a
+    // MIDI story unchanged (docs/MIDI_MODULATION_MILESTONE.md S3).
+    modulatorMidiURL: URL? = nil,
     namedModulators: [NamedModulatorEntry] = [],
     // Parallel to `slots`: the named modulator each slot binds to ("" = default).
     // Empty (the default) leaves every slot on the default modulator, so callers
@@ -2236,6 +2245,9 @@ final class AppState: ObservableObject {
     // default) leaves every slot untouched, so callers whose panels don't opt
     // in to capture need no change — the `slotLfos` churn-avoider precedent.
     slotCaptures: [String?] = [],
+    // Parallel to `slots`: the CC controller number for a slot whose source is
+    // `.midiCc`. Empty (the default) leaves every slot untouched.
+    slotMidiCcNumbers: [Int] = [],
     effectLabel: String
   ) -> [ModulationRouteSpec]? {
     var routes: [ModulationRouteSpec] = []
@@ -2276,15 +2288,30 @@ final class AppState: ObservableObject {
         )
         continue
       }
-      guard let source = slot.source.cliValue else { continue }
+      let source: String
+      if slot.source == .midiCc {
+        let controller = index < slotMidiCcNumbers.count ? slotMidiCcNumbers[index] : 74
+        guard let spec = midiCcSourceSpec(controller: controller) else {
+          statusMessage =
+            "MIDI CC number must be 0–127 on the \(effectLabel) \(slot.target) slot."
+          return nil
+        }
+        source = spec
+      } else if let cli = slot.source.cliValue {
+        source = cli
+      } else {
+        continue
+      }
       let modulator = index < slotModulators.count ? slotModulators[index] : ""
       // Resolve the media this slot reads: the default modulator (empty name)
       // or the same-named declared entry.
       let audioURL: URL?
       let framesURL: URL?
+      let midiURL: URL?
       if modulator.isEmpty {
         audioURL = modulatorAudioURL
         framesURL = modulatorFramesURL
+        midiURL = modulatorMidiURL
       } else {
         guard let entry = namedModulators.first(where: { $0.name == modulator }) else {
           statusMessage =
@@ -2293,6 +2320,7 @@ final class AppState: ObservableObject {
         }
         audioURL = entry.audioURL
         framesURL = entry.framesURL
+        midiURL = entry.midiURL
       }
       let mediaLabel = modulator.isEmpty ? effectLabel : "modulator \"\(modulator)\""
       if slot.source.needsAudio && audioURL == nil {
@@ -2302,6 +2330,11 @@ final class AppState: ObservableObject {
       if slot.source.needsFrames && framesURL == nil {
         statusMessage =
           "Pick a modulator frame directory for \(mediaLabel) before rendering with a luma/flow source."
+        return nil
+      }
+      if slot.source.needsMidi && midiURL == nil {
+        statusMessage =
+          "Pick a modulator MIDI file for \(mediaLabel) before rendering with a MIDI source."
         return nil
       }
       routes.append(
@@ -2319,7 +2352,8 @@ final class AppState: ObservableObject {
   /// entries are dropped (they are indistinguishable from the default).
   private func namedModulatorSpecs(_ entries: [NamedModulatorEntry]) -> [NamedModulatorMediaSpec] {
     entries.filter { !$0.name.isEmpty }.map {
-      NamedModulatorMediaSpec(name: $0.name, audioURL: $0.audioURL, framesURL: $0.framesURL)
+      NamedModulatorMediaSpec(
+        name: $0.name, audioURL: $0.audioURL, framesURL: $0.framesURL, midiURL: $0.midiURL)
     }
   }
 
@@ -2352,6 +2386,19 @@ final class AppState: ObservableObject {
     }
     list[index].audioURL = url
     statusMessage = "Named modulator \"\(list[index].name)\" WAV selected: \(url.lastPathComponent)"
+  }
+
+  private func pickNamedModulatorMIDI(in list: inout [NamedModulatorEntry], id: UUID) {
+    guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+    guard let url = MediaFilePicker.chooseMIDIFile(
+      title: "Choose Named Modulator MIDI",
+      message: "Select the MIDI file whose CC/note envelopes drive slots bound to this modulator."
+    ) else {
+      statusMessage = "Modulator MIDI selection cancelled."
+      return
+    }
+    list[index].midiURL = url
+    statusMessage = "Named modulator \"\(list[index].name)\" MIDI selected: \(url.lastPathComponent)"
   }
 
   private func pickNamedModulatorFrames(in list: inout [NamedModulatorEntry], id: UUID) {
@@ -2689,6 +2736,7 @@ final class AppState: ObservableObject {
   func addRuttEtraNamedModulator() { appendNamedModulator(to: &ruttEtraNamedModulators) }
   func chooseRuttEtraNamedModulatorWAV(id: UUID) { pickNamedModulatorWAV(in: &ruttEtraNamedModulators, id: id) }
   func chooseRuttEtraNamedModulatorFrames(id: UUID) { pickNamedModulatorFrames(in: &ruttEtraNamedModulators, id: id) }
+  func chooseRuttEtraNamedModulatorMIDI(id: UUID) { pickNamedModulatorMIDI(in: &ruttEtraNamedModulators, id: id) }
   func removeRuttEtraNamedModulator(id: UUID) {
     guard let entry = ruttEtraNamedModulators.first(where: { $0.id == id }) else { return }
     ruttEtraNamedModulators.removeAll { $0.id == id }
@@ -3057,6 +3105,18 @@ final class AppState: ObservableObject {
     statusMessage = "Rutt-etra modulator WAV selected: \(url.lastPathComponent)"
   }
 
+  func chooseRuttEtraModulatorMIDI() {
+    guard let url = MediaFilePicker.chooseMIDIFile(
+      title: "Choose Modulator MIDI",
+      message: "Select the MIDI file whose CC/note envelopes drive the routed knobs."
+    ) else {
+      statusMessage = "Modulator MIDI selection cancelled."
+      return
+    }
+    ruttEtraModulatorMidiURL = url
+    statusMessage = "Rutt-etra modulator MIDI selected: \(url.lastPathComponent)"
+  }
+
   func chooseRuttEtraModulatorFrames() {
     guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
       title: "Choose Modulator Frames",
@@ -3385,6 +3445,7 @@ final class AppState: ObservableObject {
       ],
       modulatorAudioURL: ruttEtraModulatorAudioURL,
       modulatorFramesURL: ruttEtraModulatorFramesURL,
+      modulatorMidiURL: ruttEtraModulatorMidiURL,
       namedModulators: ruttEtraNamedModulators,
       slotModulators: [
         ruttEtraModDepthModulator, ruttEtraModPitchModulator, ruttEtraModThicknessModulator,
@@ -3401,6 +3462,9 @@ final class AppState: ObservableObject {
         ruttEtraCapturedSpec("displacement_depth"),
         ruttEtraCapturedSpec("line_pitch"),
         ruttEtraCapturedSpec("line_thickness"),
+      ],
+      slotMidiCcNumbers: [
+        ruttEtraModDepthMidiCc, ruttEtraModPitchMidiCc, ruttEtraModThicknessMidiCc,
       ],
       effectLabel: "rutt-etra"
     ) else { return }
@@ -3424,6 +3488,7 @@ final class AppState: ObservableObject {
     )
     request.backend = ruttEtraBackend
     request.sourceADirectoryURL = sourceADirectoryURL
+    request.modulatorMidiURL = ruttEtraModulatorMidiURL
 
     statusMessage = "Queueing rutt-etra through morphogen-cli..."
     DispatchQueue.global(qos: .userInitiated).async {
@@ -4603,6 +4668,7 @@ struct NamedModulatorEntry: Identifiable, Equatable {
   var name: String = ""
   var audioURL: URL? = nil
   var framesURL: URL? = nil
+  var midiURL: URL? = nil
 }
 
 enum ModulationSourceOption: String, CaseIterable, Identifiable {
@@ -4621,11 +4687,20 @@ enum ModulationSourceOption: String, CaseIterable, Identifiable {
   /// via `capturedSourceSpec` (a `breakpoints(...)` clause), so it never goes
   /// through `cliValue`. See `docs/PERFORMANCE_CAPTURE_MILESTONE.md`.
   case captured = "Captured"
+  /// MIDI-file sources (docs/MIDI_MODULATION_MILESTONE.md S3). Only slot rows
+  /// that opt in (`midiAvailable`) offer them. `midiCc` needs a per-slot
+  /// controller number, spelled via `midiCcSourceSpec`; the other three go
+  /// through `cliValue` like any media source.
+  case midiCc = "MIDI CC"
+  case midiVelocity = "MIDI Velocity"
+  case midiNoteDensity = "MIDI Density"
+  case midiPitch = "MIDI Pitch"
 
   var id: String { rawValue }
 
-  /// CLI route-grammar spelling; `nil` for `off` (and for `lfo`/`captured`,
-  /// whose spelling is per-slot — see `lfoSourceSpec`/`capturedSourceSpec`).
+  /// CLI route-grammar spelling; `nil` for `off` (and for `lfo`/`captured`/
+  /// `midiCc`, whose spelling is per-slot — see `lfoSourceSpec`/
+  /// `capturedSourceSpec`/`midiCcSourceSpec`).
   var cliValue: String? {
     switch self {
     case .off:
@@ -4644,6 +4719,14 @@ enum ModulationSourceOption: String, CaseIterable, Identifiable {
       return nil
     case .captured:
       return nil
+    case .midiCc:
+      return nil
+    case .midiVelocity:
+      return "midi-velocity"
+    case .midiNoteDensity:
+      return "midi-note-density"
+    case .midiPitch:
+      return "midi-pitch"
     }
   }
 
@@ -4659,6 +4742,17 @@ enum ModulationSourceOption: String, CaseIterable, Identifiable {
   var needsFrames: Bool {
     self == .luma || self == .flow
   }
+
+  var needsMidi: Bool {
+    switch self {
+    case .midiCc, .midiVelocity, .midiNoteDensity, .midiPitch:
+      return true
+    default:
+      return false
+    }
+  }
+
+  var isMidi: Bool { needsMidi }
 }
 
 enum ModulationSamplingOption: String, CaseIterable, Identifiable {
@@ -4772,6 +4866,14 @@ func lfoSourceSpec(shape: LfoShapeOption, rate: Double, phase: Double) -> String
     String(format: "%.6g", locale: Locale(identifier: "en_US_POSIX"), value)
   }
   return "lfo(\(shape.cliValue),\(number(rate)),\(number(phase)))"
+}
+
+/// The exact `midi-cc(<n>)` source clause for the CLI route grammar, or `nil`
+/// when the controller number is out of the MIDI range (mirrors the CLI parse
+/// rule: 0–127). Free function for testability — the `lfoSourceSpec` precedent.
+func midiCcSourceSpec(controller: Int) -> String? {
+  guard (0...127).contains(controller) else { return nil }
+  return "midi-cc(\(controller))"
 }
 
 /// The exact `breakpoints(<t>:<v>[;<t>:<v>...])` source clause for a recorded
