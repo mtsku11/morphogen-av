@@ -89,6 +89,21 @@ final class ProResImageSequenceExporterTests: XCTestCase {
     XCTAssertTrue(summary.contains("@ 12.000 fps"))
   }
 
+  func testRec709ColorPropertiesPinExactTags() {
+    // Tier 5.6 S3 (docs/COLOUR_PIPELINE_MILESTONE.md): the export writer tags
+    // primaries/transfer/matrix as ITU-R 709 explicitly. Pinned so a settings
+    // refactor cannot silently drop or change the tags (an untagged export
+    // probes as color_space=smpte170m with unknown primaries).
+    XCTAssertEqual(
+      ProResImageSequenceExporter.rec709VideoColorProperties(),
+      [
+        AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+        AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+        AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2
+      ]
+    )
+  }
+
   func testExportPNGSequenceWritesTinyProResMovieWhenEncoderIsAvailable() async throws {
     let directory = try makeTemporaryDirectory()
     try writePNGFrame(directory.appendingPathComponent("frame_000000.png"), seed: 0)

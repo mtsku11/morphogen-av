@@ -220,12 +220,27 @@ enum ProResImageSequenceExporter {
     return frames
   }
 
+  /// Explicit Rec.709 colour tags (Tier 5.6 S3, docs/COLOUR_PIPELINE_MILESTONE.md):
+  /// primaries, transfer function, and YCbCr matrix all ITU-R 709, so exports
+  /// land correctly in Resolve/FCP instead of the writer guessing (an untagged
+  /// export probes as color_space=smpte170m / primaries unknown). Metadata
+  /// only — pixel data is untouched (pinned by frame-md5 comparison in the
+  /// milestone evidence). Static + internal so the dictionary is test-pinned.
+  static func rec709VideoColorProperties() -> [String: String] {
+    [
+      AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+      AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+      AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2
+    ]
+  }
+
   private static func videoOutputSettings(for plan: ProResExportPlan) -> [String: Any] {
     [
       AVVideoCodecKey: avVideoCodecType(for: plan.profile),
       AVVideoWidthKey: NSNumber(value: plan.dimensions.width),
       AVVideoHeightKey: NSNumber(value: plan.dimensions.height),
-      AVVideoEncoderSpecificationKey: plan.encoderSpecification
+      AVVideoEncoderSpecificationKey: plan.encoderSpecification,
+      AVVideoColorPropertiesKey: rec709VideoColorProperties()
     ]
   }
 
@@ -441,6 +456,18 @@ enum ProResImageSequenceExporter {
     )
     context.clear(bounds)
     context.draw(image, in: bounds)
+
+    // Both tagging surfaces must agree (docs/COLOUR_PIPELINE_MILESTONE.md S3):
+    // the writer's AVVideoColorPropertiesKey above, and the buffers themselves.
+    CVBufferSetAttachment(
+      pixelBuffer, kCVImageBufferColorPrimariesKey,
+      kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+    CVBufferSetAttachment(
+      pixelBuffer, kCVImageBufferTransferFunctionKey,
+      kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
+    CVBufferSetAttachment(
+      pixelBuffer, kCVImageBufferYCbCrMatrixKey,
+      kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
 
     return pixelBuffer
   }
