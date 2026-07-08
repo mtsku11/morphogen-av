@@ -6,8 +6,8 @@ use metal::{
 use morphogen_render::{
     pyramidal_lucas_kanade_flow_with_refiner, ChannelShiftSettings, FieldParticleSettings,
     FlowFeedbackSettings, FlowField, FluidAdvectSettings, FluidAdvectTwoSourceSettings, GrainPool,
-    GrainSelection, GranularMosaicSettings, ImageBufferF32, PaletteQuantizeSettings, ParticleField,
-    PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError,
+    GrainSelection, GranularMosaicSettings, ImageBufferF32, MatteField, PaletteQuantizeSettings,
+    ParticleField, PixelSortSettings, PyramidalLucasKanadeEstimate, QuantizeMode, RenderError,
     RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection, SortKey,
     StructureMode,
 };
@@ -24,11 +24,12 @@ use crate::{
     FLUID_ADVECT_TWO_SOURCE_SHADER_SOURCE, GRANULAR_MOSAIC_KERNEL_NAME,
     GRANULAR_MOSAIC_POOL_KERNEL_NAME, GRANULAR_MOSAIC_POOL_SHADER_SOURCE,
     GRANULAR_MOSAIC_SHADER_SOURCE, LUCAS_KANADE_REFINE_KERNEL_NAME,
-    LUCAS_KANADE_REFINE_SHADER_SOURCE, PALETTE_QUANTIZE_KERNEL_NAME,
-    PALETTE_QUANTIZE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME, PIXEL_SORT_SHADER_SOURCE,
-    RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE, RUTT_ETRA_KERNEL_NAME,
-    RUTT_ETRA_SHADER_SOURCE, RUTT_ETRA_TWO_SOURCE_KERNEL_NAME, RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE,
-    VIDEO_VOCODER_MATCH_KERNEL_NAME, VIDEO_VOCODER_SHADER_SOURCE,
+    LUCAS_KANADE_REFINE_SHADER_SOURCE, MATTE_BLEND_KERNEL_NAME, MATTE_BLEND_SHADER_SOURCE,
+    PALETTE_QUANTIZE_KERNEL_NAME, PALETTE_QUANTIZE_SHADER_SOURCE, PIXEL_SORT_KERNEL_NAME,
+    PIXEL_SORT_SHADER_SOURCE, RETRO_STATIC_KERNEL_NAME, RETRO_STATIC_SHADER_SOURCE,
+    RUTT_ETRA_KERNEL_NAME, RUTT_ETRA_SHADER_SOURCE, RUTT_ETRA_TWO_SOURCE_KERNEL_NAME,
+    RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE, VIDEO_VOCODER_MATCH_KERNEL_NAME,
+    VIDEO_VOCODER_SHADER_SOURCE,
 };
 
 #[repr(C)]
@@ -158,6 +159,12 @@ struct PaletteQuantizeMetalParams {
     height: u32,
     mode: u32,   // 0 = posterize, 1 = neon palette
     levels: u32, // posterize only; 0 when mode != 0
+}
+
+#[repr(C)]
+struct MatteBlendMetalParams {
+    width: u32,
+    height: u32,
 }
 
 #[repr(C)]
@@ -2499,6 +2506,118 @@ pub fn palette_quantize_metal(
     read_rgba_f32_texture(&output_texture, w, h)
 }
 
+/// Blend `effected` toward `original` per-pixel using `matte` on the GPU:
+/// `out = m*effected + (1-m)*original`, alpha from `effected` — the exact CPU
+/// blend in `morphogen_render::apply_matte`, ported as a trivial gather kernel
+/// (Tier 5.4 S2). The matte field itself stays CPU-computed
+/// (`compute_matte_field`); only the blend runs here.
+pub fn matte_blend_metal(
+    effected: &ImageBufferF32,
+    original: &ImageBufferF32,
+    matte: &MatteField,
+) -> Result<ImageBufferF32, MetalDispatchError> {
+    if effected.width == 0 || effected.height == 0 {
+        return Err(MetalDispatchError::EmptyDimensions);
+    }
+    if effected.width != original.width || effected.height != original.height {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "effected is {}x{}, original is {}x{}",
+            effected.width, effected.height, original.width, original.height
+        )));
+    }
+    if matte.width != effected.width || matte.height != effected.height {
+        return Err(MetalDispatchError::IncompatibleInputs(format!(
+            "matte field is {}x{}, carrier is {}x{}",
+            matte.width, matte.height, effected.width, effected.height
+        )));
+    }
+
+    let w = effected.width;
+    let h = effected.height;
+
+    let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
+    let compile_options = CompileOptions::new();
+    compile_options.set_fast_math_enabled(false);
+    let library = device
+        .new_library_with_source(MATTE_BLEND_SHADER_SOURCE, &compile_options)
+        .map_err(MetalDispatchError::ShaderCompilation)?;
+    let function = library
+        .get_function(MATTE_BLEND_KERNEL_NAME, None)
+        .map_err(MetalDispatchError::FunctionLookup)?;
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(&function)
+        .map_err(MetalDispatchError::PipelineCreation)?;
+
+    let effected_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let original_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let matte_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::R32Float,
+        MTLTextureUsage::ShaderRead,
+    );
+    let output_texture = new_texture(
+        &device,
+        w,
+        h,
+        MTLPixelFormat::RGBA32Float,
+        MTLTextureUsage::ShaderWrite,
+    );
+    upload_rgba_f32_texture(&effected_texture, effected)?;
+    upload_rgba_f32_texture(&original_texture, original)?;
+    upload_r_f32_texture(&matte_texture, &matte.values, w, h)?;
+
+    let params = MatteBlendMetalParams {
+        width: w,
+        height: h,
+    };
+
+    let tg_w = 16_u64.min(w as u64);
+    let tg_h = 16_u64.min(h as u64);
+    let grid_w = div_ceil(w, tg_w as u32) as u64;
+    let grid_h = div_ceil(h, tg_h as u32) as u64;
+
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_texture(0, Some(&effected_texture));
+    encoder.set_texture(1, Some(&original_texture));
+    encoder.set_texture(2, Some(&matte_texture));
+    encoder.set_texture(3, Some(&output_texture));
+    encoder.set_bytes(
+        0,
+        std::mem::size_of::<MatteBlendMetalParams>() as u64,
+        (&params as *const MatteBlendMetalParams).cast(),
+    );
+    encoder.dispatch_thread_groups(MTLSize::new(grid_w, grid_h, 1), MTLSize::new(tg_w, tg_h, 1));
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let status = command_buffer.status();
+    if status != MTLCommandBufferStatus::Completed {
+        return Err(MetalDispatchError::CommandBufferFailed(format!(
+            "{status:?}"
+        )));
+    }
+
+    read_rgba_f32_texture(&output_texture, w, h)
+}
+
 #[cfg(test)]
 mod tests {
     use morphogen_render::{
@@ -3614,6 +3733,56 @@ mod tests {
             Err(e) => panic!("palette_quantize_metal (palette) failed: {e}"),
         };
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_matte_blend_matches_cpu_reference() {
+        use morphogen_render::{apply_matte, compute_matte_field, MatteSource};
+
+        // Textured, distinct effected/original frames so the blend is
+        // non-trivial in every channel; matte-media frame is half-black/
+        // half-white so the a-luma field varies spatially (the half-frame
+        // readout shape, on a small fixture).
+        let effected = ImageBufferF32::from_fn(16, 16, |x, y| {
+            let v = 0.5 + 0.3 * (0.4 * x as f32).sin() + 0.2 * (0.3 * y as f32).cos();
+            [v, v * 0.5, 1.0 - v, 1.0]
+        })
+        .expect("effected fixture");
+        let original = ImageBufferF32::from_fn(16, 16, |x, y| {
+            let v = 0.2 + 0.1 * x as f32 / 16.0 + 0.1 * y as f32 / 16.0;
+            [1.0 - v, v, v * 0.7, 1.0]
+        })
+        .expect("original fixture");
+        let matte_media = ImageBufferF32::from_fn(16, 16, |x, _y| {
+            if x < 8 {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            }
+        })
+        .expect("matte media fixture");
+
+        let field =
+            compute_matte_field(None, &matte_media, MatteSource::ALuma, 1.0).expect("matte field");
+        let cpu = apply_matte(&effected, &original, &field).expect("cpu blend");
+        let gpu = match matte_blend_metal(&effected, &original, &field) {
+            Ok(img) => img,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!("skipping Metal matte blend: no Metal device");
+                return;
+            }
+            Err(e) => panic!("matte_blend_metal failed: {e}"),
+        };
+        assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+
+        // Sanity: the two halves must actually differ (else the test would
+        // pass trivially even with a broken blend).
+        let left_gpu = gpu.pixels[8]; // (x=8,y=0) is inside the white half
+        let right_gpu = gpu.pixels[0]; // (x=0,y=0) is inside the black half
+        assert_ne!(
+            left_gpu, right_gpu,
+            "matte-driven halves must diverge in the blended output"
+        );
     }
 
     #[test]

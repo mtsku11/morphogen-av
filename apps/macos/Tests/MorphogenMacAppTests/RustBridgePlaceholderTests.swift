@@ -1978,6 +1978,55 @@ final class RustBridgePlaceholderTests: XCTestCase {
       try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request))
   }
 
+  func testQueuedRuttEtraSequenceMatteArgumentsEmittedWhenActive() throws {
+    // Tier 5.4 S2: an active matte emits the three flags; gain rides =-joined
+    // (the clap negative-number precedent, though gain is non-negative).
+    var request = makeRuttEtraRequest()
+    request.matteSource = .aLuma
+    request.matteFramesURL = URL(fileURLWithPath: "/tmp/matte-frames", isDirectory: true)
+    request.matteGain = 1.5
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    let matteIdx = try XCTUnwrap(arguments.firstIndex(of: "--matte"))
+    XCTAssertEqual(arguments[matteIdx + 1], "a-luma")
+    let framesIdx = try XCTUnwrap(arguments.firstIndex(of: "--matte-frames"))
+    XCTAssertEqual(arguments[framesIdx + 1], "/tmp/matte-frames")
+    XCTAssertTrue(arguments.contains("--matte-gain=1.5"))
+  }
+
+  func testQueuedRuttEtraSequenceMatteFallsBackToSourceA() throws {
+    // Two-source rutt-etra: no matte-frames dir needed — the CLI defaults to
+    // --source-a-dir, so the bridge omits --matte-frames and does not throw.
+    var request = makeRuttEtraRequest()
+    request.sourceADirectoryURL = URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true)
+    request.matteSource = .aFlow
+
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request)
+
+    XCTAssertTrue(arguments.contains("--matte"))
+    XCTAssertFalse(arguments.contains("--matte-frames"))
+  }
+
+  func testQueuedRuttEtraSequenceMatteWithoutFramesOrSourceAThrows() {
+    var request = makeRuttEtraRequest()
+    request.matteSource = .aEdge
+    // No matte frames, no Source A fallback — refuse before any launch.
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(request: request))
+  }
+
+  func testQueuedRuttEtraSequenceNoMatteKeepsArgumentsByteIdentical() throws {
+    // .off (the default) emits none of the three flags — the no-matte shape
+    // is byte-identical to pre-slice (the exact array is pinned in
+    // testQueuedRuttEtraSequenceArgumentsIncludeKnobs).
+    let arguments = try RustBridgePlaceholder.queueAddRuttEtraSequenceArguments(
+      request: makeRuttEtraRequest())
+    XCTAssertFalse(arguments.contains("--matte"))
+    XCTAssertFalse(arguments.contains("--matte-frames"))
+    XCTAssertFalse(arguments.contains { $0.hasPrefix("--matte-gain") })
+  }
+
   func testMidiCcSourceSpecValidatesRange() {
     XCTAssertEqual(midiCcSourceSpec(controller: 0), "midi-cc(0)")
     XCTAssertEqual(midiCcSourceSpec(controller: 74), "midi-cc(74)")

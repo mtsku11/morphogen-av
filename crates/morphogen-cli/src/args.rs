@@ -2512,6 +2512,19 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// Spatial matte source: gate the effect's blend per-pixel instead of
+        /// uniformly (docs/SPATIAL_MATTE_MILESTONE.md). Requires --matte-frames
+        /// (or --source-a-dir, used as the default matte media).
+        #[arg(long)]
+        matte: Option<CliMatteSource>,
+        /// Matte-media PNG frame directory analyzed by --matte. Defaults to
+        /// --source-a-dir when set; required otherwise. Error without --matte.
+        #[arg(long)]
+        matte_frames: Option<PathBuf>,
+        /// Matte gain applied after the source's fixed normalization/lift, before
+        /// clamp to [0,1]. Finite, >= 0. Error without --matte.
+        #[arg(long)]
+        matte_gain: Option<f32>,
     },
     QueueRunChannelShiftSequence {
         queue_path: PathBuf,
@@ -2564,6 +2577,19 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// Spatial matte source: gate the effect's blend per-pixel instead of
+        /// uniformly (docs/SPATIAL_MATTE_MILESTONE.md). Requires --matte-frames
+        /// (no Source A default on this single-source command).
+        #[arg(long)]
+        matte: Option<CliMatteSource>,
+        /// Matte-media PNG frame directory analyzed by --matte. Required when
+        /// --matte is set. Error without --matte.
+        #[arg(long)]
+        matte_frames: Option<PathBuf>,
+        /// Matte gain applied after the source's fixed normalization/lift, before
+        /// clamp to [0,1]. Finite, >= 0. Error without --matte.
+        #[arg(long)]
+        matte_gain: Option<f32>,
     },
     QueueRunPaletteQuantizeSequence {
         queue_path: PathBuf,
@@ -2631,6 +2657,19 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// Spatial matte source: gate the effect's blend per-pixel instead of
+        /// uniformly (docs/SPATIAL_MATTE_MILESTONE.md). Requires --matte-frames
+        /// (or --source-a-dir, used as the default matte media).
+        #[arg(long)]
+        matte: Option<CliMatteSource>,
+        /// Matte-media PNG frame directory analyzed by --matte. Defaults to
+        /// --source-a-dir when set; required otherwise. Error without --matte.
+        #[arg(long)]
+        matte_frames: Option<PathBuf>,
+        /// Matte gain applied after the source's fixed normalization/lift, before
+        /// clamp to [0,1]. Finite, >= 0. Error without --matte.
+        #[arg(long)]
+        matte_gain: Option<f32>,
     },
     QueueRunRuttEtraSequence {
         queue_path: PathBuf,

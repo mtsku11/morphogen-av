@@ -48,10 +48,10 @@ use morphogen_render::{
     FieldParticleSettings, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
     FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GeneratorPreset,
     GeneratorSettings, GrainColorDescriptor, GrainDescriptor, GrainPool, GrainSelection,
-    GranularMosaicSettings, ImageBufferF32, MaskSource, MatteSource, PaletteQuantizeSettings,
-    ParticleField, PixelSortSettings, PoolSelectionWindow, QuantizeMode, RetroStaticSettings,
-    RmsDisplacementEnvelope, RuttEtraSettings, ScanlineSmearSettings, TemporalCoherence,
-    VectorRemixMode, VideoVocoderSettings, CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
+    GranularMosaicSettings, ImageBufferF32, MaskSource, MatteField, MatteSource,
+    PaletteQuantizeSettings, ParticleField, PixelSortSettings, PoolSelectionWindow, QuantizeMode,
+    RetroStaticSettings, RmsDisplacementEnvelope, RuttEtraSettings, ScanlineSmearSettings,
+    TemporalCoherence, VectorRemixMode, VideoVocoderSettings, CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
     DATAMOSH_CODEC_ENGRAVE_ALGORITHM, DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
     GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
@@ -6106,7 +6106,7 @@ pub(crate) struct MatteConfig<'a> {
 /// resolve the matte-media frame list. `fallback_dir` is `--source-a-dir` on
 /// commands that have one (used as the default matte media); `None` on
 /// palette-quantize, which has no Source A concept.
-fn resolve_matte_config<'a>(
+pub(crate) fn resolve_matte_config<'a>(
     matte: Option<MatteSource>,
     matte_frames: Option<&'a Path>,
     matte_gain: Option<f32>,
@@ -6155,7 +6155,7 @@ fn resolve_matte_config<'a>(
 }
 
 /// CLI-facing label for a matte source, matching the `--matte` flag spelling.
-fn matte_source_label(source: MatteSource) -> &'static str {
+pub(crate) fn matte_source_label(source: MatteSource) -> &'static str {
     match source {
         MatteSource::ALuma => "a-luma",
         MatteSource::AFlow => "a-flow",
@@ -6163,22 +6163,77 @@ fn matte_source_label(source: MatteSource) -> &'static str {
     }
 }
 
+/// Parse a persisted queue-job matte source label (the inverse of
+/// [`matte_source_label`]) back into a [`MatteSource`].
+pub(crate) fn parse_matte_source_label(label: &str) -> Result<MatteSource, CliError> {
+    match label {
+        "a-luma" => Ok(MatteSource::ALuma),
+        "a-flow" => Ok(MatteSource::AFlow),
+        "a-edge" => Ok(MatteSource::AEdge),
+        other => Err(CliError::Message(format!(
+            "queue job has an unrecognized matte source: {other}"
+        ))),
+    }
+}
+
 /// Load the matte-media frame at `index`, compute its per-pixel field against
 /// `prev_matte_frame` (the previous matte-media frame; `None` at frame 0 — the
 /// declared a-flow frame-zero rule), and blend `effected` toward `original`
 /// (the carrier before the effect). Returns the blended frame and the loaded
-/// matte-media frame (to become the next call's `prev_matte_frame`).
+/// matte-media frame (to become the next call's `prev_matte_frame`). The
+/// blend itself runs on `backend` (Tier 5.4 S2): CPU calls `apply_matte`
+/// directly; Metal dispatches the parity-gated `matte_blend` kernel. The
+/// matte *field* compute (`compute_matte_field`, above) stays CPU on both
+/// backends — only the blend is ported (the milestone's declared scope).
 fn apply_matte_to_frame(
     config: &MatteConfig<'_>,
     index: usize,
     prev_matte_frame: Option<&ImageBufferF32>,
     effected: &ImageBufferF32,
     original: &ImageBufferF32,
+    backend: RenderBackend,
 ) -> Result<(ImageBufferF32, ImageBufferF32), CliError> {
     let matte_current = load_image_f32(&config.frames[index])?;
     let field = compute_matte_field(prev_matte_frame, &matte_current, config.source, config.gain)?;
-    let blended = apply_matte(effected, original, &field)?;
+    let blended = match backend {
+        RenderBackend::Cpu => apply_matte(effected, original, &field)?,
+        RenderBackend::Metal => render_matte_blend_frame_metal(effected, original, &field)?,
+    };
     Ok((blended, matte_current))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn render_matte_blend_frame_metal(
+    effected: &ImageBufferF32,
+    original: &ImageBufferF32,
+    field: &MatteField,
+) -> Result<ImageBufferF32, CliError> {
+    let gpu = morphogen_metal::matte_blend_metal(effected, original, field)?;
+    let cpu = apply_matte(effected, original, field)?;
+    let difference = gpu.max_channel_difference(&cpu).ok_or_else(|| {
+        CliError::Message(
+            "Metal and CPU matte blend outputs have mismatched dimensions; cannot verify parity"
+                .to_string(),
+        )
+    })?;
+    if difference > METAL_CPU_PARITY_EPSILON {
+        return Err(CliError::Message(format!(
+            "Metal matte blend diverged from CPU reference by {difference} \
+             (tolerance {METAL_CPU_PARITY_EPSILON})"
+        )));
+    }
+    Ok(gpu)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn render_matte_blend_frame_metal(
+    _effected: &ImageBufferF32,
+    _original: &ImageBufferF32,
+    _field: &MatteField,
+) -> Result<ImageBufferF32, CliError> {
+    Err(CliError::Message(
+        "the Metal backend is only available on macOS; use --backend cpu".to_string(),
+    ))
 }
 
 /// Add the `matte` block to a manifest JSON object when a matte is active.
@@ -6320,6 +6375,7 @@ pub(crate) fn render_channel_shift_sequence(
                     prev_matte_frame.as_ref(),
                     &rendered,
                     &source_b,
+                    request.backend,
                 )?;
                 prev_matte_frame = Some(matte_current);
                 blended
@@ -6587,6 +6643,7 @@ pub(crate) fn render_palette_quantize_sequence(
                     prev_matte_frame.as_ref(),
                     &rendered,
                     &source_b,
+                    request.backend,
                 )?;
                 prev_matte_frame = Some(matte_current);
                 blended
@@ -6836,6 +6893,7 @@ pub(crate) fn render_rutt_etra_sequence(
                     prev_matte_frame.as_ref(),
                     &rendered,
                     &source_b,
+                    request.backend,
                 )?;
                 prev_matte_frame = Some(matte_current);
                 blended

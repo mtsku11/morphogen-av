@@ -45,6 +45,8 @@ pub const RUTT_ETRA_SHADER_SOURCE: &str = include_str!("../shaders/rutt_etra_sca
 pub const RUTT_ETRA_TWO_SOURCE_KERNEL_NAME: &str = "rutt_etra_two_source";
 pub const RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE: &str =
     include_str!("../shaders/rutt_etra_two_source.metal");
+pub const MATTE_BLEND_KERNEL_NAME: &str = "matte_blend";
+pub const MATTE_BLEND_SHADER_SOURCE: &str = include_str!("../shaders/matte_blend.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowDisplaceDispatchPlan {
@@ -187,6 +189,10 @@ pub enum MetalDispatchError {
     MissingRuttEtraBindingLayout,
     #[error("invalid rutt-etra settings: {0}")]
     InvalidRuttEtraSettings(String),
+    #[error("matte_blend.metal does not contain the expected kernel entry point")]
+    MissingMatteBlendKernelEntryPoint,
+    #[error("matte_blend.metal does not contain the expected texture and buffer bindings")]
+    MissingMatteBlendBindingLayout,
 }
 
 impl FlowDisplaceDispatchPlan {
@@ -587,6 +593,24 @@ pub fn validate_rutt_etra_two_source_shader_source() -> Result<(), MetalDispatch
     ] {
         if !RUTT_ETRA_TWO_SOURCE_SHADER_SOURCE.contains(expected) {
             return Err(MetalDispatchError::MissingRuttEtraBindingLayout);
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_matte_blend_shader_source() -> Result<(), MetalDispatchError> {
+    if !MATTE_BLEND_SHADER_SOURCE.contains("kernel void matte_blend") {
+        return Err(MetalDispatchError::MissingMatteBlendKernelEntryPoint);
+    }
+    for expected in [
+        "texture2d<float, access::read>  effected [[texture(0)]]",
+        "texture2d<float, access::read>  original [[texture(1)]]",
+        "texture2d<float, access::read>  matte    [[texture(2)]]",
+        "texture2d<float, access::write> output   [[texture(3)]]",
+        "constant MatteBlendParams&      params   [[buffer(0)]]",
+    ] {
+        if !MATTE_BLEND_SHADER_SOURCE.contains(expected) {
+            return Err(MetalDispatchError::MissingMatteBlendBindingLayout);
         }
     }
     Ok(())

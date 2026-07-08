@@ -26,7 +26,8 @@ use morphogen_render::{
     ChannelShiftSettings, CoagulationFlowSource, CoagulationSettings, ConvolutionBlendSettings,
     DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, LfoShape,
-    MaskSource, ModulationSampling, ModulationSource, PaletteQuantizeSettings, PixelSortSettings,
+    MaskSource, MatteSource, ModulationSampling, ModulationSource, PaletteQuantizeSettings,
+    PixelSortSettings,
     QuantizeMode, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
     SortKey, StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM,
     COAGULATED_BLEND_ALGORITHM, CASCADE_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM,
@@ -3515,6 +3516,12 @@ pub(crate) struct QueueAddChannelShiftSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// Spatial matte source (Tier 5.4 S2). `None` = no matte.
+    pub(crate) matte: Option<MatteSource>,
+    /// Matte-media frame directory. Defaults to `source_a_dir` when unset.
+    pub(crate) matte_frames: Option<&'a Path>,
+    /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
+    pub(crate) matte_gain: Option<f32>,
 }
 
 pub(crate) fn queue_add_channel_shift_sequence(
@@ -3532,6 +3539,17 @@ pub(crate) fn queue_add_channel_shift_sequence(
             "flow-driven channel shift is CPU-only; use --backend cpu".to_string(),
         ));
     }
+
+    // Fail-fast matte validation (mirrors the direct CLI): rejects before
+    // anything is persisted. The resolved frame list itself is discarded —
+    // queue-run re-resolves it against the actual clamped frame count.
+    resolve_matte_config(
+        request.matte,
+        request.matte_frames,
+        request.matte_gain,
+        request.source_a_dir,
+        request.frames as usize,
+    )?;
 
     let modulation = parse_queue_modulation_routes(
         request.modulate,
@@ -3588,6 +3606,11 @@ pub(crate) fn queue_add_channel_shift_sequence(
                 .modulator_midi
                 .map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            matte_source: request.matte.map(matte_source_label).map(str::to_string),
+            matte_frames: request
+                .matte_frames
+                .map(|p| p.to_string_lossy().to_string()),
+            matte_gain: request.matte_gain,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3651,6 +3674,9 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        matte_source,
+        matte_frames,
+        matte_gain,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3703,10 +3729,12 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
-            // Matte is not yet wired into the queue path (Tier 5.4 S2).
-            matte: None,
-            matte_frames: None,
-            matte_gain: None,
+            matte: matte_source
+                .as_deref()
+                .map(parse_matte_source_label)
+                .transpose()?,
+            matte_frames: matte_frames.as_deref().map(Path::new),
+            matte_gain,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": algorithm,
@@ -3764,6 +3792,13 @@ pub(crate) struct QueueAddPaletteQuantizeSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// Spatial matte source (Tier 5.4 S2). `None` = no matte.
+    pub(crate) matte: Option<MatteSource>,
+    /// Matte-media frame directory. No Source A default on this single-source
+    /// command — required when `matte` is set.
+    pub(crate) matte_frames: Option<&'a Path>,
+    /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
+    pub(crate) matte_gain: Option<f32>,
 }
 
 pub(crate) fn queue_add_palette_quantize_sequence(
@@ -3775,6 +3810,16 @@ pub(crate) fn queue_add_palette_quantize_sequence(
             "levels must be >= 2 for posterize mode".to_string(),
         ));
     }
+
+    // Fail-fast matte validation (mirrors the direct CLI): rejects before
+    // anything is persisted.
+    resolve_matte_config(
+        request.matte,
+        request.matte_frames,
+        request.matte_gain,
+        None,
+        request.frames as usize,
+    )?;
 
     let modulation = parse_queue_modulation_routes(
         request.modulate,
@@ -3822,6 +3867,11 @@ pub(crate) fn queue_add_palette_quantize_sequence(
                 .modulator_midi
                 .map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            matte_source: request.matte.map(matte_source_label).map(str::to_string),
+            matte_frames: request
+                .matte_frames
+                .map(|p| p.to_string_lossy().to_string()),
+            matte_gain: request.matte_gain,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -3878,6 +3928,9 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        matte_source,
+        matte_frames,
+        matte_gain,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -3918,10 +3971,12 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
-            // Matte is not yet wired into the queue path (Tier 5.4 S2).
-            matte: None,
-            matte_frames: None,
-            matte_gain: None,
+            matte: matte_source
+                .as_deref()
+                .map(parse_matte_source_label)
+                .transpose()?,
+            matte_frames: matte_frames.as_deref().map(Path::new),
+            matte_gain,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": PALETTE_QUANTIZE_ALGORITHM,
@@ -3994,6 +4049,12 @@ pub(crate) struct QueueAddRuttEtraSequenceRequest<'a> {
     pub(crate) named_modulator_audio: &'a [String],
     pub(crate) named_modulator_frames: &'a [String],
     pub(crate) named_modulator_midi: &'a [String],
+    /// Spatial matte source (Tier 5.4 S2). `None` = no matte.
+    pub(crate) matte: Option<MatteSource>,
+    /// Matte-media frame directory. Defaults to `source_a_dir` when unset.
+    pub(crate) matte_frames: Option<&'a Path>,
+    /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
+    pub(crate) matte_gain: Option<f32>,
 }
 
 pub(crate) fn queue_add_rutt_etra_sequence(
@@ -4001,6 +4062,16 @@ pub(crate) fn queue_add_rutt_etra_sequence(
 ) -> Result<(), CliError> {
     validate_queued_sequence_timing(request.frames, request.frame_rate)?;
     request.settings.validate()?;
+
+    // Fail-fast matte validation (mirrors the direct CLI): rejects before
+    // anything is persisted.
+    resolve_matte_config(
+        request.matte,
+        request.matte_frames,
+        request.matte_gain,
+        request.source_a_dir,
+        request.frames as usize,
+    )?;
 
     let modulation = parse_queue_modulation_routes(
         request.modulate,
@@ -4053,6 +4124,11 @@ pub(crate) fn queue_add_rutt_etra_sequence(
                 .modulator_midi
                 .map(|p| p.to_string_lossy().to_string()),
             named_modulator_midi: modulation.named_midi,
+            matte_source: request.matte.map(matte_source_label).map(str::to_string),
+            matte_frames: request
+                .matte_frames
+                .map(|p| p.to_string_lossy().to_string()),
+            matte_gain: request.matte_gain,
         },
         provenance: Some(single_source_provenance(
             "source-frames",
@@ -4110,6 +4186,9 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
         named_modulator_audio,
         named_modulator_frames,
         named_modulator_midi,
+        matte_source,
+        matte_frames,
+        matte_gain,
     } = queue.jobs[job_index].task.clone()
     else {
         return Err(CliError::Message(
@@ -4153,10 +4232,12 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
-            // Matte is not yet wired into the queue path (Tier 5.4 S2).
-            matte: None,
-            matte_frames: None,
-            matte_gain: None,
+            matte: matte_source
+                .as_deref()
+                .map(parse_matte_source_label)
+                .transpose()?,
+            matte_frames: matte_frames.as_deref().map(Path::new),
+            matte_gain,
         })?;
         let algorithm = match (source_a_directory.is_some(), backend) {
             (true, RenderBackend::Cpu) => RUTT_ETRA_TWO_SOURCE_ALGORITHM,

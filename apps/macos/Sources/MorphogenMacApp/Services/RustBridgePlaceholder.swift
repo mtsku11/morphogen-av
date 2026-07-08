@@ -2161,6 +2161,13 @@ enum RustBridgePlaceholder {
       sampling: request.modulationSampling,
       namedModulators: request.namedModulators
     )
+    try appendMatteArguments(
+      &arguments,
+      source: request.matteSource,
+      framesURL: request.matteFramesURL,
+      hasSourceAFallback: request.flowGain != 0 && request.sourceADirectoryURL != nil,
+      gain: request.matteGain
+    )
 
     return arguments
   }
@@ -2244,6 +2251,13 @@ enum RustBridgePlaceholder {
       modulatorFramesURL: request.modulatorFramesURL,
       sampling: request.modulationSampling,
       namedModulators: request.namedModulators
+    )
+    try appendMatteArguments(
+      &arguments,
+      source: request.matteSource,
+      framesURL: request.matteFramesURL,
+      hasSourceAFallback: false,
+      gain: request.matteGain
     )
     return arguments
   }
@@ -2341,6 +2355,13 @@ enum RustBridgePlaceholder {
       modulatorMidiURL: request.modulatorMidiURL,
       sampling: request.modulationSampling,
       namedModulators: request.namedModulators
+    )
+    try appendMatteArguments(
+      &arguments,
+      source: request.matteSource,
+      framesURL: request.matteFramesURL,
+      hasSourceAFallback: request.sourceADirectoryURL != nil,
+      gain: request.matteGain
     )
     return arguments
   }
@@ -3362,6 +3383,37 @@ enum RustBridgePlaceholder {
     arguments.append(sampling.cliValue)
   }
 
+  /// Append `--matte`/`--matte-frames`/`--matte-gain` when a matte source is
+  /// active (Tier 5.4 S2, docs/SPATIAL_MATTE_MILESTONE.md). `.off` emits
+  /// nothing, so no-matte call sites keep byte-identical argument arrays.
+  /// `hasSourceAFallback` mirrors the CLI's own default (rutt-etra/channel-
+  /// shift fall back to `--source-a-dir` when `--matte-frames` is unset;
+  /// palette-quantize has no such fallback and must pass `false`).
+  private static func appendMatteArguments(
+    _ arguments: inout [String],
+    source: MatteSourceOption,
+    framesURL: URL?,
+    hasSourceAFallback: Bool,
+    gain: Double
+  ) throws {
+    guard let cliValue = source.cliValue else { return }
+    guard framesURL != nil || hasSourceAFallback else {
+      throw RustBridgeError.invalidFrameSequenceRequest(
+        "--matte requires matte frames (or a Source A directory, when available)"
+      )
+    }
+    guard gain.isFinite && gain >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("matte gain must be finite and >= 0")
+    }
+    arguments.append("--matte")
+    arguments.append(cliValue)
+    if let framesURL = framesURL {
+      arguments.append("--matte-frames")
+      arguments.append(framesURL.path)
+    }
+    arguments.append("--matte-gain=\(cliNumber(gain))")
+  }
+
   private static func validateFluidSequenceFrames(_ frames: Int, frameRate: Double) throws {
     guard frames > 0 else {
       throw RustBridgeError.invalidFrameSequenceRequest("frame count must be greater than zero")
@@ -3949,6 +4001,11 @@ struct ChannelShiftSequenceRenderQueueCommandRequest {
   // Declared named modulators; defaulted empty so call sites predating the
   // named-modulator UI keep their single-modulator meaning.
   var namedModulators: [NamedModulatorMediaSpec] = []
+  // Spatial matte (Tier 5.4 S2). `.off` = no `--matte` flag at all, so call
+  // sites predating this slice keep byte-identical argument arrays.
+  var matteSource: MatteSourceOption = .off
+  var matteFramesURL: URL? = nil
+  var matteGain: Double = 1.0
 }
 
 struct PaletteQuantizeSequenceRenderQueueCommandRequest {
@@ -3969,6 +4026,11 @@ struct PaletteQuantizeSequenceRenderQueueCommandRequest {
   var modulatorFramesURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
   var namedModulators: [NamedModulatorMediaSpec] = []
+  // Spatial matte (Tier 5.4 S2). No Source A concept on this single-source
+  // command — matte frames must be given explicitly.
+  var matteSource: MatteSourceOption = .off
+  var matteFramesURL: URL? = nil
+  var matteGain: Double = 1.0
 }
 
 struct RuttEtraSequenceRenderQueueCommandRequest {
@@ -4003,6 +4065,11 @@ struct RuttEtraSequenceRenderQueueCommandRequest {
   var modulatorMidiURL: URL? = nil
   var modulationSampling: ModulationSamplingOption = .hold
   var namedModulators: [NamedModulatorMediaSpec] = []
+  // Spatial matte (Tier 5.4 S2). Frames default to `sourceADirectoryURL` at
+  // the CLI when unset.
+  var matteSource: MatteSourceOption = .off
+  var matteFramesURL: URL? = nil
+  var matteGain: Double = 1.0
 }
 
 enum CoagulationFlowSourceOption: String, CaseIterable, Identifiable {

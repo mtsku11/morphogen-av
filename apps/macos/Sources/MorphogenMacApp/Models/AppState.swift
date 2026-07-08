@@ -460,6 +460,12 @@ final class AppState: ObservableObject {
   // single default `channelShiftModulator*URL`. Empty = only the default is
   // available (panels predating this stay visually unchanged).
   @Published var channelShiftNamedModulators: [NamedModulatorEntry] = []
+  // Spatial matte (Tier 5.4 S2): gate the effect's blend per-pixel instead of
+  // uniformly. Off = no matte (byte-identical to pre-slice behaviour). Frames
+  // default to Source A (the flow-driven mode's modulator dir) when unset.
+  @Published var channelShiftMatteSource = MatteSourceOption.off
+  @Published var channelShiftMatteFramesURL: URL?
+  @Published var channelShiftMatteGain = 1.0
   // Palette Quantize — posterize levels / neon-palette colour collapse.
   // Levels default 8 (visible posterize) rather than the CLI's 256 passthrough
   // so the first Run shows the effect; 256 stays reachable as the off case.
@@ -484,6 +490,11 @@ final class AppState: ObservableObject {
   @Published var paletteQuantizeModulatorFramesURL: URL?
   @Published var paletteQuantizeModSampling = ModulationSamplingOption.hold
   @Published var paletteQuantizeNamedModulators: [NamedModulatorEntry] = []
+  // Spatial matte (Tier 5.4 S2). No Source A concept on this single-source
+  // command — matte frames must be chosen explicitly.
+  @Published var paletteQuantizeMatteSource = MatteSourceOption.off
+  @Published var paletteQuantizeMatteFramesURL: URL?
+  @Published var paletteQuantizeMatteGain = 1.0
   // Rutt-Etra — luma-displaced scanlines on black (CPU-only; no backend
   // picker until the Metal slice lands).
   @Published var ruttEtraLinePitch = 8
@@ -533,6 +544,11 @@ final class AppState: ObservableObject {
   @Published var ruttEtraModThicknessMidiCc = 74
   @Published var ruttEtraModSampling = ModulationSamplingOption.hold
   @Published var ruttEtraNamedModulators: [NamedModulatorEntry] = []
+  // Spatial matte (Tier 5.4 S2). Frames default to Source A (the two-source
+  // modulator dir) when unset and Two-Source is on.
+  @Published var ruttEtraMatteSource = MatteSourceOption.off
+  @Published var ruttEtraMatteFramesURL: URL?
+  @Published var ruttEtraMatteGain = 1.0
   // Performance capture (docs/PERFORMANCE_CAPTURE_MILESTONE.md): recorded
   // takes keyed by Rutt-Etra target name; re-recording replaces (the MVP edit
   // story). The strip state lives here (not the view) so takes survive view
@@ -2534,6 +2550,18 @@ final class AppState: ObservableObject {
     statusMessage = "Channel-shift modulator frames selected: \(url.lastPathComponent)"
   }
 
+  func chooseChannelShiftMatteFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Matte Frames",
+      message: "Select the frame directory analyzed for the spatial matte field."
+    ) else {
+      statusMessage = "Matte frames selection cancelled."
+      return
+    }
+    channelShiftMatteFramesURL = url
+    statusMessage = "Channel-shift matte frames selected: \(url.lastPathComponent)"
+  }
+
   /// Non-empty declared names for the channel-shift slots' Modulator pickers.
   var channelShiftDeclaredModulatorNames: [String] {
     channelShiftNamedModulators.map(\.name).filter { !$0.isEmpty }
@@ -3093,6 +3121,18 @@ final class AppState: ObservableObject {
     statusMessage = "Palette-quantize modulator frames selected: \(url.lastPathComponent)"
   }
 
+  func choosePaletteQuantizeMatteFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Matte Frames",
+      message: "Select the frame directory analyzed for the spatial matte field."
+    ) else {
+      statusMessage = "Matte frames selection cancelled."
+      return
+    }
+    paletteQuantizeMatteFramesURL = url
+    statusMessage = "Palette-quantize matte frames selected: \(url.lastPathComponent)"
+  }
+
   func chooseRuttEtraModulatorWAV() {
     guard let url = MediaFilePicker.chooseWAVFile(
       title: "Choose Modulator WAV",
@@ -3127,6 +3167,18 @@ final class AppState: ObservableObject {
     }
     ruttEtraModulatorFramesURL = url
     statusMessage = "Rutt-etra modulator frames selected: \(url.lastPathComponent)"
+  }
+
+  func chooseRuttEtraMatteFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Matte Frames",
+      message: "Select the frame directory analyzed for the spatial matte field."
+    ) else {
+      statusMessage = "Matte frames selection cancelled."
+      return
+    }
+    ruttEtraMatteFramesURL = url
+    statusMessage = "Rutt-etra matte frames selected: \(url.lastPathComponent)"
   }
 
   func choosePixelSortModulatorWAV() {
@@ -3240,6 +3292,13 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source A frame directory before rendering flow-driven channel shift."
       return
     }
+    let channelShiftSourceADirectoryURL = channelShiftFlowGain != 0 ? effectiveModulatorURL() : nil
+    if channelShiftMatteSource != .off && channelShiftMatteFramesURL == nil
+      && channelShiftSourceADirectoryURL == nil {
+      statusMessage =
+        "Select matte frames (or a Source A directory) before rendering a matted channel shift."
+      return
+    }
     guard let routes = modulationRoutes(
       slots: [
         (
@@ -3290,7 +3349,7 @@ final class AppState: ObservableObject {
       shiftGY: channelShiftGY,
       shiftBX: channelShiftBX,
       shiftBY: channelShiftBY,
-      sourceADirectoryURL: channelShiftFlowGain != 0 ? effectiveModulatorURL() : nil,
+      sourceADirectoryURL: channelShiftSourceADirectoryURL,
       flowGain: channelShiftFlowGain,
       flowRadius: channelShiftFlowRadius,
       backend: channelShiftBackend,
@@ -3299,7 +3358,10 @@ final class AppState: ObservableObject {
       modulatorAudioURL: channelShiftModulatorAudioURL,
       modulatorFramesURL: channelShiftModulatorFramesURL,
       modulationSampling: channelShiftModSampling,
-      namedModulators: namedModulatorSpecs(channelShiftNamedModulators)
+      namedModulators: namedModulatorSpecs(channelShiftNamedModulators),
+      matteSource: channelShiftMatteSource,
+      matteFramesURL: channelShiftMatteFramesURL,
+      matteGain: channelShiftMatteGain
     )
 
     statusMessage = "Queueing channel shift through morphogen-cli..."
@@ -3333,6 +3395,12 @@ final class AppState: ObservableObject {
     }
     guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
       statusMessage = "Choose a frame sequence output directory before rendering palette quantize."
+      return
+    }
+    // No Source A concept on this single-source command — matte frames must
+    // be chosen explicitly.
+    if paletteQuantizeMatteSource != .off && paletteQuantizeMatteFramesURL == nil {
+      statusMessage = "Select matte frames before rendering a matted palette quantize."
       return
     }
     let modeMapping = enumModulationMapping(
@@ -3373,7 +3441,10 @@ final class AppState: ObservableObject {
       modulatorAudioURL: paletteQuantizeModulatorAudioURL,
       modulatorFramesURL: paletteQuantizeModulatorFramesURL,
       modulationSampling: paletteQuantizeModSampling,
-      namedModulators: namedModulatorSpecs(paletteQuantizeNamedModulators)
+      namedModulators: namedModulatorSpecs(paletteQuantizeNamedModulators),
+      matteSource: paletteQuantizeMatteSource,
+      matteFramesURL: paletteQuantizeMatteFramesURL,
+      matteGain: paletteQuantizeMatteGain
     )
 
     statusMessage = "Queueing palette quantize through morphogen-cli..."
@@ -3424,6 +3495,11 @@ final class AppState: ObservableObject {
         return
       }
       sourceADirectoryURL = modulatorURL
+    }
+    if ruttEtraMatteSource != .off && ruttEtraMatteFramesURL == nil && sourceADirectoryURL == nil {
+      statusMessage =
+        "Select matte frames (or turn on Two-Source) before rendering a matted rutt-etra."
+      return
     }
     guard let routes = modulationRoutes(
       slots: [
@@ -3489,6 +3565,9 @@ final class AppState: ObservableObject {
     request.backend = ruttEtraBackend
     request.sourceADirectoryURL = sourceADirectoryURL
     request.modulatorMidiURL = ruttEtraModulatorMidiURL
+    request.matteSource = ruttEtraMatteSource
+    request.matteFramesURL = ruttEtraMatteFramesURL
+    request.matteGain = ruttEtraMatteGain
 
     statusMessage = "Queueing rutt-etra through morphogen-cli..."
     DispatchQueue.global(qos: .userInitiated).async {
@@ -4902,6 +4981,32 @@ enum PaletteQuantizeModeOption: String, CaseIterable, Identifiable {
       return "posterize"
     case .palette:
       return "palette"
+    }
+  }
+}
+
+/// Spatial matte source (Tier 5.4, docs/SPATIAL_MATTE_MILESTONE.md): gates a
+/// stateless effect's blend per-pixel instead of uniformly. `.off` means no
+/// `--matte` flag at all (byte-identical to pre-slice behaviour) — it has no
+/// `cliValue` for that reason, unlike the other CLI-mapped option enums here.
+enum MatteSourceOption: String, CaseIterable, Identifiable {
+  case off = "Off"
+  case aLuma = "A-Luma"
+  case aFlow = "A-Flow"
+  case aEdge = "A-Edge"
+
+  var id: String { rawValue }
+
+  var cliValue: String? {
+    switch self {
+    case .off:
+      return nil
+    case .aLuma:
+      return "a-luma"
+    case .aFlow:
+      return "a-flow"
+    case .aEdge:
+      return "a-edge"
     }
   }
 }

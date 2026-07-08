@@ -2198,6 +2198,9 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            matte,
+            matte_frames,
+            matte_gain,
         } => queue_add_channel_shift_sequence(QueueAddChannelShiftSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2225,6 +2228,9 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames: &named_modulator_frames,
             modulator_midi: modulator_midi.as_deref(),
             named_modulator_midi: &named_modulator_midi,
+            matte: matte.map(Into::into),
+            matte_frames: matte_frames.as_deref(),
+            matte_gain,
         }),
         Commands::QueueRunChannelShiftSequence { queue_path } => {
             queue_run_channel_shift_sequence(&queue_path)
@@ -2247,6 +2253,9 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            matte,
+            matte_frames,
+            matte_gain,
         } => queue_add_palette_quantize_sequence(QueueAddPaletteQuantizeSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2267,6 +2276,9 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames: &named_modulator_frames,
             modulator_midi: modulator_midi.as_deref(),
             named_modulator_midi: &named_modulator_midi,
+            matte: matte.map(Into::into),
+            matte_frames: matte_frames.as_deref(),
+            matte_gain,
         }),
         Commands::QueueRunPaletteQuantizeSequence { queue_path } => {
             queue_run_palette_quantize_sequence(&queue_path)
@@ -2292,6 +2304,9 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             modulator_midi,
             named_modulator_midi,
+            matte,
+            matte_frames,
+            matte_gain,
         } => queue_add_rutt_etra_sequence(QueueAddRuttEtraSequenceRequest {
             queue_path: &queue_path,
             source_b_dir: &source_b_dir,
@@ -2315,6 +2330,9 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames: &named_modulator_frames,
             modulator_midi: modulator_midi.as_deref(),
             named_modulator_midi: &named_modulator_midi,
+            matte: matte.map(Into::into),
+            matte_frames: matte_frames.as_deref(),
+            matte_gain,
         }),
         Commands::QueueRunRuttEtraSequence { queue_path } => {
             queue_run_rutt_etra_sequence(&queue_path)

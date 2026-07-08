@@ -672,6 +672,18 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        /// Spatial matte source label (Tier 5.4 S2): `a-luma` / `a-flow` /
+        /// `a-edge`. `None` = no matte (pre-slice queue JSON deserializes to
+        /// `None`, matching pre-slice behaviour exactly).
+        #[serde(default)]
+        matte_source: Option<String>,
+        /// Matte-media frame directory. Defaults to the command's Source A
+        /// directory at run time when unset (mirrors the direct CLI default).
+        #[serde(default)]
+        matte_frames: Option<String>,
+        /// Matte gain (defaults to `1.0` at run time when `matte_source` is set).
+        #[serde(default)]
+        matte_gain: Option<f32>,
     },
     /// Palette quantize / posterize: collapse the carrier's colours to discrete
     /// per-channel levels (posterize) or the built-in neon palette. Stateless
@@ -711,6 +723,18 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        /// Spatial matte source label (Tier 5.4 S2): `a-luma` / `a-flow` /
+        /// `a-edge`. `None` = no matte (pre-slice queue JSON deserializes to
+        /// `None`, matching pre-slice behaviour exactly).
+        #[serde(default)]
+        matte_source: Option<String>,
+        /// Matte-media frame directory. Defaults to the command's Source A
+        /// directory at run time when unset (mirrors the direct CLI default).
+        #[serde(default)]
+        matte_frames: Option<String>,
+        /// Matte gain (defaults to `1.0` at run time when `matte_source` is set).
+        #[serde(default)]
+        matte_gain: Option<f32>,
     },
     /// Rutt-Etra scanline: re-render the carrier as sparse horizontal
     /// scanlines on black, each displaced vertically by its own luminance.
@@ -763,6 +787,18 @@ pub enum RenderJobTask {
         modulator_midi_path: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         named_modulator_midi: Vec<NamedModulatorMedia>,
+        /// Spatial matte source label (Tier 5.4 S2): `a-luma` / `a-flow` /
+        /// `a-edge`. `None` = no matte (pre-slice queue JSON deserializes to
+        /// `None`, matching pre-slice behaviour exactly).
+        #[serde(default)]
+        matte_source: Option<String>,
+        /// Matte-media frame directory. Defaults to the command's Source A
+        /// directory at run time when unset (mirrors the direct CLI default).
+        #[serde(default)]
+        matte_frames: Option<String>,
+        /// Matte gain (defaults to `1.0` at run time when `matte_source` is set).
+        #[serde(default)]
+        matte_gain: Option<f32>,
     },
     /// An effect chain run from a resolved chain-spec document
     /// (`docs/EFFECT_CHAIN_MILESTONE.md`). The spec is persisted verbatim as
@@ -1869,6 +1905,65 @@ mod tests {
             panic!("expected frame-sequence task");
         };
         assert_eq!(backend, RenderBackend::Cpu);
+    }
+
+    #[test]
+    fn rutt_etra_task_without_matte_fields_defaults_to_no_matte() {
+        // Pre-Tier-5.4-S2 queue JSON (no matte_source/matte_frames/matte_gain
+        // keys at all) must deserialize with matte off, byte-identical in
+        // meaning to before the slice landed.
+        let json = r#"{
+            "type": "frame_sequence_rutt_etra",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "frames": 4,
+            "frame_rate": 24.0
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize legacy task");
+        let RenderJobTask::FrameSequenceRuttEtra {
+            matte_source,
+            matte_frames,
+            matte_gain,
+            ..
+        } = task
+        else {
+            panic!("expected rutt-etra frame-sequence task");
+        };
+        assert_eq!(matte_source, None);
+        assert_eq!(matte_frames, None);
+        assert_eq!(matte_gain, None);
+    }
+
+    #[test]
+    fn rutt_etra_task_with_matte_round_trips() {
+        let task = RenderJobTask::FrameSequenceRuttEtra {
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            source_a_directory: Some("/tmp/a".to_string()),
+            frames: 4,
+            frame_rate: 24.0,
+            line_pitch: 8,
+            displacement_depth: 48.0,
+            line_thickness: 1,
+            mono: false,
+            backend: RenderBackend::Cpu,
+            modulation_routes: Vec::new(),
+            modulator_audio_path: None,
+            modulator_frames_directory: None,
+            modulation_sampling: ModulationSampling::Hold,
+            named_modulator_audio: Vec::new(),
+            named_modulator_frames: Vec::new(),
+            modulator_midi_path: None,
+            named_modulator_midi: Vec::new(),
+            matte_source: Some("a-luma".to_string()),
+            matte_frames: Some("/tmp/a".to_string()),
+            matte_gain: Some(0.5),
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize matte task");
+        let decoded: RenderJobTask = serde_json::from_str(&json).expect("deserialize matte task");
+        assert_eq!(decoded, task);
     }
 
     #[test]

@@ -801,6 +801,186 @@ fn queue_rutt_etra_two_source_matches_direct_render() {
     assert_eq!(manifest["source_a"], a_arg);
 }
 
+/// Tier 5.4 S2: queue add→run with an active spatial matte (half-black/
+/// half-white `a-luma` over a strong displacement — the half-frame readout
+/// shape) is byte-identical to the direct render, on both backends. The queue
+/// path shares the direct render function, so the persisted `frames/
+/// manifest.json` gains the exact same `matte` block as the direct manifest
+/// (the milestone's "shares the direct code path" claim, asserted directly).
+fn queue_rutt_etra_matte_matches_direct_render(backend: &str) {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    fs::create_dir_all(&source_dir).expect("create source frames");
+    for index in 0..2u32 {
+        let frame = ImageBuffer::from_fn(16, 16, |x, _| {
+            let value = (x as u8).wrapping_mul(16).wrapping_add(index as u8);
+            Rgba([value, value, value, u8::MAX])
+        });
+        frame
+            .save(source_dir.join(format!("frame_{index:06}.png")))
+            .expect("write source frame");
+    }
+
+    let matte_dir = temp_dir.path().join("matte-frames");
+    fs::create_dir_all(&matte_dir).expect("create matte frames");
+    for index in 0..2u32 {
+        let frame: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(16, 16, |x, _| {
+            if x < 8 {
+                Rgba([0u8, 0, 0, 255])
+            } else {
+                Rgba([255u8, 255, 255, 255])
+            }
+        });
+        frame
+            .save(matte_dir.join(format!("frame_{index:06}.png")))
+            .expect("write matte frame");
+    }
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let matte_arg = matte_dir.to_string_lossy().to_string();
+    let direct_dir = temp_dir.path().join("direct");
+    let plain_dir = temp_dir.path().join("plain");
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "40.0",
+            "--backend",
+            backend,
+            "--matte",
+            "a-luma",
+            "--matte-frames",
+            matte_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    // No-matte render of the identical source/settings: matte=1 half must
+    // reproduce this exactly (Anchor 1); matte=0 half must reproduce the
+    // plain carrier exactly (Anchor 2, checked directly against source frames).
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_arg.as_str(),
+            plain_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "40.0",
+            "--backend",
+            backend,
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-rutt-etra-sequence",
+            queue_arg.as_str(),
+            source_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--frame-rate",
+            "4",
+            "--line-pitch",
+            "4",
+            "--displacement-depth",
+            "40.0",
+            "--backend",
+            backend,
+            "--matte",
+            "a-luma",
+            "--matte-frames",
+            matte_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    let queue_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&queue_path).expect("read queue"))
+            .expect("parse queue");
+    assert_eq!(queue_json["jobs"][0]["task"]["matte_source"], "a-luma");
+    assert_eq!(queue_json["jobs"][0]["task"]["matte_frames"], matte_arg);
+    assert_eq!(
+        queue_json["jobs"][0]["task"]["matte_gain"],
+        serde_json::Value::Null
+    );
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-rutt-etra-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    for file_name in ["frame_000000.png", "frame_000001.png", "manifest.json"] {
+        assert_eq!(
+            fs::read(output_root.join("job-0001/frames").join(file_name)).expect("queued file"),
+            fs::read(direct_dir.join(file_name)).expect("direct file"),
+            "queued matte render must be byte-identical to direct render ({file_name}, backend {backend})"
+        );
+    }
+
+    let direct_manifest = read_json(&direct_dir.join("manifest.json"));
+    assert_eq!(direct_manifest["matte"]["source"], "a-luma");
+    assert_eq!(direct_manifest["matte"]["frames"], matte_arg);
+
+    // Half-frame readout: left half (black matte, value 0) is carrier-
+    // identical; right half (white matte, value 1) reproduces the plain
+    // (unmatted) effect exactly.
+    let matted = image::open(direct_dir.join("frame_000001.png"))
+        .expect("open matted")
+        .to_rgba8();
+    let plain = image::open(plain_dir.join("frame_000001.png"))
+        .expect("open plain")
+        .to_rgba8();
+    let carrier = image::open(source_dir.join("frame_000001.png"))
+        .expect("open carrier")
+        .to_rgba8();
+
+    for y in 0..16u32 {
+        for x in 0..8u32 {
+            assert_eq!(
+                matted.get_pixel(x, y),
+                carrier.get_pixel(x, y),
+                "black-matte half must equal the plain carrier at ({x},{y}), backend {backend}"
+            );
+        }
+        for x in 8..16u32 {
+            assert_eq!(
+                matted.get_pixel(x, y),
+                plain.get_pixel(x, y),
+                "white-matte half must equal the unmatted effect at ({x},{y}), backend {backend}"
+            );
+        }
+    }
+}
+
+#[test]
+fn queue_rutt_etra_matte_cpu_matches_direct_render() {
+    queue_rutt_etra_matte_matches_direct_render("cpu");
+}
+
+#[test]
+fn queue_rutt_etra_matte_metal_matches_direct_render() {
+    queue_rutt_etra_matte_matches_direct_render("metal");
+}
+
 #[test]
 fn render_rutt_etra_sequence_modulation_continuity_identity() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -9426,6 +9606,9 @@ fn modulation_route_and_task_named_fields_skip_serialization_when_unset() {
         named_modulator_frames: Vec::new(),
         modulator_midi_path: None,
         named_modulator_midi: Vec::new(),
+        matte_source: None,
+        matte_frames: None,
+        matte_gain: None,
     };
     let task_json = serde_json::to_string(&task).expect("serialize task");
     assert!(

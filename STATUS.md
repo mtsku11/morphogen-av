@@ -8,15 +8,15 @@ _Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **647 passing across 7 crates, 0 failing** (was 598
-  at session start; 5.2 oscillators +13, 5.3 MIDI +22, 5.4 mattes S1 +14).
+- `cargo test --workspace`: **652 passing across 7 crates, 0 failing** (was 598
+  at session start; 5.2 oscillators +13, 5.3 MIDI +22, 5.4 mattes +19).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `cargo fmt --all -- --check` is **dirty on ~54 pre-existing lines** (the
   Homebrew rustc 1.96 fmt drift again — verified pre-existing by identical
   per-file diff counts with all 2026-07-07 changes stashed; new code adds zero
   fmt diffs). Reconcile in its own commit when convenient, not mid-feature.
-- `swift test`: **137 passing, 0 failing** (was 123 at session start; Tier 5.5
-  capture +9, Tier 5.3 MIDI S3 +5).
+- `swift test`: **141 passing, 0 failing** (was 123 at session start; Tier 5.5
+  capture +9, Tier 5.3 MIDI S3 +5, Tier 5.4 mattes S2 +4).
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -42,8 +42,9 @@ this session.
 
 **In flight (user-directed 2026-07-07): "do all remaining work on Tier 5"** —
 the arc runs 5.1 combinators ✅ → **5.2 oscillators ✅** → **5.5 capture ✅** →
-**5.3 MIDI ✅ (S1–S3 complete)** → 5.4 mattes → 5.6 colour; **5.7 canvas stays
-user-gated (excluded from "remaining")**. Orchestration model: Opus architect writes each
+**5.3 MIDI ✅ (S1–S3 complete)** → **5.4 mattes ✅ (S1+S2; chain-stage form
+flagged to 3.2 per contract)** → 5.6 colour; **5.7 canvas stays user-gated
+(excluded from "remaining")**. Orchestration model: Opus architect writes each
 `docs/*_MILESTONE.md` contract, a Sonnet agent builds, the architect verifies
 (baseline→delta, frames Read, frame-delta numbers) and checkpoints. Contracts
 already written ahead: `PERFORMANCE_CAPTURE_MILESTONE.md` (5.5, MVP-only +

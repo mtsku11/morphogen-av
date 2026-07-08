@@ -95,7 +95,18 @@ convention).
   pre-slice (stdout-only convention), so they write `manifest.json` only
   when a matte is active — the off case stays exactly pre-slice (no file);
   rutt-etra's existing manifest gains the block only when active.)
-- **S2 — Metal + queue.** A trivial per-pixel blend kernel, parity-gated
+- **S2 — Metal + queue. DONE (2026-07-08,** Sonnet build to ~90%, orchestrator
+  finished the last two panel rows + the 4 bridge token tests inline after the
+  agent hit its session limit, then verified: cargo 647 → **652/0**, swift
+  137 → **141/0**, clippy clean, fmt untouched (same 8 pre-existing files);
+  `matte_blend.metal` + `matte_blend_metal` dispatch, runtime parity test
+  passing on hardware, queue add→run byte-identical smokes for **both** cpu
+  and metal backends; SwiftUI `MatteConfigRow` on all three panels with
+  bridge `appendMatteArguments` (`.off` emits nothing — no-matte arrays
+  byte-identical, pinned; Source-A fallback honoured, palette-quantize
+  requires explicit frames). **In-scope milestone work COMPLETE** — the
+  chain-stage `matte_blend` form stays flagged to the Tier 3.2 chain-graph
+  design per Non-goals.) A trivial per-pixel blend kernel, parity-gated
   frame-by-frame like every kernel (`METAL_CPU_PARITY_EPSILON`); matte-field
   computation stays CPU (LK flow on GPU is already backend-segregated — reuse
   only if free, do not port). Queue tasks gain serde-skip matte fields

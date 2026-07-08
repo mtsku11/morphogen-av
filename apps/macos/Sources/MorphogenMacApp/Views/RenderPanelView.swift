@@ -1047,6 +1047,14 @@ struct RenderPanelView: View {
             chooseFrames: { state.chooseChannelShiftNamedModulatorFrames(id: $0) }
           )
 
+          MatteConfigRow(
+            source: $state.channelShiftMatteSource,
+            gain: $state.channelShiftMatteGain,
+            framesURL: state.channelShiftMatteFramesURL,
+            chooseFrames: { state.chooseChannelShiftMatteFrames() },
+            framesHelp: "Defaults to Source A when flow-driven mode (Flow Gain ≠ 0) is on."
+          )
+
           Text(state.channelShiftSummary)
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -1128,6 +1136,14 @@ struct RenderPanelView: View {
             onRemove: { state.removePaletteQuantizeNamedModulator(id: $0) },
             chooseAudio: { state.choosePaletteQuantizeNamedModulatorWAV(id: $0) },
             chooseFrames: { state.choosePaletteQuantizeNamedModulatorFrames(id: $0) }
+          )
+
+          MatteConfigRow(
+            source: $state.paletteQuantizeMatteSource,
+            gain: $state.paletteQuantizeMatteGain,
+            framesURL: state.paletteQuantizeMatteFramesURL,
+            chooseFrames: { state.choosePaletteQuantizeMatteFrames() },
+            framesHelp: "Required when a matte source is selected (palette-quantize has no Source A)."
           )
 
           Text(state.paletteQuantizeSummary)
@@ -1258,6 +1274,14 @@ struct RenderPanelView: View {
             chooseAudio: { state.chooseRuttEtraNamedModulatorWAV(id: $0) },
             chooseFrames: { state.chooseRuttEtraNamedModulatorFrames(id: $0) },
             chooseMidi: { state.chooseRuttEtraNamedModulatorMIDI(id: $0) }
+          )
+
+          MatteConfigRow(
+            source: $state.ruttEtraMatteSource,
+            gain: $state.ruttEtraMatteGain,
+            framesURL: state.ruttEtraMatteFramesURL,
+            chooseFrames: { state.chooseRuttEtraMatteFrames() },
+            framesHelp: "Defaults to Source A when Two-Source is on; otherwise pick a matte frame directory."
           )
 
           Text(state.ruttEtraSummary)
@@ -2432,6 +2456,55 @@ where
 
 /// The modulator media + sampling controls shared by an effect's mod slots;
 /// hidden until any slot picks a source.
+/// Spatial matte config row (Tier 5.4 S2, docs/SPATIAL_MATTE_MILESTONE.md):
+/// source picker (Off/A-Luma/A-Flow/A-Edge), gain stepper, and a matte-frames
+/// directory picker. The gain stepper and frames picker only appear once a
+/// source is chosen, matching `ModulationMediaRow`'s reveal-on-active idiom.
+struct MatteConfigRow: View {
+  @Binding var source: MatteSourceOption
+  @Binding var gain: Double
+  let framesURL: URL?
+  let chooseFrames: () -> Void
+  /// Explains the matte-frames default for this command (rutt-etra/channel-
+  /// shift fall back to Source A; palette-quantize has no such fallback).
+  let framesHelp: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 16) {
+        Picker("Matte", selection: $source) {
+          ForEach(MatteSourceOption.allCases) { option in
+            Text(option.rawValue).tag(option)
+          }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 280)
+        .help(
+          "Gate the effect's blend per-pixel by analysis of the matte frames "
+          + "instead of applying it uniformly.")
+
+        if source != .off {
+          Stepper(value: $gain, in: 0...4, step: 0.1) {
+            Text("Gain \(gain, specifier: "%.2f")")
+          }
+          .frame(width: 140, alignment: .leading)
+          .help("Applied after the source's fixed normalization/lift, before clamp to [0,1].")
+        }
+      }
+
+      if source != .off {
+        HStack(spacing: 16) {
+          Button("Matte Frames…", action: chooseFrames)
+          Text(framesURL?.lastPathComponent ?? "none selected")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .help(framesHelp)
+      }
+    }
+  }
+}
+
 struct ModulationMediaRow: View {
   let sources: [ModulationSourceOption]
   let audioURL: URL?
