@@ -118,6 +118,192 @@ fn render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs() {
     assert_eq!(manifest["frame_count"], 2);
 }
 
+/// Pin (Tier 5.4 S1): without `--matte`, the manifest carries no `matte` block —
+/// pre-slice manifests stay byte-identical.
+#[test]
+fn render_rutt_etra_sequence_no_matte_manifest_has_no_matte_block() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let output_dir = temp_dir.path().join("out");
+    write_solid_frames(&source_dir, 2, [200, 100, 50, 255]);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--displacement-depth",
+            "20",
+        ])
+        .assert()
+        .success();
+
+    let manifest = read_json(&output_dir.join("manifest.json"));
+    assert!(
+        manifest.get("matte").is_none(),
+        "no --matte ⇒ no matte block in manifest"
+    );
+}
+
+/// Anchor 1 (matte-1 identity): an all-white `a-luma` matte (gain 1) reproduces
+/// the render without `--matte`, byte-for-byte.
+#[test]
+fn render_rutt_etra_sequence_matte_all_white_is_identity_to_no_matte() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let matte_dir = temp_dir.path().join("matte-frames");
+    let plain_dir = temp_dir.path().join("plain-out");
+    let matted_dir = temp_dir.path().join("matted-out");
+    write_solid_frames(&source_dir, 3, [180, 90, 30, 255]);
+    write_solid_frames(&matte_dir, 3, [255, 255, 255, 255]);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            plain_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--displacement-depth",
+            "20",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            matted_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--displacement-depth",
+            "20",
+            "--matte",
+            "a-luma",
+            "--matte-frames",
+            matte_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+
+    for index in 0..3 {
+        let file_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(plain_dir.join(&file_name)).expect("plain frame"),
+            fs::read(matted_dir.join(&file_name)).expect("matted frame"),
+            "matte-1 identity: all-white matte must reproduce no-matte output ({file_name})"
+        );
+    }
+}
+
+/// Anchor 2 (matte-0 identity): an all-black `a-luma` matte reproduces the
+/// plain carrier frames verbatim (pure passthrough), byte-for-byte.
+#[test]
+fn render_rutt_etra_sequence_matte_all_black_is_plain_carrier() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let matte_dir = temp_dir.path().join("matte-frames");
+    let matted_dir = temp_dir.path().join("matted-out");
+    write_solid_frames(&source_dir, 3, [180, 90, 30, 255]);
+    write_solid_frames(&matte_dir, 3, [0, 0, 0, 255]);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            matted_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--displacement-depth",
+            "20",
+            "--matte",
+            "a-luma",
+            "--matte-frames",
+            matte_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .success();
+
+    let source_frames = {
+        let mut frames: Vec<_> = fs::read_dir(&source_dir)
+            .expect("read source dir")
+            .map(|entry| entry.expect("entry").path())
+            .collect();
+        frames.sort();
+        frames
+    };
+    for (index, source_frame) in source_frames.iter().enumerate().take(3) {
+        let file_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(source_frame).expect("source frame"),
+            fs::read(matted_dir.join(&file_name)).expect("matted frame"),
+            "matte-0 identity: all-black matte must reproduce the plain carrier ({file_name})"
+        );
+    }
+}
+
+/// `--matte-frames`/`--matte-gain` without `--matte` is a dead-flag user error.
+#[test]
+fn render_rutt_etra_sequence_matte_frames_without_matte_flag_errors() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let matte_dir = temp_dir.path().join("matte-frames");
+    let output_dir = temp_dir.path().join("out");
+    write_solid_frames(&source_dir, 2, [100, 100, 100, 255]);
+    write_solid_frames(&matte_dir, 2, [255, 255, 255, 255]);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "2",
+            "--matte-frames",
+            matte_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("require --matte"));
+}
+
+/// Matte frames shorter than the rendered range is a clear error (not a silent
+/// truncation — the modulator-media convention differs here on purpose).
+#[test]
+fn render_rutt_etra_sequence_matte_frames_too_short_errors() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_dir = temp_dir.path().join("source-frames");
+    let matte_dir = temp_dir.path().join("matte-frames");
+    let output_dir = temp_dir.path().join("out");
+    write_solid_frames(&source_dir, 4, [100, 100, 100, 255]);
+    write_solid_frames(&matte_dir, 2, [255, 255, 255, 255]);
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-rutt-etra-sequence",
+            source_dir.to_string_lossy().as_ref(),
+            output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "4",
+            "--matte",
+            "a-luma",
+            "--matte-frames",
+            matte_dir.to_string_lossy().as_ref(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("do not cover the rendered range"));
+}
+
 /// `generate-frames` writes a manifest with every knob and PNG frames; a generated
 /// dir is "just a frame dir" — feeding it straight into `render-rutt-etra-sequence`
 /// must render without complaint (the oscillator bank's engine-integration anchor).

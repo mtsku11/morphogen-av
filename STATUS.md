@@ -8,8 +8,8 @@ _Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **633 passing across 7 crates, 0 failing** (was 598
-  at session start; Tier 5.2 oscillator bank +13, Tier 5.3 MIDI S1 +19, S2 +3).
+- `cargo test --workspace`: **647 passing across 7 crates, 0 failing** (was 598
+  at session start; 5.2 oscillators +13, 5.3 MIDI +22, 5.4 mattes S1 +14).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `cargo fmt --all -- --check` is **dirty on ~54 pre-existing lines** (the
   Homebrew rustc 1.96 fmt drift again — verified pre-existing by identical

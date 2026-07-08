@@ -16,9 +16,10 @@ use morphogen_render::{
     advance_cascade_trails, advance_coagulation_field, advance_dispersion_field,
     advance_field_particles, advance_fluid_mosaic, analyze_convolution_kernel_cpu,
     analyze_convolution_kernels_color_cpu, analyze_grain_colors_cpu, analyze_grain_pool_cpu,
-    analyze_grains_cpu, analyze_luma_band_envelope_cpu, apply_history_smear, apply_tone_map_cpu,
-    assign_temporal_patches, average_cell_flows, coagulation_field, composite_with_field,
-    compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask, compute_per_row_shifts,
+    analyze_grains_cpu, analyze_luma_band_envelope_cpu, apply_history_smear, apply_matte,
+    apply_tone_map_cpu, assign_temporal_patches, average_cell_flows, coagulation_field,
+    composite_with_field, compute_a_edge_mask, compute_a_flow_mask, compute_a_luma_mask,
+    compute_matte_field, compute_per_row_shifts,
     convolution_blend_color_cpu, convolution_blend_cpu, datamosh_block_refresh_composite,
     datamosh_codec_engrave_frame_cpu, datamosh_residual_flow, datamosh_scanline_smear_frame_cpu,
     disperse_composite_cpu, downsample_flow_to_cells, feedback_state_path, flow_displace_cpu,
@@ -47,16 +48,16 @@ use morphogen_render::{
     FieldParticleSettings, FlowFeedbackSettings, FlowFeedbackStateDescriptor, FlowField,
     FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings, GeneratorPreset,
     GeneratorSettings, GrainColorDescriptor, GrainDescriptor, GrainPool, GrainSelection,
-    GranularMosaicSettings, ImageBufferF32, MaskSource, PaletteQuantizeSettings, ParticleField,
-    PixelSortSettings, PoolSelectionWindow, QuantizeMode, RetroStaticSettings,
+    GranularMosaicSettings, ImageBufferF32, MaskSource, MatteSource, PaletteQuantizeSettings,
+    ParticleField, PixelSortSettings, PoolSelectionWindow, QuantizeMode, RetroStaticSettings,
     RmsDisplacementEnvelope, RuttEtraSettings, ScanlineSmearSettings, TemporalCoherence,
     VectorRemixMode, VideoVocoderSettings, CASCADE_COLLAGE_B_SAMPLER_ALGORITHM,
     DATAMOSH_CODEC_ENGRAVE_ALGORITHM, DATAMOSH_SCANLINE_SMEAR_ALGORITHM, FLOW_VECTOR_CONVENTION,
     GRAIN_COLOR_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_DESCRIPTOR_CACHE_FILE_NAME,
     GRAIN_POOL_DESCRIPTOR_CACHE_FILE_NAME, GRAIN_SELECTION_CACHE_FILE_NAME,
-    GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MULTIMODAL_GRAIN_ALGORITHM,
-    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_AV_AUDIO_ALGORITHM, POOLED_GRAIN_ALGORITHM,
-    RUTT_ETRA_ALGORITHM,
+    GRANULAR_MOSAIC_ALGORITHM, LUCAS_KANADE_WINDOW_RADIUS, MATTE_BLEND_ALGORITHM,
+    MULTIMODAL_GRAIN_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_AV_AUDIO_ALGORITHM,
+    POOLED_GRAIN_ALGORITHM, RUTT_ETRA_ALGORITHM,
     RUTT_ETRA_METAL_ALGORITHM, RUTT_ETRA_TWO_SOURCE_ALGORITHM,
     RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
@@ -6085,6 +6086,112 @@ pub(crate) fn load_rms_amount_modulation(
     }))
 }
 
+// ─── Spatial matte (Tier 5.4 S1) ───────────────────────────────────────────────
+//
+// A per-pixel [0,1] field computed from analysis of a matte-media directory
+// (defaults to Source A when the command has one), used to blend a stateless
+// effect's output against its own unmodified carrier per-pixel instead of
+// uniformly. Shared by render-rutt-etra-sequence, render-channel-shift-sequence,
+// and render-palette-quantize-sequence. See docs/SPATIAL_MATTE_MILESTONE.md.
+
+/// Resolved, validated matte configuration for one sequence render.
+pub(crate) struct MatteConfig<'a> {
+    source: MatteSource,
+    frames: Vec<PathBuf>,
+    dir: &'a Path,
+    gain: f32,
+}
+
+/// Validate the raw `--matte`/`--matte-frames`/`--matte-gain` CLI args and
+/// resolve the matte-media frame list. `fallback_dir` is `--source-a-dir` on
+/// commands that have one (used as the default matte media); `None` on
+/// palette-quantize, which has no Source A concept.
+fn resolve_matte_config<'a>(
+    matte: Option<MatteSource>,
+    matte_frames: Option<&'a Path>,
+    matte_gain: Option<f32>,
+    fallback_dir: Option<&'a Path>,
+    frame_count: usize,
+) -> Result<Option<MatteConfig<'a>>, CliError> {
+    let Some(source) = matte else {
+        if matte_frames.is_some() || matte_gain.is_some() {
+            return Err(CliError::Message(
+                "--matte-frames and --matte-gain require --matte".to_string(),
+            ));
+        }
+        return Ok(None);
+    };
+
+    let gain = matte_gain.unwrap_or(1.0);
+    if !gain.is_finite() || gain < 0.0 {
+        return Err(CliError::Message(
+            "--matte-gain must be finite and >= 0".to_string(),
+        ));
+    }
+
+    let dir = matte_frames.or(fallback_dir).ok_or_else(|| {
+        CliError::Message(
+            "--matte requires --matte-frames (or --source-a-dir, when the command has one)"
+                .to_string(),
+        )
+    })?;
+
+    let frames = collect_image_frames(dir)?;
+    if frames.len() < frame_count {
+        return Err(CliError::Message(format!(
+            "matte frames ({}) do not cover the rendered range ({} frame(s)) in {}",
+            frames.len(),
+            frame_count,
+            dir.display()
+        )));
+    }
+
+    Ok(Some(MatteConfig {
+        source,
+        frames,
+        dir,
+        gain,
+    }))
+}
+
+/// CLI-facing label for a matte source, matching the `--matte` flag spelling.
+fn matte_source_label(source: MatteSource) -> &'static str {
+    match source {
+        MatteSource::ALuma => "a-luma",
+        MatteSource::AFlow => "a-flow",
+        MatteSource::AEdge => "a-edge",
+    }
+}
+
+/// Load the matte-media frame at `index`, compute its per-pixel field against
+/// `prev_matte_frame` (the previous matte-media frame; `None` at frame 0 — the
+/// declared a-flow frame-zero rule), and blend `effected` toward `original`
+/// (the carrier before the effect). Returns the blended frame and the loaded
+/// matte-media frame (to become the next call's `prev_matte_frame`).
+fn apply_matte_to_frame(
+    config: &MatteConfig<'_>,
+    index: usize,
+    prev_matte_frame: Option<&ImageBufferF32>,
+    effected: &ImageBufferF32,
+    original: &ImageBufferF32,
+) -> Result<(ImageBufferF32, ImageBufferF32), CliError> {
+    let matte_current = load_image_f32(&config.frames[index])?;
+    let field = compute_matte_field(prev_matte_frame, &matte_current, config.source, config.gain)?;
+    let blended = apply_matte(effected, original, &field)?;
+    Ok((blended, matte_current))
+}
+
+/// Add the `matte` block to a manifest JSON object when a matte is active.
+/// Absent block ⇒ pre-slice manifests byte-identical (the S1 acceptance pin).
+fn add_matte_manifest_block(manifest: &mut serde_json::Value, config: &MatteConfig<'_>) {
+    manifest["matte"] = serde_json::json!({
+        "algorithm": MATTE_BLEND_ALGORITHM,
+        "source": matte_source_label(config.source),
+        "gain": config.gain,
+        "frames": config.dir.display().to_string(),
+    });
+}
+
 // ─── Channel Shift ────────────────────────────────────────────────────────────
 
 pub(crate) struct ChannelShiftSequenceRequest<'a> {
@@ -6100,6 +6207,13 @@ pub(crate) struct ChannelShiftSequenceRequest<'a> {
     /// Lucas-Kanade window radius for optical-flow in A-flow mode.
     pub(crate) radius: i32,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// Spatial matte source (Tier 5.4 S1). `None` = no matte (byte-identical to
+    /// pre-slice behaviour).
+    pub(crate) matte: Option<MatteSource>,
+    /// Matte-media frame directory. Defaults to `source_a_dir` when unset.
+    pub(crate) matte_frames: Option<&'a Path>,
+    /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
+    pub(crate) matte_gain: Option<f32>,
 }
 
 pub(crate) fn render_channel_shift_sequence(
@@ -6137,6 +6251,14 @@ pub(crate) fn render_channel_shift_sequence(
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
+    let matte_config = resolve_matte_config(
+        request.matte,
+        request.matte_frames,
+        request.matte_gain,
+        request.source_a_dir,
+        frame_count,
+    )?;
+
     let modulation = request.modulation.build_plan()?;
     if let Some(plan) = &modulation {
         // Dry-run at frame 0 so an unknown target fails before any frame renders.
@@ -6148,6 +6270,7 @@ pub(crate) fn render_channel_shift_sequence(
     }
 
     let mut prev_a: Option<ImageBufferF32> = None;
+    let mut prev_matte_frame: Option<ImageBufferF32> = None;
     let mut metal_flow_validated = false;
 
     for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
@@ -6189,9 +6312,32 @@ pub(crate) fn render_channel_shift_sequence(
         } else {
             render_channel_shift_frame(&source_b, &frame_settings, &per_row_shifts)?
         };
+        let final_frame = match &matte_config {
+            Some(config) => {
+                let (blended, matte_current) = apply_matte_to_frame(
+                    config,
+                    index,
+                    prev_matte_frame.as_ref(),
+                    &rendered,
+                    &source_b,
+                )?;
+                prev_matte_frame = Some(matte_current);
+                blended
+            }
+            None => rendered,
+        };
         save_png(
-            &rendered,
+            &final_frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if let Some(config) = &matte_config {
+        let mut manifest = serde_json::json!({});
+        add_matte_manifest_block(&mut manifest, config);
+        fs::write(
+            request.output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
         )?;
     }
 
@@ -6363,6 +6509,14 @@ pub(crate) struct PaletteQuantizeSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// Spatial matte source (Tier 5.4 S1). `None` = no matte (byte-identical to
+    /// pre-slice behaviour).
+    pub(crate) matte: Option<MatteSource>,
+    /// Matte-media frame directory. No Source A default on this single-source
+    /// command — required when `matte` is set.
+    pub(crate) matte_frames: Option<&'a Path>,
+    /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
+    pub(crate) matte_gain: Option<f32>,
 }
 
 pub(crate) fn render_palette_quantize_sequence(
@@ -6385,6 +6539,14 @@ pub(crate) fn render_palette_quantize_sequence(
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
 
+    let matte_config = resolve_matte_config(
+        request.matte,
+        request.matte_frames,
+        request.matte_gain,
+        None,
+        frame_count,
+    )?;
+
     let mode_label = match request.settings.mode {
         QuantizeMode::Posterize => format!("posterize levels={}", request.settings.levels),
         QuantizeMode::Palette => "neon-palette".to_string(),
@@ -6401,6 +6563,8 @@ pub(crate) fn render_palette_quantize_sequence(
         println!("modulation routes: {}", plan.describe());
     }
 
+    let mut prev_matte_frame: Option<ImageBufferF32> = None;
+
     for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
         let mut frame_settings = request.settings;
         if let Some(plan) = &modulation {
@@ -6415,9 +6579,32 @@ pub(crate) fn render_palette_quantize_sequence(
                 render_palette_quantize_frame_metal(&source_b, &frame_settings)?
             }
         };
+        let final_frame = match &matte_config {
+            Some(config) => {
+                let (blended, matte_current) = apply_matte_to_frame(
+                    config,
+                    index,
+                    prev_matte_frame.as_ref(),
+                    &rendered,
+                    &source_b,
+                )?;
+                prev_matte_frame = Some(matte_current);
+                blended
+            }
+            None => rendered,
+        };
         save_png(
-            &rendered,
+            &final_frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),
+        )?;
+    }
+
+    if let Some(config) = &matte_config {
+        let mut manifest = serde_json::json!({});
+        add_matte_manifest_block(&mut manifest, config);
+        fs::write(
+            request.output_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest)?,
         )?;
     }
 
@@ -6547,6 +6734,13 @@ pub(crate) struct RuttEtraSequenceRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) backend: RenderBackend,
     pub(crate) modulation: ModulationCliArgs<'a>,
+    /// Spatial matte source (Tier 5.4 S1). `None` = no matte (byte-identical to
+    /// pre-slice behaviour).
+    pub(crate) matte: Option<MatteSource>,
+    /// Matte-media frame directory. Defaults to `source_a_dir` when unset.
+    pub(crate) matte_frames: Option<&'a Path>,
+    /// Matte gain. Defaults to `1.0` when `matte` is set and this is `None`.
+    pub(crate) matte_gain: Option<f32>,
 }
 
 pub(crate) fn render_rutt_etra_sequence(
@@ -6587,6 +6781,14 @@ pub(crate) fn render_rutt_etra_sequence(
     }
     fs::create_dir_all(request.output_dir)?;
 
+    let matte_config = resolve_matte_config(
+        request.matte,
+        request.matte_frames,
+        request.matte_gain,
+        request.source_a_dir,
+        frame_count,
+    )?;
+
     let modulation = request.modulation.build_plan()?;
     if let Some(plan) = &modulation {
         // Dry-run at frame 0 so an unknown target fails before any frame renders.
@@ -6596,6 +6798,8 @@ pub(crate) fn render_rutt_etra_sequence(
         }
         println!("modulation routes: {}", plan.describe());
     }
+
+    let mut prev_matte_frame: Option<ImageBufferF32> = None;
 
     for (index, frame_path) in source_b_frames.iter().enumerate().take(frame_count) {
         let mut frame_settings = request.settings;
@@ -6624,8 +6828,22 @@ pub(crate) fn render_rutt_etra_sequence(
                 RenderBackend::Metal => render_rutt_etra_frame_metal(&source_b, &frame_settings)?,
             },
         };
+        let final_frame = match &matte_config {
+            Some(config) => {
+                let (blended, matte_current) = apply_matte_to_frame(
+                    config,
+                    index,
+                    prev_matte_frame.as_ref(),
+                    &rendered,
+                    &source_b,
+                )?;
+                prev_matte_frame = Some(matte_current);
+                blended
+            }
+            None => rendered,
+        };
         save_png(
-            &rendered,
+            &final_frame,
             &request.output_dir.join(format!("frame_{index:06}.png")),
         )?;
     }
@@ -6646,6 +6864,9 @@ pub(crate) fn render_rutt_etra_sequence(
     });
     if let Some(dir) = request.source_a_dir {
         manifest["source_a"] = serde_json::json!(dir.display().to_string());
+    }
+    if let Some(config) = &matte_config {
+        add_matte_manifest_block(&mut manifest, config);
     }
     fs::write(
         request.output_dir.join("manifest.json"),

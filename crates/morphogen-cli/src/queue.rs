@@ -3703,6 +3703,10 @@ pub(crate) fn queue_run_channel_shift_sequence(queue_path: &Path) -> Result<(), 
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            // Matte is not yet wired into the queue path (Tier 5.4 S2).
+            matte: None,
+            matte_frames: None,
+            matte_gain: None,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": algorithm,
@@ -3914,6 +3918,10 @@ pub(crate) fn queue_run_palette_quantize_sequence(queue_path: &Path) -> Result<(
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            // Matte is not yet wired into the queue path (Tier 5.4 S2).
+            matte: None,
+            matte_frames: None,
+            matte_gain: None,
         })?;
         let mut effect = serde_json::json!({
             "algorithm": PALETTE_QUANTIZE_ALGORITHM,
@@ -4145,6 +4153,10 @@ pub(crate) fn queue_run_rutt_etra_sequence(queue_path: &Path) -> Result<(), CliE
                 modulator_midi: modulator_midi_path.as_deref().map(Path::new),
                 named_modulator_midi: &named_modulator_midi_specs,
             },
+            // Matte is not yet wired into the queue path (Tier 5.4 S2).
+            matte: None,
+            matte_frames: None,
+            matte_gain: None,
         })?;
         let algorithm = match (source_a_directory.is_some(), backend) {
             (true, RenderBackend::Cpu) => RUTT_ETRA_TWO_SOURCE_ALGORITHM,

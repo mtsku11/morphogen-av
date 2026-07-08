@@ -770,6 +770,9 @@ fn render_stage(
                 flow_gain: 0.0,
                 radius: 0,
                 modulation: stage.modulation_args(),
+                matte: None,
+                matte_frames: None,
+                matte_gain: None,
             })?
             .frame_count
         }
@@ -781,6 +784,9 @@ fn render_stage(
                 frames: u32::MAX,
                 backend: RenderBackend::Cpu,
                 modulation: stage.modulation_args(),
+                matte: None,
+                matte_frames: None,
+                matte_gain: None,
             })?
             .frame_count
         }
@@ -793,6 +799,9 @@ fn render_stage(
                 frames: u32::MAX,
                 backend: RenderBackend::Cpu,
                 modulation: stage.modulation_args(),
+                matte: None,
+                matte_frames: None,
+                matte_gain: None,
             })?
             .frame_count
         }

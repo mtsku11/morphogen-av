@@ -14,9 +14,9 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    BlendMode, CoagulationFlowSource, GeneratorPreset, ModulationSampling, ScanlineFilter,
-    StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
-    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+    BlendMode, CoagulationFlowSource, GeneratorPreset, MatteSource, ModulationSampling,
+    ScanlineFilter, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
+    CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -1210,6 +1210,19 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// Spatial matte source: gate the effect's blend per-pixel instead of
+        /// uniformly (docs/SPATIAL_MATTE_MILESTONE.md). Requires --matte-frames
+        /// (or --source-a-dir, used as the default matte media).
+        #[arg(long)]
+        matte: Option<CliMatteSource>,
+        /// Matte-media PNG frame directory analyzed by --matte. Defaults to
+        /// --source-a-dir when set; required otherwise. Error without --matte.
+        #[arg(long)]
+        matte_frames: Option<PathBuf>,
+        /// Matte gain applied after the source's fixed normalization/lift, before
+        /// clamp to [0,1]. Finite, >= 0. Error without --matte.
+        #[arg(long)]
+        matte_gain: Option<f32>,
     },
     /// Render the retro-static glitch: deterministically simulate a PNG-style
     /// scanline filter, then deliberately misread it at the wrong bytes-per-pixel
@@ -1350,6 +1363,19 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// Spatial matte source: gate the effect's blend per-pixel instead of
+        /// uniformly (docs/SPATIAL_MATTE_MILESTONE.md). Requires --matte-frames
+        /// (or --source-a-dir, used as the default matte media).
+        #[arg(long)]
+        matte: Option<CliMatteSource>,
+        /// Matte-media PNG frame directory analyzed by --matte. Defaults to
+        /// --source-a-dir when set; required otherwise. Error without --matte.
+        #[arg(long)]
+        matte_frames: Option<PathBuf>,
+        /// Matte gain applied after the source's fixed normalization/lift, before
+        /// clamp to [0,1]. Finite, >= 0. Error without --matte.
+        #[arg(long)]
+        matte_gain: Option<f32>,
     },
     /// Posterize or map Source B to a limited colour palette. `--mode posterize
     /// --levels 256` returns B verbatim (off case, byte-identical).
@@ -1407,6 +1433,18 @@ pub(crate) enum Commands {
         /// Named modulator MIDI file <name>=<path> (repeatable).
         #[arg(long = "named-modulator-midi")]
         named_modulator_midi: Vec<String>,
+        /// Spatial matte source: gate the effect's blend per-pixel instead of
+        /// uniformly (docs/SPATIAL_MATTE_MILESTONE.md). Requires --matte-frames.
+        #[arg(long)]
+        matte: Option<CliMatteSource>,
+        /// Matte-media PNG frame directory analyzed by --matte. Required when
+        /// --matte is set (no Source A default on this single-source command).
+        #[arg(long)]
+        matte_frames: Option<PathBuf>,
+        /// Matte gain applied after the source's fixed normalization/lift, before
+        /// clamp to [0,1]. Finite, >= 0. Error without --matte.
+        #[arg(long)]
+        matte_gain: Option<f32>,
     },
     /// Run an ordered list of single-source effect stages from a JSON spec
     /// (see docs/EFFECT_CHAIN_MILESTONE.md). Stage 1 reads `input_dir`; each
@@ -3805,6 +3843,31 @@ impl From<CliRenderBackend> for RenderBackend {
         match value {
             CliRenderBackend::Cpu => Self::Cpu,
             CliRenderBackend::Metal => Self::Metal,
+        }
+    }
+}
+
+/// Which analysis of the matte-media frames drives the per-pixel spatial matte.
+/// See `docs/SPATIAL_MATTE_MILESTONE.md`. The shared `A` prefix denotes Source A
+/// (the modulator convention, matching `render::MatteSource`/`CliMaskSource`) —
+/// not accidental redundant naming.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[allow(clippy::enum_variant_names)]
+pub(crate) enum CliMatteSource {
+    /// Rec.709 luma of the matte frame (absolute `[0,1]`).
+    ALuma,
+    /// Lucas-Kanade optical-flow magnitude between matte frames (frame 0 = all zero).
+    AFlow,
+    /// Per-pixel Sobel edge magnitude of the matte frame's luma.
+    AEdge,
+}
+
+impl From<CliMatteSource> for MatteSource {
+    fn from(value: CliMatteSource) -> Self {
+        match value {
+            CliMatteSource::ALuma => Self::ALuma,
+            CliMatteSource::AFlow => Self::AFlow,
+            CliMatteSource::AEdge => Self::AEdge,
         }
     }
 }

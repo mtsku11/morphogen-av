@@ -22,6 +22,7 @@ pub mod grain_cache;
 pub mod granular_mosaic;
 pub mod image_buffer;
 pub mod luminance_flow;
+pub mod matte;
 pub mod modulation;
 pub mod optical_flow;
 pub mod palette_quantize;
@@ -131,6 +132,10 @@ pub use granular_mosaic::{
 };
 pub use image_buffer::ImageBufferF32;
 pub use luminance_flow::luminance_gradient_flow_cpu;
+pub use matte::{
+    apply_matte, compute_matte_field, MatteField, MatteSource, MATTE_BLEND_ALGORITHM,
+    MATTE_EDGE_GAIN, MATTE_FLOW_FULL_SCALE_PX,
+};
 pub use modulation::{
     apply_cascade_collage_modulation, apply_cascade_trails_modulation,
     apply_channel_shift_modulation, apply_coagulation_modulation, apply_dispersion_modulation,

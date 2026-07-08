@@ -86,7 +86,15 @@ convention).
 ## Slices
 
 - **S1 — CPU matte blend, direct CLI** on the three commands + unit tests +
-  the half-frame readout (below).
+  the half-frame readout (below). **DONE (2026-07-08,** Sonnet build,
+  orchestrator-verified: cargo 633 → **647/0**, clippy clean, zero new fmt
+  diffs; matte-1/matte-0 byte-identity + frame-zero flow rule pinned as
+  tests; half-frame crop-compare **28800/28800 both halves** re-run
+  independently, frame Read (clean gradient|displaced split). Declared
+  deviation, accepted: channel-shift/palette-quantize had NO manifest
+  pre-slice (stdout-only convention), so they write `manifest.json` only
+  when a matte is active — the off case stays exactly pre-slice (no file);
+  rutt-etra's existing manifest gains the block only when active.)
 - **S2 — Metal + queue.** A trivial per-pixel blend kernel, parity-gated
   frame-by-frame like every kernel (`METAL_CPU_PARITY_EPSILON`); matte-field
   computation stays CPU (LK flow on GPU is already backend-segregated — reuse
