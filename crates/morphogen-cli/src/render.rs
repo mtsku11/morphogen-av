@@ -70,6 +70,11 @@ use morphogen_render::{
     apply_rutt_etra_modulation,
     ModulationRoute, ModulationSampling,
 };
+use morphogen_render::{
+    advance_morphogenesis_frame, morphogenesis_field_dimensions, morphogenesis_field_from_rgba32f,
+    morphogenesis_field_to_rgba32f, render_v_field_grayscale, seed_morphogenesis_field,
+    MorphogenesisSettings, MORPHOGENESIS_ALGORITHM,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::args::*;
@@ -7030,6 +7035,313 @@ pub(crate) fn render_rutt_etra_sequence(
         request.output_dir.display(),
     );
     Ok(FrameSequenceRenderResult { frame_count })
+}
+
+// ─── Morphogenesis field (Tier "Morphogenesis" S1) ─────────────────────────────
+//
+// `render-morphogenesis-field` is the S1 debug scaffold: it seeds and advances
+// the Gray-Scott field (see `morphogen_render::morphogenesis`) and dumps the raw
+// V field as greyscale PNGs, maintaining an RGBA32F checkpoint. It has no
+// composite (S2 supersedes the frame dump with the real pattern-mix/displace
+// output) — this exists so the field can be eyeballed and so the stateful
+// checkpoint/resume contract lands before the composite does.
+//
+// The checkpoint/resume/refusal shape mirrors `render-feedback-sequence`
+// (`load_feedback_resume_state` et al. above): a JSON contract (algorithm +
+// settings + source fingerprint) gates resume, and the unquantized state is an
+// RGBA32F file read/written via `feedback_state.rs`'s generic codec (reused
+// as-is — the magic bytes there predate this effect, but the format doesn't
+// care which stateful node wrote it; the JSON contract is what discriminates).
+
+pub(crate) const MORPHOGENESIS_CHECKPOINT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct MorphogenesisSourceFingerprint {
+    directory: String,
+    /// Content fingerprint of frame 0 only — S1's only footage coupling is
+    /// the frame-zero seed, so only that frame's content can stale a resume.
+    checksum: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct MorphogenesisFieldContract {
+    version: u32,
+    algorithm: String,
+    source: MorphogenesisSourceFingerprint,
+    settings: MorphogenesisSettings,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct MorphogenesisFieldCheckpoint {
+    version: u32,
+    task: String,
+    job_id: String,
+    status: String,
+    next_frame_index: u32,
+    state_path: Option<String>,
+    state: Option<FlowFeedbackStateDescriptor>,
+    contract: MorphogenesisFieldContract,
+}
+
+pub(crate) fn morphogenesis_state_relative_path(frame_index: u32) -> String {
+    format!("state/morphogenesis_frame_{frame_index:06}.rgba32f")
+}
+
+fn morphogenesis_state_path_from_checkpoint(
+    output_dir: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, CliError> {
+    let relative_path = Path::new(relative_path);
+    if relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(CliError::Message(
+            "morphogenesis checkpoint state path must be relative to its output directory"
+                .to_string(),
+        ));
+    }
+    Ok(output_dir.join(relative_path))
+}
+
+/// Resume/refuse for `render-morphogenesis-field`, mirroring
+/// `load_feedback_resume_state`'s shape and wording exactly.
+fn load_morphogenesis_resume_state(
+    output_dir: &Path,
+    job_id: &str,
+    expected_contract: &MorphogenesisFieldContract,
+    frame_count: u32,
+) -> Result<(usize, Option<ImageBufferF32>), CliError> {
+    let checkpoint_path = output_dir.join("checkpoint.json");
+    if !checkpoint_path.exists() {
+        return Ok((0, None));
+    }
+
+    let checkpoint: MorphogenesisFieldCheckpoint =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path)?)?;
+    if checkpoint.version != MORPHOGENESIS_CHECKPOINT_VERSION
+        || checkpoint.task != "render_morphogenesis_field"
+        || checkpoint.job_id != job_id
+    {
+        return Err(CliError::Message(format!(
+            "morphogenesis checkpoint at {} is incompatible with this render",
+            checkpoint_path.display()
+        )));
+    }
+    if checkpoint.contract != *expected_contract {
+        return Err(CliError::Message(
+            "morphogenesis checkpoint input or settings changed; start with a new output directory"
+                .to_string(),
+        ));
+    }
+    if checkpoint.next_frame_index > frame_count {
+        return Err(CliError::Message(
+            "morphogenesis checkpoint advances beyond the current frame count".to_string(),
+        ));
+    }
+    let start_frame = checkpoint.next_frame_index as usize;
+    if start_frame == 0 {
+        return Ok((0, None));
+    }
+
+    let expected_state = checkpoint.state.ok_or_else(|| {
+        CliError::Message("morphogenesis checkpoint is missing its previous field state".into())
+    })?;
+    let relative_state_path = checkpoint.state_path.ok_or_else(|| {
+        CliError::Message("morphogenesis checkpoint is missing its state path".into())
+    })?;
+    let state_path = morphogenesis_state_path_from_checkpoint(output_dir, &relative_state_path)?;
+    let (actual_state, state_image) = read_flow_feedback_state(&state_path)?;
+    if actual_state != expected_state {
+        return Err(CliError::Message(format!(
+            "morphogenesis state at {} does not match its checkpoint",
+            state_path.display()
+        )));
+    }
+    let previous_frame_path = output_dir
+        .join("frames")
+        .join(format!("frame_{:06}.png", start_frame - 1));
+    if !previous_frame_path.exists() {
+        return Err(CliError::Message(format!(
+            "morphogenesis checkpoint is missing exported frame {}",
+            previous_frame_path.display()
+        )));
+    }
+    Ok((start_frame, Some(state_image)))
+}
+
+struct MorphogenesisCheckpointWrite<'a> {
+    job_id: &'a str,
+    status: &'a str,
+    next_frame_index: u32,
+    state_path: Option<&'a str>,
+    state: Option<FlowFeedbackStateDescriptor>,
+    contract: &'a MorphogenesisFieldContract,
+}
+
+fn write_morphogenesis_checkpoint(
+    output_dir: &Path,
+    checkpoint: MorphogenesisCheckpointWrite<'_>,
+) -> Result<(), CliError> {
+    let checkpoint = MorphogenesisFieldCheckpoint {
+        version: MORPHOGENESIS_CHECKPOINT_VERSION,
+        task: "render_morphogenesis_field".to_string(),
+        job_id: checkpoint.job_id.to_string(),
+        status: checkpoint.status.to_string(),
+        next_frame_index: checkpoint.next_frame_index,
+        state_path: checkpoint.state_path.map(str::to_string),
+        state: checkpoint.state,
+        contract: checkpoint.contract.clone(),
+    };
+    write_feedback_json_atomically(
+        &output_dir.join("checkpoint.json"),
+        &serde_json::to_string_pretty(&checkpoint)?,
+    )?;
+    Ok(())
+}
+
+pub(crate) struct MorphogenesisFieldRenderRequest<'a> {
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_dir: &'a Path,
+    pub(crate) frames: u32,
+    pub(crate) settings: MorphogenesisSettings,
+    pub(crate) job_id: &'a str,
+    pub(crate) stop_after_frame: bool,
+}
+
+/// Render `request.frames` frames of the Gray-Scott field, seeded from Source
+/// B's frame 0, dumping the V field as greyscale PNGs. See the module-level
+/// comment above for the checkpoint/resume shape.
+pub(crate) fn render_morphogenesis_field(
+    request: MorphogenesisFieldRenderRequest<'_>,
+) -> Result<FrameSequenceRenderResult, CliError> {
+    let MorphogenesisFieldRenderRequest {
+        source_b_dir,
+        output_dir,
+        frames,
+        settings,
+        job_id,
+        stop_after_frame,
+    } = request;
+
+    settings.validate()?;
+    if frames == 0 {
+        return Err(CliError::Message(
+            "frames must be greater than zero".to_string(),
+        ));
+    }
+
+    let carrier_frames = collect_image_frames(source_b_dir)?;
+    let Some(first_frame) = carrier_frames.first() else {
+        return Err(CliError::Message(format!(
+            "no supported image frames found in {}",
+            source_b_dir.display()
+        )));
+    };
+    let carrier_frame_zero = load_image_f32(first_frame)?;
+    let (sim_width, sim_height) = morphogenesis_field_dimensions(
+        carrier_frame_zero.width,
+        carrier_frame_zero.height,
+        settings.sim_scale,
+    );
+
+    let contract = MorphogenesisFieldContract {
+        version: MORPHOGENESIS_CHECKPOINT_VERSION,
+        algorithm: MORPHOGENESIS_ALGORITHM.to_string(),
+        source: MorphogenesisSourceFingerprint {
+            directory: source_b_dir.to_string_lossy().to_string(),
+            checksum: image_file_fingerprint(first_frame)?,
+        },
+        settings,
+        width: sim_width,
+        height: sim_height,
+    };
+
+    let frame_dir = output_dir.join("frames");
+    fs::create_dir_all(&frame_dir)?;
+
+    let (start_frame, resumed_state) =
+        load_morphogenesis_resume_state(output_dir, job_id, &contract, frames)?;
+    let mut field = match resumed_state {
+        Some(state_image) => morphogenesis_field_from_rgba32f(&state_image)?,
+        None => seed_morphogenesis_field(&carrier_frame_zero, &settings)?,
+    };
+
+    for index in start_frame..frames as usize {
+        if index > 0 {
+            field = advance_morphogenesis_frame(&field, &settings)?;
+        }
+
+        let visualization = render_v_field_grayscale(&field)?;
+        save_png(
+            &visualization,
+            &frame_dir.join(format!("frame_{index:06}.png")),
+        )?;
+
+        let state_image = morphogenesis_field_to_rgba32f(&field)?;
+        let relative_state_path = morphogenesis_state_relative_path(index as u32);
+        let state_path = output_dir.join(&relative_state_path);
+        let descriptor = write_flow_feedback_state(&state_path, &state_image)?;
+
+        let is_last_frame = index + 1 == frames as usize;
+        write_morphogenesis_checkpoint(
+            output_dir,
+            MorphogenesisCheckpointWrite {
+                job_id,
+                status: if is_last_frame && !stop_after_frame {
+                    "complete"
+                } else {
+                    "running"
+                },
+                next_frame_index: (index + 1) as u32,
+                state_path: Some(relative_state_path.as_str()),
+                state: Some(descriptor),
+                contract: &contract,
+            },
+        )?;
+
+        if stop_after_frame {
+            println!(
+                "checkpointed morphogenesis field after frame {} in {}",
+                index,
+                output_dir.display()
+            );
+            return Ok(FrameSequenceRenderResult {
+                frame_count: index + 1,
+            });
+        }
+    }
+
+    let manifest = serde_json::json!({
+        "algorithm": MORPHOGENESIS_ALGORITHM,
+        "task": "render_morphogenesis_field",
+        "job_id": job_id,
+        "status": "complete",
+        "settings": contract.settings,
+        "width": contract.width,
+        "height": contract.height,
+        "source_b_dir": source_b_dir.to_string_lossy(),
+        "frames": frames,
+    });
+    fs::write(
+        output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+
+    println!(
+        "rendered morphogenesis field with {frames} frame(s) (algorithm {}, {}x{} sim) from {} to {}",
+        MORPHOGENESIS_ALGORITHM,
+        sim_width,
+        sim_height,
+        source_b_dir.display(),
+        output_dir.display()
+    );
+    Ok(FrameSequenceRenderResult {
+        frame_count: frames as usize,
+    })
 }
 
 #[cfg(test)]

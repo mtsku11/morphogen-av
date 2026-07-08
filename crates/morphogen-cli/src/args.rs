@@ -15,8 +15,9 @@ use morphogen_core::{
 };
 use morphogen_render::{
     BlendMode, CoagulationFlowSource, GeneratorPreset, MatteSource, ModulationSampling,
-    ScanlineFilter, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
-    CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+    MorphogenesisPreset, ScanlineFilter, StructureMode, VectorRemixMode,
+    CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM,
+    MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -2046,6 +2047,53 @@ pub(crate) enum Commands {
         #[arg(long)]
         height: Option<u32>,
     },
+    /// Gray-Scott reaction-diffusion field sim — S1 debug scaffold (Tier
+    /// "Morphogenesis"; see `docs/MORPHOGENESIS_MILESTONE.md`). Seeds V where
+    /// Source B's frame-0 luma crosses `--seed-threshold`, then dumps the V
+    /// field as greyscale PNGs while maintaining an RGBA32F checkpoint. No
+    /// composite yet (S2 supersedes this with pattern-mix/displace output).
+    RenderMorphogenesisField {
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 60)]
+        frames: u32,
+        #[arg(long, value_enum, default_value_t = CliMorphogenesisPreset::Coral)]
+        preset: CliMorphogenesisPreset,
+        /// `U` diffusion rate. Overrides the preset when given.
+        #[arg(long)]
+        du: Option<f32>,
+        /// `V` diffusion rate. Overrides the preset when given.
+        #[arg(long)]
+        dv: Option<f32>,
+        /// Feed rate. Overrides the preset when given.
+        #[arg(long)]
+        feed: Option<f32>,
+        /// Kill rate. Overrides the preset when given.
+        #[arg(long)]
+        kill: Option<f32>,
+        /// Per-substep integration step. Overrides the preset when given.
+        #[arg(long)]
+        dt: Option<f32>,
+        /// Gray-Scott substeps per output frame. `0` freezes the field
+        /// (anchor A2). Overrides the preset when given.
+        #[arg(long)]
+        substeps: Option<u32>,
+        /// Sim resolution divisor relative to the carrier frame. Overrides
+        /// the preset when given.
+        #[arg(long)]
+        sim_scale: Option<u32>,
+        /// Frame-zero seed threshold: carrier luma >= this seeds V.
+        /// Overrides the preset when given.
+        #[arg(long)]
+        seed_threshold: Option<f32>,
+        /// Deterministic seed for the frame-zero speckle. Overrides the
+        /// preset when given.
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Checkpoint after one frame and exit (resume semantics test hook).
+        #[arg(long)]
+        stop_after_frame: bool,
+    },
     QueueInit {
         queue_path: PathBuf,
     },
@@ -3624,6 +3672,26 @@ impl From<CliGeneratorPreset> for GeneratorPreset {
             CliGeneratorPreset::Radial => Self::Radial,
             CliGeneratorPreset::Plasma => Self::Plasma,
             CliGeneratorPreset::Gradient => Self::Gradient,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliMorphogenesisPreset {
+    #[default]
+    Coral,
+    Mitosis,
+    Worms,
+    Spots,
+}
+
+impl From<CliMorphogenesisPreset> for MorphogenesisPreset {
+    fn from(value: CliMorphogenesisPreset) -> Self {
+        match value {
+            CliMorphogenesisPreset::Coral => Self::Coral,
+            CliMorphogenesisPreset::Mitosis => Self::Mitosis,
+            CliMorphogenesisPreset::Worms => Self::Worms,
+            CliMorphogenesisPreset::Spots => Self::Spots,
         }
     }
 }

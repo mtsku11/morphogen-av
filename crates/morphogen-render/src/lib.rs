@@ -24,6 +24,7 @@ pub mod image_buffer;
 pub mod luminance_flow;
 pub mod matte;
 pub mod modulation;
+pub mod morphogenesis;
 pub mod optical_flow;
 pub mod palette_quantize;
 pub mod pixel_sort;
@@ -150,6 +151,12 @@ pub use modulation::{
     FLUID_ADVECT_TWO_SOURCE_MODULATION_TARGETS, FLUID_MOSAIC_MODULATION_TARGETS,
     PALETTE_QUANTIZE_MODULATION_TARGETS, PIXEL_SORT_MODULATION_TARGETS,
     RETRO_STATIC_MODULATION_TARGETS, RUTT_ETRA_MODULATION_TARGETS,
+};
+pub use morphogenesis::{
+    advance_morphogenesis_frame, morphogenesis_field_dimensions, morphogenesis_field_from_rgba32f,
+    morphogenesis_field_to_rgba32f, morphogenesis_substep, render_v_field_grayscale,
+    seed_morphogenesis_field, MorphogenesisField, MorphogenesisPreset, MorphogenesisSettings,
+    MORPHOGENESIS_ALGORITHM,
 };
 pub use optical_flow::{
     lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu,

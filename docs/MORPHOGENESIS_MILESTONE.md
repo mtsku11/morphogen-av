@@ -92,9 +92,25 @@ footage's own palette), and `--displace` pushes B's pixels along ∇V
 
 ## Build plan (slices — /checkpoint each)
 
-- **S1 — CPU field sim + seed + checkpoint.** The Gray-Scott core, frame-zero
-  declaration, RGBA32F checkpoint, anchors A2/A3/A4. No composite yet (dump
-  the raw field as PNG for eyeballing). Id `morphogenesis_cpu_v1`.
+- **S1 — CPU field sim + seed + checkpoint. DONE (2026-07-08,** Sonnet build,
+  orchestrator-verified: cargo 664 → **674/0**, clippy clean, zero new fmt
+  diffs, no `unwrap()`. Anchors A2/A3/A4 + determinism + per-preset aliveness
+  variance band + seeding rules all pinned; checkpoint reuses
+  `feedback_state.rs`'s RGBA32F codec verbatim (declared DRY deviation — the
+  JSON contract discriminates staleness) with feedback's refusal wording.
+  Debug scaffold `render-morphogenesis-field` (S2's composite command
+  supersedes/absorbs it) writes V-field PNGs + manifest + checkpoint. Visual:
+  coral on a wide-ring radial carrier — seed rings bead into nodules (t=15),
+  elongate into tendrils (t=30), full labyrinthine coral by t=59; field
+  frame-delta **2.488/255** sustained over 60 frames. Preset values pinned:
+  mitosis f=.0367/k=.0649 (contract), spots f=.030/k=.062 (atlas), worms
+  f=.062/k=.061 (the common .058/.065 is alive but too slow for the 60-frame
+  window — empirically tuned). **Trap recorded in memory
+  (`morphogenesis-reaction-diffusion`):** seed geometry has a critical size
+  independent of (f,k) — thin seeds at half-res sim decay to V=0 by ~frame 15
+  and mimic dead chemistry; check seed feature width in sim-pixels before
+  blaming the parameters. Speckle density 0.2% (1% drowned the aliveness
+  metric).)
 - **S2 — composite + CLI.** `render-morphogenesis-sequence <source-b> <out>`
   with pattern-mix/displace/hue, presets, anchor A1, acceptance 2–3.
 - **S3 — coupling.** B→(f,k) param maps; register the five modulation targets

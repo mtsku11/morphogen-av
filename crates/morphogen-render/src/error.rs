@@ -38,6 +38,10 @@ pub enum RenderError {
     InvalidRuttEtraSettings(String),
     #[error("invalid generator settings: {0}")]
     InvalidGeneratorSettings(String),
+    #[error("invalid morphogenesis settings: {0}")]
+    InvalidMorphogenesisSettings(String),
+    #[error("invalid morphogenesis field: {0}")]
+    InvalidMorphogenesisField(String),
     #[error("invalid modulation route: {0}")]
     InvalidModulationRoute(String),
     #[error("render inputs are incompatible: {0}")]

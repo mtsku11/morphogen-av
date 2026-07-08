@@ -4,8 +4,9 @@ use morphogen_render::{
     BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
     ChannelShiftSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
     FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
-    FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings, PaletteQuantizeSettings,
-    PixelSortSettings, RetroStaticSettings, RuttEtraSettings, StructureMode, VideoVocoderSettings,
+    FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings, MorphogenesisPreset,
+    MorphogenesisSettings, PaletteQuantizeSettings, PixelSortSettings, RetroStaticSettings,
+    RuttEtraSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -1767,6 +1768,60 @@ fn run() -> Result<(), CliError> {
             width,
             height,
         } => cache_luminance_flow(&modulator_image, &output_dir, width, height),
+        Commands::RenderMorphogenesisField {
+            source_b_dir,
+            output_dir,
+            frames,
+            preset,
+            du,
+            dv,
+            feed,
+            kill,
+            dt,
+            substeps,
+            sim_scale,
+            seed_threshold,
+            seed,
+            stop_after_frame,
+        } => {
+            let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
+            if let Some(du) = du {
+                settings.du = du;
+            }
+            if let Some(dv) = dv {
+                settings.dv = dv;
+            }
+            if let Some(feed) = feed {
+                settings.feed = feed;
+            }
+            if let Some(kill) = kill {
+                settings.kill = kill;
+            }
+            if let Some(dt) = dt {
+                settings.dt = dt;
+            }
+            if let Some(substeps) = substeps {
+                settings.substeps = substeps;
+            }
+            if let Some(sim_scale) = sim_scale {
+                settings.sim_scale = sim_scale;
+            }
+            if let Some(seed_threshold) = seed_threshold {
+                settings.seed_threshold = seed_threshold;
+            }
+            if let Some(seed) = seed {
+                settings.seed = seed;
+            }
+            render_morphogenesis_field(MorphogenesisFieldRenderRequest {
+                source_b_dir: &source_b_dir,
+                output_dir: &output_dir,
+                frames,
+                settings,
+                job_id: "direct-morphogenesis-field",
+                stop_after_frame,
+            })
+            .map(|_| ())
+        }
         Commands::QueueInit { queue_path } => queue_init(&queue_path),
         Commands::QueueAddTest {
             queue_path,

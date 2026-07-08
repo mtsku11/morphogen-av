@@ -11025,3 +11025,124 @@ fn render_feedback_sequence_midi_route_joins_checkpoint_contract_and_refuses_on_
         );
     }
 }
+
+/// `render-morphogenesis-field` (Tier "Morphogenesis" S1): checkpoint/resume
+/// mirrors `render-feedback-sequence` exactly — a partial checkpoint after
+/// `--stop-after-frame`, a resumed run byte-identical to an uninterrupted one,
+/// and a settings change refusing to resume the same output directory.
+#[test]
+fn render_morphogenesis_field_checkpoints_resumes_and_refuses_stale_settings() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let resumed_dir = temp_dir.path().join("resumed-output");
+    let uninterrupted_dir = temp_dir.path().join("uninterrupted-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "1",
+            "--rate",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let resumed_arg = resumed_dir.to_string_lossy().to_string();
+    let uninterrupted_arg = uninterrupted_dir.to_string_lossy().to_string();
+    let morphogenesis_args = [
+        "render-morphogenesis-field",
+        carrier_arg.as_str(),
+        resumed_arg.as_str(),
+        "--frames",
+        "3",
+        "--preset",
+        "coral",
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(morphogenesis_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed morphogenesis field after frame 0",
+        ));
+
+    let partial_checkpoint = read_json(&resumed_dir.join("checkpoint.json"));
+    assert_eq!(partial_checkpoint["task"], "render_morphogenesis_field");
+    assert_eq!(partial_checkpoint["status"], "running");
+    assert_eq!(partial_checkpoint["next_frame_index"], 1);
+    assert!(resumed_dir
+        .join("state/morphogenesis_frame_000000.rgba32f")
+        .exists());
+    assert!(resumed_dir.join("frames/frame_000000.png").exists());
+    assert!(!resumed_dir.join("manifest.json").exists());
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(morphogenesis_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered morphogenesis field with 3 frame(s)",
+        ));
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-field",
+            carrier_arg.as_str(),
+            uninterrupted_arg.as_str(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+        ])
+        .assert()
+        .success();
+
+    let final_checkpoint = read_json(&resumed_dir.join("checkpoint.json"));
+    assert_eq!(final_checkpoint["status"], "complete");
+    assert_eq!(final_checkpoint["next_frame_index"], 3);
+    let manifest = read_json(&resumed_dir.join("manifest.json"));
+    assert_eq!(manifest["task"], "render_morphogenesis_field");
+    assert_eq!(manifest["algorithm"], "morphogenesis_cpu_v1");
+
+    for index in 0..3 {
+        let frame_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(resumed_dir.join("frames").join(&frame_name)).expect("resumed frame"),
+            fs::read(uninterrupted_dir.join("frames").join(&frame_name))
+                .expect("uninterrupted frame"),
+            "resumed morphogenesis field must be byte-identical to an uninterrupted run ({frame_name})"
+        );
+    }
+
+    // Changed settings must refuse to resume the (now-complete) output dir.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-field",
+            carrier_arg.as_str(),
+            resumed_arg.as_str(),
+            "--frames",
+            "3",
+            "--preset",
+            "worms",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+}
