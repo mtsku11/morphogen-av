@@ -272,12 +272,21 @@ Metal parity gates compile only on macOS.
   `render_composition_persists_fingerprint_before_rendering` provokes a
   post-fingerprint failure and asserts the record already carries the scene's
   fingerprint.
-- **F4 — master-clock fps alignment guard.** The trim offset assumes the
-  scene's modulation timeline runs at the composition fps. A master-routed
-  stage whose envelope fps differs — a stateful stage samples at its own
-  pinned frame rate — reads the master off-time, silently. Fix: at spec
-  validation, refuse a `master.` route on a stage whose effective envelope fps
-  ≠ the composition fps (or, later, trim per stage fps).
+- **F4 — master-clock fps alignment guard. DONE (2026-07-08).** The trim
+  offset assumes the scene's modulation timeline runs at the composition fps;
+  a master-routed stage whose envelope fps differs (stateless default 12, or
+  flow_feedback's pinned frame rate) read the master off-time, silently.
+  Fixed: `ChainStage::effective_envelope_fps()` (single source of truth,
+  shared with `modulation_args` so the guard and the render can't drift) +
+  a per-stage check in `validate_scene_chain` — a `master.` route on a stage
+  whose effective envelope fps ≠ the composition fps refuses at validation
+  with the alignment remedy, before anything is written. Fires on the direct,
+  `--scene`, and queue-add paths (all validate through
+  `validate_composition_spec`). Test
+  `render_composition_master_route_refuses_misaligned_envelope_fps`:
+  24-fps composition × default-12 stateless stage refuses; stage
+  `modulation.fps: 24` renders; feedback stage (pinned 12) under 24 refuses.
+  Per-stage trimming stays deferred (the "or, later" clause).
 - **F5 — acceptance 3 on real footage.** The ramp-not-step proof ran on the
   warm|cool synthetic fixture (cut = one 116.1 boundary spike; 6-frame
   crossfade = ~16.5 across 7 pairs). The contract's real two-scene piece

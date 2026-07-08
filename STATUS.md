@@ -8,8 +8,9 @@ _Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **663 passing across 7 crates, 0 failing** (was 598
-  at arc start; 5.2 oscillators +13, 5.3 MIDI +22, 5.4 mattes +19, 5.6 colour +11).
+- `cargo test --workspace`: **664 passing across 7 crates, 0 failing** (was 598
+  at arc start; 5.2 oscillators +13, 5.3 MIDI +22, 5.4 mattes +19, 5.6 colour
+  +11, composition F4 +1).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `cargo fmt --all -- --check` is **dirty on ~54 pre-existing lines** (the
   Homebrew rustc 1.96 fmt drift again — verified pre-existing by identical
@@ -45,7 +46,9 @@ work on Tier 5")** — 5.1 combinators ✅ → 5.2 oscillators ✅ → 5.5 captu
 5.3 MIDI ✅ (S1–S3) → 5.4 mattes ✅ (S1+S2; chain-stage form flagged to 3.2 per
 contract) → 5.6 colour ✅ (S1–S3). **5.7 canvas stays user-gated (excluded from
 "remaining" by standing decision)**. Next per the roadmap: composition
-follow-ups F4/F5, then gated 2.x → blocked 3.x → **Morphogenesis**. Orchestration model: Opus architect writes each
+follow-up **F5** (**F4 ✅ 2026-07-08** — master-fps alignment guard at spec
+validation, shared `effective_envelope_fps`), then gated 2.x → blocked 3.x →
+**Morphogenesis**. Arc pushed to origin at `1e183f9` (2026-07-08). Orchestration model: Opus architect writes each
 `docs/*_MILESTONE.md` contract, a Sonnet agent builds, the architect verifies
 (baseline→delta, frames Read, frame-delta numbers) and checkpoints. Contracts
 already written ahead: `PERFORMANCE_CAPTURE_MILESTONE.md` (5.5, MVP-only +

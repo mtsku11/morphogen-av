@@ -321,10 +321,25 @@ impl ChainStage {
         Ok(())
     }
 
-    /// The `ModulationCliArgs` this stage renders with. A feedback stage's
-    /// envelope base is its pinned frame rate (the one-timeline-per-stateful-
-    /// render rule); stateless stages default to the direct CLI's
-    /// `--modulation-fps` default of 12.
+    /// The fps this stage's modulation envelopes sample against, or `None`
+    /// when the stage has no modulation block (no routes ⇒ no timeline). A
+    /// feedback stage's envelope base is its pinned frame rate (the
+    /// one-timeline-per-stateful-render rule); stateless stages default to
+    /// the direct CLI's `--modulation-fps` default of 12. Single source of
+    /// truth shared by `modulation_args` and the composition master-clock
+    /// alignment guard (F4).
+    pub(crate) fn effective_envelope_fps(&self) -> Option<f64> {
+        self.modulation_spec().map(|modulation| {
+            if matches!(self, ChainStage::FlowFeedback(_)) {
+                CHAIN_FEEDBACK_FRAME_RATE
+            } else {
+                modulation.fps.unwrap_or(12.0)
+            }
+        })
+    }
+
+    /// The `ModulationCliArgs` this stage renders with (envelope fps via
+    /// `effective_envelope_fps`).
     fn modulation_args(&self) -> ModulationCliArgs<'_> {
         match self.modulation_spec() {
             None => no_modulation(),
@@ -333,11 +348,9 @@ impl ChainStage {
                 modulator_audio: modulation.modulator_audio.as_deref(),
                 modulator_frames: modulation.modulator_frames.as_deref(),
                 sampling: modulation.sampling,
-                fps: if matches!(self, ChainStage::FlowFeedback(_)) {
-                    CHAIN_FEEDBACK_FRAME_RATE
-                } else {
-                    modulation.fps.unwrap_or(12.0)
-                },
+                // modulation_spec is Some in this arm, so the unwrap_or arm is
+                // unreachable — kept as a value fallback, never a panic path.
+                fps: self.effective_envelope_fps().unwrap_or(12.0),
                 cache_dir: None,
                 named_modulator_audio: &modulation.named_modulator_audio,
                 named_modulator_frames: &modulation.named_modulator_frames,

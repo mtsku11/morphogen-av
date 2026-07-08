@@ -197,7 +197,7 @@ pub(crate) fn validate_composition_spec(spec: &CompositionSpec) -> Result<(), Cl
             (Some(transition), false) => validate_transition(&scene.name, transition)?,
             (None, _) => {}
         }
-        validate_scene_chain(scene, spec.master.as_ref())?;
+        validate_scene_chain(scene, spec.master.as_ref(), spec.fps)?;
     }
 
     // A scene's incoming (previous scene's crossfade) and outgoing crossfade
@@ -255,10 +255,44 @@ fn crossfade_frames(transition: &Option<Transition>) -> u32 {
 /// media resolves). Refuses a master route when the composition declares no
 /// master, when the scene collides with the reserved name, or when the route
 /// needs a not-yet-supported video master.
-fn validate_scene_chain(scene: &Scene, master: Option<&MasterSpec>) -> Result<(), CliError> {
+fn validate_scene_chain(
+    scene: &Scene,
+    master: Option<&MasterSpec>,
+    composition_fps: f64,
+) -> Result<(), CliError> {
     let sources = scene_master_sources(scene)?;
     if sources.is_empty() {
         return validate_chain_spec(&scene.chain);
+    }
+    // F4 — master-clock fps alignment guard. The trim offset aligns the master
+    // to the scene's global start assuming the modulation timeline runs at the
+    // composition fps; a master-routed stage sampling at a different envelope
+    // fps would read the master off-time, silently. Refuse at validation.
+    for (index, stage) in scene.chain.stages.iter().enumerate() {
+        let routes_master = stage.modulation_spec().is_some_and(|modulation| {
+            modulation.routes.iter().any(|spec| {
+                parse_modulation_route(spec)
+                    .is_ok_and(|route| route.modulator.as_deref() == Some(MASTER_MODULATOR_NAME))
+            })
+        });
+        if !routes_master {
+            continue;
+        }
+        let Some(stage_fps) = stage.effective_envelope_fps() else {
+            continue;
+        };
+        if stage_fps != composition_fps {
+            return Err(CliError::Message(format!(
+                "scene {:?} stage {} routes from the master clock but its modulation \
+                 envelope fps ({stage_fps}) differs from the composition fps \
+                 ({composition_fps}) — the master would be read off-time. Set the stage \
+                 modulation \"fps\" to the composition fps (stateless stages default to 12; \
+                 a flow_feedback stage is pinned to its own frame rate and cannot route \
+                 from the master unless the composition fps matches it)",
+                scene.name,
+                index + 1,
+            )));
+        }
     }
     let Some(master) = master else {
         return Err(CliError::Message(format!(

@@ -2708,6 +2708,83 @@ fn render_composition_master_offset_equals_trimmed_media() {
 }
 
 #[test]
+fn render_composition_master_route_refuses_misaligned_envelope_fps() {
+    // F4: the master trim aligns to the composition fps; a master-routed stage
+    // sampling at a different envelope fps would read the master off-time,
+    // silently. Refused at validation (nothing written); aligning the stage's
+    // modulation fps renders.
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let src = temp_dir.path().join("src");
+    write_texture_sequence(&src, &[0, 2, 4]);
+    let wav = temp_dir.path().join("score.wav");
+    write_test_wav_at(&wav, 6144, &master_wav_samples(9, 3));
+
+    let spec_for = |fps: serde_json::Value, modulation: serde_json::Value| {
+        serde_json::json!({
+            "version": 1, "fps": fps, "master": {"audio": wav.to_string_lossy()},
+            "scenes": [{"name": "solo", "duration_frames": 3, "input_dir": src.to_string_lossy(),
+                "chain": {"version": 1, "stages": [{
+                    "effect": "rutt_etra", "line_pitch": 2, "displacement_depth": 0.0,
+                    "line_thickness": 1, "mono": false, "modulation": modulation
+                }]}}]
+        })
+    };
+    let render = |spec: &serde_json::Value, name: &str| {
+        let spec_path = temp_dir.path().join(format!("{name}.json"));
+        write_chain_spec(&spec_path, &spec.to_string());
+        let out = temp_dir.path().join(format!("{name}-out"));
+        let assert = Command::cargo_bin("morphogen")
+            .expect("morphogen binary")
+            .args([
+                "render-composition",
+                spec_path.to_string_lossy().as_ref(),
+                out.to_string_lossy().as_ref(),
+            ])
+            .assert();
+        (assert, out)
+    };
+
+    // Composition at 24 fps; the master-routed stateless stage defaults to an
+    // envelope fps of 12 — refused, nothing written.
+    let misaligned = spec_for(
+        serde_json::json!(24),
+        serde_json::json!({"routes": ["displacement_depth=master.audio-rms:40"]}),
+    );
+    let (assert, out) = render(&misaligned, "misaligned");
+    assert
+        .failure()
+        .stderr(predicate::str::contains("differs from the composition fps"));
+    assert!(!out.exists(), "refused spec must write nothing");
+
+    // Same composition with the stage's modulation fps aligned to 24 — renders.
+    let aligned = spec_for(
+        serde_json::json!(24),
+        serde_json::json!({
+            "routes": ["displacement_depth=master.audio-rms:40"], "fps": 24
+        }),
+    );
+    let (assert, out) = render(&aligned, "aligned");
+    assert.success();
+    assert!(out.join("composition-manifest.json").is_file());
+
+    // A flow_feedback stage is pinned to its own frame rate (12): a master
+    // route on it under a 24-fps composition is refused the same way.
+    let feedback_spec = serde_json::json!({
+        "version": 1, "fps": 24, "master": {"audio": wav.to_string_lossy()},
+        "scenes": [{"name": "solo", "duration_frames": 3, "input_dir": src.to_string_lossy(),
+            "chain": {"version": 1, "stages": [{
+                "effect": "flow_feedback",
+                "modulation": {"routes": ["feedback_mix=master.audio-rms:0.5,0.2"]}
+            }]}}]
+    });
+    let (assert, out) = render(&feedback_spec, "feedback-misaligned");
+    assert
+        .failure()
+        .stderr(predicate::str::contains("differs from the composition fps"));
+    assert!(!out.exists(), "refused feedback spec must write nothing");
+}
+
+#[test]
 fn render_composition_single_scene_matches_full_composition_scene() {
     // F2: `--scene <name>` renders that one scene at its composition timeline
     // offset (so its master binding is identical to the full render) without
