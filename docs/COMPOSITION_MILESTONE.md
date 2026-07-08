@@ -287,11 +287,17 @@ Metal parity gates compile only on macOS.
   24-fps composition × default-12 stateless stage refuses; stage
   `modulation.fps: 24` renders; feedback stage (pinned 12) under 24 refuses.
   Per-stage trimming stays deferred (the "or, later" clause).
-- **F5 — acceptance 3 on real footage.** The ramp-not-step proof ran on the
-  warm|cool synthetic fixture (cut = one 116.1 boundary spike; 6-frame
-  crossfade = ~16.5 across 7 pairs). The contract's real two-scene piece
-  (rutt_etra scene → flow_feedback scene, 12-frame crossfade on the cello/harp
-  clips) is still owed — needs macOS + the gitignored clips; Read the boundary
-  frames and report `frame-delta.py` across the window.
+- **F5 — acceptance 3 on real footage. DONE (2026-07-08).** The real
+  two-scene piece rendered end to end: 36-frame rutt_etra scene (cello,
+  640×360@12, pitch 4 / depth 48 / thickness 2) → 12-frame crossfade →
+  36-frame flow_feedback scene (harp) = 60 timeline frames. Per-pair
+  frame-delta across the window: scene-1 motion ≈7–11, window entry 13.77
+  decaying smoothly 12.6 → 9.5 → 8.4 → … → 5.5 into scene-2's ≈2.0 — the
+  transition is spread across all 12 pairs with no cut-style spike (the
+  synthetic cut's one-pair 116.1 is the counter-shape). Boundary frames Read:
+  pure scanline cellist (23) → harp meadow ghosting behind the terrain (27) →
+  equal mid-blend, ridges dissolving into grass (31) → meadow-dominant with
+  the last ripples sinking (35) → pure flow-feedback harpist (36). Evidence
+  only — no code change; clips stay gitignored.
 - **F6 — unchanged deferrals:** morph transitions, per-scene resolutions/fps,
   nested compositions, audio-only/generative scenes, video master (above).

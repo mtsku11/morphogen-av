@@ -45,9 +45,12 @@ this session.
 work on Tier 5")** — 5.1 combinators ✅ → 5.2 oscillators ✅ → 5.5 capture ✅ →
 5.3 MIDI ✅ (S1–S3) → 5.4 mattes ✅ (S1+S2; chain-stage form flagged to 3.2 per
 contract) → 5.6 colour ✅ (S1–S3). **5.7 canvas stays user-gated (excluded from
-"remaining" by standing decision)**. Next per the roadmap: composition
-follow-up **F5** (**F4 ✅ 2026-07-08** — master-fps alignment guard at spec
-validation, shared `effective_envelope_fps`), then gated 2.x → blocked 3.x →
+"remaining" by standing decision)**. Composition follow-ups **F4 ✅ + F5 ✅ (2026-07-08)** — master-fps alignment
+guard at spec validation (shared `effective_envelope_fps`), and acceptance 3
+proven on real footage (cello rutt-etra → 12-frame crossfade → harp
+flow-feedback; window deltas 13.77 → 5.5 ramp vs the synthetic cut's 116.1
+spike; boundary frames Read). Composition post-build review is closed (F6 =
+deferrals list). Next per the roadmap: gated 2.x → blocked 3.x →
 **Morphogenesis**. Arc pushed to origin at `1e183f9` (2026-07-08). Orchestration model: Opus architect writes each
 `docs/*_MILESTONE.md` contract, a Sonnet agent builds, the architect verifies
 (baseline→delta, frames Read, frame-delta numbers) and checkpoints. Contracts
