@@ -8,16 +8,16 @@ _Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **689 passing across 7 crates, 0 failing** (was 598
+- `cargo test --workspace`: **693 passing across 7 crates, 0 failing** (was 598
   at arc start; 5.2 oscillators +13, 5.3 MIDI +22, 5.4 mattes +19, 5.6 colour
-  +11, composition F4 +1, Morphogenesis S1–S3 +25).
+  +11, composition F4 +1, Morphogenesis S1–S4 +29).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `cargo fmt --all -- --check` is **dirty on ~54 pre-existing lines** (the
   Homebrew rustc 1.96 fmt drift again — verified pre-existing by identical
   per-file diff counts with all 2026-07-07 changes stashed; new code adds zero
   fmt diffs). Reconcile in its own commit when convenient, not mid-feature.
-- `swift test`: **142 passing, 0 failing** (was 123 at arc start; 5.5 capture
-  +9, 5.3 MIDI S3 +5, 5.4 mattes S2 +4, 5.6 Rec.709 pin +1).
+- `swift test`: **147 passing, 0 failing** (was 123 at arc start; 5.5 capture
+  +9, 5.3 MIDI S3 +5, 5.4 mattes S2 +4, 5.6 Rec.709 pin +1, Morphogenesis S4 +5).
 - `cargo clippy --workspace --all-targets -- -D warnings`: **clean**.
 - Toolchain: Homebrew rustc **1.96.0** (`rust-toolchain.toml` pins `channel =
   "stable"`, which Homebrew installs ignore — a rustc upgrade can shift
@@ -50,11 +50,13 @@ guard at spec validation (shared `effective_envelope_fps`), and acceptance 3
 proven on real footage (cello rutt-etra → 12-frame crossfade → harp
 flow-feedback; window deltas 13.77 → 5.5 ramp vs the synthetic cut's 116.1
 spike; boundary frames Read). Composition post-build review is closed (F6 =
-deferrals list). **Morphogenesis is IN FLIGHT (user-directed 2026-07-08,
-jumping the gated 2.x/3.x tiers): S1 field sim ✅ → S2 composite + CLI ✅ →
-S3 coupling + mod targets ✅ (LFO pulse verified on cello footage; param-map
-segment retuned same-sign after the dark-footage die-off trap) → next S4
-queue/SwiftUI; S5 Metal deferred-by-default.**
+deferrals list). **Morphogenesis MILESTONE COMPLETE (2026-07-09;
+user-directed 2026-07-08, jumping the gated 2.x/3.x tiers): S1 field sim ✅ →
+S2 composite + CLI ✅ → S3 coupling + mod targets ✅ → S4 queue + SwiftUI ✅;
+S5 Metal stays deferred-by-default (the datamosh sub-epsilon finding). The app
+named Morphogen now contains morphogenesis.** Remaining roadmap: gated 2.x
+(chain-builder UI / live preview need explicit commitment) → blocked 3.x (3.1
+depth needs a carve-out contract).
 Everything through composition F5 pushed to origin at `ec61fa3` (2026-07-08). Orchestration model: Opus architect writes each
 `docs/*_MILESTONE.md` contract, a Sonnet agent builds, the architect verifies
 (baseline→delta, frames Read, frame-delta numbers) and checkpoints. Contracts

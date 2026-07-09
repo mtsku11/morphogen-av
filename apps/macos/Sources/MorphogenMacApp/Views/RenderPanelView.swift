@@ -1298,6 +1298,190 @@ struct RenderPanelView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
+          Text("Morphogenesis — Reaction-Diffusion (Gray-Scott)")
+            .font(.subheadline.weight(.semibold))
+
+          HStack(spacing: 16) {
+            Picker("Preset", selection: $state.morphogenesisPreset) {
+              ForEach(MorphogenesisPresetOption.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+              }
+            }
+            .frame(width: 160)
+            .help("Named (feed, kill) atlas points — most of that space is dead (uniform grey).")
+
+            Stepper(value: $state.morphogenesisPatternMix, in: 0...1, step: 0.05) {
+              Text("Pattern Mix \(state.morphogenesisPatternMix, specifier: "%.2f")")
+            }
+            .frame(width: 180, alignment: .leading)
+            .help("V-weighted colourize tint strength; 0 = the carrier passes through unmodified.")
+
+            Stepper(value: $state.morphogenesisDisplace, in: -64...64, step: 1) {
+              Text("Displace \(state.morphogenesisDisplace, specifier: "%.0f")px")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Pixel displacement pushing the carrier sample along the growth gradient.")
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.morphogenesisPatternHue, in: 0...1, step: 0.02) {
+              Text("Hue \(state.morphogenesisPatternHue, specifier: "%.2f")")
+            }
+            .frame(width: 130, alignment: .leading)
+            .disabled(state.morphogenesisPatternColorMode == .inherit)
+            .help("Fixed tint hue (turns); ignored in Inherit mode.")
+
+            Picker("Colour", selection: $state.morphogenesisPatternColorMode) {
+              ForEach(MorphogenesisColorModeOption.allCases) { mode in
+                Text(mode.rawValue).tag(mode)
+              }
+            }
+            .frame(width: 160)
+            .help("Hue tints toward a fixed colour; Inherit tints toward the sample's own hue.")
+
+            Stepper(value: $state.morphogenesisParamMapStrength, in: 0...4, step: 0.1) {
+              Text("Param Map \(state.morphogenesisParamMapStrength, specifier: "%.2f")")
+            }
+            .frame(width: 170, alignment: .leading)
+            .help("Strength of the carrier-luma-driven (feed, kill) shift; 0 = uniform chemistry.")
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.morphogenesisSeedThreshold, in: 0...1, step: 0.05) {
+              Text("Seed Threshold \(state.morphogenesisSeedThreshold, specifier: "%.2f")")
+            }
+            .frame(width: 190, alignment: .leading)
+            .help("Frame-zero carrier luma at/above this seeds the growth field.")
+
+            Stepper(value: $state.morphogenesisSimScale, in: 1...8, step: 1) {
+              Text("Sim Scale \(state.morphogenesisSimScale)")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Sim resolution divisor relative to the carrier frame; 1 = full res.")
+
+            Stepper(value: $state.morphogenesisSubsteps, in: 0...64, step: 1) {
+              Text("Substeps \(state.morphogenesisSubsteps)")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Gray-Scott substeps per output frame; 0 freezes the field at its seed.")
+          }
+
+          ModulationSlotRow(
+            label: "Feed",
+            source: $state.morphogenesisModFeedSource,
+            scale: $state.morphogenesisModFeedScale,
+            offset: $state.morphogenesisModFeedOffset,
+            samplingOverride: $state.morphogenesisModFeedSamplingOverride,
+            scaleRange: -0.12...0.12, scaleStep: 0.005, offsetRange: -0.12...0.12, offsetStep: 0.005,
+            modulator: $state.morphogenesisModFeedModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModFeedLfoShape,
+            lfoRate: $state.morphogenesisModFeedLfoRate,
+            lfoPhase: $state.morphogenesisModFeedLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModFeedMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Kill",
+            source: $state.morphogenesisModKillSource,
+            scale: $state.morphogenesisModKillScale,
+            offset: $state.morphogenesisModKillOffset,
+            samplingOverride: $state.morphogenesisModKillSamplingOverride,
+            scaleRange: -0.12...0.12, scaleStep: 0.005, offsetRange: -0.12...0.12, offsetStep: 0.005,
+            modulator: $state.morphogenesisModKillModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModKillLfoShape,
+            lfoRate: $state.morphogenesisModKillLfoRate,
+            lfoPhase: $state.morphogenesisModKillLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModKillMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Param Map",
+            source: $state.morphogenesisModParamMapStrengthSource,
+            scale: $state.morphogenesisModParamMapStrengthScale,
+            offset: $state.morphogenesisModParamMapStrengthOffset,
+            samplingOverride: $state.morphogenesisModParamMapStrengthSamplingOverride,
+            modulator: $state.morphogenesisModParamMapStrengthModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModParamMapStrengthLfoShape,
+            lfoRate: $state.morphogenesisModParamMapStrengthLfoRate,
+            lfoPhase: $state.morphogenesisModParamMapStrengthLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModParamMapStrengthMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Pattern Mix",
+            source: $state.morphogenesisModPatternMixSource,
+            scale: $state.morphogenesisModPatternMixScale,
+            offset: $state.morphogenesisModPatternMixOffset,
+            samplingOverride: $state.morphogenesisModPatternMixSamplingOverride,
+            modulator: $state.morphogenesisModPatternMixModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModPatternMixLfoShape,
+            lfoRate: $state.morphogenesisModPatternMixLfoRate,
+            lfoPhase: $state.morphogenesisModPatternMixLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModPatternMixMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Displace",
+            source: $state.morphogenesisModDisplaceSource,
+            scale: $state.morphogenesisModDisplaceScale,
+            offset: $state.morphogenesisModDisplaceOffset,
+            samplingOverride: $state.morphogenesisModDisplaceSamplingOverride,
+            scaleRange: -256...256, scaleStep: 8, offsetRange: -256...256, offsetStep: 8,
+            modulator: $state.morphogenesisModDisplaceModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModDisplaceLfoShape,
+            lfoRate: $state.morphogenesisModDisplaceLfoRate,
+            lfoPhase: $state.morphogenesisModDisplaceLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModDisplaceMidiCc
+          )
+
+          ModulationMediaRow(
+            sources: [
+              state.morphogenesisModFeedSource, state.morphogenesisModKillSource,
+              state.morphogenesisModParamMapStrengthSource, state.morphogenesisModPatternMixSource,
+              state.morphogenesisModDisplaceSource,
+            ],
+            audioURL: state.morphogenesisModulatorAudioURL,
+            framesURL: state.morphogenesisModulatorFramesURL,
+            sampling: $state.morphogenesisModSampling,
+            chooseAudio: { state.chooseMorphogenesisModulatorWAV() },
+            chooseFrames: { state.chooseMorphogenesisModulatorFrames() },
+            midiURL: state.morphogenesisModulatorMidiURL,
+            chooseMidi: { state.chooseMorphogenesisModulatorMIDI() }
+          )
+
+          NamedModulatorsSection(
+            modulators: $state.morphogenesisNamedModulators,
+            onAdd: { state.addMorphogenesisNamedModulator() },
+            onRemove: { state.removeMorphogenesisNamedModulator(id: $0) },
+            chooseAudio: { state.chooseMorphogenesisNamedModulatorWAV(id: $0) },
+            chooseFrames: { state.chooseMorphogenesisNamedModulatorFrames(id: $0) },
+            chooseMidi: { state.chooseMorphogenesisNamedModulatorMIDI(id: $0) }
+          )
+
+          Text(state.morphogenesisSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          Button {
+            state.runMorphogenesisSequenceRender()
+          } label: {
+            Label("Run Morphogenesis", systemImage: "leaf.fill")
+          }
+        }
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 8) {
           Text("Granular Mosaic — Temporal Pool (Joint-AV)")
             .font(.subheadline.weight(.semibold))
 

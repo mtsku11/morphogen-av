@@ -151,6 +151,21 @@ fn default_output_bit_depth() -> u8 {
     8
 }
 
+/// Morphogenesis preset label (Tier "Morphogenesis" S4). Purely a round-trip
+/// display convenience — queue-add resolves `--preset` plus any per-knob CLI
+/// overrides into the concrete fields below, which are the actual source of
+/// truth `queue-run` reconstructs from (avoids a second preset-resolution path
+/// that could drift from the direct CLI's).
+fn default_morphogenesis_preset() -> String {
+    "coral".to_string()
+}
+
+/// Morphogenesis composite colour-mode label; mirrors
+/// [`MorphogenesisSequenceContract`]'s composite default (hue).
+fn default_morphogenesis_pattern_color_mode() -> String {
+    "hue".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -1273,6 +1288,65 @@ pub enum RenderJobTask {
         /// Frame rate mapping A's frame index to time for the descriptor lookup.
         fps: f64,
     },
+    /// Gray-Scott reaction-diffusion sequence (Tier "Morphogenesis" S4;
+    /// `docs/MORPHOGENESIS_MILESTONE.md`). Stateful — the checkpoint contract
+    /// lives in `morphogen-cli` (mirrors `FrameSequenceFlowFeedback`'s shape).
+    /// Single-source (carrier only): modulator media below feeds the mod-matrix
+    /// routes, not a second visual source. `preset` is a queue-add-time label
+    /// only; the knob fields are the fully resolved settings (preset defaults
+    /// with any CLI overrides already applied), so they are the actual source
+    /// of truth `queue-run` reconstructs from.
+    RenderMorphogenesisSequence {
+        carrier_frame_directory: String,
+        output_directory: String,
+        frames: u32,
+        frame_rate: f64,
+        /// Preset label (`coral`/`mitosis`/`worms`/`spots`) — display only.
+        #[serde(default = "default_morphogenesis_preset")]
+        preset: String,
+        du: f32,
+        dv: f32,
+        feed: f32,
+        kill: f32,
+        dt: f32,
+        /// Gray-Scott substeps per output frame. `0` freezes the field.
+        substeps: u32,
+        sim_scale: u32,
+        seed_threshold: f32,
+        seed: u64,
+        /// S3 footage-coupled `(feed, kill)` shift strength; `0` = uniform sim.
+        param_map_strength: f32,
+        /// `[0,1]`: `V`-weighted colourize tint strength.
+        pattern_mix: f32,
+        /// Pixel displacement along `∇V`.
+        displace: f32,
+        /// Hue (turns) used when `pattern_color_mode == "hue"`.
+        pattern_hue: f32,
+        /// `hue` or `inherit`.
+        #[serde(default = "default_morphogenesis_pattern_color_mode")]
+        pattern_color_mode: String,
+        /// Persisted modulation routes (empty = unmodulated). Envelope times
+        /// are sampled against this job's `frame_rate`. Stateful: routes join
+        /// the render's checkpoint contract.
+        #[serde(default)]
+        modulation_routes: Vec<RenderJobModulationRoute>,
+        #[serde(default)]
+        modulator_audio_path: Option<String>,
+        #[serde(default)]
+        modulator_frames_directory: Option<String>,
+        #[serde(default)]
+        modulation_sampling: ModulationSampling,
+        /// Named-modulator media referenced by routes' `<name>.` prefix
+        /// (empty = no named routes).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_audio: Vec<NamedModulatorMedia>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_frames: Vec<NamedModulatorMedia>,
+        #[serde(default)]
+        modulator_midi_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        named_modulator_midi: Vec<NamedModulatorMedia>,
+    },
 }
 
 /// Selects how Source A's impulse response is mapped onto the carrier channels.
@@ -1994,6 +2068,99 @@ mod tests {
 
         let json = serde_json::to_string(&task).expect("serialize matte task");
         let decoded: RenderJobTask = serde_json::from_str(&json).expect("deserialize matte task");
+        assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn morphogenesis_task_without_preset_or_color_mode_defaults_to_coral_and_hue() {
+        // Pre-slice queue JSON never existed for this brand-new (Tier
+        // "Morphogenesis" S4) variant, but `preset`/`pattern_color_mode` still
+        // carry defaults defensively (round-trip display labels only — the
+        // resolved knob fields below are the real source of truth).
+        let json = r#"{
+            "type": "render_morphogenesis_sequence",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "frames": 4,
+            "frame_rate": 24.0,
+            "du": 0.16,
+            "dv": 0.08,
+            "feed": 0.037,
+            "kill": 0.06,
+            "dt": 1.0,
+            "substeps": 12,
+            "sim_scale": 2,
+            "seed_threshold": 0.5,
+            "seed": 71,
+            "param_map_strength": 1.0,
+            "pattern_mix": 0.85,
+            "displace": 0.0,
+            "pattern_hue": 0.02
+        }"#;
+
+        let task: RenderJobTask = serde_json::from_str(json).expect("deserialize legacy-shaped task");
+        let RenderJobTask::RenderMorphogenesisSequence {
+            preset,
+            pattern_color_mode,
+            modulation_routes,
+            named_modulator_audio,
+            named_modulator_frames,
+            named_modulator_midi,
+            ..
+        } = task
+        else {
+            panic!("expected morphogenesis task");
+        };
+        assert_eq!(preset, "coral");
+        assert_eq!(pattern_color_mode, "hue");
+        assert!(modulation_routes.is_empty());
+        assert!(named_modulator_audio.is_empty());
+        assert!(named_modulator_frames.is_empty());
+        assert!(named_modulator_midi.is_empty());
+    }
+
+    #[test]
+    fn morphogenesis_task_round_trips_with_modulation() {
+        let task = RenderJobTask::RenderMorphogenesisSequence {
+            carrier_frame_directory: "/tmp/car".to_string(),
+            output_directory: "/tmp/out".to_string(),
+            frames: 60,
+            frame_rate: 24.0,
+            preset: "mitosis".to_string(),
+            du: 0.16,
+            dv: 0.08,
+            feed: 0.0367,
+            kill: 0.0649,
+            dt: 1.0,
+            substeps: 12,
+            sim_scale: 2,
+            seed_threshold: 0.5,
+            seed: 71,
+            param_map_strength: 1.0,
+            pattern_mix: 0.85,
+            displace: 0.0,
+            pattern_hue: 0.02,
+            pattern_color_mode: "hue".to_string(),
+            modulation_routes: vec![RenderJobModulationRoute {
+                target: "feed".to_string(),
+                source: ModulationSource::AudioRms,
+                scale: 0.5,
+                offset: 0.25,
+                sampling: None,
+                modulator: None,
+            }],
+            modulator_audio_path: Some("/tmp/mod.wav".to_string()),
+            modulator_frames_directory: None,
+            modulation_sampling: ModulationSampling::Hold,
+            named_modulator_audio: Vec::new(),
+            named_modulator_frames: Vec::new(),
+            modulator_midi_path: None,
+            named_modulator_midi: Vec::new(),
+        };
+
+        let json = serde_json::to_string(&task).expect("serialize morphogenesis task");
+        assert!(json.starts_with(r#"{"type":"render_morphogenesis_sequence""#));
+        let decoded: RenderJobTask = serde_json::from_str(&json).expect("decode morphogenesis task");
         assert_eq!(decoded, task);
     }
 

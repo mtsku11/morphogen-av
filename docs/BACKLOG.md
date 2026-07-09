@@ -168,10 +168,10 @@ queue pair, SwiftUI spec-runner panel. Post-build review follow-ups live in
 [COMPOSITION_MILESTONE.md](COMPOSITION_MILESTONE.md) §Post-build review:
 **F1 (cut-only cross-scene dims refusal), F3 (fingerprint persisted before
 render → real mid-scene resume), and F2 (`--scene <name>` single-scene render at
-timeline offset, no assembly) are DONE (2026-07-07)**; **F4** (master-fps
-alignment guard) and **F5** (real-footage two-scene acceptance render) remain
-(deferred behind the Tier 5 arc by user direction 2026-07-07), then
-Morphogenesis. **Tier 5 arc COMPLETE (2026-07-08; user-directed 2026-07-07: "all remaining
+timeline offset, no assembly) are DONE (2026-07-07)**; **F4 (master-fps
+alignment guard) and F5 (real-footage two-scene acceptance render: cello
+rutt-etra → 12-frame crossfade → harp flow-feedback, ramp-not-step proven)
+are DONE (2026-07-08)** — the composition post-build review is closed. **Tier 5 arc COMPLETE (2026-07-08; user-directed 2026-07-07: "all remaining
 Tier 5"): 5.2 oscillator bank
 ([OSCILLATOR_BANK_MILESTONE.md](OSCILLATOR_BANK_MILESTONE.md) — `generate-frames`
 CLI, 4 presets, f64 phase law); 5.5 capture
@@ -186,11 +186,13 @@ to 3.2); 5.6 colour S1–S3
 interchange + --output-bit-depth rollout + Rec.709-tagged ProRes export).
 5.7 canvas stays user-gated.**
 
-**The wild experimental plan (user-requested 2026-07-05) is the morphogenesis
-engine — contract ready in
-[MORPHOGENESIS_MILESTONE.md](MORPHOGENESIS_MILESTONE.md)**: Gray-Scott
-reaction-diffusion grown on the footage, A steering the chemistry via the
-existing mod matrix. Slices S1–S4 build-ready; Metal deferred-by-default.
+**Morphogenesis MILESTONE COMPLETE (2026-07-09,
+[MORPHOGENESIS_MILESTONE.md](MORPHOGENESIS_MILESTONE.md))**: Gray-Scott
+reaction-diffusion grown on the footage — field sim + RGBA32F checkpoint,
+pattern-mix/displace composite, B→(f,k) param maps, five mod targets
+(`feed = lfo(...)` pulses the growth), queue pair + SwiftUI panel. S5 Metal
+stays deferred-by-default (the datamosh sub-epsilon finding). The app named
+Morphogen contains morphogenesis.
 
 **The full deferred-work catalog, tiered and build-ready, is
 [DEFERRED_WORK_HANDOFF.md](DEFERRED_WORK_HANDOFF.md)** — entry points, slice

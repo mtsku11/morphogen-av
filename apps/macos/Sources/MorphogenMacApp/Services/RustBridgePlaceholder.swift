@@ -184,6 +184,12 @@ enum RustBridgePlaceholder {
     )
   }
 
+  static func defaultMorphogenesisSequenceRenderQueueURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent(
+      "morphogen-morphogenesis-sequence-queue.json"
+    )
+  }
+
   static func defaultMediaProxyRootURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent(
       "morphogen-media-proxies",
@@ -2366,6 +2372,117 @@ enum RustBridgePlaceholder {
     return arguments
   }
 
+  // MARK: - Morphogenesis (Tier "Morphogenesis" S4, docs/MORPHOGENESIS_MILESTONE.md)
+
+  /// Queue a Gray-Scott reaction-diffusion sequence job then run it — the
+  /// standard add→run flow every effect panel uses. Single-source (Source B
+  /// only, CPU-only — no backend picker, unlike Rutt-Etra).
+  static func runQueuedMorphogenesisSequenceRender(
+    request: MorphogenesisSequenceRenderQueueCommandRequest
+  ) throws -> FluidAdvectionRenderQueueCommandResult {
+    let repoRoot = try resolveRepoRoot()
+    if !FileManager.default.fileExists(atPath: request.queueURL.path) {
+      _ = try queueInit(queueURL: request.queueURL)
+    }
+
+    let addResult = try runCommand(
+      arguments: try queueAddMorphogenesisSequenceArguments(request: request),
+      currentDirectoryURL: repoRoot
+    )
+    let jobID = try queuedJobID(from: addResult)
+    let runResult = try runCommand(
+      arguments: [
+        "cargo",
+        "run",
+        "--quiet",
+        "--release",
+        "-p",
+        "morphogen-cli",
+        "--",
+        "queue-run-morphogenesis-sequence",
+        request.queueURL.path
+      ],
+      currentDirectoryURL: repoRoot
+    )
+
+    return FluidAdvectionRenderQueueCommandResult(
+      queueURL: request.queueURL,
+      bundleURL: request.outputRootDirectoryURL.appendingPathComponent(jobID, isDirectory: true),
+      commandSummary: [addResult.summary, runResult.summary].joined(separator: " ")
+    )
+  }
+
+  static func queueAddMorphogenesisSequenceArguments(
+    request: MorphogenesisSequenceRenderQueueCommandRequest
+  ) throws -> [String] {
+    try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
+    guard request.simScale >= 1 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("sim scale must be >= 1")
+    }
+    guard request.paramMapStrength.isFinite && request.paramMapStrength >= 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("param map strength must be finite and >= 0")
+    }
+    guard request.patternMix.isFinite && (0...1).contains(request.patternMix) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("pattern mix must be finite and in [0, 1]")
+    }
+    guard request.displace.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("displace must be finite")
+    }
+    guard request.seedThreshold.isFinite && (0...1).contains(request.seedThreshold) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("seed threshold must be finite and in [0, 1]")
+    }
+
+    var arguments = [
+      "cargo",
+      "run",
+      "--quiet",
+      "--release",
+      "-p",
+      "morphogen-cli",
+      "--",
+      "queue-add-morphogenesis-sequence",
+      request.queueURL.path,
+      request.carrierDirectoryURL.path,
+      request.outputRootDirectoryURL.path,
+      "--frames",
+      String(request.frames),
+      "--frame-rate",
+      cliNumber(request.frameRate),
+      "--preset",
+      request.preset.cliValue,
+      "--param-map-strength",
+      cliNumber(request.paramMapStrength),
+      "--seed-threshold",
+      cliNumber(request.seedThreshold),
+      "--sim-scale",
+      String(request.simScale),
+      "--substeps",
+      String(request.substeps),
+      "--pattern-mix",
+      cliNumber(request.patternMix),
+      // `=`-joined so a negative displacement is not mistaken for a flag (clap).
+      "--displace=\(cliNumber(request.displace))",
+      "--pattern-hue",
+      cliNumber(request.patternHue),
+      "--pattern-color-mode",
+      request.patternColorMode.cliValue
+    ]
+    if let projectURL = request.projectURL {
+      arguments.append("--project-path")
+      arguments.append(projectURL.path)
+    }
+    try appendModulationArguments(
+      &arguments,
+      routes: request.modulationRoutes,
+      modulatorAudioURL: request.modulatorAudioURL,
+      modulatorFramesURL: request.modulatorFramesURL,
+      modulatorMidiURL: request.modulatorMidiURL,
+      sampling: request.modulationSampling,
+      namedModulators: request.namedModulators
+    )
+    return arguments
+  }
+
   // MARK: - Composition timeline (docs/COMPOSITION_MILESTONE.md)
 
   static func defaultCompositionRenderQueueURL() -> URL {
@@ -4070,6 +4187,35 @@ struct RuttEtraSequenceRenderQueueCommandRequest {
   var matteSource: MatteSourceOption = .off
   var matteFramesURL: URL? = nil
   var matteGain: Double = 1.0
+}
+
+/// Gray-Scott reaction-diffusion sequence (Tier "Morphogenesis" S4,
+/// docs/MORPHOGENESIS_MILESTONE.md). Single-source (Source B only), CPU-only —
+/// no backend/matte fields, unlike Rutt-Etra/palette-quantize.
+struct MorphogenesisSequenceRenderQueueCommandRequest {
+  let queueURL: URL
+  let carrierDirectoryURL: URL
+  let outputRootDirectoryURL: URL
+  let frames: Int
+  let frameRate: Double
+  let preset: MorphogenesisPresetOption
+  let paramMapStrength: Double
+  let seedThreshold: Double
+  let simScale: Int
+  let substeps: Int
+  let patternMix: Double
+  let displace: Double
+  let patternHue: Double
+  let patternColorMode: MorphogenesisColorModeOption
+  let projectURL: URL?
+  // Modulation-matrix routes; defaulted off so call sites predating this
+  // slice keep their unmodulated meaning.
+  var modulationRoutes: [ModulationRouteSpec] = []
+  var modulatorAudioURL: URL? = nil
+  var modulatorFramesURL: URL? = nil
+  var modulatorMidiURL: URL? = nil
+  var modulationSampling: ModulationSamplingOption = .hold
+  var namedModulators: [NamedModulatorMediaSpec] = []
 }
 
 enum CoagulationFlowSourceOption: String, CaseIterable, Identifiable {

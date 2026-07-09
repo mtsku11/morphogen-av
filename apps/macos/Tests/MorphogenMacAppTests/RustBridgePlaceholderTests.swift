@@ -2098,6 +2098,152 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  private func makeMorphogenesisRequest() -> MorphogenesisSequenceRenderQueueCommandRequest {
+    MorphogenesisSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/morphogenesis-queue.json"),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(
+        fileURLWithPath: "/tmp/output-root/morphogenesis", isDirectory: true
+      ),
+      frames: 60,
+      frameRate: 24.0,
+      preset: .coral,
+      paramMapStrength: 1.0,
+      seedThreshold: 0.5,
+      simScale: 2,
+      substeps: 12,
+      patternMix: 0.85,
+      displace: 0.0,
+      patternHue: 0.02,
+      patternColorMode: .hue,
+      projectURL: nil
+    )
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsIncludeKnobs() throws {
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: makeMorphogenesisRequest()
+    )
+
+    XCTAssertEqual(
+      arguments,
+      [
+        "cargo", "run", "--quiet", "--release", "-p", "morphogen-cli", "--",
+        "queue-add-morphogenesis-sequence",
+        "/tmp/morphogenesis-queue.json",
+        "/tmp/source-b-frames",
+        "/tmp/output-root/morphogenesis",
+        "--frames", "60",
+        "--frame-rate", "24",
+        "--preset", "coral",
+        "--param-map-strength", "1",
+        "--seed-threshold", "0.5",
+        "--sim-scale", "2",
+        "--substeps", "12",
+        "--pattern-mix", "0.85",
+        "--displace=0",
+        "--pattern-hue", "0.02",
+        "--pattern-color-mode", "hue",
+      ]
+    )
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsCarryModulationRoutesAndMedia() throws {
+    var request = makeMorphogenesisRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "feed", source: "audio-rms", scale: 0.02, offset: 0.03)
+    ]
+    request.modulatorAudioURL = URL(fileURLWithPath: "/tmp/modulator.wav")
+    request.modulationSampling = .smooth
+
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: request
+    )
+
+    XCTAssertTrue(arguments.contains("feed=audio-rms:0.02,0.03"))
+    guard let audioIndex = arguments.firstIndex(of: "--modulator-audio") else {
+      return XCTFail("expected a --modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[audioIndex + 1], "/tmp/modulator.wav")
+    guard let samplingIndex = arguments.firstIndex(of: "--modulation-sampling") else {
+      return XCTFail("expected a --modulation-sampling flag")
+    }
+    XCTAssertEqual(arguments[samplingIndex + 1], "smooth")
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsCarryNamedModulators() throws {
+    var request = makeMorphogenesisRequest()
+    request.modulationRoutes = [
+      ModulationRouteSpec(target: "kill", source: "audio-rms", scale: 0.01, offset: 0.05, modulator: "bass")
+    ]
+    request.namedModulators = [
+      NamedModulatorMediaSpec(name: "bass", audioURL: URL(fileURLWithPath: "/tmp/bass.wav"), framesURL: nil)
+    ]
+
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: request)
+    XCTAssertTrue(arguments.contains("kill=bass.audio-rms:0.01,0.05"))
+    guard let index = arguments.firstIndex(of: "--named-modulator-audio") else {
+      return XCTFail("expected a --named-modulator-audio flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "bass=/tmp/bass.wav")
+  }
+
+  func testQueuedMorphogenesisSequenceNoModulationKeepsArgumentsByteIdentical() throws {
+    // No active mod slot ⇒ the exact unmodulated CLI path (the
+    // testQueuedMorphogenesisSequenceArgumentsIncludeKnobs pin).
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: makeMorphogenesisRequest()
+    )
+    XCTAssertFalse(arguments.contains("--modulate"))
+    XCTAssertFalse(arguments.contains("--modulation-sampling"))
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsRejectInvalidValues() {
+    let base = makeMorphogenesisRequest()
+
+    let invalidSimScale = MorphogenesisSequenceRenderQueueCommandRequest(
+      queueURL: base.queueURL,
+      carrierDirectoryURL: base.carrierDirectoryURL,
+      outputRootDirectoryURL: base.outputRootDirectoryURL,
+      frames: base.frames,
+      frameRate: base.frameRate,
+      preset: base.preset,
+      paramMapStrength: base.paramMapStrength,
+      seedThreshold: base.seedThreshold,
+      simScale: 0,
+      substeps: base.substeps,
+      patternMix: base.patternMix,
+      displace: base.displace,
+      patternHue: base.patternHue,
+      patternColorMode: base.patternColorMode,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidSimScale)
+    )
+
+    let invalidPatternMix = MorphogenesisSequenceRenderQueueCommandRequest(
+      queueURL: base.queueURL,
+      carrierDirectoryURL: base.carrierDirectoryURL,
+      outputRootDirectoryURL: base.outputRootDirectoryURL,
+      frames: base.frames,
+      frameRate: base.frameRate,
+      preset: base.preset,
+      paramMapStrength: base.paramMapStrength,
+      seedThreshold: base.seedThreshold,
+      simScale: base.simScale,
+      substeps: base.substeps,
+      patternMix: 1.5,
+      displace: base.displace,
+      patternHue: base.patternHue,
+      patternColorMode: base.patternColorMode,
+      projectURL: nil
+    )
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidPatternMix)
+    )
+  }
+
   func testQueuedRetroStaticSequenceArgumentsRejectInvalidValues() {
     let invalid = RetroStaticSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/retro-static-queue.json"),

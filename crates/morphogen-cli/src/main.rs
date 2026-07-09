@@ -1914,6 +1914,98 @@ fn run() -> Result<(), CliError> {
             })
             .map(|_| ())
         }
+        Commands::QueueAddMorphogenesisSequence {
+            queue_path,
+            source_b_dir,
+            output_root_dir,
+            frames,
+            frame_rate,
+            preset,
+            du,
+            dv,
+            feed,
+            kill,
+            dt,
+            substeps,
+            sim_scale,
+            seed_threshold,
+            seed,
+            param_map_strength,
+            pattern_mix,
+            displace,
+            pattern_hue,
+            pattern_color_mode,
+            project_path,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulator_midi,
+            modulation_sampling,
+            named_modulator_audio,
+            named_modulator_frames,
+            named_modulator_midi,
+        } => {
+            let preset_label = morphogenesis_preset_label(MorphogenesisPreset::from(preset));
+            let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
+            if let Some(du) = du {
+                settings.du = du;
+            }
+            if let Some(dv) = dv {
+                settings.dv = dv;
+            }
+            if let Some(feed) = feed {
+                settings.feed = feed;
+            }
+            if let Some(kill) = kill {
+                settings.kill = kill;
+            }
+            if let Some(dt) = dt {
+                settings.dt = dt;
+            }
+            if let Some(substeps) = substeps {
+                settings.substeps = substeps;
+            }
+            if let Some(sim_scale) = sim_scale {
+                settings.sim_scale = sim_scale;
+            }
+            if let Some(seed_threshold) = seed_threshold {
+                settings.seed_threshold = seed_threshold;
+            }
+            if let Some(seed) = seed {
+                settings.seed = seed;
+            }
+            if let Some(param_map_strength) = param_map_strength {
+                settings.param_map_strength = param_map_strength;
+            }
+            let composite = MorphogenesisCompositeSettings {
+                pattern_mix,
+                displace,
+                pattern_hue,
+                pattern_color_mode: pattern_color_mode.into(),
+            };
+            queue_add_morphogenesis_sequence(QueueAddMorphogenesisSequenceRequest {
+                queue_path: &queue_path,
+                source_b_dir: &source_b_dir,
+                output_root_dir: &output_root_dir,
+                frames,
+                frame_rate,
+                preset_label,
+                settings,
+                composite,
+                project_path: project_path.as_deref(),
+                modulate: &modulate,
+                modulator_audio: modulator_audio.as_deref(),
+                modulator_frames: modulator_frames.as_deref(),
+                modulator_midi: modulator_midi.as_deref(),
+                modulation_sampling: modulation_sampling.into(),
+                named_modulator_audio: &named_modulator_audio,
+                named_modulator_frames: &named_modulator_frames,
+                named_modulator_midi: &named_modulator_midi,
+            })
+        }
+        Commands::QueueRunMorphogenesisSequence { queue_path } => {
+            queue_run_morphogenesis_sequence(&queue_path)
+        }
         Commands::QueueInit { queue_path } => queue_init(&queue_path),
         Commands::QueueAddTest {
             queue_path,

@@ -9705,6 +9705,166 @@ fn queue_feedback_modulated_matches_direct_and_records_routes() {
     assert_eq!(modulation["fps"], 4.0);
 }
 
+/// Morphogenesis (Tier "Morphogenesis" S4): queue add→run shares
+/// `render_morphogenesis_sequence` with the direct CLI, so the two paths
+/// must be byte-identical, and the queued job's checkpoint must carry the
+/// routed contract exactly like flow-feedback's.
+#[test]
+fn queue_morphogenesis_modulated_matches_direct_and_records_routes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let route = "feed=audio-rms:0.02,0.03";
+
+    // Direct render: morphogenesis samples envelopes against its own
+    // --frame-rate, which is exactly the queued job's frame_rate.
+    let direct_dir = temp_dir.path().join("direct");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-morphogenesis-sequence",
+            queue_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--frame-rate",
+            "4",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-morphogenesis-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let job_frames = output_root.join("job-0001/frames");
+    assert_png_frames_identical(&direct_dir.join("frames"), &job_frames, 3);
+
+    // The queued render's manifest records the algorithm/settings, mirroring
+    // the direct CLI's own manifest shape.
+    let manifest = read_json(&output_root.join("job-0001/manifest.json"));
+    assert_eq!(manifest["algorithm"], "morphogenesis_cpu_v1");
+    assert_eq!(manifest["task"], "render_morphogenesis_sequence");
+
+    // Stateful: the queued render's checkpoint contract carries the routes,
+    // so a re-run with different routes would refuse to resume.
+    let checkpoint = read_json(&output_root.join("job-0001/checkpoint.json"));
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "feed");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+    assert_eq!(modulation["routes"][0]["scale"], 0.02);
+    assert_eq!(modulation["routes"][0]["offset"], 0.03);
+    assert_eq!(modulation["fps"], 4.0);
+}
+
+/// `queue-add-morphogenesis-sequence` validates the full direct-CLI surface
+/// (settings/composite/timing) before persisting anything — an invalid
+/// override must leave no queue file behind, mirroring the palette-quantize
+/// / datamosh add-time-rejection precedent.
+#[test]
+fn queue_add_morphogenesis_sequence_rejects_invalid_settings_before_persisting() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-morphogenesis-sequence",
+            queue_arg.as_str(),
+            carrier_dir.to_string_lossy().as_ref(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            // seed-threshold must be in [0, 1]; out of range fails
+            // MorphogenesisSettings::validate at add time.
+            "--seed-threshold",
+            "5.0",
+        ])
+        .assert()
+        .failure();
+    assert!(
+        !queue_path.exists(),
+        "rejected queue-add must not write a queue file"
+    );
+}
+
 #[test]
 fn queue_datamosh_modulated_matches_direct_and_records_routes() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");

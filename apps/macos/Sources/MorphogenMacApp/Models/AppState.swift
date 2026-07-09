@@ -561,6 +561,70 @@ final class AppState: ObservableObject {
   @Published var ruttEtraBackend = AppState.stickyBackend("backend.ruttEtra", default: .cpu) {
     didSet { AppState.persistBackend("backend.ruttEtra", ruttEtraBackend) }
   }
+  // Morphogenesis — Gray-Scott reaction-diffusion (Tier "Morphogenesis" S4;
+  // docs/MORPHOGENESIS_MILESTONE.md). CPU-only (stateful checkpoint; no Metal
+  // slice yet) — no backend picker, unlike Rutt-Etra.
+  @Published var morphogenesisPreset = MorphogenesisPresetOption.coral
+  @Published var morphogenesisPatternMix = 0.85
+  @Published var morphogenesisDisplace = 0.0
+  @Published var morphogenesisPatternHue = 0.02
+  @Published var morphogenesisPatternColorMode = MorphogenesisColorModeOption.hue
+  @Published var morphogenesisParamMapStrength = 1.0
+  @Published var morphogenesisSeedThreshold = 0.5
+  @Published var morphogenesisSimScale = 2
+  @Published var morphogenesisSubsteps = 12
+  @Published var morphogenesisSummary = "No morphogenesis sequence rendered"
+  @Published var morphogenesisModFeedSource = ModulationSourceOption.off
+  @Published var morphogenesisModFeedScale = 0.014
+  @Published var morphogenesisModFeedOffset = 0.0
+  @Published var morphogenesisModFeedSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModFeedModulator = ""
+  @Published var morphogenesisModFeedLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModFeedLfoRate = 1.0
+  @Published var morphogenesisModFeedLfoPhase = 0.0
+  @Published var morphogenesisModFeedMidiCc = 74
+  @Published var morphogenesisModKillSource = ModulationSourceOption.off
+  @Published var morphogenesisModKillScale = 0.008
+  @Published var morphogenesisModKillOffset = 0.0
+  @Published var morphogenesisModKillSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModKillModulator = ""
+  @Published var morphogenesisModKillLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModKillLfoRate = 1.0
+  @Published var morphogenesisModKillLfoPhase = 0.0
+  @Published var morphogenesisModKillMidiCc = 74
+  @Published var morphogenesisModParamMapStrengthSource = ModulationSourceOption.off
+  @Published var morphogenesisModParamMapStrengthScale = 1.0
+  @Published var morphogenesisModParamMapStrengthOffset = 0.0
+  @Published var morphogenesisModParamMapStrengthSamplingOverride =
+    ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModParamMapStrengthModulator = ""
+  @Published var morphogenesisModParamMapStrengthLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModParamMapStrengthLfoRate = 1.0
+  @Published var morphogenesisModParamMapStrengthLfoPhase = 0.0
+  @Published var morphogenesisModParamMapStrengthMidiCc = 74
+  @Published var morphogenesisModPatternMixSource = ModulationSourceOption.off
+  @Published var morphogenesisModPatternMixScale = 1.0
+  @Published var morphogenesisModPatternMixOffset = 0.0
+  @Published var morphogenesisModPatternMixSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModPatternMixModulator = ""
+  @Published var morphogenesisModPatternMixLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModPatternMixLfoRate = 1.0
+  @Published var morphogenesisModPatternMixLfoPhase = 0.0
+  @Published var morphogenesisModPatternMixMidiCc = 74
+  @Published var morphogenesisModDisplaceSource = ModulationSourceOption.off
+  @Published var morphogenesisModDisplaceScale = 8.0
+  @Published var morphogenesisModDisplaceOffset = 0.0
+  @Published var morphogenesisModDisplaceSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModDisplaceModulator = ""
+  @Published var morphogenesisModDisplaceLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModDisplaceLfoRate = 1.0
+  @Published var morphogenesisModDisplaceLfoPhase = 0.0
+  @Published var morphogenesisModDisplaceMidiCc = 74
+  @Published var morphogenesisModulatorAudioURL: URL?
+  @Published var morphogenesisModulatorFramesURL: URL?
+  @Published var morphogenesisModulatorMidiURL: URL?
+  @Published var morphogenesisModSampling = ModulationSamplingOption.hold
+  @Published var morphogenesisNamedModulators: [NamedModulatorEntry] = []
   @Published var granularPoolGrainSize = 32
   @Published var granularPoolRearrangement = 1.0
   @Published var granularPoolVariation = 0.25
@@ -2774,6 +2838,32 @@ final class AppState: ObservableObject {
     if ruttEtraModThicknessModulator == name { ruttEtraModThicknessModulator = "" }
   }
 
+  var morphogenesisDeclaredModulatorNames: [String] {
+    morphogenesisNamedModulators.map(\.name).filter { !$0.isEmpty }
+  }
+  func addMorphogenesisNamedModulator() { appendNamedModulator(to: &morphogenesisNamedModulators) }
+  func chooseMorphogenesisNamedModulatorWAV(id: UUID) {
+    pickNamedModulatorWAV(in: &morphogenesisNamedModulators, id: id)
+  }
+  func chooseMorphogenesisNamedModulatorFrames(id: UUID) {
+    pickNamedModulatorFrames(in: &morphogenesisNamedModulators, id: id)
+  }
+  func chooseMorphogenesisNamedModulatorMIDI(id: UUID) {
+    pickNamedModulatorMIDI(in: &morphogenesisNamedModulators, id: id)
+  }
+  func removeMorphogenesisNamedModulator(id: UUID) {
+    guard let entry = morphogenesisNamedModulators.first(where: { $0.id == id }) else { return }
+    morphogenesisNamedModulators.removeAll { $0.id == id }
+    let name = entry.name
+    if morphogenesisModFeedModulator == name { morphogenesisModFeedModulator = "" }
+    if morphogenesisModKillModulator == name { morphogenesisModKillModulator = "" }
+    if morphogenesisModParamMapStrengthModulator == name {
+      morphogenesisModParamMapStrengthModulator = ""
+    }
+    if morphogenesisModPatternMixModulator == name { morphogenesisModPatternMixModulator = "" }
+    if morphogenesisModDisplaceModulator == name { morphogenesisModDisplaceModulator = "" }
+  }
+
   var datamoshDeclaredModulatorNames: [String] {
     datamoshNamedModulators.map(\.name).filter { !$0.isEmpty }
   }
@@ -3179,6 +3269,42 @@ final class AppState: ObservableObject {
     }
     ruttEtraMatteFramesURL = url
     statusMessage = "Rutt-etra matte frames selected: \(url.lastPathComponent)"
+  }
+
+  func chooseMorphogenesisModulatorWAV() {
+    guard let url = MediaFilePicker.chooseWAVFile(
+      title: "Choose Modulator WAV",
+      message: "Select the audio whose analysis envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator WAV selection cancelled."
+      return
+    }
+    morphogenesisModulatorAudioURL = url
+    statusMessage = "Morphogenesis modulator WAV selected: \(url.lastPathComponent)"
+  }
+
+  func chooseMorphogenesisModulatorMIDI() {
+    guard let url = MediaFilePicker.chooseMIDIFile(
+      title: "Choose Modulator MIDI",
+      message: "Select the MIDI file whose CC/note envelopes drive the routed knobs."
+    ) else {
+      statusMessage = "Modulator MIDI selection cancelled."
+      return
+    }
+    morphogenesisModulatorMidiURL = url
+    statusMessage = "Morphogenesis modulator MIDI selected: \(url.lastPathComponent)"
+  }
+
+  func chooseMorphogenesisModulatorFrames() {
+    guard let url = ImageSequenceExportPanel.chooseFrameDirectory(
+      title: "Choose Modulator Frames",
+      message: "Select the frame directory whose luma/flow envelope drives the routed knobs."
+    ) else {
+      statusMessage = "Modulator frames selection cancelled."
+      return
+    }
+    morphogenesisModulatorFramesURL = url
+    statusMessage = "Morphogenesis modulator frames selected: \(url.lastPathComponent)"
   }
 
   func choosePixelSortModulatorWAV() {
@@ -3590,6 +3716,128 @@ final class AppState: ObservableObject {
           self.failPreviewIfNeeded(message: error.localizedDescription)
           self.ruttEtraSummary = "Rutt-etra render failed: \(error.localizedDescription)"
           self.statusMessage = "Rutt-etra render failed: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
+
+  func runMorphogenesisSequenceRender() {
+    guard let carrierURL = effectiveCarrierURL() else {
+      statusMessage = "Select Source B frame directory before rendering morphogenesis."
+      return
+    }
+    guard let outputURL = effectiveOutputRoot(frameSequenceOutputURL) else {
+      statusMessage = "Choose a frame sequence output directory before rendering morphogenesis."
+      return
+    }
+    guard let routes = modulationRoutes(
+      slots: [
+        (
+          "feed", morphogenesisModFeedSource,
+          morphogenesisModFeedScale, morphogenesisModFeedOffset,
+          morphogenesisModFeedSamplingOverride
+        ),
+        (
+          "kill", morphogenesisModKillSource,
+          morphogenesisModKillScale, morphogenesisModKillOffset,
+          morphogenesisModKillSamplingOverride
+        ),
+        (
+          "param_map_strength", morphogenesisModParamMapStrengthSource,
+          morphogenesisModParamMapStrengthScale, morphogenesisModParamMapStrengthOffset,
+          morphogenesisModParamMapStrengthSamplingOverride
+        ),
+        (
+          "pattern_mix", morphogenesisModPatternMixSource,
+          morphogenesisModPatternMixScale, morphogenesisModPatternMixOffset,
+          morphogenesisModPatternMixSamplingOverride
+        ),
+        (
+          "displace", morphogenesisModDisplaceSource,
+          morphogenesisModDisplaceScale, morphogenesisModDisplaceOffset,
+          morphogenesisModDisplaceSamplingOverride
+        ),
+      ],
+      modulatorAudioURL: morphogenesisModulatorAudioURL,
+      modulatorFramesURL: morphogenesisModulatorFramesURL,
+      modulatorMidiURL: morphogenesisModulatorMidiURL,
+      namedModulators: morphogenesisNamedModulators,
+      slotModulators: [
+        morphogenesisModFeedModulator, morphogenesisModKillModulator,
+        morphogenesisModParamMapStrengthModulator, morphogenesisModPatternMixModulator,
+        morphogenesisModDisplaceModulator,
+      ],
+      slotLfos: [
+        (morphogenesisModFeedLfoShape, morphogenesisModFeedLfoRate, morphogenesisModFeedLfoPhase),
+        (morphogenesisModKillLfoShape, morphogenesisModKillLfoRate, morphogenesisModKillLfoPhase),
+        (
+          morphogenesisModParamMapStrengthLfoShape, morphogenesisModParamMapStrengthLfoRate,
+          morphogenesisModParamMapStrengthLfoPhase
+        ),
+        (
+          morphogenesisModPatternMixLfoShape, morphogenesisModPatternMixLfoRate,
+          morphogenesisModPatternMixLfoPhase
+        ),
+        (
+          morphogenesisModDisplaceLfoShape, morphogenesisModDisplaceLfoRate,
+          morphogenesisModDisplaceLfoPhase
+        ),
+      ],
+      slotMidiCcNumbers: [
+        morphogenesisModFeedMidiCc, morphogenesisModKillMidiCc,
+        morphogenesisModParamMapStrengthMidiCc, morphogenesisModPatternMixMidiCc,
+        morphogenesisModDisplaceMidiCc,
+      ],
+      effectLabel: "morphogenesis"
+    ) else { return }
+
+    let request = MorphogenesisSequenceRenderQueueCommandRequest(
+      queueURL: RustBridgePlaceholder.defaultMorphogenesisSequenceRenderQueueURL(),
+      carrierDirectoryURL: carrierURL,
+      outputRootDirectoryURL: outputURL.appendingPathComponent("morphogenesis", isDirectory: true),
+      frames: effectiveMaxFrames(frameSequenceMaxFrames),
+      frameRate: proResFrameRate.framesPerSecond,
+      preset: morphogenesisPreset,
+      paramMapStrength: morphogenesisParamMapStrength,
+      seedThreshold: morphogenesisSeedThreshold,
+      simScale: morphogenesisSimScale,
+      substeps: morphogenesisSubsteps,
+      patternMix: morphogenesisPatternMix,
+      displace: morphogenesisDisplace,
+      patternHue: morphogenesisPatternHue,
+      patternColorMode: morphogenesisPatternColorMode,
+      projectURL: projectURL,
+      modulationRoutes: routes,
+      modulatorAudioURL: morphogenesisModulatorAudioURL,
+      modulatorFramesURL: morphogenesisModulatorFramesURL,
+      modulatorMidiURL: morphogenesisModulatorMidiURL,
+      modulationSampling: morphogenesisModSampling,
+      namedModulators: namedModulatorSpecs(morphogenesisNamedModulators)
+    )
+
+    statusMessage = "Queueing morphogenesis through morphogen-cli..."
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let result = try RustBridgePlaceholder.runQueuedMorphogenesisSequenceRender(
+          request: request
+        )
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
+        DispatchQueue.main.async {
+          self.applyRenderQueueTimingDefaults(bundle)
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
+          self.lastRenderQueueBundleURL = bundle.bundleURL
+          self.renderQueueSummary = "\(bundle.compactSummary) at \(bundle.bundleURL.path)"
+          self.morphogenesisSummary =
+            "\(bundle.frameCount) morphogenesis frame(s) at \(bundle.frameDirectory.path)"
+          self.proResExportSummary =
+            "Queued morphogenesis sequence ready for ProRes export: \(bundle.bundleURL.path)"
+          self.statusMessage = "Morphogenesis render complete: \(bundle.bundleURL.path)"
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
+          self.morphogenesisSummary = "Morphogenesis render failed: \(error.localizedDescription)"
+          self.statusMessage = "Morphogenesis render failed: \(error.localizedDescription)"
         }
       }
     }
@@ -4981,6 +5229,42 @@ enum PaletteQuantizeModeOption: String, CaseIterable, Identifiable {
       return "posterize"
     case .palette:
       return "palette"
+    }
+  }
+}
+
+/// Named Gray-Scott parameter-atlas presets (Tier "Morphogenesis" S1;
+/// docs/MORPHOGENESIS_MILESTONE.md) — most of `(feed, kill)` space is dead
+/// (uniform grey), so the panel offers presets rather than raw numbers.
+enum MorphogenesisPresetOption: String, CaseIterable, Identifiable {
+  case coral = "Coral"
+  case mitosis = "Mitosis"
+  case worms = "Worms"
+  case spots = "Spots"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .coral: return "coral"
+    case .mitosis: return "mitosis"
+    case .worms: return "worms"
+    case .spots: return "spots"
+    }
+  }
+}
+
+/// `--pattern-color-mode`: how the pattern-mix tint colour is chosen.
+enum MorphogenesisColorModeOption: String, CaseIterable, Identifiable {
+  case hue = "Hue"
+  case inherit = "Inherit"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .hue: return "hue"
+    case .inherit: return "inherit"
     }
   }
 }

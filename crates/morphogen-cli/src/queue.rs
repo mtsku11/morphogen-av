@@ -20,20 +20,23 @@ use morphogen_render::{
     apply_channel_shift_modulation, apply_coagulation_modulation, apply_dispersion_modulation,
     apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_fluid_mosaic_modulation,
-    apply_palette_quantize_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
+    apply_morphogenesis_modulation, apply_palette_quantize_modulation, apply_pixel_sort_modulation,
+    apply_retro_static_modulation,
     apply_rutt_etra_modulation, flow_displace_cpu, parse_modulation_route, validate_route_targets,
     BlendMode, BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
     ChannelShiftSettings, CoagulationFlowSource, CoagulationSettings, ConvolutionBlendSettings,
     DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, LfoShape,
-    MaskSource, MatteSource, ModulationSampling, ModulationSource, PaletteQuantizeSettings,
-    PixelSortSettings,
+    MaskSource, MatteSource, ModulationSampling, ModulationSource, MorphogenesisCompositeSettings,
+    MorphogenesisPreset, MorphogenesisSettings, PaletteQuantizeSettings,
+    PatternColorMode, PixelSortSettings,
     QuantizeMode, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
     SortKey, StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM,
     COAGULATED_BLEND_ALGORITHM, CASCADE_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM,
     CHANNEL_SHIFT_ALGORITHM, CHANNEL_SHIFT_FLOW_ALGORITHM, DISPERSION_BLEND_ALGORITHM,
     FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
-    FLUID_MOSAIC_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM,
+    FLUID_MOSAIC_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM,
+    PIXEL_SORT_ALGORITHM,
     PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM,
     RMS_DISPLACEMENT_ROUTE_ALGORITHM, RUTT_ETRA_ALGORITHM, RUTT_ETRA_METAL_ALGORITHM,
     RUTT_ETRA_TWO_SOURCE_ALGORITHM, RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
@@ -6574,6 +6577,324 @@ pub(crate) fn feedback_output_bit_depth(settings: &RenderSettings) -> Result<u8,
     }
 }
 
+/// Label for a resolved [`MorphogenesisPreset`] — round-trip display only
+/// (the `queue_add_morphogenesis_sequence` request carries the resolved
+/// preset label directly; there is no reverse mapping to keep in sync).
+pub(crate) fn morphogenesis_preset_label(preset: MorphogenesisPreset) -> String {
+    match preset {
+        MorphogenesisPreset::Coral => "coral".to_string(),
+        MorphogenesisPreset::Mitosis => "mitosis".to_string(),
+        MorphogenesisPreset::Worms => "worms".to_string(),
+        MorphogenesisPreset::Spots => "spots".to_string(),
+    }
+}
+
+fn morphogenesis_pattern_color_mode_label(mode: PatternColorMode) -> String {
+    match mode {
+        PatternColorMode::Hue => "hue".to_string(),
+        PatternColorMode::Inherit => "inherit".to_string(),
+    }
+}
+
+fn parse_morphogenesis_pattern_color_mode(label: &str) -> PatternColorMode {
+    match label {
+        "inherit" => PatternColorMode::Inherit,
+        _ => PatternColorMode::Hue,
+    }
+}
+
+pub(crate) struct QueueAddMorphogenesisSequenceRequest<'a> {
+    pub(crate) queue_path: &'a Path,
+    pub(crate) source_b_dir: &'a Path,
+    pub(crate) output_root_dir: &'a Path,
+    pub(crate) frames: u32,
+    pub(crate) frame_rate: f64,
+    /// Preset label for the manifest/checkpoint only — `settings`/`composite`
+    /// below are already the fully resolved (preset + CLI overrides) knobs.
+    pub(crate) preset_label: String,
+    pub(crate) settings: MorphogenesisSettings,
+    pub(crate) composite: MorphogenesisCompositeSettings,
+    pub(crate) project_path: Option<&'a Path>,
+    pub(crate) modulate: &'a [String],
+    pub(crate) modulator_audio: Option<&'a Path>,
+    pub(crate) modulator_frames: Option<&'a Path>,
+    pub(crate) modulator_midi: Option<&'a Path>,
+    pub(crate) modulation_sampling: ModulationSampling,
+    pub(crate) named_modulator_audio: &'a [String],
+    pub(crate) named_modulator_frames: &'a [String],
+    pub(crate) named_modulator_midi: &'a [String],
+}
+
+/// Queue a Gray-Scott reaction-diffusion sequence job (Tier "Morphogenesis"
+/// S4). Validates everything the direct `render-morphogenesis-sequence`
+/// command does — settings/composite/timing/modulation routes — before
+/// anything is persisted (a rejection leaves the queue file untouched).
+pub(crate) fn queue_add_morphogenesis_sequence(
+    request: QueueAddMorphogenesisSequenceRequest<'_>,
+) -> Result<(), CliError> {
+    let QueueAddMorphogenesisSequenceRequest {
+        queue_path,
+        source_b_dir,
+        output_root_dir,
+        frames,
+        frame_rate,
+        preset_label,
+        settings,
+        composite,
+        project_path,
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        modulator_midi,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
+        named_modulator_midi,
+    } = request;
+
+    settings.validate()?;
+    composite.validate()?;
+    validate_queued_sequence_timing(frames, frame_rate)?;
+
+    let modulation = parse_queue_modulation_routes(
+        modulate,
+        modulator_audio,
+        modulator_frames,
+        modulator_midi,
+        named_modulator_audio,
+        named_modulator_frames,
+        named_modulator_midi,
+        |target| {
+            let mut probe_settings = settings;
+            let mut probe_composite = composite;
+            apply_morphogenesis_modulation(&mut probe_settings, &mut probe_composite, target, 0.0)
+                .map_err(CliError::from)
+        },
+    )?;
+
+    let mut queue = load_or_default_queue(queue_path)?;
+    let job_id = format!("job-{:04}", queue.jobs.len() + 1);
+    let job_output_dir = output_root_dir.join(&job_id);
+
+    queue.enqueue(RenderJob {
+        id: job_id.clone(),
+        project_path: project_path.map(|path| path.to_string_lossy().to_string()),
+        settings: png_sequence_settings(frame_rate),
+        task: RenderJobTask::RenderMorphogenesisSequence {
+            carrier_frame_directory: source_b_dir.to_string_lossy().to_string(),
+            output_directory: job_output_dir.to_string_lossy().to_string(),
+            frames,
+            frame_rate,
+            preset: preset_label,
+            du: settings.du,
+            dv: settings.dv,
+            feed: settings.feed,
+            kill: settings.kill,
+            dt: settings.dt,
+            substeps: settings.substeps,
+            sim_scale: settings.sim_scale,
+            seed_threshold: settings.seed_threshold,
+            seed: settings.seed,
+            param_map_strength: settings.param_map_strength,
+            pattern_mix: composite.pattern_mix,
+            displace: composite.displace,
+            pattern_hue: composite.pattern_hue,
+            pattern_color_mode: morphogenesis_pattern_color_mode_label(
+                composite.pattern_color_mode,
+            ),
+            modulation_routes: modulation.routes,
+            modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
+            modulator_frames_directory: modulator_frames.map(|p| p.to_string_lossy().to_string()),
+            modulation_sampling: core_modulation_sampling(modulation_sampling),
+            named_modulator_audio: modulation.named_audio,
+            named_modulator_frames: modulation.named_frames,
+            modulator_midi_path: modulator_midi.map(|p| p.to_string_lossy().to_string()),
+            named_modulator_midi: modulation.named_midi,
+        },
+        provenance: Some(single_source_provenance(
+            "source-b-frames",
+            SourceRole::Carrier,
+            source_b_dir,
+        )),
+        status: RenderJobStatus::Queued,
+        output: None,
+        failure: None,
+    });
+    queue.save_json(queue_path)?;
+    println!(
+        "queued morphogenesis render job {job_id} in {}",
+        queue_path.display()
+    );
+    Ok(())
+}
+
+/// Run the next queued/running morphogenesis-sequence job, sharing
+/// `render_morphogenesis_sequence` with the direct CLI so add→run is
+/// byte-identical. Stateful: the render writes its own manifest.json and
+/// checkpoint.json (mirrors `queue_run_feedback_sequence`), so this does not
+/// go through `complete_experimental_frame_sequence_job`.
+pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), CliError> {
+    let mut queue = RenderQueue::load_json(queue_path)?;
+    let job_index = queue
+        .jobs
+        .iter()
+        .position(|job| {
+            matches!(
+                (&job.status, &job.task),
+                (
+                    RenderJobStatus::Queued | RenderJobStatus::Running,
+                    RenderJobTask::RenderMorphogenesisSequence { .. }
+                )
+            )
+        })
+        .ok_or_else(|| {
+            CliError::Message(
+                "render queue has no queued or running morphogenesis jobs".to_string(),
+            )
+        })?;
+
+    let job_id = queue.jobs[job_index].id.clone();
+    let RenderJobTask::RenderMorphogenesisSequence {
+        carrier_frame_directory,
+        output_directory,
+        frames,
+        frame_rate,
+        preset: _preset,
+        du,
+        dv,
+        feed,
+        kill,
+        dt,
+        substeps,
+        sim_scale,
+        seed_threshold,
+        seed,
+        param_map_strength,
+        pattern_mix,
+        displace,
+        pattern_hue,
+        pattern_color_mode,
+        modulation_routes,
+        modulator_audio_path,
+        modulator_frames_directory,
+        modulator_midi_path,
+        modulation_sampling,
+        named_modulator_audio,
+        named_modulator_frames,
+        named_modulator_midi,
+    } = queue.jobs[job_index].task.clone()
+    else {
+        return Err(CliError::Message(
+            "selected queue job is not a morphogenesis render".to_string(),
+        ));
+    };
+    let output_dir = PathBuf::from(output_directory);
+    let provenance = single_source_provenance(
+        "source-b-frames",
+        SourceRole::Carrier,
+        Path::new(&carrier_frame_directory),
+    );
+    queue.jobs[job_index].provenance = Some(provenance);
+    queue.jobs[job_index].status = RenderJobStatus::Running;
+    queue.save_json(queue_path)?;
+
+    let settings = MorphogenesisSettings {
+        du,
+        dv,
+        feed,
+        kill,
+        dt,
+        substeps,
+        sim_scale,
+        seed_threshold,
+        seed,
+        param_map_strength,
+    };
+    let composite = MorphogenesisCompositeSettings {
+        pattern_mix,
+        displace,
+        pattern_hue,
+        pattern_color_mode: parse_morphogenesis_pattern_color_mode(&pattern_color_mode),
+    };
+    let modulation_specs = modulation_specs_from_routes(&modulation_routes);
+    let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
+    let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
+    let named_modulator_midi_specs = named_modulator_specs_from_media(&named_modulator_midi);
+
+    let outcome = (|| -> Result<RenderJobOutputMetadata, CliError> {
+        let render_result = render_morphogenesis_sequence(MorphogenesisSequenceRenderRequest {
+            source_b_dir: Path::new(&carrier_frame_directory),
+            output_dir: &output_dir,
+            frames,
+            settings,
+            composite,
+            job_id: &job_id,
+            stop_after_frame: false,
+            frame_rate,
+            modulation: ModulationCliArgs {
+                modulate: &modulation_specs,
+                modulator_audio: modulator_audio_path.as_deref().map(Path::new),
+                modulator_frames: modulator_frames_directory.as_deref().map(Path::new),
+                sampling: render_modulation_sampling(modulation_sampling),
+                // The job's frame_rate is the envelope time base — the same
+                // convention as the direct CLI, which samples against
+                // --frame-rate.
+                fps: frame_rate,
+                // Queue jobs render uncached envelopes for now (the sidecar is a direct-CLI flag).
+                cache_dir: None,
+                named_modulator_audio: &named_modulator_audio_specs,
+                named_modulator_frames: &named_modulator_frames_specs,
+                modulator_midi: modulator_midi_path.as_deref().map(Path::new),
+                named_modulator_midi: &named_modulator_midi_specs,
+            },
+        })?;
+        let frame_count = u32::try_from(render_result.frame_count).map_err(|_| {
+            CliError::Message("frame sequence contains more than u32::MAX frames".to_string())
+        })?;
+        let timing = RenderTimingMetadata {
+            frame_rate,
+            frame_count,
+            start_seconds: 0.0,
+            duration_seconds: frame_count as f64 / frame_rate,
+            sample_rate: 48_000,
+            audio_sample_count: 0,
+        };
+        let frame_paths = (0..frame_count)
+            .map(|index| format!("frames/frame_{index:06}.png"))
+            .collect::<Vec<_>>();
+        Ok(RenderJobOutputMetadata {
+            output_directory: output_dir.to_string_lossy().to_string(),
+            frame_paths,
+            audio_stem_paths: Vec::new(),
+            timing,
+        })
+    })();
+
+    match outcome {
+        Ok(metadata) => {
+            queue.jobs[job_index].status = RenderJobStatus::Complete;
+            queue.jobs[job_index].output = Some(metadata);
+            queue.jobs[job_index].failure = None;
+            queue.save_json(queue_path)?;
+            println!(
+                "rendered queued morphogenesis job {} to {}",
+                job_id,
+                output_dir.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            queue.jobs[job_index].status = RenderJobStatus::Failed;
+            queue.jobs[job_index].failure = Some(RenderJobFailure {
+                message: error.to_string(),
+            });
+            queue.save_json(queue_path)?;
+            eprintln!("morphogenesis job {job_id} failed: {error}");
+            Err(error)
+        }
+    }
+}
+
 pub(crate) fn write_test_render_output_bundle(
     job_id: &str,
     output_dir: &Path,
@@ -7085,6 +7406,7 @@ pub(crate) fn queue_inspect(queue_path: &Path) -> Result<(), CliError> {
             RenderJobTask::AudioSpectralCrossSynth { .. } => "audio_spectral_cross_synth",
             RenderJobTask::AudioImpulseConvolution { .. } => "audio_impulse_convolution",
             RenderJobTask::VideoAudioRoute { .. } => "video_audio_route",
+            RenderJobTask::RenderMorphogenesisSequence { .. } => "render_morphogenesis_sequence",
         };
         let provenance_summary = job
             .provenance

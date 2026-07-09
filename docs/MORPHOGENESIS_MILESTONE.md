@@ -1,10 +1,10 @@
 # Morphogenesis — Reaction-Diffusion Engine (the wild one)
 
-Status: **PLANNED — handoff for a future build session.** Written 2026-07-05 at
-the user's request ("plan a build for a wild, experimental feature"). Nothing
-implemented. The [`DEFERRED_WORK_HANDOFF.md`](DEFERRED_WORK_HANDOFF.md) ground
-rules apply (baseline first, CPU-first, pixels+number verification,
-`/checkpoint` per slice).
+Status: **MILESTONE COMPLETE (2026-07-09) — S1–S4 built and verified; S5
+Metal stays deferred-by-default per the datamosh finding.** Contract written
+2026-07-05 at the user's request; built 2026-07-08/09 (Sonnet slice builds,
+orchestrator-verified per slice — see the DONE entries in the build plan).
+Final: cargo **693/0**, swift **147/0**.
 
 ## Why this one
 
@@ -170,8 +170,19 @@ footage's own palette), and `--displace` pushes B's pixels along ∇V
   rounder blobs, and dark (floor) regions growing branchier/stringier shapes
   vs off's blobs — visibly different species; cross-delta grows 0 → 1.130 →
   1.859 → 2.074 → 3.132/255 (frames 0/15/30/45/59).
-- **S4 — queue + SwiftUI panel** (established patterns; add→run
-  byte-identical).
+- **S4 — queue + SwiftUI panel. DONE (2026-07-09,** Sonnet build to clean
+  compile, orchestrator ran the verification after the agent hit its session
+  limit: cargo 689 → **693/0**, swift 142 → **147/0**, clippy clean, zero new
+  fmt diffs. `RenderJobTask::RenderMorphogenesisSequence` persists the full
+  direct surface (serde-default conventions); queue-add validates before
+  persisting (rejection smoke); queue-run shares the direct handler —
+  add→run **byte-identical** pinned by smoke AND re-proven live (`diff -r`
+  empty on a 24-frame cello render, manifest records
+  algorithm/settings/composite). SwiftUI Morphogenesis panel (preset picker,
+  knob steppers, no backend picker — CPU-only) with mod slots for the five
+  targets + shared/named modulator media incl. LFO/captured/MIDI opt-ins;
+  bridge token-sequence tests pin the unmodulated exact array, modulated
+  media flags, and rejection.)
 - **S5 (deferred-by-default) — Metal port.** Stencil gathers are
   parity-friendly, but 12 substeps/frame compounds sub-epsilon drift on a
   stateful node (the datamosh finding — per-frame parity can pass while
