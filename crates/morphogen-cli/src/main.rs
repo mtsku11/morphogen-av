@@ -1785,6 +1785,7 @@ fn run() -> Result<(), CliError> {
             inject,
             erode,
             inject_source,
+            coverage_target,
             stop_after_frame,
         } => {
             let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
@@ -1818,6 +1819,7 @@ fn run() -> Result<(), CliError> {
             settings.inject = inject;
             settings.erode = erode;
             settings.inject_source = inject_source.into();
+            settings.coverage_target = coverage_target;
             render_morphogenesis_field(MorphogenesisFieldRenderRequest {
                 source_b_dir: &source_b_dir,
                 output_dir: &output_dir,
@@ -1846,6 +1848,7 @@ fn run() -> Result<(), CliError> {
             inject,
             erode,
             inject_source,
+            coverage_target,
             pattern_mix,
             displace,
             pattern_hue,
@@ -1896,6 +1899,7 @@ fn run() -> Result<(), CliError> {
             settings.inject = inject;
             settings.erode = erode;
             settings.inject_source = inject_source.into();
+            settings.coverage_target = coverage_target;
             let composite = MorphogenesisCompositeSettings {
                 pattern_mix,
                 displace,

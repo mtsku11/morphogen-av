@@ -71,9 +71,10 @@ use morphogen_render::{
     ModulationRoute, ModulationSampling,
 };
 use morphogen_render::{
-    advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map, apply_inject_erode,
-    composite_morphogenesis_frame, injection_weight_luma, injection_weight_motion,
-    morphogenesis_field_dimensions, morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
+    advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
+    apply_coverage_homeostat, apply_inject_erode, composite_morphogenesis_frame,
+    injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
+    morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
     sample_carrier_luma_at_sim_resolution, render_v_field_grayscale, seed_morphogenesis_field,
     InjectSource, MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisSettings,
     MORPHOGENESIS_ALGORITHM,
@@ -7353,7 +7354,12 @@ pub(crate) fn render_morphogenesis_field(
                     field = apply_inject_erode(&field, &settings, &w)?;
                 }
             }
-            field = advance_morphogenesis_frame(&field, &settings)?;
+            // Live Coupling L-S2: the coverage-target homeostat rides on
+            // top, shifting the effective (feed, kill) used for this
+            // frame's substeps only (declared order: inject → erode →
+            // homeostat → substeps).
+            let advance_settings = apply_coverage_homeostat(&settings, &field);
+            field = advance_morphogenesis_frame(&field, &advance_settings)?;
         }
         if track_prev_luma {
             previous_luma = current_luma;
@@ -7695,11 +7701,26 @@ pub(crate) fn render_morphogenesis_sequence(
     let frame_dir = output_dir.join("frames");
     fs::create_dir_all(&frame_dir)?;
 
-    // Live Coupling L-S1: track the previous frame's carrier luma across
-    // resume only when inject/erode are active in the render's OWN settings
-    // (inject/erode aren't yet modulation targets — L-S2 — so this decision
-    // is constant for the whole render, unlike `frame_settings` below).
-    let track_prev_luma = settings.inject != 0.0 || settings.erode != 0.0;
+    // Live Coupling L-S2: inject/erode are now modulation targets, so a
+    // route can turn either on mid-render even when the render's OWN base
+    // `settings.inject`/`settings.erode` are 0 (e.g. `inject=lfo(...)`
+    // starting cold). The prev-luma tracking decision must therefore also
+    // account for a ROUTED inject/erode target, not just the static knobs —
+    // otherwise `need_luma_sample`/`previous_luma` below would stay `None`
+    // for the whole render and the routed inject/erode pass would silently
+    // never fire (its weight field needs a sampled luma to exist at all).
+    // This is a per-render constant decision either way (routes are
+    // resolved once, before the loop), so it still can't itself be a
+    // per-frame `frame_settings` decision.
+    let routes_inject_or_erode = modulation_plan
+        .as_ref()
+        .map(|plan| {
+            plan.route_list()
+                .iter()
+                .any(|route| route.target == "inject" || route.target == "erode")
+        })
+        .unwrap_or(false);
+    let track_prev_luma = settings.inject != 0.0 || settings.erode != 0.0 || routes_inject_or_erode;
 
     let (start_frame, resumed_state) =
         load_morphogenesis_sequence_resume_state(output_dir, job_id, &contract, frame_count_u32)?;
@@ -7778,10 +7799,16 @@ pub(crate) fn render_morphogenesis_sequence(
             } else {
                 &[]
             };
+            // Live Coupling L-S2: the coverage-target homeostat rides on top
+            // of the routes-resolved `frame_settings` (declared order: routes
+            // → param map → homeostat) — its shifted (feed, kill) is the
+            // base the per-cell param map then divides around for this
+            // frame's substeps.
+            let advance_settings = apply_coverage_homeostat(&frame_settings, &field);
             field = advance_morphogenesis_frame_with_param_map(
                 &field,
-                &frame_settings,
-                frame_settings.param_map_strength,
+                &advance_settings,
+                advance_settings.param_map_strength,
                 cell_luma,
             )?;
         }

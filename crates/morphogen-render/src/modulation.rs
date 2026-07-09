@@ -993,21 +993,27 @@ pub const CASCADE_COLLAGE_MODULATION_TARGETS: &[&str] =
 pub const DISPERSION_MODULATION_TARGETS: &[&str] =
     &["coagulation_strength", "bias", "scatter_amount", "damping"];
 
-/// Morphogenesis (Tier "Morphogenesis" S3, `docs/MORPHOGENESIS_MILESTONE.md`)
-/// — three chemistry knobs (`feed`, `kill`, `param_map_strength`, all on
-/// [`MorphogenesisSettings`]) and two composite knobs (`pattern_mix`,
-/// `displace`, on [`MorphogenesisCompositeSettings`]); a single apply
-/// function threads both structs since the routes span them. Structural
-/// knobs (`du`, `dv`, `dt`, `substeps`, `sim_scale`, `seed_threshold`,
-/// `seed`, `pattern_hue`, `pattern_color_mode`) restructure the field/seed or
-/// select a mode and are excluded. Stateful with a checkpoint path → routes
-/// join the sequence contract like flow-feedback.
+/// Morphogenesis (Tier "Morphogenesis" S3, `docs/MORPHOGENESIS_MILESTONE.md`;
+/// Live Coupling L-S2, `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`) —
+/// three chemistry knobs (`feed`, `kill`, `param_map_strength`, all on
+/// [`MorphogenesisSettings`]), two composite knobs (`pattern_mix`,
+/// `displace`, on [`MorphogenesisCompositeSettings`]), and three Live
+/// Coupling knobs (`inject`, `erode`, `coverage_target`, all on
+/// [`MorphogenesisSettings`]); a single apply function threads both structs
+/// since the routes span them. Structural knobs (`du`, `dv`, `dt`,
+/// `substeps`, `sim_scale`, `seed_threshold`, `seed`, `inject_source`,
+/// `pattern_hue`, `pattern_color_mode`) restructure the field/seed or select
+/// a mode and are excluded. Stateful with a checkpoint path → routes join
+/// the sequence contract like flow-feedback.
 pub const MORPHOGENESIS_MODULATION_TARGETS: &[&str] = &[
     "feed",
     "kill",
     "param_map_strength",
     "pattern_mix",
     "displace",
+    "inject",
+    "erode",
+    "coverage_target",
 ];
 
 /// Fluid mosaic — the look-driving continuous knobs.
@@ -1427,9 +1433,11 @@ pub fn apply_rutt_etra_modulation(
 /// mirrors its own `>= 0` validate rule; `pattern_mix` mirrors the composite's
 /// `[0, 1]` validate rule; `displace` shares the channel-shift pixel
 /// precedent ([`SHIFT_RANGE`]) since `MorphogenesisCompositeSettings::validate`
-/// only requires finiteness. The routes span two structs
-/// ([`MorphogenesisSettings`] for the chemistry, [`MorphogenesisCompositeSettings`]
-/// for the composite) because the milestone's five targets do.
+/// only requires finiteness. `inject`/`erode`/`coverage_target` (Live
+/// Coupling L-S2) each clamp to `[0, 1]`, mirroring their own validate rule.
+/// The routes span two structs ([`MorphogenesisSettings`] for the chemistry
+/// and Live Coupling knobs, [`MorphogenesisCompositeSettings`] for the
+/// composite) because the milestone's eight targets do.
 pub fn apply_morphogenesis_modulation(
     settings: &mut MorphogenesisSettings,
     composite: &mut MorphogenesisCompositeSettings,
@@ -1452,6 +1460,9 @@ pub fn apply_morphogenesis_modulation(
         "param_map_strength" => settings.param_map_strength = value.max(0.0),
         "pattern_mix" => composite.pattern_mix = value.clamp(0.0, 1.0),
         "displace" => composite.displace = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        "inject" => settings.inject = value.clamp(0.0, 1.0),
+        "erode" => settings.erode = value.clamp(0.0, 1.0),
+        "coverage_target" => settings.coverage_target = value.clamp(0.0, 1.0),
         _ => {
             return Err(unknown_target(
                 "morphogenesis",
@@ -1904,6 +1915,22 @@ mod tests {
             .unwrap();
         assert_eq!(composite.displace, -4096.0);
 
+        // Live Coupling L-S2: inject/erode/coverage_target each clamp to [0, 1].
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "inject", 1.5).unwrap();
+        assert_eq!(settings.inject, 1.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "inject", -0.5).unwrap();
+        assert_eq!(settings.inject, 0.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "erode", 1.5).unwrap();
+        assert_eq!(settings.erode, 1.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "erode", -0.5).unwrap();
+        assert_eq!(settings.erode, 0.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "coverage_target", 1.5)
+            .unwrap();
+        assert_eq!(settings.coverage_target, 1.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "coverage_target", -0.5)
+            .unwrap();
+        assert_eq!(settings.coverage_target, 0.0);
+
         // Every clamped combination stays legal for the render.
         settings.validate().unwrap();
         composite.validate().unwrap();
@@ -1917,6 +1944,7 @@ mod tests {
             "sim_scale",
             "seed_threshold",
             "seed",
+            "inject_source",
             "pattern_hue",
             "pattern_color_mode",
         ] {

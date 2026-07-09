@@ -6810,12 +6810,13 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         seed_threshold,
         seed,
         param_map_strength,
-        // Live Coupling L-S1 (`docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`)
+        // Live Coupling L-S1/L-S2 (`docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`)
         // isn't exposed on the queue task yet (L-S3 scope) — queue-run jobs
         // stay at the off defaults, matching a pre-milestone direct render.
         inject: 0.0,
         erode: 0.0,
         inject_source: InjectSource::Motion,
+        coverage_target: 0.0,
     };
     let composite = MorphogenesisCompositeSettings {
         pattern_mix,

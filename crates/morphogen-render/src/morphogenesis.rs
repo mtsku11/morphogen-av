@@ -164,6 +164,17 @@ pub struct MorphogenesisSettings {
     /// (`InjectSource::Motion`), same compatibility rule as `inject`.
     #[serde(default)]
     pub inject_source: InjectSource,
+    /// Live Coupling L-S2: the global negative-feedback homeostat target for
+    /// mean(`V`) coverage, `[0, 1]`. Each frame (when `> 0`), the effective
+    /// `(feed, kill)` used for THAT frame's substeps is shifted toward
+    /// dissolution (kill up, feed down) when mean(`V`) is above target, toward
+    /// growth (kill down, feed up) when below — see
+    /// [`apply_coverage_homeostat`]. `0` = off: no mean(`V`) computation and no
+    /// shift, byte-identical to the pre-L-S2 build (continuity anchor).
+    /// `#[serde(default)]`, same pre-milestone-checkpoint compatibility rule
+    /// as `inject`/`erode`.
+    #[serde(default)]
+    pub coverage_target: f32,
 }
 
 impl MorphogenesisSettings {
@@ -183,6 +194,7 @@ impl MorphogenesisSettings {
             inject: 0.0,
             erode: 0.0,
             inject_source: InjectSource::Motion,
+            coverage_target: 0.0,
         }
     }
 
@@ -263,6 +275,11 @@ impl MorphogenesisSettings {
         if !(self.erode.is_finite() && (0.0..=1.0).contains(&self.erode)) {
             return Err(RenderError::InvalidMorphogenesisSettings(
                 "erode must be finite and in [0, 1]".into(),
+            ));
+        }
+        if !(self.coverage_target.is_finite() && (0.0..=1.0).contains(&self.coverage_target)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "coverage_target must be finite and in [0, 1]".into(),
             ));
         }
         Ok(())
@@ -697,6 +714,62 @@ pub fn apply_inject_erode(
         *value = (*value * (1.0 - settings.erode * (1.0 - w))).clamp(0.0, 1.0);
     }
     MorphogenesisField::new(field.width, field.height, field.u.clone(), v)
+}
+
+// ─── Live Coupling L-S2: coverage-target homeostat ─────────────────────────
+//
+// `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`: `inject` alone (no sink)
+// on bright footage saturates V toward the injection ceiling — the field
+// still "freezes" (just at a different, brighter equilibrium) instead of
+// finding a moving balance. `coverage_target` is a global negative-feedback
+// controller: each frame, mean(V) is compared to the target and the
+// EFFECTIVE `(feed, kill)` used for that frame's substeps is nudged toward
+// dissolution (kill up, feed down — the Gray-Scott "dead" direction) when
+// coverage is too high, toward growth (kill down, feed up) when too low.
+
+/// Pinned proportional gain for [`apply_coverage_homeostat`]'s `(feed,
+/// kill)` shift, tuned empirically on the L4 anchor (coverage-target 0.3 +
+/// pure-luma injection on a bright, textured carrier — see
+/// `anchor_l4_homeostat_settles_mean_v_within_band_of_coverage_target`).
+/// Swept `0.01..=0.6` on the anchor scenario: `0.01..=0.3` all settle within
+/// the ±0.1 band (tail mean rising from ≈0.22 to ≈0.27 as gain increases,
+/// tracking closer to the 0.3 target with milder residual oscillation at the
+/// low end), but `0.6` COLLAPSES the field toward near-total dissolution
+/// (tail settles at ≈0.003 — outside the band): too-aggressive kill increase
+/// self-reinforces once the field starts dying, since less V feeds back
+/// into less injection weight overlap and the loop never recovers. `0.15`
+/// sits mid-band with the least oscillation (tail spread < 0.001) and the
+/// most margin from both the low-gain undershoot and the high-gain collapse.
+pub const COVERAGE_GAIN: f32 = 0.15;
+
+/// The L-S2 homeostat. Returns a copy of `settings` with `feed`/`kill`
+/// shifted by `COVERAGE_GAIN * (mean(V) - coverage_target)` — feed DOWN and
+/// kill UP (floored at `0.0`) when mean(V) exceeds the target (dissolution),
+/// the opposite when it's under (growth). Declared to run AFTER modulation
+/// routes have resolved `settings.feed`/`kill` for this frame (the shift
+/// "rides on top" of a routed value — `feed = audio-rms` still drives the
+/// base), and its OUTPUT is what the per-cell param map centers its own
+/// per-cell divergence on for the frame's substeps (declared order: routes →
+/// param map → homeostat describes the knob-resolution precedence; the
+/// homeostat's shifted `(feed, kill)` is the "effective" base the param map
+/// then divides around). `coverage_target <= 0.0` is the off case: returns
+/// `*settings` unchanged with NO mean(V) computation (anchor: byte-identical
+/// to the pre-L-S2 build).
+pub fn apply_coverage_homeostat(
+    settings: &MorphogenesisSettings,
+    field: &MorphogenesisField,
+) -> MorphogenesisSettings {
+    if settings.coverage_target <= 0.0 {
+        return *settings;
+    }
+    let n = (field.v.len() as f32).max(1.0);
+    let mean_v = field.v.iter().sum::<f32>() / n;
+    let error = mean_v - settings.coverage_target;
+    let shift = COVERAGE_GAIN * error;
+    let mut shifted = *settings;
+    shifted.feed = (settings.feed - shift).max(0.0);
+    shifted.kill = (settings.kill + shift).max(0.0);
+    shifted
 }
 
 /// Pack the field into an unquantized RGBA32F image (`U` in R, `V` in G, `B`/`A`
@@ -1675,6 +1748,25 @@ mod tests {
     }
 
     #[test]
+    fn settings_validate_rejects_out_of_range_coverage_target() {
+        let settings = MorphogenesisSettings {
+            coverage_target: 1.5,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+        let settings = MorphogenesisSettings {
+            coverage_target: -0.1,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+        let settings = MorphogenesisSettings {
+            coverage_target: f32::NAN,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
     fn injection_weight_luma_matches_declared_formula() {
         let luma = vec![0.0, 0.5, 0.75, 1.0];
         let w = injection_weight_luma(&luma, 0.5);
@@ -1846,6 +1938,142 @@ mod tests {
         assert!(
             (center_of_mass - frame_zero_center).abs() > 3.0,
             "L2: V center-of-mass ({center_of_mass}) must NOT still sit at frame-0's column ({frame_zero_center})"
+        );
+    }
+
+    // ─── Live Coupling L-S2: coverage-target homeostat ────────────────────
+
+    #[test]
+    fn apply_coverage_homeostat_is_identity_when_target_is_off() {
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.9, 0.9, 0.9, 0.9]).unwrap();
+        let settings = MorphogenesisSettings {
+            coverage_target: 0.0,
+            ..MorphogenesisSettings::coral()
+        };
+        let shifted = apply_coverage_homeostat(&settings, &field);
+        assert_eq!(
+            shifted, settings,
+            "coverage_target == 0 must leave (feed, kill) untouched"
+        );
+    }
+
+    #[test]
+    fn apply_coverage_homeostat_shifts_toward_dissolution_when_above_target() {
+        // mean(V) = 0.35, modestly above a 0.3 target (small enough that the
+        // shift doesn't hit the feed >= 0 floor): feed must drop, kill must
+        // rise, both by exactly COVERAGE_GAIN * (0.35 - 0.3).
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.35; 4]).unwrap();
+        let settings = MorphogenesisSettings {
+            coverage_target: 0.3,
+            ..MorphogenesisSettings::coral()
+        };
+        let shifted = apply_coverage_homeostat(&settings, &field);
+        let expected_shift = COVERAGE_GAIN * (0.35 - 0.3);
+        assert!((shifted.feed - (settings.feed - expected_shift)).abs() < 1e-6);
+        assert!((shifted.kill - (settings.kill + expected_shift)).abs() < 1e-6);
+        assert!(shifted.feed < settings.feed, "feed must drop (dissolution)");
+        assert!(shifted.kill > settings.kill, "kill must rise (dissolution)");
+    }
+
+    #[test]
+    fn apply_coverage_homeostat_shifts_toward_growth_when_below_target() {
+        // mean(V) = 0.1, well below a 0.5 target: feed must rise, kill must
+        // drop (floored at 0).
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.1; 4]).unwrap();
+        let settings = MorphogenesisSettings {
+            coverage_target: 0.5,
+            ..MorphogenesisSettings::coral()
+        };
+        let shifted = apply_coverage_homeostat(&settings, &field);
+        assert!(shifted.feed > settings.feed, "feed must rise (growth)");
+        assert!(shifted.kill < settings.kill, "kill must drop (growth)");
+        assert!(shifted.kill >= 0.0, "kill must never go negative");
+    }
+
+    #[test]
+    fn apply_coverage_homeostat_floors_kill_and_feed_at_zero() {
+        // A pathologically large error must not drive feed/kill negative.
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![1.0; 4]).unwrap();
+        let settings = MorphogenesisSettings {
+            coverage_target: 0.001,
+            feed: 0.001,
+            ..MorphogenesisSettings::coral()
+        };
+        let shifted = apply_coverage_homeostat(&settings, &field);
+        assert!(shifted.feed >= 0.0);
+        assert!(shifted.kill >= 0.0);
+    }
+
+    /// Anchor L4: with `coverage_target = 0.3` and pure-luma injection (no
+    /// erode — the harder case, since nothing else opposes saturation) on a
+    /// bright carrier, mean(V) must settle within ±0.1 of the target over the
+    /// render's last 48 of 144 frames — vs saturating toward the injection
+    /// ceiling without the homeostat (asserted here too, as the falsifiable
+    /// contrast).
+    #[test]
+    fn anchor_l4_homeostat_settles_mean_v_within_band_of_coverage_target() {
+        let width = 32u32;
+        let height = 32u32;
+        // A bright-but-textured carrier (ring on a dark field), NOT a flat
+        // solid colour: a perfectly uniform carrier removes Gray-Scott's own
+        // spatial diffusion (the Laplacian is exactly zero everywhere),
+        // degenerating the sim into a bare 0-D reaction ODE that can ring/
+        // oscillate independent of the homeostat. Real footage always has
+        // spatial texture, so this is the representative "bright carrier".
+        let carrier = structured_carrier(width, height);
+        let total_frames = 144;
+        let coverage_target = 0.3;
+
+        let run = |coverage_target: f32| -> Vec<f32> {
+            let settings = MorphogenesisSettings {
+                sim_scale: 1,
+                inject: 0.1,
+                erode: 0.0,
+                inject_source: InjectSource::Luma,
+                seed_threshold: 0.5,
+                coverage_target,
+                ..MorphogenesisSettings::coral()
+            };
+            let mut field = seed_morphogenesis_field(&carrier, &settings).expect("seed");
+            let carrier_luma = sample_carrier_luma_at_sim_resolution(
+                &carrier,
+                field.width,
+                field.height,
+                settings.sim_scale,
+            )
+            .expect("sample luma");
+            let w = injection_weight_luma(&carrier_luma, settings.seed_threshold);
+            let mut means = Vec::with_capacity(total_frames);
+            for index in 0..total_frames {
+                if index > 0 {
+                    field = apply_inject_erode(&field, &settings, &w).expect("apply");
+                    let advance_settings = apply_coverage_homeostat(&settings, &field);
+                    field =
+                        advance_morphogenesis_frame(&field, &advance_settings).expect("advance");
+                }
+                let mean_v = field.v.iter().sum::<f32>() / field.v.len() as f32;
+                means.push(mean_v);
+            }
+            means
+        };
+
+        let homeostat_means = run(coverage_target);
+        let tail = &homeostat_means[homeostat_means.len() - 48..];
+        for &mean_v in tail {
+            assert!(
+                (mean_v - coverage_target).abs() <= 0.1,
+                "L4: mean(V)={mean_v} must settle within +/-0.1 of target {coverage_target} (full run: {homeostat_means:?})"
+            );
+        }
+
+        // Falsifiable contrast: WITHOUT the homeostat (coverage_target = 0),
+        // pure-luma injection with no sink saturates toward the injection
+        // ceiling well outside that band.
+        let unregulated_means = run(0.0);
+        let unregulated_final = *unregulated_means.last().unwrap();
+        assert!(
+            (unregulated_final - coverage_target).abs() > 0.1,
+            "contrast: without the homeostat, mean(V)={unregulated_final} should NOT already sit near the target"
         );
     }
 }

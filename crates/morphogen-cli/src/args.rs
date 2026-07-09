@@ -2104,6 +2104,11 @@ pub(crate) enum Commands {
         /// default). Only meaningful when `--inject`/`--erode` > 0.
         #[arg(long, value_enum, default_value_t = CliMorphogenesisInjectSource::Motion)]
         inject_source: CliMorphogenesisInjectSource,
+        /// Live Coupling L-S2 global negative-feedback homeostat target for
+        /// mean(V) coverage, `[0, 1]`. `0` = off (no mean(V) computation).
+        /// See `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`.
+        #[arg(long, default_value_t = 0.0)]
+        coverage_target: f32,
         /// Checkpoint after one frame and exit (resume semantics test hook).
         #[arg(long)]
         stop_after_frame: bool,
@@ -2171,6 +2176,11 @@ pub(crate) enum Commands {
         /// default). Only meaningful when `--inject`/`--erode` > 0.
         #[arg(long, value_enum, default_value_t = CliMorphogenesisInjectSource::Motion)]
         inject_source: CliMorphogenesisInjectSource,
+        /// Live Coupling L-S2 global negative-feedback homeostat target for
+        /// mean(V) coverage, `[0, 1]`. `0` = off (no mean(V) computation).
+        /// See `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`.
+        #[arg(long, default_value_t = 0.0)]
+        coverage_target: f32,
         /// `[0,1]`: strength of the `V`-weighted colourize tint. `0` = the
         /// (possibly displaced) carrier passes through unmodified.
         #[arg(long, default_value_t = 0.85)]
@@ -2194,7 +2204,8 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
-        /// Targets: feed, kill, param_map_strength, pattern_mix, displace.
+        /// Targets: feed, kill, param_map_strength, pattern_mix, displace,
+        /// inject, erode, coverage_target.
         /// Routes join the checkpoint contract, so a route or modulator
         /// change refuses to resume an existing output directory.
         #[arg(long = "modulate")]

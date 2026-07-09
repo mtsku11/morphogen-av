@@ -195,10 +195,24 @@ the checkpoint contract exactly like the S3 targets.
   blob that shifts position between frames 95 and 143 — directly, visually
   confirming L2's mechanism on real footage, not just the synthetic unit
   test.)
-- **L-S2 — homeostat + mod targets.** `coverage_target` + registry entries
-  for inject/erode/coverage_target (checkpoint contract join, the S3
-  pattern), anchors L4/L5, `inject = audio-rms` readout (growth surging on
-  the soundtrack — the payoff route; Read + numbers).
+- **L-S2 — homeostat + mod targets. DONE (2026-07-09,** Sonnet build,
+  orchestrator-verified: cargo 711 → **723/0**, clippy clean, zero new fmt
+  diffs. `coverage_target` (serde-default 0 = off, identity pinned) with
+  `COVERAGE_GAIN = 0.15` (swept 0.01–0.6 on the anchor scenario; 0.6
+  self-reinforces into near-total dissolution — outside the band; a FLAT
+  carrier degenerates the sim into a 0-D ODE, so L4 uses a textured bright
+  carrier). L4 holds: tail mean(V) 0.256–0.266 vs target 0.3 (control
+  without homeostat saturates to 0.474). inject/erode/coverage_target join
+  the modulation registry (clamp [0,1]); **routed-prev-luma fix**: the
+  track-prev-luma decision now also keys off routed inject/erode targets —
+  without it a pure-route `inject=lfo(...)` would silently never fire; L5
+  pinned incl. routed-inject interrupt+resume byte-identity and legacy
+  checkpoint compat. Readout on real cello audio
+  (`inject=audio-rms:0.15,0@smooth`, erode 0.03): early/late field deltas
+  1.895/1.627 (ratio 0.86, no freeze); loud passage = coherent coral maze
+  across the stage floor, quiet lull 8 frames later = sparse flecks — the
+  growth surges and decays in lockstep with the music (frames
+  orchestrator-Read).)
 - **L-S3 — queue + SwiftUI + showcase.** The three knobs on the queue task
   (serde-default, add→run byte-identity) and panel steppers + mod slots;
   final showcase render for the user (field view + composite, 6 s, audio
