@@ -4,9 +4,9 @@ use morphogen_render::{
     BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
     ChannelShiftSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
     FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
-    FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings, MorphogenesisPreset,
-    MorphogenesisSettings, PaletteQuantizeSettings, PixelSortSettings, RetroStaticSettings,
-    RuttEtraSettings, StructureMode, VideoVocoderSettings,
+    FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings, MorphogenesisCompositeSettings,
+    MorphogenesisPreset, MorphogenesisSettings, PaletteQuantizeSettings, PixelSortSettings,
+    RetroStaticSettings, RuttEtraSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -1818,6 +1818,71 @@ fn run() -> Result<(), CliError> {
                 frames,
                 settings,
                 job_id: "direct-morphogenesis-field",
+                stop_after_frame,
+            })
+            .map(|_| ())
+        }
+        Commands::RenderMorphogenesisSequence {
+            source_b_dir,
+            output_dir,
+            frames,
+            preset,
+            du,
+            dv,
+            feed,
+            kill,
+            dt,
+            substeps,
+            sim_scale,
+            seed_threshold,
+            seed,
+            pattern_mix,
+            displace,
+            pattern_hue,
+            pattern_color_mode,
+            stop_after_frame,
+        } => {
+            let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
+            if let Some(du) = du {
+                settings.du = du;
+            }
+            if let Some(dv) = dv {
+                settings.dv = dv;
+            }
+            if let Some(feed) = feed {
+                settings.feed = feed;
+            }
+            if let Some(kill) = kill {
+                settings.kill = kill;
+            }
+            if let Some(dt) = dt {
+                settings.dt = dt;
+            }
+            if let Some(substeps) = substeps {
+                settings.substeps = substeps;
+            }
+            if let Some(sim_scale) = sim_scale {
+                settings.sim_scale = sim_scale;
+            }
+            if let Some(seed_threshold) = seed_threshold {
+                settings.seed_threshold = seed_threshold;
+            }
+            if let Some(seed) = seed {
+                settings.seed = seed;
+            }
+            let composite = MorphogenesisCompositeSettings {
+                pattern_mix,
+                displace,
+                pattern_hue,
+                pattern_color_mode: pattern_color_mode.into(),
+            };
+            render_morphogenesis_sequence(MorphogenesisSequenceRenderRequest {
+                source_b_dir: &source_b_dir,
+                output_dir: &output_dir,
+                frames,
+                settings,
+                composite,
+                job_id: "direct-morphogenesis-sequence",
                 stop_after_frame,
             })
             .map(|_| ())

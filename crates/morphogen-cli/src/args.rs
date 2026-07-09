@@ -15,7 +15,7 @@ use morphogen_core::{
 };
 use morphogen_render::{
     BlendMode, CoagulationFlowSource, GeneratorPreset, MatteSource, ModulationSampling,
-    MorphogenesisPreset, ScanlineFilter, StructureMode, VectorRemixMode,
+    MorphogenesisPreset, PatternColorMode, ScanlineFilter, StructureMode, VectorRemixMode,
     CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM,
     MULTIMODAL_GRAIN_ALGORITHM,
 };
@@ -2094,6 +2094,68 @@ pub(crate) enum Commands {
         #[arg(long)]
         stop_after_frame: bool,
     },
+    /// Gray-Scott reaction-diffusion composite (Tier "Morphogenesis" S2; see
+    /// `docs/MORPHOGENESIS_MILESTONE.md`). Seeds and advances the same field
+    /// as `render-morphogenesis-field`, then reshapes Source B two ways:
+    /// `--pattern-mix` colourizes the growth into the frame, `--displace`
+    /// pushes B's pixels along `∇V` (the chemotaxis smear).
+    RenderMorphogenesisSequence {
+        source_b_dir: PathBuf,
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 60)]
+        frames: u32,
+        #[arg(long, value_enum, default_value_t = CliMorphogenesisPreset::Coral)]
+        preset: CliMorphogenesisPreset,
+        /// `U` diffusion rate. Overrides the preset when given.
+        #[arg(long)]
+        du: Option<f32>,
+        /// `V` diffusion rate. Overrides the preset when given.
+        #[arg(long)]
+        dv: Option<f32>,
+        /// Feed rate. Overrides the preset when given.
+        #[arg(long)]
+        feed: Option<f32>,
+        /// Kill rate. Overrides the preset when given.
+        #[arg(long)]
+        kill: Option<f32>,
+        /// Per-substep integration step. Overrides the preset when given.
+        #[arg(long)]
+        dt: Option<f32>,
+        /// Gray-Scott substeps per output frame. `0` freezes the field
+        /// (anchor A2). Overrides the preset when given.
+        #[arg(long)]
+        substeps: Option<u32>,
+        /// Sim resolution divisor relative to the carrier frame. Overrides
+        /// the preset when given.
+        #[arg(long)]
+        sim_scale: Option<u32>,
+        /// Frame-zero seed threshold: carrier luma >= this seeds V.
+        /// Overrides the preset when given.
+        #[arg(long)]
+        seed_threshold: Option<f32>,
+        /// Deterministic seed for the frame-zero speckle. Overrides the
+        /// preset when given.
+        #[arg(long)]
+        seed: Option<u64>,
+        /// `[0,1]`: strength of the `V`-weighted colourize tint. `0` = the
+        /// (possibly displaced) carrier passes through unmodified.
+        #[arg(long, default_value_t = 0.85)]
+        pattern_mix: f32,
+        /// Pixel displacement pushing the carrier sample along `∇V`. `0` = no
+        /// displacement.
+        #[arg(long, default_value_t = 0.0)]
+        displace: f32,
+        /// Hue (turns, `[0,1)`) used when `--pattern-color-mode hue`.
+        #[arg(long, default_value_t = 0.02)]
+        pattern_hue: f32,
+        /// How the pattern-mix tint colour is chosen: `hue` (fixed
+        /// `--pattern-hue`) or `inherit` (the sample's own hue, saturated).
+        #[arg(long, value_enum, default_value_t = CliPatternColorMode::Hue)]
+        pattern_color_mode: CliPatternColorMode,
+        /// Checkpoint after one frame and exit (resume semantics test hook).
+        #[arg(long)]
+        stop_after_frame: bool,
+    },
     QueueInit {
         queue_path: PathBuf,
     },
@@ -3692,6 +3754,24 @@ impl From<CliMorphogenesisPreset> for MorphogenesisPreset {
             CliMorphogenesisPreset::Mitosis => Self::Mitosis,
             CliMorphogenesisPreset::Worms => Self::Worms,
             CliMorphogenesisPreset::Spots => Self::Spots,
+        }
+    }
+}
+
+/// S2 composite colour mode (`--pattern-color-mode`); see
+/// [`PatternColorMode`].
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliPatternColorMode {
+    #[default]
+    Hue,
+    Inherit,
+}
+
+impl From<CliPatternColorMode> for PatternColorMode {
+    fn from(value: CliPatternColorMode) -> Self {
+        match value {
+            CliPatternColorMode::Hue => Self::Hue,
+            CliPatternColorMode::Inherit => Self::Inherit,
         }
     }
 }

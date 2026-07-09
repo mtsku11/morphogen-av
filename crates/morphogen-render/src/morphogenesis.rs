@@ -44,7 +44,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ImageBufferF32, RenderError};
+use crate::{sample_bilinear_clamped, ImageBufferF32, RenderError};
 
 /// Algorithm identifier — bump when the stencil, seeding, or clamp semantics
 /// change so stale checkpoints invalidate.
@@ -428,6 +428,312 @@ pub fn render_v_field_grayscale(field: &MorphogenesisField) -> Result<ImageBuffe
     })
 }
 
+// ─── S2 composite: pattern-mix colourize + displace-along-∇V ──────────────
+//
+// `out = carrier` reshaped by the Gray-Scott `V` field two ways, each with a
+// strength knob (`docs/MORPHOGENESIS_MILESTONE.md`'s S2 entry): `displace`
+// pushes the carrier sample along `∇V` (chemotaxis smear), and `pattern_mix`
+// tints the (possibly displaced) sample toward a colourized version of
+// itself, weighted by the local `V` value. Both knobs live in
+// [`MorphogenesisCompositeSettings`], separate from [`MorphogenesisSettings`]
+// because they don't affect field evolution — only `out`. They DO join the
+// sequence's checkpoint contract in `morphogen-cli` (declared there): a
+// resume with changed composite knobs would silently make new frames
+// colour/warp differently from already-written ones, which the stale-state
+// invariant forbids exactly like a changed field setting.
+
+/// How [`composite_morphogenesis_frame`] chooses the pattern-mix tint colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternColorMode {
+    /// Tint toward a fixed hue (`pattern_hue`, turns) — growth is painted a
+    /// uniform colour wash.
+    Hue,
+    /// Tint toward the sample's OWN hue, pushed to full saturation — growth
+    /// reads as the footage's own colour turning vivid rather than being
+    /// repainted a foreign hue ("the growth takes the local B colour").
+    Inherit,
+}
+
+/// Composite (S2) knobs. See the module section above for why these are
+/// separate from [`MorphogenesisSettings`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MorphogenesisCompositeSettings {
+    /// `[0,1]`: strength of the `V`-weighted colourize tint. `0` = the
+    /// (possibly displaced) carrier sample passes through unmodified.
+    pub pattern_mix: f32,
+    /// Pixel displacement pushing the carrier sample along `∇V`. `0` = no
+    /// displacement (the carrier is sampled at its own integer coordinate).
+    pub displace: f32,
+    /// Hue (turns, `[0,1)`) used by [`PatternColorMode::Hue`]; ignored by
+    /// [`PatternColorMode::Inherit`].
+    pub pattern_hue: f32,
+    /// Which colour the pattern-mix tint targets.
+    pub pattern_color_mode: PatternColorMode,
+}
+
+impl MorphogenesisCompositeSettings {
+    /// Anchor A1: no colourize, no displacement — `composite_morphogenesis_frame`
+    /// is byte-identical to the carrier regardless of the field.
+    pub fn passthrough() -> Self {
+        Self {
+            pattern_mix: 0.0,
+            displace: 0.0,
+            pattern_hue: 0.0,
+            pattern_color_mode: PatternColorMode::Hue,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), RenderError> {
+        if !(self.pattern_mix.is_finite() && (0.0..=1.0).contains(&self.pattern_mix)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "pattern_mix must be finite and in [0, 1]".into(),
+            ));
+        }
+        if !self.displace.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "displace must be finite".into(),
+            ));
+        }
+        if !self.pattern_hue.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "pattern_hue must be finite".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for MorphogenesisCompositeSettings {
+    /// `pattern_mix` defaults nonzero (~0.85, declared S2 default) so the
+    /// first render shows the growth rather than a silent passthrough;
+    /// `displace` defaults to `0` (a purely additive knob).
+    fn default() -> Self {
+        Self {
+            pattern_mix: 0.85,
+            displace: 0.0,
+            pattern_hue: 0.02,
+            pattern_color_mode: PatternColorMode::Hue,
+        }
+    }
+}
+
+fn luma3(r: f32, g: f32, b: f32) -> f32 {
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/// HSV (h in turns, s/v in [0,1]) → RGB in [0,1].
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+    if s <= 0.0 {
+        return (v, v, v);
+    }
+    let h6 = (h - h.floor()) * 6.0;
+    let i = h6.floor();
+    let f = h6 - i;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    match i as i32 % 6 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    }
+}
+
+/// RGB in [0,1] → HSV (h in turns, s/v in [0,1]).
+fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let v = max;
+    let s = if max <= 0.0 { 0.0 } else { d / max };
+    let h = if d <= 0.0 {
+        0.0
+    } else if max == r {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h / 6.0, s, v)
+}
+
+/// A fully-saturated colour at `hue` (turns), rescaled so its luma matches
+/// `color`'s own luma ("colourize toward a hue, luma-preserving": the tint
+/// keeps the pixel's brightness but replaces its colour).
+fn colorize_luma_preserving(color: [f32; 4], hue: f32) -> [f32; 4] {
+    let (r, g, b) = hsv_to_rgb(hue.rem_euclid(1.0), 1.0, 1.0);
+    let hue_luma = luma3(r, g, b);
+    let source_luma = luma3(color[0], color[1], color[2]);
+    let scale = if hue_luma > 1e-6 {
+        source_luma / hue_luma
+    } else {
+        0.0
+    };
+    [
+        (r * scale).clamp(0.0, 1.0),
+        (g * scale).clamp(0.0, 1.0),
+        (b * scale).clamp(0.0, 1.0),
+        color[3],
+    ]
+}
+
+/// Gradient of the `V` field (central differences, **clamped edges** — the
+/// same stencil convention as [`morphogenesis_substep`]'s Laplacian) at sim
+/// resolution. Computed once per composite call, then bilinearly upsampled
+/// to frame size per pixel by [`sample_scalar_grid`] — the same
+/// upsample-at-composite-time convention as the `V` field itself
+/// (`docs/MORPHOGENESIS_MILESTONE.md`'s sim_scale contract).
+fn morphogenesis_v_gradient(field: &MorphogenesisField) -> (Vec<f32>, Vec<f32>) {
+    let w = field.width as usize;
+    let mut gx = vec![0.0_f32; field.v.len()];
+    let mut gy = vec![0.0_f32; field.v.len()];
+    for y in 0..field.height {
+        let y_prev = clamp_prev(y) as usize;
+        let y_next = clamp_next(y, field.height) as usize;
+        for x in 0..field.width {
+            let x_prev = clamp_prev(x) as usize;
+            let x_next = clamp_next(x, field.width) as usize;
+            let idx = y as usize * w + x as usize;
+            let left = field.v[y as usize * w + x_prev];
+            let right = field.v[y as usize * w + x_next];
+            let up = field.v[y_prev * w + x as usize];
+            let down = field.v[y_next * w + x as usize];
+            gx[idx] = (right - left) * 0.5;
+            gy[idx] = (down - up) * 0.5;
+        }
+    }
+    (gx, gy)
+}
+
+/// Bilinear sample of a sim-resolution scalar grid at a carrier-resolution
+/// pixel coordinate `(px, py)`, clamped at the grid borders (the scalar
+/// analogue of [`sample_bilinear_clamped`]). Pixel-centre alignment so a
+/// `sim_scale` that doesn't evenly divide the carrier dimensions (the
+/// `div_ceil` convention in [`morphogenesis_field_dimensions`]) still samples
+/// smoothly to the frame edges.
+fn sample_scalar_grid(
+    width: u32,
+    height: u32,
+    values: &[f32],
+    carrier_width: u32,
+    carrier_height: u32,
+    px: f32,
+    py: f32,
+) -> f32 {
+    let fx = (px + 0.5) * width as f32 / carrier_width.max(1) as f32 - 0.5;
+    let fy = (py + 0.5) * height as f32 / carrier_height.max(1) as f32 - 0.5;
+    let x0f = fx.floor();
+    let y0f = fy.floor();
+    let tx = fx - x0f;
+    let ty = fy - y0f;
+    let x0 = (x0f as i64).clamp(0, width as i64 - 1) as u32;
+    let y0 = (y0f as i64).clamp(0, height as i64 - 1) as u32;
+    let x1 = ((x0f + 1.0) as i64).clamp(0, width as i64 - 1) as u32;
+    let y1 = ((y0f + 1.0) as i64).clamp(0, height as i64 - 1) as u32;
+    let w = width as usize;
+    let v00 = values[y0 as usize * w + x0 as usize];
+    let v10 = values[y0 as usize * w + x1 as usize];
+    let v01 = values[y1 as usize * w + x0 as usize];
+    let v11 = values[y1 as usize * w + x1 as usize];
+    let top = v00 + (v10 - v00) * tx;
+    let bottom = v01 + (v11 - v01) * tx;
+    top + (bottom - top) * ty
+}
+
+/// The S2 composite: `out = carrier` reshaped by the Gray-Scott `V` field.
+///
+/// 1. **Displace** — sample the carrier at `(x,y) - displace * ∇V(x,y)` (the
+///    gather convention: a pixel whose gradient points toward it is pulled
+///    from upstream, the chemotaxis smear). `∇V` is
+///    [`morphogenesis_v_gradient`] bilinearly upsampled via
+///    [`sample_scalar_grid`].
+/// 2. **Pattern-mix** — tint the displaced sample toward
+///    [`colorize_luma_preserving`], `V`-weighted (`strength = pattern_mix *
+///    V`); [`PatternColorMode::Hue`] tints toward the fixed `pattern_hue`,
+///    [`PatternColorMode::Inherit`] tints toward the sample's own hue.
+///
+/// `pattern_mix == 0 && displace == 0` is anchor A1: every output pixel
+/// samples the carrier at its own integer coordinate with a zero-strength
+/// mix (short-circuited before any `V` sampling), so the output is
+/// byte-identical to the carrier regardless of what the field is doing.
+pub fn composite_morphogenesis_frame(
+    carrier: &ImageBufferF32,
+    field: &MorphogenesisField,
+    settings: &MorphogenesisCompositeSettings,
+) -> Result<ImageBufferF32, RenderError> {
+    settings.validate()?;
+    let (gx, gy) = morphogenesis_v_gradient(field);
+    ImageBufferF32::from_fn(carrier.width, carrier.height, |x, y| {
+        let px = x as f32;
+        let py = y as f32;
+
+        let sample_x;
+        let sample_y;
+        if settings.displace == 0.0 {
+            sample_x = px;
+            sample_y = py;
+        } else {
+            let grad_x = sample_scalar_grid(
+                field.width,
+                field.height,
+                &gx,
+                carrier.width,
+                carrier.height,
+                px,
+                py,
+            );
+            let grad_y = sample_scalar_grid(
+                field.width,
+                field.height,
+                &gy,
+                carrier.width,
+                carrier.height,
+                px,
+                py,
+            );
+            sample_x = px - settings.displace * grad_x;
+            sample_y = py - settings.displace * grad_y;
+        }
+        let color = sample_bilinear_clamped(carrier, sample_x, sample_y);
+
+        if settings.pattern_mix <= 0.0 {
+            return color;
+        }
+        let v = sample_scalar_grid(
+            field.width,
+            field.height,
+            &field.v,
+            carrier.width,
+            carrier.height,
+            px,
+            py,
+        )
+        .clamp(0.0, 1.0);
+        let strength = (settings.pattern_mix * v).clamp(0.0, 1.0);
+        if strength <= 0.0 {
+            return color;
+        }
+        let target = match settings.pattern_color_mode {
+            PatternColorMode::Hue => colorize_luma_preserving(color, settings.pattern_hue),
+            PatternColorMode::Inherit => {
+                let (h, _s, _v) = rgb_to_hsv(color[0], color[1], color[2]);
+                colorize_luma_preserving(color, h)
+            }
+        };
+        [
+            color[0] + (target[0] - color[0]) * strength,
+            color[1] + (target[1] - color[1]) * strength,
+            color[2] + (target[2] - color[2]) * strength,
+            color[3],
+        ]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,5 +987,225 @@ mod tests {
                 "{preset:?}: final variance must stay in a nontrivial band (final={final_variance})"
             );
         }
+    }
+
+    // ─── S2 composite tests ────────────────────────────────────────────────
+
+    fn varied_carrier(width: u32, height: u32) -> ImageBufferF32 {
+        // Distinct, partially-saturated per-pixel colour so tint/displace
+        // effects are individually observable (never pure grey, never a
+        // primary at full saturation).
+        ImageBufferF32::from_fn(width, height, |x, y| {
+            let fx = x as f32 / width.max(1) as f32;
+            let fy = y as f32 / height.max(1) as f32;
+            [0.2 + 0.5 * fx, 0.3 + 0.4 * fy, 0.6 - 0.3 * fx, 1.0]
+        })
+        .unwrap()
+    }
+
+    /// A field at the SAME resolution as the carrier (`sim_scale`-1
+    /// equivalent) with a hand-picked `V` gradient, so composite math can be
+    /// cross-checked pixel-for-pixel without any bilinear-upsample rounding.
+    fn varied_field(width: u32, height: u32) -> MorphogenesisField {
+        let count = (width as usize) * (height as usize);
+        let u = vec![1.0_f32; count];
+        let mut v = vec![0.0_f32; count];
+        for y in 0..height {
+            for x in 0..width {
+                let idx = (y as usize) * (width as usize) + (x as usize);
+                v[idx] = (x as f32 / width.max(1) as f32).clamp(0.0, 1.0);
+            }
+        }
+        MorphogenesisField::new(width, height, u, v).unwrap()
+    }
+
+    #[test]
+    fn anchor_a1_passthrough_composite_matches_carrier_regardless_of_field() {
+        let carrier = varied_carrier(8, 6);
+        let field = varied_field(8, 6);
+        let settings = MorphogenesisCompositeSettings::passthrough();
+
+        let output = composite_morphogenesis_frame(&carrier, &field, &settings).expect("composite");
+        assert_eq!(
+            output, carrier,
+            "A1: pattern_mix=0 && displace=0 must reproduce the carrier byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn pattern_mix_zero_leaves_the_displaced_sample_untinted() {
+        // pattern_mix=0 alone (displace nonzero) must skip the colourize step
+        // entirely: the output is exactly the displaced sample, matching
+        // `sample_bilinear_clamped` directly, with no dependence on V.
+        let carrier = varied_carrier(10, 8);
+        let field = varied_field(10, 8);
+        let settings = MorphogenesisCompositeSettings {
+            pattern_mix: 0.0,
+            displace: 3.0,
+            pattern_hue: 0.5,
+            pattern_color_mode: PatternColorMode::Hue,
+        };
+        let output = composite_morphogenesis_frame(&carrier, &field, &settings).expect("composite");
+
+        let (gx, gy) = morphogenesis_v_gradient(&field);
+        for y in 0..carrier.height {
+            for x in 0..carrier.width {
+                let grad_x = sample_scalar_grid(
+                    field.width,
+                    field.height,
+                    &gx,
+                    carrier.width,
+                    carrier.height,
+                    x as f32,
+                    y as f32,
+                );
+                let grad_y = sample_scalar_grid(
+                    field.width,
+                    field.height,
+                    &gy,
+                    carrier.width,
+                    carrier.height,
+                    x as f32,
+                    y as f32,
+                );
+                let expected = sample_bilinear_clamped(
+                    &carrier,
+                    x as f32 - settings.displace * grad_x,
+                    y as f32 - settings.displace * grad_y,
+                );
+                assert_eq!(output.pixel(x, y).unwrap(), expected, "pixel ({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn displace_zero_samples_the_carriers_own_pixel_under_full_pattern_mix() {
+        // displace=0 must sample the carrier at its own integer coordinate —
+        // proven under pattern_mix=1 (not just the A1 all-off case) by
+        // reconstructing the expected tint from the UNDISPLACED source pixel.
+        let carrier = varied_carrier(6, 5);
+        let field = varied_field(6, 5);
+        let settings = MorphogenesisCompositeSettings {
+            pattern_mix: 1.0,
+            displace: 0.0,
+            pattern_hue: 0.35,
+            pattern_color_mode: PatternColorMode::Hue,
+        };
+        let output = composite_morphogenesis_frame(&carrier, &field, &settings).expect("composite");
+
+        for y in 0..carrier.height {
+            for x in 0..carrier.width {
+                let idx = (y as usize) * (carrier.width as usize) + (x as usize);
+                let source = carrier.pixel(x, y).unwrap();
+                let v = field.v[idx];
+                let target = colorize_luma_preserving(source, settings.pattern_hue);
+                let strength = (settings.pattern_mix * v).clamp(0.0, 1.0);
+                let expected = [
+                    source[0] + (target[0] - source[0]) * strength,
+                    source[1] + (target[1] - source[1]) * strength,
+                    source[2] + (target[2] - source[2]) * strength,
+                    source[3],
+                ];
+                let actual = output.pixel(x, y).unwrap();
+                for channel in 0..4 {
+                    assert!(
+                        (actual[channel] - expected[channel]).abs() < 1e-5,
+                        "pixel ({x},{y}) channel {channel}: {actual:?} vs {expected:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_mix_one_at_full_v_preserves_luma_and_shifts_toward_the_target_hue() {
+        let carrier = ImageBufferF32::from_fn(2, 2, |_, _| [0.6, 0.3, 0.2, 1.0]).unwrap();
+        // Uniform V=1 field so every pixel gets the full-strength tint.
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![1.0; 4]).unwrap();
+        let settings = MorphogenesisCompositeSettings {
+            pattern_mix: 1.0,
+            displace: 0.0,
+            pattern_hue: 0.55,
+            pattern_color_mode: PatternColorMode::Hue,
+        };
+        let output = composite_morphogenesis_frame(&carrier, &field, &settings).expect("composite");
+
+        let source_luma = luma3(0.6, 0.3, 0.2);
+        for pixel in &output.pixels {
+            let out_luma = luma3(pixel[0], pixel[1], pixel[2]);
+            assert!(
+                (out_luma - source_luma).abs() < 1e-4,
+                "tint must preserve luma: source={source_luma} output={out_luma}"
+            );
+            let (h, _s, _v) = rgb_to_hsv(pixel[0], pixel[1], pixel[2]);
+            assert!(
+                (h - settings.pattern_hue).abs() < 1e-3,
+                "tint must shift hue toward pattern_hue: got {h}, wanted {}",
+                settings.pattern_hue
+            );
+        }
+    }
+
+    #[test]
+    fn inherit_mode_differs_from_hue_mode_on_a_partially_saturated_carrier() {
+        let carrier = ImageBufferF32::from_fn(2, 2, |_, _| [0.7, 0.4, 0.3, 1.0]).unwrap();
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![1.0; 4]).unwrap();
+        let hue_settings = MorphogenesisCompositeSettings {
+            pattern_mix: 1.0,
+            displace: 0.0,
+            pattern_hue: 0.55, // far from the carrier's own (reddish) hue
+            pattern_color_mode: PatternColorMode::Hue,
+        };
+        let inherit_settings = MorphogenesisCompositeSettings {
+            pattern_color_mode: PatternColorMode::Inherit,
+            ..hue_settings
+        };
+
+        let hue_out = composite_morphogenesis_frame(&carrier, &field, &hue_settings).expect("hue");
+        let inherit_out =
+            composite_morphogenesis_frame(&carrier, &field, &inherit_settings).expect("inherit");
+
+        assert_ne!(
+            hue_out.pixels, inherit_out.pixels,
+            "hue mode must tint toward pattern_hue while inherit tints toward the local hue"
+        );
+
+        // Inherit's target hue is the carrier's OWN hue, so its luma-preserved
+        // tint should reproduce the carrier's own hue (fully saturated) —
+        // verify against colorize_luma_preserving with the extracted local hue.
+        let (local_hue, _s, _v) = rgb_to_hsv(0.7, 0.4, 0.3);
+        let expected = colorize_luma_preserving([0.7, 0.4, 0.3, 1.0], local_hue);
+        for pixel in &inherit_out.pixels {
+            for channel in 0..4 {
+                assert!(
+                    (pixel[channel] - expected[channel]).abs() < 1e-5,
+                    "inherit tint must match the carrier's own hue: {pixel:?} vs {expected:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn composite_is_deterministic_across_repeated_calls() {
+        let carrier = varied_carrier(12, 9);
+        let field = varied_field(12, 9);
+        let settings = MorphogenesisCompositeSettings {
+            pattern_mix: 0.6,
+            displace: 4.0,
+            pattern_hue: 0.1,
+            pattern_color_mode: PatternColorMode::Inherit,
+        };
+        let a = composite_morphogenesis_frame(&carrier, &field, &settings).expect("first");
+        let b = composite_morphogenesis_frame(&carrier, &field, &settings).expect("second");
+        assert_eq!(a, b, "composite must be a pure, deterministic function");
+    }
+
+    #[test]
+    fn composite_settings_validate_rejects_out_of_range_pattern_mix() {
+        let settings = MorphogenesisCompositeSettings {
+            pattern_mix: 1.5,
+            ..MorphogenesisCompositeSettings::passthrough()
+        };
+        assert!(settings.validate().is_err());
     }
 }

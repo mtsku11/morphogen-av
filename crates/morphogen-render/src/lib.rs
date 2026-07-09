@@ -153,9 +153,10 @@ pub use modulation::{
     RETRO_STATIC_MODULATION_TARGETS, RUTT_ETRA_MODULATION_TARGETS,
 };
 pub use morphogenesis::{
-    advance_morphogenesis_frame, morphogenesis_field_dimensions, morphogenesis_field_from_rgba32f,
-    morphogenesis_field_to_rgba32f, morphogenesis_substep, render_v_field_grayscale,
-    seed_morphogenesis_field, MorphogenesisField, MorphogenesisPreset, MorphogenesisSettings,
+    advance_morphogenesis_frame, composite_morphogenesis_frame, morphogenesis_field_dimensions,
+    morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f, morphogenesis_substep,
+    render_v_field_grayscale, seed_morphogenesis_field, MorphogenesisCompositeSettings,
+    MorphogenesisField, MorphogenesisPreset, MorphogenesisSettings, PatternColorMode,
     MORPHOGENESIS_ALGORITHM,
 };
 pub use optical_flow::{

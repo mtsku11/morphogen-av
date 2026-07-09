@@ -111,8 +111,23 @@ footage's own palette), and `--displace` pushes B's pixels along ∇V
   and mimic dead chemistry; check seed feature width in sim-pixels before
   blaming the parameters. Speckle density 0.2% (1% drowned the aliveness
   metric).)
-- **S2 — composite + CLI.** `render-morphogenesis-sequence <source-b> <out>`
-  with pattern-mix/displace/hue, presets, anchor A1, acceptance 2–3.
+- **S2 — composite + CLI. DONE (2026-07-08,** Sonnet build,
+  orchestrator-verified: cargo 674 → **683/0**, clippy clean, zero new fmt
+  diffs. `render-morphogenesis-sequence` with `--pattern-mix` (default 0.85) /
+  `--displace` / `--pattern-hue` + `--pattern-color-mode hue|inherit` (inherit
+  = growth takes the local B colour); displace gathers at `x − displace·∇V`
+  (central differences at sim res, bilinear upsample). Composite knobs JOIN
+  the checkpoint contract (composite reads B every frame ⇒ changed knobs or
+  any changed carrier frame refuses resume; whole-dir source fingerprint).
+  A1 pinned at unit + CLI level, and re-verified live on real footage at the
+  pixel level (ffmpeg rgb24 md5 identical — raw byte cmp is the known
+  RGB↔RGBA encoding trap). Acceptance 3 on cello.mp4: off≡source; on = coral
+  nucleating on the cellist's face/hands at t=0 → travelling-front stipple
+  through the shirt at t=29 → full labyrinthine coral carpet across the hall
+  floor at t=59; off-vs-on cross-delta sustained 2.9–5.6/255 across the run
+  (non-monotonic per the rutt-etra precedent — the mid-run dip is the seed
+  patches thinning into fronts). `render-morphogenesis-field` kept as the
+  raw-field debug view.)
 - **S3 — coupling.** B→(f,k) param maps; register the five modulation targets
   (checkpoint contract joins here — routed settings enter the fingerprint);
   acceptance 4.
