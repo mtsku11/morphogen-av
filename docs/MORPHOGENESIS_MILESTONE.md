@@ -128,9 +128,48 @@ footage's own palette), and `--displace` pushes B's pixels along ∇V
   (non-monotonic per the rutt-etra precedent — the mid-run dip is the seed
   patches thinning into fronts). `render-morphogenesis-field` kept as the
   raw-field debug view.)
-- **S3 — coupling.** B→(f,k) param maps; register the five modulation targets
-  (checkpoint contract joins here — routed settings enter the fingerprint);
-  acceptance 4.
+- **S3 — coupling. DONE (2026-07-09,** Sonnet build, orchestrator-verified:
+  cargo 683 → **689/0**, clippy clean, zero new fmt diffs. B→(f,k) param map:
+  a declared line segment centered EXACTLY on `settings`'s own `(feed, kill)`
+  (`local_feed_kill`) — `param_map_strength == 0` delegates to the plain
+  `advance_morphogenesis_frame` verbatim, so the continuity anchor is
+  byte-identical by construction, not float coincidence. `feed`/`kill`
+  registered on `MorphogenesisSettings`, `param_map_strength` alongside them;
+  `pattern_mix`/`displace` stay on `MorphogenesisCompositeSettings` — one
+  `apply_morphogenesis_modulation(settings, composite, target, value)` threads
+  both. `--frame-rate` added to `render-morphogenesis-sequence` (the
+  flow-feedback precedent: one timeline per stateful render, envelopes sample
+  against it) plus the standard `--modulate`/`--modulator-*`/named-modulator
+  args. Routes join `MorphogenesisSequenceContract` via `FeedbackModulationContract`
+  reused verbatim (it's generic over which effect's routes it carries); both
+  it and `MorphogenesisSettings.param_map_strength` are `#[serde(default)]` so
+  pre-S3 checkpoints deserialize unmodulated and stay resumable — proven by a
+  legacy-checkpoint resume test (mirrors
+  `render_feedback_sequence_lfo_route_joins_checkpoint_contract`'s shape).
+  **Trap found and fixed:** the first segment (opposite-sign deltas,
+  `feed +0.05 / kill −0.02`) passed every unit test (uniform synthetic
+  carriers) but silently killed the WHOLE field on real footage — a
+  mostly-dark carrier pushes its majority of cells into a truly-dead
+  `(feed, kill)` pair, and Gray-Scott's diffusion drags the small alive
+  region down with it over 60 frames; a uniform-luma unit test can't see this
+  because there's no dead majority to diffuse from. Fixed by making
+  `feed`/`kill` shift with the SAME sign and empirically probing candidate
+  segments with `render-morphogenesis-field` (bare aliveness, no compositing)
+  before picking `feed +0.014 / kill +0.008`: both endpoints
+  (`feed≈0.044,kill≈0.064` bright; `feed≈0.030,kill≈0.056` dark) stay alive at
+  `param_map_strength == 1.0` (the visible-by-default value) on the cello
+  footage. Acceptance 4 on the same cello frames: `feed = lfo(sine,0.1):0.02,0.03`
+  at `--frame-rate 6` (60 frames = one full 10s LFO period) visibly pulses —
+  dense floor/shirt growth expands into large blobs at the feed peak (t=5s,
+  frame 30) and recedes to sparse speckle at the troughs (frame 0/59);
+  within-on frame-delta 3.476/255 sustained, off-vs-on cross-delta grows
+  0 (frame 0, shared seed) → 0.685 → 2.003 → 2.115 → 3.754/255 (frames
+  15/30/45/59) as the knob history accumulates (non-monotonic, the rutt-etra
+  precedent). The param-map on/off pair (same cello frames, coral defaults)
+  shows bright (shirt) regions growing a finer stipple texture vs off's
+  rounder blobs, and dark (floor) regions growing branchier/stringier shapes
+  vs off's blobs — visibly different species; cross-delta grows 0 → 1.130 →
+  1.859 → 2.074 → 3.132/255 (frames 0/15/30/45/59).
 - **S4 — queue + SwiftUI panel** (established patterns; add→run
   byte-identical).
 - **S5 (deferred-by-default) — Metal port.** Stencil gathers are

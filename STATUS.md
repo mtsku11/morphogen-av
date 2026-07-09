@@ -8,9 +8,9 @@ _Last updated: 2026-07-07_
 
 ## Baseline (verified)
 
-- `cargo test --workspace`: **683 passing across 7 crates, 0 failing** (was 598
+- `cargo test --workspace`: **689 passing across 7 crates, 0 failing** (was 598
   at arc start; 5.2 oscillators +13, 5.3 MIDI +22, 5.4 mattes +19, 5.6 colour
-  +11, composition F4 +1, Morphogenesis S1+S2 +19).
+  +11, composition F4 +1, Morphogenesis S1–S3 +25).
   One benign warning (`block v0.1.6` transitive dep, future-Rust deprecation).
 - `cargo fmt --all -- --check` is **dirty on ~54 pre-existing lines** (the
   Homebrew rustc 1.96 fmt drift again — verified pre-existing by identical
@@ -52,8 +52,9 @@ flow-feedback; window deltas 13.77 → 5.5 ramp vs the synthetic cut's 116.1
 spike; boundary frames Read). Composition post-build review is closed (F6 =
 deferrals list). **Morphogenesis is IN FLIGHT (user-directed 2026-07-08,
 jumping the gated 2.x/3.x tiers): S1 field sim ✅ → S2 composite + CLI ✅ →
-next S3 coupling + mod targets → S4 queue/SwiftUI; S5 Metal
-deferred-by-default.**
+S3 coupling + mod targets ✅ (LFO pulse verified on cello footage; param-map
+segment retuned same-sign after the dark-footage die-off trap) → next S4
+queue/SwiftUI; S5 Metal deferred-by-default.**
 Everything through composition F5 pushed to origin at `ec61fa3` (2026-07-08). Orchestration model: Opus architect writes each
 `docs/*_MILESTONE.md` contract, a Sonnet agent builds, the architect verifies
 (baseline→delta, frames Read, frame-delta numbers) and checkpoints. Contracts

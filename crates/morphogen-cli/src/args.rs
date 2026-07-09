@@ -2137,6 +2137,12 @@ pub(crate) enum Commands {
         /// preset when given.
         #[arg(long)]
         seed: Option<u64>,
+        /// S3: strength of the per-cell `(feed, kill)` shift driven by
+        /// Source B's per-frame luma along the declared line segment. `0` =
+        /// the exact uniform-`(feed,kill)` sim (continuity anchor). Overrides
+        /// the preset when given.
+        #[arg(long)]
+        param_map_strength: Option<f32>,
         /// `[0,1]`: strength of the `V`-weighted colourize tint. `0` = the
         /// (possibly displaced) carrier passes through unmodified.
         #[arg(long, default_value_t = 0.85)]
@@ -2155,6 +2161,42 @@ pub(crate) enum Commands {
         /// Checkpoint after one frame and exit (resume semantics test hook).
         #[arg(long)]
         stop_after_frame: bool,
+        /// The render's own timeline; modulation envelopes sample against it
+        /// (the flow-feedback precedent: one timeline per stateful render).
+        #[arg(long, default_value_t = 24.0)]
+        frame_rate: f64,
+        /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
+        /// Targets: feed, kill, param_map_strength, pattern_mix, displace.
+        /// Routes join the checkpoint contract, so a route or modulator
+        /// change refuses to resume an existing output directory.
+        #[arg(long = "modulate")]
+        modulate: Vec<String>,
+        /// Modulator WAV for audio-* modulation sources.
+        #[arg(long)]
+        modulator_audio: Option<PathBuf>,
+        /// Modulator PNG frame directory for luma/flow modulation sources.
+        #[arg(long)]
+        modulator_frames: Option<PathBuf>,
+        /// Modulator Standard MIDI File for midi-* modulation sources.
+        #[arg(long)]
+        modulator_midi: Option<PathBuf>,
+        /// Envelope evaluation per output frame: hold (step) or smooth (linear).
+        #[arg(long, value_enum, default_value_t = CliModulationSampling::Hold)]
+        modulation_sampling: CliModulationSampling,
+        /// Reuse/write extracted luma/flow envelope sidecars (analysis cache;
+        /// reused only on an algorithm/fps/content-fingerprint match).
+        #[arg(long)]
+        modulation_cache_dir: Option<PathBuf>,
+        /// Named modulator WAV <name>=<wav> (repeatable); routes reference it
+        /// as <name>.<source>. The unnamed --modulator-audio stays the default.
+        #[arg(long = "named-modulator-audio")]
+        named_modulator_audio: Vec<String>,
+        /// Named modulator frame directory <name>=<dir> (repeatable).
+        #[arg(long = "named-modulator-frames")]
+        named_modulator_frames: Vec<String>,
+        /// Named modulator MIDI file <name>=<path> (repeatable).
+        #[arg(long = "named-modulator-midi")]
+        named_modulator_midi: Vec<String>,
     },
     QueueInit {
         queue_path: PathBuf,

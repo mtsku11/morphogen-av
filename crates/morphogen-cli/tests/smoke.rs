@@ -11349,3 +11349,192 @@ fn render_morphogenesis_sequence_checkpoints_resumes_and_refuses_stale_composite
             "settings changed; start with a new output directory",
         ));
 }
+
+/// `render-morphogenesis-sequence` (Tier "Morphogenesis" S3): a `feed`
+/// LFO route joins the checkpoint contract exactly like flow-feedback's
+/// (`FeedbackModulationContract` reused verbatim) — mirrors
+/// `render_feedback_sequence_lfo_route_joins_checkpoint_contract`'s shape.
+#[test]
+fn render_morphogenesis_sequence_lfo_route_joins_checkpoint_contract() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    // sine at 1 Hz, fps 4: p = 0, 0.25, 0.5 across the three frames — a
+    // distinct routed `feed` per frame (0.03, 0.04, 0.05), so frame N's field
+    // state consumed frames 0..N's values (what resume must reproduce). All
+    // literals are exactly representable in f32.
+    let route = "feed=lfo(sine,1):0.02,0.03";
+    let base_args = |output_dir: &str| {
+        vec![
+            "render-morphogenesis-sequence".to_string(),
+            carrier_arg.clone(),
+            output_dir.to_string(),
+            "--frames".to_string(),
+            "3".to_string(),
+            "--preset".to_string(),
+            "coral".to_string(),
+            "--pattern-mix".to_string(),
+            "0.85".to_string(),
+            "--displace".to_string(),
+            "0".to_string(),
+            "--frame-rate".to_string(),
+            "4".to_string(),
+        ]
+    };
+    let modulated_args = |output_dir: &str| {
+        let mut args = base_args(output_dir);
+        args.extend(["--modulate".to_string(), route.to_string()]);
+        args
+    };
+
+    // Unmodulated reference (the off case) and the uninterrupted modulated
+    // render the resumed one must match.
+    let off_dir = temp_dir.path().join("off-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&off_dir.to_string_lossy()))
+        .assert()
+        .success();
+    let uninterrupted_dir = temp_dir.path().join("uninterrupted-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(modulated_args(&uninterrupted_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "modulation routes: feed=lfo(sine,1,0):0.02,0.03",
+        ));
+
+    // The route actually drives the field evolution.
+    assert_ne!(
+        fs::read(uninterrupted_dir.join("frames/frame_000002.png")).expect("modulated frame"),
+        fs::read(off_dir.join("frames/frame_000002.png")).expect("unmodulated frame"),
+        "routed LFO feed must change the rendered sequence"
+    );
+
+    // Interrupt after frame 0, then resume with identical arguments.
+    let resumed_dir = temp_dir.path().join("resumed-output");
+    let resumed_args = modulated_args(&resumed_dir.to_string_lossy());
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "checkpointed morphogenesis sequence after frame 0",
+        ));
+
+    // The LFO params ride the route inside the checkpoint's modulation block.
+    let checkpoint: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_dir.join("checkpoint.json")).expect("read checkpoint"),
+    )
+    .expect("parse checkpoint");
+    let modulation = &checkpoint["contract"]["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "feed");
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["shape"], "sine");
+    assert_eq!(modulation["routes"][0]["source"]["lfo"]["rate_hz"], 1.0);
+    assert_eq!(modulation["routes"][0]["scale"], 0.02);
+    assert_eq!(modulation["routes"][0]["offset"], 0.03);
+    assert_eq!(modulation["fps"], 4.0);
+    assert!(modulation["modulator_audio"].is_null());
+    assert!(modulation["modulator_frames"].is_null());
+
+    // A changed rate_hz must refuse to resume — the knob history would differ.
+    let mut changed_rate_args = base_args(&resumed_dir.to_string_lossy());
+    changed_rate_args.extend([
+        "--modulate".to_string(),
+        "feed=lfo(sine,2):0.02,0.03".to_string(),
+    ]);
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&changed_rate_args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+    // Dropping the route entirely must refuse for the same reason.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&resumed_dir.to_string_lossy()))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+
+    // Identical arguments resume to byte-identity with uninterrupted.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(&resumed_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered morphogenesis sequence with 3 frame(s)",
+        ));
+    for frame_name in ["frame_000000.png", "frame_000001.png", "frame_000002.png"] {
+        assert_eq!(
+            fs::read(resumed_dir.join("frames").join(frame_name)).expect("resumed frame"),
+            fs::read(uninterrupted_dir.join("frames").join(frame_name))
+                .expect("uninterrupted frame"),
+            "resumed LFO-modulated render must be byte-identical ({frame_name})"
+        );
+    }
+
+    // A pre-S3 checkpoint (no modulation key at all) deserializes as
+    // unmodulated and stays resumable by an unmodulated render.
+    let legacy_dir = temp_dir.path().join("legacy-output");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+    let checkpoint_path = legacy_dir.join("checkpoint.json");
+    let mut legacy_checkpoint: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).expect("read legacy"))
+            .expect("parse legacy");
+    let contract = legacy_checkpoint["contract"]
+        .as_object_mut()
+        .expect("contract object");
+    assert!(contract.remove("modulation").is_some());
+    // A pre-S3 checkpoint's settings also predate `param_map_strength` — drop
+    // it too so the legacy-shape simulation is complete.
+    contract["settings"]
+        .as_object_mut()
+        .expect("settings object")
+        .remove("param_map_strength");
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_string(&legacy_checkpoint).expect("serialize legacy"),
+    )
+    .expect("write legacy checkpoint");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args(&legacy_dir.to_string_lossy()))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered morphogenesis sequence with 3 frame(s)",
+        ));
+}

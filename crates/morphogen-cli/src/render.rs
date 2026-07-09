@@ -66,15 +66,16 @@ use morphogen_render::{
     apply_channel_shift_modulation, apply_coagulation_modulation, apply_dispersion_modulation,
     apply_field_particle_modulation, apply_flow_feedback_modulation, apply_fluid_advect_modulation,
     apply_fluid_advect_two_source_modulation, apply_fluid_mosaic_modulation,
-    apply_palette_quantize_modulation, apply_pixel_sort_modulation, apply_retro_static_modulation,
-    apply_rutt_etra_modulation,
+    apply_morphogenesis_modulation, apply_palette_quantize_modulation, apply_pixel_sort_modulation,
+    apply_retro_static_modulation, apply_rutt_etra_modulation,
     ModulationRoute, ModulationSampling,
 };
 use morphogen_render::{
-    advance_morphogenesis_frame, composite_morphogenesis_frame, morphogenesis_field_dimensions,
-    morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f, render_v_field_grayscale,
-    seed_morphogenesis_field, MorphogenesisCompositeSettings, MorphogenesisSettings,
-    MORPHOGENESIS_ALGORITHM,
+    advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
+    composite_morphogenesis_frame, morphogenesis_field_dimensions,
+    morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
+    sample_carrier_luma_at_sim_resolution, render_v_field_grayscale, seed_morphogenesis_field,
+    MorphogenesisCompositeSettings, MorphogenesisSettings, MORPHOGENESIS_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -7375,6 +7376,15 @@ pub(crate) struct MorphogenesisSequenceContract {
     composite: MorphogenesisCompositeSettings,
     width: u32,
     height: u32,
+    /// S3 modulation routes join the sequence contract exactly like flow-
+    /// feedback's (`FeedbackModulationContract` reused verbatim — it's
+    /// generic over which effect's routes it carries): frame N's field state
+    /// depends on the whole knob history, so a changed/dropped route must
+    /// refuse to resume. `#[serde(default)]` so pre-S3 checkpoints (no
+    /// `modulation` key at all) deserialize as unmodulated and stay
+    /// resumable by an unmodulated render.
+    #[serde(default)]
+    modulation: Option<FeedbackModulationContract>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -7499,6 +7509,11 @@ pub(crate) struct MorphogenesisSequenceRenderRequest<'a> {
     pub(crate) composite: MorphogenesisCompositeSettings,
     pub(crate) job_id: &'a str,
     pub(crate) stop_after_frame: bool,
+    /// The render's own timeline (the flow-feedback precedent: one timeline
+    /// per stateful render, rather than a separate `--modulation-fps` knob)
+    /// — modulation envelopes sample against this frame-rate.
+    pub(crate) frame_rate: f64,
+    pub(crate) modulation: ModulationCliArgs<'a>,
 }
 
 /// Render `request.frames` frames (clamped to the available carrier frame
@@ -7517,6 +7532,8 @@ pub(crate) fn render_morphogenesis_sequence(
         composite,
         job_id,
         stop_after_frame,
+        frame_rate,
+        modulation,
     } = request;
 
     settings.validate()?;
@@ -7524,6 +7541,11 @@ pub(crate) fn render_morphogenesis_sequence(
     if frames == 0 {
         return Err(CliError::Message(
             "frames must be greater than zero".to_string(),
+        ));
+    }
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(CliError::Message(
+            "frame-rate must be a positive finite number".to_string(),
         ));
     }
 
@@ -7546,6 +7568,30 @@ pub(crate) fn render_morphogenesis_sequence(
         settings.sim_scale,
     );
 
+    // S3: routes span both the chemistry (feed/kill/param_map_strength) and
+    // the composite (pattern_mix/displace), so the dry-run probe and the
+    // per-frame application below both thread a settings AND a composite
+    // copy through apply_morphogenesis_modulation — the flow-feedback
+    // precedent's single-struct probe, doubled.
+    let modulation_plan = modulation.build_plan()?;
+    if let Some(plan) = &modulation_plan {
+        let mut probe_settings = settings;
+        let mut probe_composite = composite;
+        for (target, value) in plan.frame_values(0) {
+            apply_morphogenesis_modulation(
+                &mut probe_settings,
+                &mut probe_composite,
+                target,
+                value,
+            )?;
+        }
+        println!("modulation routes: {}", plan.describe());
+    }
+    let modulation_contract = modulation_plan
+        .as_ref()
+        .map(|plan| feedback_modulation_contract(plan, &modulation))
+        .transpose()?;
+
     let contract = MorphogenesisSequenceContract {
         version: MORPHOGENESIS_SEQUENCE_CHECKPOINT_VERSION,
         algorithm: MORPHOGENESIS_ALGORITHM.to_string(),
@@ -7554,6 +7600,7 @@ pub(crate) fn render_morphogenesis_sequence(
         composite,
         width: sim_width,
         height: sim_height,
+        modulation: modulation_contract,
     };
 
     let frame_dir = output_dir.join("frames");
@@ -7572,12 +7619,47 @@ pub(crate) fn render_morphogenesis_sequence(
         .take(frame_count)
         .skip(start_frame)
     {
-        if index > 0 {
-            field = advance_morphogenesis_frame(&field, &settings)?;
+        // Per-frame settings/composite copy, overwritten at the top of the
+        // frame before either the field substeps or the composite consume
+        // them — the flow-feedback precedent, applied to both structs.
+        let mut frame_settings = settings;
+        let mut frame_composite = composite;
+        if let Some(plan) = &modulation_plan {
+            for (target, value) in plan.frame_values(index) {
+                apply_morphogenesis_modulation(
+                    &mut frame_settings,
+                    &mut frame_composite,
+                    target,
+                    value,
+                )?;
+            }
         }
 
+        // The carrier is loaded BEFORE advancing so the param map (if
+        // active) reads THIS frame's B, not the previous one — the
+        // contract's "reads the current B frame each output frame".
         let carrier = load_image_f32(frame_path)?;
-        let output = composite_morphogenesis_frame(&carrier, &field, &composite)?;
+
+        if index > 0 {
+            let cell_luma = if frame_settings.param_map_strength != 0.0 {
+                sample_carrier_luma_at_sim_resolution(
+                    &carrier,
+                    sim_width,
+                    sim_height,
+                    frame_settings.sim_scale,
+                )?
+            } else {
+                Vec::new()
+            };
+            field = advance_morphogenesis_frame_with_param_map(
+                &field,
+                &frame_settings,
+                frame_settings.param_map_strength,
+                &cell_luma,
+            )?;
+        }
+
+        let output = composite_morphogenesis_frame(&carrier, &field, &frame_composite)?;
         save_png(&output, &frame_dir.join(format!("frame_{index:06}.png")))?;
 
         let state_image = morphogenesis_field_to_rgba32f(&field)?;

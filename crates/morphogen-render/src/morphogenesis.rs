@@ -55,6 +55,38 @@ pub const MORPHOGENESIS_ALGORITHM: &str = "morphogenesis_cpu_v1";
 /// start perfectly symmetric even on a flat/dark carrier.
 const SPECKLE_DENSITY: f32 = 0.002;
 
+/// S3 (`docs/MORPHOGENESIS_MILESTONE.md`, "B → parameter maps") declared line
+/// segment in `(feed, kill)` parameter space: the carrier's per-cell luma
+/// (`[0,1]`, centered at `0.5`) shifts that cell's `(feed, kill)` away from
+/// `settings`'s own values by `(luma - 0.5) * param_map_strength * DELTA`.
+/// The segment's MIDPOINT (`luma == 0.5`) is exactly `settings`'s own
+/// `(feed, kill)`, so `param_map_strength == 0` reproduces the uniform sim
+/// exactly regardless of the carrier (continuity anchor). `feed` and `kill`
+/// shift with the SAME sign (not opposite): an opposite-sign segment was
+/// tried first and empirically kills the whole field on real (mostly-dark)
+/// footage — Gray-Scott diffuses, so a dark-dominated carrier pushing its
+/// (majority) dark cells into a truly-dead `(feed, kill)` pair drags the
+/// bright/alive cells down with it over 60 frames, even though a
+/// synthetic-carrier unit test (uniform luma, no diffusion pressure from a
+/// dead majority) doesn't reveal it. At the coral default (`feed=0.037,
+/// kill=0.060`) and `param_map_strength == 1.0`, the full-bright endpoint
+/// (`feed≈0.044, kill≈0.064`) and full-dark endpoint (`feed≈0.030,
+/// kill≈0.056`) both stay alive on the real-footage acceptance render (V
+/// variance ≈0.015 vs ≈0.008 at frame 59) while growing visibly different
+/// pattern species — empirically probed via `render-morphogenesis-field` on
+/// several candidate segments before landing here.
+pub const PARAM_MAP_SEGMENT_DELTA_FEED: f32 = 0.014;
+pub const PARAM_MAP_SEGMENT_DELTA_KILL: f32 = 0.008;
+
+/// Declared default `--param-map-strength`: visible bright/dark species
+/// divergence without pushing the whole atlas into uniformly-dead territory
+/// (see [`PARAM_MAP_SEGMENT_DELTA_FEED`]/[`PARAM_MAP_SEGMENT_DELTA_KILL`]).
+pub const PARAM_MAP_STRENGTH_DEFAULT: f32 = 1.0;
+
+fn default_param_map_strength() -> f32 {
+    PARAM_MAP_STRENGTH_DEFAULT
+}
+
 /// `V` value written into a seeded pixel (threshold-crossed or speckle-hit).
 /// `U` stays at 1 everywhere per the frame-zero contract; the reaction still
 /// nucleates because `U*V²` dominates locally once `V` is non-zero.
@@ -84,6 +116,17 @@ pub struct MorphogenesisSettings {
     pub seed_threshold: f32,
     /// Deterministic seed for the frame-zero speckle (splitmix64 keyed).
     pub seed: u64,
+    /// S3 footage coupling: strength of the per-cell `(feed, kill)` shift
+    /// along [`PARAM_MAP_SEGMENT_DELTA_FEED`]/[`PARAM_MAP_SEGMENT_DELTA_KILL`],
+    /// driven by the carrier's per-frame luma (see
+    /// [`advance_morphogenesis_frame_with_param_map`]). `0` = the exact
+    /// uniform-`(feed,kill)` sim (continuity anchor); `>= 0` only (a negative
+    /// strength would just mirror the segment, which is not a meaningful
+    /// distinct control). `#[serde(default)]` so pre-S3 checkpoints (whose
+    /// JSON has no such key) deserialize as the same default a fresh
+    /// unmodulated render would use, keeping them resumable.
+    #[serde(default = "default_param_map_strength")]
+    pub param_map_strength: f32,
 }
 
 impl MorphogenesisSettings {
@@ -99,6 +142,7 @@ impl MorphogenesisSettings {
             sim_scale: 2,
             seed_threshold: 0.5,
             seed: 71,
+            param_map_strength: PARAM_MAP_STRENGTH_DEFAULT,
         }
     }
 
@@ -164,6 +208,11 @@ impl MorphogenesisSettings {
         if !(0.0..=1.0).contains(&self.seed_threshold) {
             return Err(RenderError::InvalidMorphogenesisSettings(
                 "seed_threshold must be in [0, 1]".into(),
+            ));
+        }
+        if !(self.param_map_strength.is_finite() && self.param_map_strength >= 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "param_map_strength must be finite and >= 0".into(),
             ));
         }
         Ok(())
@@ -277,6 +326,43 @@ fn seed_hash_unit(seed: u64, x: u32, y: u32) -> f32 {
     (h & 0xffff) as f32 / 65536.0
 }
 
+/// Rec.709 luma of the carrier pixel nearest-sampled at sim-lattice
+/// coordinate `(x, y)` — the shared nearest-sample convention used by both
+/// frame-zero seeding and the S3 per-frame `(feed, kill)` parameter map:
+/// `src = (lattice_coord * sim_scale).min(carrier_dim - 1)`.
+fn carrier_luma_at_sim_cell(
+    carrier: &ImageBufferF32,
+    sim_scale: u32,
+    x: u32,
+    y: u32,
+) -> Result<f32, RenderError> {
+    let src_x = (x * sim_scale).min(carrier.width - 1);
+    let src_y = (y * sim_scale).min(carrier.height - 1);
+    let pixel = carrier.pixel(src_x, src_y).ok_or_else(|| {
+        RenderError::InvalidMorphogenesisField("carrier sample coordinate out of bounds".into())
+    })?;
+    Ok(0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2])
+}
+
+/// The carrier's luma at every sim-resolution cell (`sim_width x
+/// sim_height`), nearest-sampled per [`carrier_luma_at_sim_cell`]. Used by
+/// [`advance_morphogenesis_frame_with_param_map`] to build the per-frame
+/// `(feed, kill)` parameter map from Source B's CURRENT frame.
+pub fn sample_carrier_luma_at_sim_resolution(
+    carrier: &ImageBufferF32,
+    sim_width: u32,
+    sim_height: u32,
+    sim_scale: u32,
+) -> Result<Vec<f32>, RenderError> {
+    let mut luma = Vec::with_capacity((sim_width as usize) * (sim_height as usize));
+    for y in 0..sim_height {
+        for x in 0..sim_width {
+            luma.push(carrier_luma_at_sim_cell(carrier, sim_scale, x, y)?);
+        }
+    }
+    Ok(luma)
+}
+
 /// Frame-zero seed (declared): `U = 1` everywhere; `V` is seeded (to
 /// [`SEED_ACTIVE_V`]) where the carrier's frame-0 luma crosses
 /// `settings.seed_threshold`, OR where the deterministic speckle hits
@@ -298,14 +384,7 @@ pub fn seed_morphogenesis_field(
 
     for y in 0..height {
         for x in 0..width {
-            let src_x = (x * settings.sim_scale).min(carrier_frame_zero.width - 1);
-            let src_y = (y * settings.sim_scale).min(carrier_frame_zero.height - 1);
-            let pixel = carrier_frame_zero.pixel(src_x, src_y).ok_or_else(|| {
-                RenderError::InvalidMorphogenesisField(
-                    "carrier sample coordinate out of bounds".into(),
-                )
-            })?;
-            let luma = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
+            let luma = carrier_luma_at_sim_cell(carrier_frame_zero, settings.sim_scale, x, y)?;
             let luma_seeded = luma >= settings.seed_threshold;
             let speckle_seeded = seed_hash_unit(settings.seed, x, y) < SPECKLE_DENSITY;
             if luma_seeded || speckle_seeded {
@@ -385,6 +464,111 @@ pub fn advance_morphogenesis_frame(
     let mut current = field.clone();
     for _ in 0..settings.substeps {
         current = morphogenesis_substep(&current, settings)?;
+    }
+    Ok(current)
+}
+
+/// The per-cell `(feed, kill)` shifted along the S3 declared line segment
+/// (see [`PARAM_MAP_SEGMENT_DELTA_FEED`]/[`PARAM_MAP_SEGMENT_DELTA_KILL`]).
+/// `luma == 0.5` (the segment midpoint) reproduces `settings`'s own values
+/// exactly; `param_map_strength == 0` does too, regardless of `luma`.
+fn local_feed_kill(
+    settings: &MorphogenesisSettings,
+    param_map_strength: f32,
+    luma: f32,
+) -> (f32, f32) {
+    let t = (luma - 0.5) * param_map_strength;
+    (
+        settings.feed + t * PARAM_MAP_SEGMENT_DELTA_FEED,
+        settings.kill + t * PARAM_MAP_SEGMENT_DELTA_KILL,
+    )
+}
+
+/// [`morphogenesis_substep`], but `(feed, kill)` are shifted per-cell by
+/// [`local_feed_kill`] using `cell_luma` (one sample per sim cell, row-major
+/// — see [`sample_carrier_luma_at_sim_resolution`]). `du`/`dv` stay global:
+/// the contract only shifts the reaction rates, not diffusion.
+pub fn morphogenesis_substep_with_param_map(
+    field: &MorphogenesisField,
+    settings: &MorphogenesisSettings,
+    param_map_strength: f32,
+    cell_luma: &[f32],
+) -> Result<MorphogenesisField, RenderError> {
+    let width = field.width;
+    let height = field.height;
+    let w = width as usize;
+    if cell_luma.len() != field.u.len() {
+        return Err(RenderError::InvalidMorphogenesisField(format!(
+            "param map expected {} luma samples, got {}",
+            field.u.len(),
+            cell_luma.len()
+        )));
+    }
+    let mut new_u = vec![0.0_f32; field.u.len()];
+    let mut new_v = vec![0.0_f32; field.v.len()];
+
+    for y in 0..height {
+        let y_prev = clamp_prev(y) as usize;
+        let y_next = clamp_next(y, height) as usize;
+        let row = y as usize * w;
+        let row_prev = y_prev * w;
+        let row_next = y_next * w;
+        for x in 0..width {
+            let x_prev = clamp_prev(x) as usize;
+            let x_next = clamp_next(x, width) as usize;
+            let idx = row + x as usize;
+
+            let u_c = field.u[idx];
+            let v_c = field.v[idx];
+            let lap_u = field.u[row + x_prev]
+                + field.u[row + x_next]
+                + field.u[row_prev + x as usize]
+                + field.u[row_next + x as usize]
+                - 4.0 * u_c;
+            let lap_v = field.v[row + x_prev]
+                + field.v[row + x_next]
+                + field.v[row_prev + x as usize]
+                + field.v[row_next + x as usize]
+                - 4.0 * v_c;
+
+            let (feed, kill) = local_feed_kill(settings, param_map_strength, cell_luma[idx]);
+            let reaction = u_c * v_c * v_c;
+            let du = settings.du * lap_u - reaction + feed * (1.0 - u_c);
+            let dv = settings.dv * lap_v + reaction - (feed + kill) * v_c;
+
+            new_u[idx] = (u_c + settings.dt * du).clamp(0.0, 1.0);
+            new_v[idx] = (v_c + settings.dt * dv).clamp(0.0, 1.0);
+        }
+    }
+
+    MorphogenesisField::new(width, height, new_u, new_v)
+}
+
+/// [`advance_morphogenesis_frame`], but each substep runs
+/// [`morphogenesis_substep_with_param_map`] against the SAME `cell_luma`
+/// (the carrier's CURRENT output frame, sampled once per frame — not
+/// per-substep, matching the contract's "reads the current B frame each
+/// output frame"). `param_map_strength == 0.0` delegates to
+/// [`advance_morphogenesis_frame`] verbatim, so the continuity anchor
+/// (byte-identical to the uniform sim) holds by construction rather than by
+/// floating-point coincidence.
+pub fn advance_morphogenesis_frame_with_param_map(
+    field: &MorphogenesisField,
+    settings: &MorphogenesisSettings,
+    param_map_strength: f32,
+    cell_luma: &[f32],
+) -> Result<MorphogenesisField, RenderError> {
+    if param_map_strength == 0.0 {
+        return advance_morphogenesis_frame(field, settings);
+    }
+    let mut current = field.clone();
+    for _ in 0..settings.substeps {
+        current = morphogenesis_substep_with_param_map(
+            &current,
+            settings,
+            param_map_strength,
+            cell_luma,
+        )?;
     }
     Ok(current)
 }
@@ -1207,5 +1391,125 @@ mod tests {
             ..MorphogenesisCompositeSettings::passthrough()
         };
         assert!(settings.validate().is_err());
+    }
+
+    // ─── S3 param-map tests ────────────────────────────────────────────────
+
+    #[test]
+    fn local_feed_kill_midpoint_and_endpoints_match_the_declared_segment() {
+        let settings = MorphogenesisSettings::coral();
+        // The segment's midpoint (luma == 0.5) is settings' own (feed, kill)
+        // at ANY strength, including strength 0.
+        let (mid_feed, mid_kill) = local_feed_kill(&settings, 2.0, 0.5);
+        assert_eq!(mid_feed, settings.feed);
+        assert_eq!(mid_kill, settings.kill);
+        let (mid_feed_zero_strength, mid_kill_zero_strength) = local_feed_kill(&settings, 0.0, 1.0);
+        assert_eq!(mid_feed_zero_strength, settings.feed);
+        assert_eq!(mid_kill_zero_strength, settings.kill);
+
+        // The bright (luma=1) and dark (luma=0) endpoints at strength=1 sit
+        // exactly half the declared delta away from the midpoint, in
+        // opposite directions.
+        let (bright_feed, bright_kill) = local_feed_kill(&settings, 1.0, 1.0);
+        let (dark_feed, dark_kill) = local_feed_kill(&settings, 1.0, 0.0);
+        assert!((bright_feed - (settings.feed + 0.5 * PARAM_MAP_SEGMENT_DELTA_FEED)).abs() < 1e-6);
+        assert!((bright_kill - (settings.kill + 0.5 * PARAM_MAP_SEGMENT_DELTA_KILL)).abs() < 1e-6);
+        assert!((dark_feed - (settings.feed - 0.5 * PARAM_MAP_SEGMENT_DELTA_FEED)).abs() < 1e-6);
+        assert!((dark_kill - (settings.kill - 0.5 * PARAM_MAP_SEGMENT_DELTA_KILL)).abs() < 1e-6);
+        assert_ne!(
+            bright_feed, dark_feed,
+            "bright and dark endpoints must differ"
+        );
+    }
+
+    #[test]
+    fn param_map_strength_zero_is_byte_identical_to_the_uniform_sim() {
+        let carrier = structured_carrier(20, 20);
+        let settings = MorphogenesisSettings {
+            sim_scale: 1,
+            ..MorphogenesisSettings::coral()
+        };
+        let seed = seed_morphogenesis_field(&carrier, &settings).expect("seed");
+        let cell_luma = sample_carrier_luma_at_sim_resolution(
+            &carrier,
+            seed.width,
+            seed.height,
+            settings.sim_scale,
+        )
+        .expect("sample luma");
+
+        let mut uniform = seed.clone();
+        let mut param_mapped = seed;
+        for _ in 0..8 {
+            uniform = advance_morphogenesis_frame(&uniform, &settings).expect("uniform advance");
+            // strength == 0.0 must reproduce the uniform sim exactly, even
+            // with a non-degenerate (non-constant) luma map in hand.
+            param_mapped = advance_morphogenesis_frame_with_param_map(
+                &param_mapped,
+                &settings,
+                0.0,
+                &cell_luma,
+            )
+            .expect("param-map advance at strength 0");
+        }
+        assert_eq!(
+            param_mapped, uniform,
+            "param_map_strength == 0 must be byte-identical to the uniform-(feed,kill) sim"
+        );
+    }
+
+    #[test]
+    fn param_map_advance_is_deterministic_and_diverges_from_uniform_when_active() {
+        let carrier = structured_carrier(20, 20);
+        let settings = MorphogenesisSettings {
+            sim_scale: 1,
+            ..MorphogenesisSettings::coral()
+        };
+        let seed = seed_morphogenesis_field(&carrier, &settings).expect("seed");
+        let cell_luma = sample_carrier_luma_at_sim_resolution(
+            &carrier,
+            seed.width,
+            seed.height,
+            settings.sim_scale,
+        )
+        .expect("sample luma");
+
+        let run = || {
+            let mut field = seed.clone();
+            for _ in 0..8 {
+                field = advance_morphogenesis_frame_with_param_map(
+                    &field,
+                    &settings,
+                    PARAM_MAP_STRENGTH_DEFAULT,
+                    &cell_luma,
+                )
+                .expect("param-map advance");
+            }
+            field
+        };
+        assert_eq!(run(), run(), "param-map advance must be deterministic");
+
+        let mut uniform = seed.clone();
+        for _ in 0..8 {
+            uniform = advance_morphogenesis_frame(&uniform, &settings).expect("uniform advance");
+        }
+        assert_ne!(
+            run().v,
+            uniform.v,
+            "an active param map over a non-uniform carrier must diverge from the uniform sim"
+        );
+    }
+
+    #[test]
+    fn param_map_rejects_a_mismatched_luma_sample_count() {
+        let field = MorphogenesisField::new(4, 4, vec![1.0; 16], vec![0.0; 16]).unwrap();
+        let settings = MorphogenesisSettings {
+            sim_scale: 1,
+            ..MorphogenesisSettings::coral()
+        };
+        let wrong_size_luma = vec![0.5_f32; 4];
+        assert!(
+            morphogenesis_substep_with_param_map(&field, &settings, 1.0, &wrong_size_luma).is_err()
+        );
     }
 }

@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     CascadeCollageSettings, CascadeTrailSettings, ChannelShiftSettings, CoagulationSettings,
     DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, FluidMosaicSettings, PaletteQuantizeSettings, PixelSortSettings,
-    QuantizeMode, RenderError, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis,
-    SortDirection,
+    FluidAdvectTwoSourceSettings, FluidMosaicSettings, MorphogenesisCompositeSettings,
+    MorphogenesisSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RenderError,
+    RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
@@ -993,6 +993,23 @@ pub const CASCADE_COLLAGE_MODULATION_TARGETS: &[&str] =
 pub const DISPERSION_MODULATION_TARGETS: &[&str] =
     &["coagulation_strength", "bias", "scatter_amount", "damping"];
 
+/// Morphogenesis (Tier "Morphogenesis" S3, `docs/MORPHOGENESIS_MILESTONE.md`)
+/// — three chemistry knobs (`feed`, `kill`, `param_map_strength`, all on
+/// [`MorphogenesisSettings`]) and two composite knobs (`pattern_mix`,
+/// `displace`, on [`MorphogenesisCompositeSettings`]); a single apply
+/// function threads both structs since the routes span them. Structural
+/// knobs (`du`, `dv`, `dt`, `substeps`, `sim_scale`, `seed_threshold`,
+/// `seed`, `pattern_hue`, `pattern_color_mode`) restructure the field/seed or
+/// select a mode and are excluded. Stateful with a checkpoint path → routes
+/// join the sequence contract like flow-feedback.
+pub const MORPHOGENESIS_MODULATION_TARGETS: &[&str] = &[
+    "feed",
+    "kill",
+    "param_map_strength",
+    "pattern_mix",
+    "displace",
+];
+
 /// Fluid mosaic — the look-driving continuous knobs.
 /// Structural knobs (tile_size, color_bins, settle_iterations, seed, *_radius,
 /// scale/drift/speed params, adaptive/carry/live flags) excluded.
@@ -1010,6 +1027,14 @@ const LEVELS_RANGE: (f32, f32) = (2.0, 256.0);
 const DISPLACEMENT_DEPTH_RANGE: (f32, f32) = (-512.0, 512.0);
 const LINE_PITCH_RANGE: (f32, f32) = (1.0, 256.0);
 const LINE_THICKNESS_RANGE: (f32, f32) = (1.0, 64.0);
+
+/// Morphogenesis `feed`/`kill` clamp: the known Gray-Scott parameter atlas
+/// (every named preset and the standard Pearson map fall well inside) spans
+/// roughly `[0, 0.1]`; this isn't a numerical-stability bound (`U`/`V` are
+/// hard-clamped to `[0, 1]` every substep regardless of `feed`/`kill`) — it
+/// just keeps a routed envelope inside the explored, visually-alive
+/// territory rather than off in flatly-dead or degenerate space.
+const MORPHOGENESIS_FEED_KILL_RANGE: (f32, f32) = (0.0, 0.12);
 
 // Enum-target variant orders (contract: milestone doc table). Unimplemented
 // variants are excluded — an envelope must not select an erroring variant
@@ -1391,6 +1416,47 @@ pub fn apply_rutt_etra_modulation(
                 "rutt-etra",
                 target,
                 RUTT_ETRA_MODULATION_TARGETS,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Overwrite one routed morphogenesis knob with a mapped value (clamped).
+/// `feed`/`kill` clamp to [`MORPHOGENESIS_FEED_KILL_RANGE`]; `param_map_strength`
+/// mirrors its own `>= 0` validate rule; `pattern_mix` mirrors the composite's
+/// `[0, 1]` validate rule; `displace` shares the channel-shift pixel
+/// precedent ([`SHIFT_RANGE`]) since `MorphogenesisCompositeSettings::validate`
+/// only requires finiteness. The routes span two structs
+/// ([`MorphogenesisSettings`] for the chemistry, [`MorphogenesisCompositeSettings`]
+/// for the composite) because the milestone's five targets do.
+pub fn apply_morphogenesis_modulation(
+    settings: &mut MorphogenesisSettings,
+    composite: &mut MorphogenesisCompositeSettings,
+    target: &str,
+    value: f32,
+) -> Result<(), RenderError> {
+    match target {
+        "feed" => {
+            settings.feed = value.clamp(
+                MORPHOGENESIS_FEED_KILL_RANGE.0,
+                MORPHOGENESIS_FEED_KILL_RANGE.1,
+            )
+        }
+        "kill" => {
+            settings.kill = value.clamp(
+                MORPHOGENESIS_FEED_KILL_RANGE.0,
+                MORPHOGENESIS_FEED_KILL_RANGE.1,
+            )
+        }
+        "param_map_strength" => settings.param_map_strength = value.max(0.0),
+        "pattern_mix" => composite.pattern_mix = value.clamp(0.0, 1.0),
+        "displace" => composite.displace = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
+        _ => {
+            return Err(unknown_target(
+                "morphogenesis",
+                target,
+                MORPHOGENESIS_MODULATION_TARGETS,
             ))
         }
     }
@@ -1801,6 +1867,65 @@ mod tests {
         // structure_mode is deliberately not a target (backend-invalid variants).
         assert!(apply_flow_feedback_modulation(&mut feedback, "structure_mode", 1.0).is_err());
         assert!(apply_flow_feedback_modulation(&mut feedback, "iterations", 1.0).is_err());
+    }
+
+    #[test]
+    fn morphogenesis_targets_clamp_to_declared_ranges() {
+        let mut settings = MorphogenesisSettings::coral();
+        let mut composite = MorphogenesisCompositeSettings::default();
+
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "feed", 99.0).unwrap();
+        assert_eq!(settings.feed, 0.12);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "feed", -5.0).unwrap();
+        assert_eq!(settings.feed, 0.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "kill", 99.0).unwrap();
+        assert_eq!(settings.kill, 0.12);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "kill", -5.0).unwrap();
+        assert_eq!(settings.kill, 0.0);
+
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "param_map_strength", -3.0)
+            .unwrap();
+        assert_eq!(settings.param_map_strength, 0.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "param_map_strength", 5.0)
+            .unwrap();
+        assert_eq!(
+            settings.param_map_strength, 5.0,
+            "param_map_strength clamp is one-sided (>= 0 only)"
+        );
+
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "pattern_mix", 1.5).unwrap();
+        assert_eq!(composite.pattern_mix, 1.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "pattern_mix", -0.5).unwrap();
+        assert_eq!(composite.pattern_mix, 0.0);
+
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "displace", 99999.0).unwrap();
+        assert_eq!(composite.displace, 4096.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "displace", -99999.0)
+            .unwrap();
+        assert_eq!(composite.displace, -4096.0);
+
+        // Every clamped combination stays legal for the render.
+        settings.validate().unwrap();
+        composite.validate().unwrap();
+
+        // Structural knobs are deliberately not targets.
+        for excluded in [
+            "du",
+            "dv",
+            "dt",
+            "substeps",
+            "sim_scale",
+            "seed_threshold",
+            "seed",
+            "pattern_hue",
+            "pattern_color_mode",
+        ] {
+            assert!(
+                apply_morphogenesis_modulation(&mut settings, &mut composite, excluded, 1.0)
+                    .is_err(),
+                "'{excluded}' must not be a modulation target"
+            );
+        }
     }
 
     #[test]

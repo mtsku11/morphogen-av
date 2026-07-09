@@ -1836,11 +1836,22 @@ fn run() -> Result<(), CliError> {
             sim_scale,
             seed_threshold,
             seed,
+            param_map_strength,
             pattern_mix,
             displace,
             pattern_hue,
             pattern_color_mode,
             stop_after_frame,
+            frame_rate,
+            modulate,
+            modulator_audio,
+            modulator_frames,
+            modulator_midi,
+            modulation_sampling,
+            modulation_cache_dir,
+            named_modulator_audio,
+            named_modulator_frames,
+            named_modulator_midi,
         } => {
             let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
             if let Some(du) = du {
@@ -1870,6 +1881,9 @@ fn run() -> Result<(), CliError> {
             if let Some(seed) = seed {
                 settings.seed = seed;
             }
+            if let Some(param_map_strength) = param_map_strength {
+                settings.param_map_strength = param_map_strength;
+            }
             let composite = MorphogenesisCompositeSettings {
                 pattern_mix,
                 displace,
@@ -1884,6 +1898,19 @@ fn run() -> Result<(), CliError> {
                 composite,
                 job_id: "direct-morphogenesis-sequence",
                 stop_after_frame,
+                frame_rate,
+                modulation: ModulationCliArgs {
+                    modulate: &modulate,
+                    modulator_audio: modulator_audio.as_deref(),
+                    modulator_frames: modulator_frames.as_deref(),
+                    sampling: modulation_sampling.into(),
+                    fps: frame_rate,
+                    cache_dir: modulation_cache_dir.as_deref(),
+                    named_modulator_audio: &named_modulator_audio,
+                    named_modulator_frames: &named_modulator_frames,
+                    modulator_midi: modulator_midi.as_deref(),
+                    named_modulator_midi: &named_modulator_midi,
+                },
             })
             .map(|_| ())
         }
