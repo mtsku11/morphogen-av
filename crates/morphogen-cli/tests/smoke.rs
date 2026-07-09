@@ -11698,3 +11698,428 @@ fn render_morphogenesis_sequence_lfo_route_joins_checkpoint_contract() {
             "rendered morphogenesis sequence with 3 frame(s)",
         ));
 }
+
+// ─── Morphogenesis Live Coupling (L-S1): inject/erode ──────────────────────
+//
+// `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md` L-S1: per-frame `--inject`/
+// `--erode` so the field keeps responding to every carrier frame instead of
+// freezing once it fills the domain. Anchors covered here: L1 (explicit
+// zero-knob CLI invocation is byte-identical to omitting the flags entirely,
+// on both commands), L5 (resume with inject+erode active is byte-identical
+// to an uninterrupted run — the prev-luma-in-checkpoint proof — plus changed
+// inject/erode refuses, plus a pre-milestone checkpoint missing the new keys
+// still resumes with defaults). L2 (motion tracking) and L3 (no-freeze
+// headline) are proven at the algorithm-unit level in
+// `morphogen-render/src/morphogenesis.rs` and via the empirical tuning pass
+// on the real cello showcase fixture (see the milestone doc's L-S1 entry).
+
+#[test]
+fn render_morphogenesis_field_inject_erode_zero_matches_the_pre_live_coupling_defaults() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let implicit_dir = temp_dir.path().join("implicit-output");
+    let explicit_dir = temp_dir.path().join("explicit-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    // No --inject/--erode/--inject-source flags at all (the pre-live-
+    // coupling CLI surface).
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-field",
+            carrier_arg.as_str(),
+            implicit_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+        ])
+        .assert()
+        .success();
+
+    // Explicit zero knobs (anchor L1).
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-field",
+            carrier_arg.as_str(),
+            explicit_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--inject",
+            "0",
+            "--erode",
+            "0",
+            "--inject-source",
+            "motion",
+        ])
+        .assert()
+        .success();
+
+    for index in 0..3 {
+        let frame_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(implicit_dir.join("frames").join(&frame_name)).expect("implicit frame"),
+            fs::read(explicit_dir.join("frames").join(&frame_name)).expect("explicit frame"),
+            "L1: explicit --inject 0 --erode 0 must be byte-identical to omitting the flags ({frame_name})"
+        );
+        let state_name = format!("state/morphogenesis_frame_{index:06}.rgba32f");
+        assert_eq!(
+            fs::read(implicit_dir.join(&state_name)).expect("implicit state"),
+            fs::read(explicit_dir.join(&state_name)).expect("explicit state"),
+            "L1: checkpoint state bytes must also match ({state_name})"
+        );
+    }
+}
+
+#[test]
+fn render_morphogenesis_sequence_inject_erode_zero_matches_the_pre_live_coupling_defaults() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let implicit_dir = temp_dir.path().join("implicit-output");
+    let explicit_dir = temp_dir.path().join("explicit-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            implicit_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            explicit_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--inject",
+            "0",
+            "--erode",
+            "0",
+            "--inject-source",
+            "motion",
+        ])
+        .assert()
+        .success();
+
+    for index in 0..3 {
+        let frame_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(implicit_dir.join("frames").join(&frame_name)).expect("implicit frame"),
+            fs::read(explicit_dir.join("frames").join(&frame_name)).expect("explicit frame"),
+            "L1: explicit --inject 0 --erode 0 must be byte-identical to omitting the flags ({frame_name})"
+        );
+    }
+}
+
+#[test]
+fn render_morphogenesis_sequence_resumes_byte_identically_with_inject_and_erode_active() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let resumed_dir = temp_dir.path().join("resumed-output");
+    let uninterrupted_dir = temp_dir.path().join("uninterrupted-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "4",
+            "--rate",
+            "0.08",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let resumed_arg = resumed_dir.to_string_lossy().to_string();
+    let uninterrupted_arg = uninterrupted_dir.to_string_lossy().to_string();
+    let morphogenesis_args = [
+        "render-morphogenesis-sequence",
+        carrier_arg.as_str(),
+        resumed_arg.as_str(),
+        "--frames",
+        "4",
+        "--preset",
+        "coral",
+        "--inject",
+        "0.3",
+        "--erode",
+        "0.2",
+        "--inject-source",
+        "motion",
+    ];
+
+    // Interrupt after frame 0 (motion source's frame-0 all-zero-weight
+    // case), then after frame 1 (the first frame where a real prev-luma
+    // must have survived the checkpoint round-trip to compute motion `w`).
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(morphogenesis_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(morphogenesis_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(morphogenesis_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered morphogenesis sequence with 4 frame(s)",
+        ));
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            uninterrupted_arg.as_str(),
+            "--frames",
+            "4",
+            "--preset",
+            "coral",
+            "--inject",
+            "0.3",
+            "--erode",
+            "0.2",
+            "--inject-source",
+            "motion",
+        ])
+        .assert()
+        .success();
+
+    for index in 0..4 {
+        let frame_name = format!("frame_{index:06}.png");
+        assert_eq!(
+            fs::read(resumed_dir.join("frames").join(&frame_name)).expect("resumed frame"),
+            fs::read(uninterrupted_dir.join("frames").join(&frame_name))
+                .expect("uninterrupted frame"),
+            "L5: resuming with inject/erode active must be byte-identical to an uninterrupted run ({frame_name}) — proves the prev-luma grid survived the checkpoint round-trip"
+        );
+    }
+}
+
+#[test]
+fn render_morphogenesis_sequence_refuses_resume_on_changed_inject_or_erode() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let output_dir = temp_dir.path().join("output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--inject",
+            "0.3",
+            "--erode",
+            "0.2",
+        ])
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+
+    // Changed --inject refuses.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--inject",
+            "0.5",
+            "--erode",
+            "0.2",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+
+    // Changed --erode refuses too.
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            output_arg.as_str(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--inject",
+            "0.3",
+            "--erode",
+            "0.6",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+}
+
+#[test]
+fn render_morphogenesis_sequence_legacy_checkpoint_without_live_coupling_keys_resumes_with_defaults(
+) {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let legacy_dir = temp_dir.path().join("legacy-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let legacy_arg = legacy_dir.to_string_lossy().to_string();
+    let base_args = [
+        "render-morphogenesis-sequence",
+        carrier_arg.as_str(),
+        legacy_arg.as_str(),
+        "--frames",
+        "3",
+        "--preset",
+        "coral",
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+
+    let checkpoint_path = legacy_dir.join("checkpoint.json");
+    let mut legacy_checkpoint: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).expect("read legacy"))
+            .expect("parse legacy");
+    let settings = legacy_checkpoint["contract"]["settings"]
+        .as_object_mut()
+        .expect("settings object");
+    assert!(settings.remove("inject").is_some());
+    assert!(settings.remove("erode").is_some());
+    assert!(settings.remove("inject_source").is_some());
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_string(&legacy_checkpoint).expect("serialize legacy"),
+    )
+    .expect("write legacy checkpoint");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered morphogenesis sequence with 3 frame(s)",
+        ));
+}

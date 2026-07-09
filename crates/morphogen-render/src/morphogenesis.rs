@@ -87,6 +87,24 @@ fn default_param_map_strength() -> f32 {
     PARAM_MAP_STRENGTH_DEFAULT
 }
 
+/// Which weight field `--inject`/`--erode` read (Tier "Morphogenesis Live
+/// Coupling" L-S1, `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`); only
+/// meaningful when `inject > 0` or `erode > 0`. See
+/// [`injection_weight_luma`]/[`injection_weight_motion`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InjectSource {
+    /// `w = max(0, luma - seed_threshold) / (1 - seed_threshold)`, clamped
+    /// `[0,1]` — bright regions continuously feed growth.
+    Luma,
+    /// `w = |luma(frame N) - luma(frame N-1)|` per sim cell, clamped
+    /// `[0,1]` — growth chases movement, static regions starve. Frame 0 has
+    /// no prior ⇒ `w = 0` everywhere (the matte frame-zero precedent: no
+    /// forward peeking, declared). The default when `inject > 0`.
+    #[default]
+    Motion,
+}
+
 /// `V` value written into a seeded pixel (threshold-crossed or speckle-hit).
 /// `U` stays at 1 everywhere per the frame-zero contract; the reaction still
 /// nucleates because `U*V²` dominates locally once `V` is non-zero.
@@ -127,6 +145,25 @@ pub struct MorphogenesisSettings {
     /// unmodulated render would use, keeping them resumable.
     #[serde(default = "default_param_map_strength")]
     pub param_map_strength: f32,
+    /// Live Coupling L-S1: per-frame source strength. `V += inject * w`
+    /// (clamped), `w` chosen by `inject_source`, applied every frame BEFORE
+    /// the substeps (declared order: inject → erode → substeps). `0` = off
+    /// (anchor L1: byte-identical to the pre-live-coupling build).
+    /// `#[serde(default)]` (`0.0`, `f32`'s own `Default`) so pre-milestone
+    /// checkpoints deserialize unmodulated and stay resumable.
+    #[serde(default)]
+    pub inject: f32,
+    /// Live Coupling L-S1: per-frame sink strength. `V *= (1 - erode * (1 -
+    /// w))` (clamped), the SAME `w` as `inject` (one weight computation per
+    /// frame), applied immediately after the inject pass. `0` = off.
+    /// `#[serde(default)]`, same compatibility rule as `inject`.
+    #[serde(default)]
+    pub erode: f32,
+    /// Live Coupling L-S1: which weight field `inject`/`erode` read. Only
+    /// meaningful when `inject > 0` or `erode > 0`. `#[serde(default)]`
+    /// (`InjectSource::Motion`), same compatibility rule as `inject`.
+    #[serde(default)]
+    pub inject_source: InjectSource,
 }
 
 impl MorphogenesisSettings {
@@ -143,6 +180,9 @@ impl MorphogenesisSettings {
             seed_threshold: 0.5,
             seed: 71,
             param_map_strength: PARAM_MAP_STRENGTH_DEFAULT,
+            inject: 0.0,
+            erode: 0.0,
+            inject_source: InjectSource::Motion,
         }
     }
 
@@ -213,6 +253,16 @@ impl MorphogenesisSettings {
         if !(self.param_map_strength.is_finite() && self.param_map_strength >= 0.0) {
             return Err(RenderError::InvalidMorphogenesisSettings(
                 "param_map_strength must be finite and >= 0".into(),
+            ));
+        }
+        if !(self.inject.is_finite() && (0.0..=1.0).contains(&self.inject)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "inject must be finite and in [0, 1]".into(),
+            ));
+        }
+        if !(self.erode.is_finite() && (0.0..=1.0).contains(&self.erode)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "erode must be finite and in [0, 1]".into(),
             ));
         }
         Ok(())
@@ -571,6 +621,82 @@ pub fn advance_morphogenesis_frame_with_param_map(
         )?;
     }
     Ok(current)
+}
+
+// ─── Live Coupling L-S1: per-frame inject/erode ────────────────────────────
+//
+// `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`: the reaction-diffusion
+// field otherwise reads footage exactly once (frame-zero seeding); once the
+// pattern fills the sim domain, Gray-Scott settles into a quasi-static
+// labyrinth and the field stops responding to new frames. `inject` adds a
+// per-frame source (`V += inject * w`) and `erode` a per-frame sink
+// (`V *= (1 - erode * (1 - w))`), both reading a weight field `w` derived
+// from the carrier's CURRENT frame (see `InjectSource`). Declared pass
+// order, applied by the CLI once per output frame, BEFORE the Gray-Scott
+// substeps: inject → erode → substeps. `inject == 0.0 && erode == 0.0` is
+// anchor L1 — callers should skip computing `w` entirely in that case (both
+// for performance and so the off-path never touches carrier motion/luma
+// data it doesn't need), though [`apply_inject_erode`] is also a
+// mathematical identity at that point regardless.
+
+/// [`InjectSource::Luma`]'s weight field: the carrier's per-cell luma
+/// (`carrier_luma`, at sim resolution — see
+/// [`sample_carrier_luma_at_sim_resolution`]), rescaled so `seed_threshold`
+/// sits at `w = 0` and full-bright (`luma == 1.0`) sits at `w = 1`, clamped
+/// `[0,1]`. `seed_threshold == 1.0` would divide by zero; guarded to `0.0`
+/// instead (every `luma <= 1.0`, so the numerator is already `<= 0` at that
+/// threshold and the mathematically-consistent weight is zero anyway).
+pub fn injection_weight_luma(carrier_luma: &[f32], seed_threshold: f32) -> Vec<f32> {
+    let denom = (1.0 - seed_threshold).max(1e-6);
+    carrier_luma
+        .iter()
+        .map(|&luma| ((luma - seed_threshold).max(0.0) / denom).clamp(0.0, 1.0))
+        .collect()
+}
+
+/// [`InjectSource::Motion`]'s weight field: `w = |luma(frame N) - luma(frame
+/// N-1)|` per sim cell, clamped `[0,1]`. `previous_luma == None` (frame 0,
+/// no prior frame to diff against) ⇒ `w = 0` everywhere — the matte
+/// frame-zero precedent, declared: no forward peeking. Mismatched lengths
+/// between `current_luma` and `previous_luma` are a caller bug (both must be
+/// sampled at the same sim resolution); pairs beyond the shorter slice are
+/// silently dropped by `zip` rather than panicking, but callers should never
+/// let the lengths diverge in the first place — [`apply_inject_erode`] is
+/// the layer that validates `w`'s length against the field.
+pub fn injection_weight_motion(current_luma: &[f32], previous_luma: Option<&[f32]>) -> Vec<f32> {
+    match previous_luma {
+        None => vec![0.0; current_luma.len()],
+        Some(previous_luma) => current_luma
+            .iter()
+            .zip(previous_luma)
+            .map(|(&current, &previous)| (current - previous).abs().clamp(0.0, 1.0))
+            .collect(),
+    }
+}
+
+/// Apply the L-S1 inject/erode passes to `V` only, in the declared order —
+/// inject, then erode — each clamped to `[0,1]` immediately: `V += inject *
+/// w`, then `V *= (1 - erode * (1 - w))`. `U` passes through unchanged. `w`
+/// must be sampled at `field`'s own resolution (one sample per cell);
+/// mismatched lengths are an error rather than a silent truncation.
+pub fn apply_inject_erode(
+    field: &MorphogenesisField,
+    settings: &MorphogenesisSettings,
+    w: &[f32],
+) -> Result<MorphogenesisField, RenderError> {
+    if w.len() != field.v.len() {
+        return Err(RenderError::InvalidMorphogenesisField(format!(
+            "inject/erode weight field expected {} samples, got {}",
+            field.v.len(),
+            w.len()
+        )));
+    }
+    let mut v = field.v.clone();
+    for (value, &w) in v.iter_mut().zip(w) {
+        *value = (*value + settings.inject * w).clamp(0.0, 1.0);
+        *value = (*value * (1.0 - settings.erode * (1.0 - w))).clamp(0.0, 1.0);
+    }
+    MorphogenesisField::new(field.width, field.height, field.u.clone(), v)
 }
 
 /// Pack the field into an unquantized RGBA32F image (`U` in R, `V` in G, `B`/`A`
@@ -1510,6 +1636,216 @@ mod tests {
         let wrong_size_luma = vec![0.5_f32; 4];
         assert!(
             morphogenesis_substep_with_param_map(&field, &settings, 1.0, &wrong_size_luma).is_err()
+        );
+    }
+
+    // ─── Live Coupling L-S1: inject/erode ─────────────────────────────────
+
+    #[test]
+    fn settings_validate_rejects_out_of_range_inject() {
+        let settings = MorphogenesisSettings {
+            inject: 1.5,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+        let settings = MorphogenesisSettings {
+            inject: -0.1,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+        let settings = MorphogenesisSettings {
+            inject: f32::NAN,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn settings_validate_rejects_out_of_range_erode() {
+        let settings = MorphogenesisSettings {
+            erode: 1.5,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+        let settings = MorphogenesisSettings {
+            erode: -0.1,
+            ..MorphogenesisSettings::coral()
+        };
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn injection_weight_luma_matches_declared_formula() {
+        let luma = vec![0.0, 0.5, 0.75, 1.0];
+        let w = injection_weight_luma(&luma, 0.5);
+        // threshold itself -> 0; full-bright -> 1; below threshold clamps to 0.
+        assert_eq!(w, vec![0.0, 0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn injection_weight_luma_handles_degenerate_threshold_without_nan() {
+        let luma = vec![1.0, 0.9, 0.0];
+        let w = injection_weight_luma(&luma, 1.0);
+        assert!(w.iter().all(|value| value.is_finite()), "no NaN: {w:?}");
+        assert_eq!(w, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn injection_weight_motion_frame_zero_is_all_zero() {
+        let current = vec![0.1, 0.9, 0.5, 1.0];
+        let w = injection_weight_motion(&current, None);
+        assert_eq!(w, vec![0.0; current.len()]);
+    }
+
+    #[test]
+    fn injection_weight_motion_tracks_luma_difference() {
+        let previous = vec![0.2, 0.2, 0.9];
+        let current = vec![0.2, 0.7, 0.1];
+        let w = injection_weight_motion(&current, Some(&previous));
+        let expected = [0.0, 0.5, 0.8];
+        for (actual, expected) in w.iter().zip(expected) {
+            assert!(
+                (actual - expected).abs() < 1e-5,
+                "w={w:?} expected~{expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_inject_erode_is_identity_at_zero_knobs() {
+        let field = MorphogenesisField::new(
+            3,
+            3,
+            vec![1.0; 9],
+            vec![0.2, 0.4, 0.6, 0.8, 0.1, 0.9, 0.3, 0.5, 0.7],
+        )
+        .unwrap();
+        let settings = MorphogenesisSettings {
+            inject: 0.0,
+            erode: 0.0,
+            ..MorphogenesisSettings::coral()
+        };
+        // Even a non-trivial weight field must leave V untouched at 0/0.
+        let w = vec![1.0, 0.0, 0.5, 1.0, 0.0, 0.3, 0.7, 0.9, 0.2];
+        let result = apply_inject_erode(&field, &settings, &w).expect("apply");
+        assert_eq!(
+            result.v, field.v,
+            "L1: zero inject/erode is an identity on V"
+        );
+        assert_eq!(result.u, field.u, "U must pass through unchanged");
+    }
+
+    #[test]
+    fn apply_inject_erode_matches_declared_formula() {
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.2, 0.5, 0.0, 0.9]).unwrap();
+        let settings = MorphogenesisSettings {
+            inject: 0.3,
+            erode: 0.4,
+            ..MorphogenesisSettings::coral()
+        };
+        let w = vec![0.0, 1.0, 0.5, 0.2];
+        let result = apply_inject_erode(&field, &settings, &w).expect("apply");
+
+        let expected: Vec<f32> = field
+            .v
+            .iter()
+            .zip(&w)
+            .map(|(&v, &w)| {
+                let injected = (v + settings.inject * w).clamp(0.0, 1.0);
+                (injected * (1.0 - settings.erode * (1.0 - w))).clamp(0.0, 1.0)
+            })
+            .collect();
+        assert_eq!(result.v, expected);
+    }
+
+    #[test]
+    fn apply_inject_erode_rejects_mismatched_weight_length() {
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.0; 4]).unwrap();
+        let settings = MorphogenesisSettings {
+            inject: 0.5,
+            ..MorphogenesisSettings::coral()
+        };
+        let wrong_size_w = vec![0.5_f32; 3];
+        assert!(apply_inject_erode(&field, &settings, &wrong_size_w).is_err());
+    }
+
+    /// Anchor L2: a bright bar moving one sim-column per frame, with
+    /// motion-sourced inject+erode active and substeps=0 (isolating the
+    /// inject/erode passes from Gray-Scott's own diffusion so the moving
+    /// mass is attributable ONLY to the live-coupling passes). The `V`
+    /// column-center-of-mass in the LATE window must track the bar's CURRENT
+    /// column, not its frame-0 column.
+    #[test]
+    fn anchor_l2_motion_tracking_center_of_mass_follows_the_moving_bar() {
+        let width = 20u32;
+        let height = 6u32;
+        let bar_width = 2u32;
+
+        // Per-frame luma grids (sim resolution, sim_scale=1): a bright bar
+        // sweeping left-to-right, dark elsewhere.
+        let luma_frame = |bar_x: u32| -> Vec<f32> {
+            let mut luma = vec![0.0_f32; (width * height) as usize];
+            for y in 0..height {
+                for x in bar_x..(bar_x + bar_width).min(width) {
+                    luma[(y * width + x) as usize] = 1.0;
+                }
+            }
+            luma
+        };
+
+        let settings = MorphogenesisSettings {
+            sim_scale: 1,
+            substeps: 0, // isolate inject/erode from Gray-Scott diffusion
+            inject: 0.8,
+            erode: 0.6,
+            inject_source: InjectSource::Motion,
+            ..MorphogenesisSettings::coral()
+        };
+
+        // Seed from an all-dark frame zero (bar starts off-canvas at x=0,
+        // width 0 contribution) so the seed itself contributes ~no V mass.
+        let carrier_zero =
+            ImageBufferF32::from_fn(width, height, |_, _| [0.0, 0.0, 0.0, 1.0]).unwrap();
+        let mut field = seed_morphogenesis_field(&carrier_zero, &settings).expect("seed");
+
+        let bar_positions: Vec<u32> = (0..width.saturating_sub(bar_width)).step_by(2).collect();
+        let mut previous_luma: Option<Vec<f32>> = None;
+        let mut last_bar_x = 0u32;
+
+        for (index, &bar_x) in bar_positions.iter().enumerate() {
+            let current_luma = luma_frame(bar_x);
+            if index > 0 {
+                let w = injection_weight_motion(&current_luma, previous_luma.as_deref());
+                field = apply_inject_erode(&field, &settings, &w).expect("apply");
+                field = advance_morphogenesis_frame(&field, &settings).expect("advance");
+            }
+            previous_luma = Some(current_luma);
+            last_bar_x = bar_x;
+        }
+
+        // Column center-of-mass of the final V field.
+        let mut weighted_sum = 0.0_f64;
+        let mut total = 0.0_f64;
+        for y in 0..height {
+            for x in 0..width {
+                let v = field.v[(y * width + x) as usize] as f64;
+                weighted_sum += v * x as f64;
+                total += v;
+            }
+        }
+        assert!(total > 0.0, "the field must have accumulated some V mass");
+        let center_of_mass = weighted_sum / total;
+
+        let current_bar_center = last_bar_x as f64 + (bar_width as f64 - 1.0) / 2.0;
+        let frame_zero_center = 0.0; // the (empty) frame-0 seed's bar position
+
+        assert!(
+            (center_of_mass - current_bar_center).abs() < 3.0,
+            "L2: V center-of-mass ({center_of_mass}) must track the bar's CURRENT column ({current_bar_center})"
+        );
+        assert!(
+            (center_of_mass - frame_zero_center).abs() > 3.0,
+            "L2: V center-of-mass ({center_of_mass}) must NOT still sit at frame-0's column ({frame_zero_center})"
         );
     }
 }

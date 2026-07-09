@@ -1782,6 +1782,9 @@ fn run() -> Result<(), CliError> {
             sim_scale,
             seed_threshold,
             seed,
+            inject,
+            erode,
+            inject_source,
             stop_after_frame,
         } => {
             let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
@@ -1812,6 +1815,9 @@ fn run() -> Result<(), CliError> {
             if let Some(seed) = seed {
                 settings.seed = seed;
             }
+            settings.inject = inject;
+            settings.erode = erode;
+            settings.inject_source = inject_source.into();
             render_morphogenesis_field(MorphogenesisFieldRenderRequest {
                 source_b_dir: &source_b_dir,
                 output_dir: &output_dir,
@@ -1837,6 +1843,9 @@ fn run() -> Result<(), CliError> {
             seed_threshold,
             seed,
             param_map_strength,
+            inject,
+            erode,
+            inject_source,
             pattern_mix,
             displace,
             pattern_hue,
@@ -1884,6 +1893,9 @@ fn run() -> Result<(), CliError> {
             if let Some(param_map_strength) = param_map_strength {
                 settings.param_map_strength = param_map_strength;
             }
+            settings.inject = inject;
+            settings.erode = erode;
+            settings.inject_source = inject_source.into();
             let composite = MorphogenesisCompositeSettings {
                 pattern_mix,
                 displace,

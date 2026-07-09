@@ -14,10 +14,10 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    BlendMode, CoagulationFlowSource, GeneratorPreset, MatteSource, ModulationSampling,
-    MorphogenesisPreset, PatternColorMode, ScanlineFilter, StructureMode, VectorRemixMode,
-    CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM,
-    MULTIMODAL_GRAIN_ALGORITHM,
+    BlendMode, CoagulationFlowSource, GeneratorPreset, InjectSource, MatteSource,
+    ModulationSampling, MorphogenesisPreset, PatternColorMode, ScanlineFilter, StructureMode,
+    VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
+    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -2090,6 +2090,20 @@ pub(crate) enum Commands {
         /// preset when given.
         #[arg(long)]
         seed: Option<u64>,
+        /// Live Coupling L-S1 per-frame source strength: `V += inject * w`
+        /// each frame, `w` chosen by `--inject-source`. `0` = off (anchor
+        /// L1). See `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`.
+        #[arg(long, default_value_t = 0.0)]
+        inject: f32,
+        /// Live Coupling L-S1 per-frame sink strength: `V *= (1 - erode *
+        /// (1 - w))`, same `w` as `--inject`. `0` = off.
+        #[arg(long, default_value_t = 0.0)]
+        erode: f32,
+        /// Which weight field `--inject`/`--erode` read: `luma` (bright
+        /// regions feed growth) or `motion` (frame-to-frame luma diff — the
+        /// default). Only meaningful when `--inject`/`--erode` > 0.
+        #[arg(long, value_enum, default_value_t = CliMorphogenesisInjectSource::Motion)]
+        inject_source: CliMorphogenesisInjectSource,
         /// Checkpoint after one frame and exit (resume semantics test hook).
         #[arg(long)]
         stop_after_frame: bool,
@@ -2143,6 +2157,20 @@ pub(crate) enum Commands {
         /// the preset when given.
         #[arg(long)]
         param_map_strength: Option<f32>,
+        /// Live Coupling L-S1 per-frame source strength: `V += inject * w`
+        /// each frame, `w` chosen by `--inject-source`. `0` = off (anchor
+        /// L1). See `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`.
+        #[arg(long, default_value_t = 0.0)]
+        inject: f32,
+        /// Live Coupling L-S1 per-frame sink strength: `V *= (1 - erode *
+        /// (1 - w))`, same `w` as `--inject`. `0` = off.
+        #[arg(long, default_value_t = 0.0)]
+        erode: f32,
+        /// Which weight field `--inject`/`--erode` read: `luma` (bright
+        /// regions feed growth) or `motion` (frame-to-frame luma diff — the
+        /// default). Only meaningful when `--inject`/`--erode` > 0.
+        #[arg(long, value_enum, default_value_t = CliMorphogenesisInjectSource::Motion)]
+        inject_source: CliMorphogenesisInjectSource,
         /// `[0,1]`: strength of the `V`-weighted colourize tint. `0` = the
         /// (possibly displaced) carrier passes through unmodified.
         #[arg(long, default_value_t = 0.85)]
@@ -3897,6 +3925,23 @@ impl From<CliMorphogenesisPreset> for MorphogenesisPreset {
             CliMorphogenesisPreset::Mitosis => Self::Mitosis,
             CliMorphogenesisPreset::Worms => Self::Worms,
             CliMorphogenesisPreset::Spots => Self::Spots,
+        }
+    }
+}
+
+/// Live Coupling L-S1 `--inject-source` (see [`InjectSource`]).
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliMorphogenesisInjectSource {
+    Luma,
+    #[default]
+    Motion,
+}
+
+impl From<CliMorphogenesisInjectSource> for InjectSource {
+    fn from(value: CliMorphogenesisInjectSource) -> Self {
+        match value {
+            CliMorphogenesisInjectSource::Luma => Self::Luma,
+            CliMorphogenesisInjectSource::Motion => Self::Motion,
         }
     }
 }

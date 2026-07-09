@@ -71,11 +71,12 @@ use morphogen_render::{
     ModulationRoute, ModulationSampling,
 };
 use morphogen_render::{
-    advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
-    composite_morphogenesis_frame, morphogenesis_field_dimensions,
-    morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
+    advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map, apply_inject_erode,
+    composite_morphogenesis_frame, injection_weight_luma, injection_weight_motion,
+    morphogenesis_field_dimensions, morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
     sample_carrier_luma_at_sim_resolution, render_v_field_grayscale, seed_morphogenesis_field,
-    MorphogenesisCompositeSettings, MorphogenesisSettings, MORPHOGENESIS_ALGORITHM,
+    InjectSource, MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisSettings,
+    MORPHOGENESIS_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -7205,6 +7206,40 @@ fn write_morphogenesis_checkpoint(
     Ok(())
 }
 
+/// Pack `field` into the checkpoint's RGBA32F state, same as
+/// [`morphogenesis_field_to_rgba32f`] (R=U, G=V, A=1.0), but with an
+/// OPTIONAL previous-frame luma grid folded into the B channel (Live
+/// Coupling L-S1, `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`): the
+/// `--inject-source motion` weight field needs the prior frame's carrier
+/// luma to survive a resume, and RGBA32F's B channel is otherwise a
+/// hardcoded spare `0.0` constant — the free real estate for it. `prev_luma
+/// == None` leaves B at that same spare `0.0`, so a render with
+/// `inject == 0.0 && erode == 0.0` writes byte-identical state files to the
+/// pre-live-coupling build (anchor L1, extended to the checkpoint bytes).
+fn pack_morphogenesis_state(
+    field: &MorphogenesisField,
+    prev_luma: Option<&[f32]>,
+) -> Result<ImageBufferF32, CliError> {
+    let mut image = morphogenesis_field_to_rgba32f(field)?;
+    if let Some(prev_luma) = prev_luma {
+        if prev_luma.len() != image.pixels.len() {
+            return Err(CliError::Message(
+                "morphogenesis prev-luma length does not match the field".to_string(),
+            ));
+        }
+        for (pixel, &luma) in image.pixels.iter_mut().zip(prev_luma) {
+            pixel[2] = luma;
+        }
+    }
+    Ok(image)
+}
+
+/// Inverse of [`pack_morphogenesis_state`]'s B-channel packing: the
+/// previous-frame luma grid, one sample per sim cell.
+fn unpack_morphogenesis_prev_luma(image: &ImageBufferF32) -> Vec<f32> {
+    image.pixels.iter().map(|pixel| pixel[2]).collect()
+}
+
 pub(crate) struct MorphogenesisFieldRenderRequest<'a> {
     pub(crate) source_b_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
@@ -7265,16 +7300,63 @@ pub(crate) fn render_morphogenesis_field(
     let frame_dir = output_dir.join("frames");
     fs::create_dir_all(&frame_dir)?;
 
+    // Live Coupling L-S1: track the previous frame's carrier luma only when
+    // inject/erode are actually active (anchor L1 — the off path never
+    // reads a carrier frame beyond frame 0, exactly like before this
+    // milestone).
+    let track_prev_luma = settings.inject != 0.0 || settings.erode != 0.0;
+
     let (start_frame, resumed_state) =
         load_morphogenesis_resume_state(output_dir, job_id, &contract, frames)?;
-    let mut field = match resumed_state {
-        Some(state_image) => morphogenesis_field_from_rgba32f(&state_image)?,
+    let mut field = match &resumed_state {
+        Some(state_image) => morphogenesis_field_from_rgba32f(state_image)?,
         None => seed_morphogenesis_field(&carrier_frame_zero, &settings)?,
+    };
+    let mut previous_luma: Option<Vec<f32>> = if track_prev_luma {
+        resumed_state.as_ref().map(unpack_morphogenesis_prev_luma)
+    } else {
+        None
     };
 
     for index in start_frame..frames as usize {
+        // The carrier is loaded per frame ONLY when inject/erode need this
+        // frame's live luma — the off path stays exactly frame-0-only.
+        let current_luma = if track_prev_luma {
+            let frame_path = carrier_frames.get(index).ok_or_else(|| {
+                CliError::Message(format!(
+                    "not enough carrier frames in {} for --inject/--erode at frame {index}",
+                    source_b_dir.display()
+                ))
+            })?;
+            let carrier = load_image_f32(frame_path)?;
+            Some(sample_carrier_luma_at_sim_resolution(
+                &carrier,
+                sim_width,
+                sim_height,
+                settings.sim_scale,
+            )?)
+        } else {
+            None
+        };
+
         if index > 0 {
+            if let Some(current_luma) = &current_luma {
+                if settings.inject != 0.0 || settings.erode != 0.0 {
+                    let w = match settings.inject_source {
+                        InjectSource::Luma => {
+                            injection_weight_luma(current_luma, settings.seed_threshold)
+                        }
+                        InjectSource::Motion => {
+                            injection_weight_motion(current_luma, previous_luma.as_deref())
+                        }
+                    };
+                    field = apply_inject_erode(&field, &settings, &w)?;
+                }
+            }
             field = advance_morphogenesis_frame(&field, &settings)?;
+        }
+        if track_prev_luma {
+            previous_luma = current_luma;
         }
 
         let visualization = render_v_field_grayscale(&field)?;
@@ -7283,7 +7365,14 @@ pub(crate) fn render_morphogenesis_field(
             &frame_dir.join(format!("frame_{index:06}.png")),
         )?;
 
-        let state_image = morphogenesis_field_to_rgba32f(&field)?;
+        let state_image = pack_morphogenesis_state(
+            &field,
+            if track_prev_luma {
+                previous_luma.as_deref()
+            } else {
+                None
+            },
+        )?;
         let relative_state_path = morphogenesis_state_relative_path(index as u32);
         let state_path = output_dir.join(&relative_state_path);
         let descriptor = write_flow_feedback_state(&state_path, &state_image)?;
@@ -7606,11 +7695,22 @@ pub(crate) fn render_morphogenesis_sequence(
     let frame_dir = output_dir.join("frames");
     fs::create_dir_all(&frame_dir)?;
 
+    // Live Coupling L-S1: track the previous frame's carrier luma across
+    // resume only when inject/erode are active in the render's OWN settings
+    // (inject/erode aren't yet modulation targets — L-S2 — so this decision
+    // is constant for the whole render, unlike `frame_settings` below).
+    let track_prev_luma = settings.inject != 0.0 || settings.erode != 0.0;
+
     let (start_frame, resumed_state) =
         load_morphogenesis_sequence_resume_state(output_dir, job_id, &contract, frame_count_u32)?;
-    let mut field = match resumed_state {
-        Some(state_image) => morphogenesis_field_from_rgba32f(&state_image)?,
+    let mut field = match &resumed_state {
+        Some(state_image) => morphogenesis_field_from_rgba32f(state_image)?,
         None => seed_morphogenesis_field(&carrier_frame_zero, &settings)?,
+    };
+    let mut previous_luma: Option<Vec<f32>> = if track_prev_luma {
+        resumed_state.as_ref().map(unpack_morphogenesis_prev_luma)
+    } else {
+        None
     };
 
     for (index, frame_path) in carrier_frames
@@ -7640,29 +7740,66 @@ pub(crate) fn render_morphogenesis_sequence(
         // contract's "reads the current B frame each output frame".
         let carrier = load_image_f32(frame_path)?;
 
+        // One luma sample per frame serves both the param map's cell_luma
+        // AND the live-coupling weight field (same carrier, same sim_scale)
+        // — sampled once when either consumer needs it.
+        let need_luma_sample = track_prev_luma || frame_settings.param_map_strength != 0.0;
+        let sampled_luma = if need_luma_sample {
+            Some(sample_carrier_luma_at_sim_resolution(
+                &carrier,
+                sim_width,
+                sim_height,
+                frame_settings.sim_scale,
+            )?)
+        } else {
+            None
+        };
+
         if index > 0 {
-            let cell_luma = if frame_settings.param_map_strength != 0.0 {
-                sample_carrier_luma_at_sim_resolution(
-                    &carrier,
-                    sim_width,
-                    sim_height,
-                    frame_settings.sim_scale,
-                )?
+            // Declared pass order: inject → erode → substeps.
+            if track_prev_luma {
+                if let Some(current_luma) = &sampled_luma {
+                    if frame_settings.inject != 0.0 || frame_settings.erode != 0.0 {
+                        let w = match frame_settings.inject_source {
+                            InjectSource::Luma => {
+                                injection_weight_luma(current_luma, frame_settings.seed_threshold)
+                            }
+                            InjectSource::Motion => {
+                                injection_weight_motion(current_luma, previous_luma.as_deref())
+                            }
+                        };
+                        field = apply_inject_erode(&field, &frame_settings, &w)?;
+                    }
+                }
+            }
+
+            let cell_luma: &[f32] = if frame_settings.param_map_strength != 0.0 {
+                sampled_luma.as_deref().unwrap_or(&[])
             } else {
-                Vec::new()
+                &[]
             };
             field = advance_morphogenesis_frame_with_param_map(
                 &field,
                 &frame_settings,
                 frame_settings.param_map_strength,
-                &cell_luma,
+                cell_luma,
             )?;
+        }
+        if track_prev_luma {
+            previous_luma = sampled_luma;
         }
 
         let output = composite_morphogenesis_frame(&carrier, &field, &frame_composite)?;
         save_png(&output, &frame_dir.join(format!("frame_{index:06}.png")))?;
 
-        let state_image = morphogenesis_field_to_rgba32f(&field)?;
+        let state_image = pack_morphogenesis_state(
+            &field,
+            if track_prev_luma {
+                previous_luma.as_deref()
+            } else {
+                None
+            },
+        )?;
         let relative_state_path = morphogenesis_sequence_state_relative_path(index as u32);
         let state_path = output_dir.join(&relative_state_path);
         let descriptor = write_flow_feedback_state(&state_path, &state_image)?;
@@ -7792,5 +7929,37 @@ mod tests {
         assert_eq!(first.variation, 0.4);
         assert_eq!(first.rearrangement, 0.2);
         assert_eq!(second.rearrangement, 0.6);
+    }
+
+    #[test]
+    fn pack_morphogenesis_state_without_prev_luma_matches_the_plain_pack() {
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.1, 0.2, 0.3, 0.4]).unwrap();
+        let plain = morphogenesis_field_to_rgba32f(&field).expect("plain pack");
+        let packed = pack_morphogenesis_state(&field, None).expect("pack without prev luma");
+        assert_eq!(
+            packed.pixels, plain.pixels,
+            "packing with prev_luma=None must be byte-identical to the pre-live-coupling pack"
+        );
+    }
+
+    #[test]
+    fn pack_and_unpack_morphogenesis_prev_luma_round_trips() {
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.0; 4]).unwrap();
+        let prev_luma = vec![0.1_f32, 0.9, 0.25, 0.75];
+        let packed = pack_morphogenesis_state(&field, Some(&prev_luma)).expect("pack");
+        let unpacked = unpack_morphogenesis_prev_luma(&packed);
+        assert_eq!(unpacked, prev_luma);
+
+        // U/V still round-trip through the SAME pack even with prev_luma set.
+        let recovered_field = morphogenesis_field_from_rgba32f(&packed).expect("unpack field");
+        assert_eq!(recovered_field.u, field.u);
+        assert_eq!(recovered_field.v, field.v);
+    }
+
+    #[test]
+    fn pack_morphogenesis_state_rejects_mismatched_prev_luma_length() {
+        let field = MorphogenesisField::new(2, 2, vec![1.0; 4], vec![0.0; 4]).unwrap();
+        let wrong_size = vec![0.5_f32; 3];
+        assert!(pack_morphogenesis_state(&field, Some(&wrong_size)).is_err());
     }
 }
