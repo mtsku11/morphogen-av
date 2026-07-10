@@ -2458,6 +2458,18 @@ enum RustBridgePlaceholder {
     guard request.shadeShininess.isFinite && request.shadeShininess > 0 else {
       throw RustBridgeError.invalidFrameSequenceRequest("shade shininess must be finite and > 0")
     }
+    guard request.fhnEpsilon.isFinite && request.fhnEpsilon > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("FHN epsilon must be finite and > 0")
+    }
+    guard request.fhnA.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("FHN a must be finite")
+    }
+    guard request.fhnB.isFinite && request.fhnB > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("FHN b must be finite and > 0")
+    }
+    guard request.fhnStimulus.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("FHN stimulus must be finite")
+    }
 
     var arguments = [
       "cargo",
@@ -2494,6 +2506,30 @@ enum RustBridgePlaceholder {
       "--pattern-color-mode",
       request.patternColorMode.cliValue
     ]
+    // Track A1: only emit `--model`/`--fhn-*` when non-default, so an
+    // unmodified panel keeps the exact byte-identical pre-A1 argument array.
+    if request.model != .grayScott {
+      arguments.append("--model")
+      arguments.append(request.model.cliValue)
+    }
+    if request.fhnPreset != .pulse {
+      arguments.append("--fhn-preset")
+      arguments.append(request.fhnPreset.cliValue)
+    }
+    if request.fhnEpsilon != 0.08 {
+      arguments.append("--fhn-epsilon")
+      arguments.append(cliNumber(request.fhnEpsilon))
+    }
+    if request.fhnA != 0.7 {
+      arguments.append("--fhn-a=\(cliNumber(request.fhnA))")
+    }
+    if request.fhnB != 0.8 {
+      arguments.append("--fhn-b")
+      arguments.append(cliNumber(request.fhnB))
+    }
+    if request.fhnStimulus != 2.5 {
+      arguments.append("--fhn-stimulus=\(cliNumber(request.fhnStimulus))")
+    }
     // Field View milestone: only emit a flag when it differs from the
     // pre-milestone default, so an unmodified panel keeps the exact
     // byte-identical composite-only argument array.
@@ -4290,6 +4326,16 @@ struct MorphogenesisSequenceRenderQueueCommandRequest {
   let patternHue: Double
   let patternColorMode: MorphogenesisColorModeOption
   let projectURL: URL?
+  // Track A1 (docs/MORPHOGENESIS_FHN_MILESTONE.md); defaulted to Gray-Scott/
+  // pulse so call sites predating this slice keep their pre-A1 meaning (the
+  // flags are only emitted when non-default — see
+  // queueAddMorphogenesisSequenceArguments).
+  var model: MorphogenesisModelOption = .grayScott
+  var fhnPreset: FhnPresetOption = .pulse
+  var fhnEpsilon: Double = 0.08
+  var fhnA: Double = 0.7
+  var fhnB: Double = 0.8
+  var fhnStimulus: Double = 2.5
   // Field View milestone (docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md);
   // defaulted composite so call sites predating this slice keep their
   // pre-milestone meaning (the flag is only emitted when non-default — see

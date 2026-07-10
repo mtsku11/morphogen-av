@@ -7712,10 +7712,12 @@ pub(crate) fn render_morphogenesis_sequence(
     let modulation_plan = modulation.build_plan()?;
     if let Some(plan) = &modulation_plan {
         let mut probe_settings = settings;
+        let mut probe_fhn_settings = fhn_settings;
         let mut probe_composite = composite;
         for (target, value) in plan.frame_values(0) {
             apply_morphogenesis_modulation(
                 &mut probe_settings,
+                &mut probe_fhn_settings,
                 &mut probe_composite,
                 target,
                 value,
@@ -7768,13 +7770,15 @@ pub(crate) fn render_morphogenesis_sequence(
                 .any(|route| route.target == "inject" || route.target == "erode")
         })
         .unwrap_or(false);
-    // Track A1: FHN has no modulation routes yet (A1-S2), so its inject
-    // tracking only ever depends on its own static knob.
+    // Track A1-S2: `inject=...` can now route onto FHN's settings too (a
+    // route can turn it on mid-render even when the render's own base
+    // `fhn_settings.inject` is 0), so FHN's tracking also considers
+    // `routes_inject_or_erode` — same reasoning as Gray-Scott's.
     let track_prev_luma = match model {
         MorphogenesisModel::GrayScott => {
             settings.inject != 0.0 || settings.erode != 0.0 || routes_inject_or_erode
         }
-        MorphogenesisModel::FitzhughNagumo => fhn_settings.inject != 0.0,
+        MorphogenesisModel::FitzhughNagumo => fhn_settings.inject != 0.0 || routes_inject_or_erode,
     };
 
     let (start_frame, resumed_state) =
@@ -7806,11 +7810,13 @@ pub(crate) fn render_morphogenesis_sequence(
         // frame before either the field substeps or the composite consume
         // them — the flow-feedback precedent, applied to both structs.
         let mut frame_settings = settings;
+        let mut frame_fhn_settings = fhn_settings;
         let mut frame_composite = composite;
         if let Some(plan) = &modulation_plan {
             for (target, value) in plan.frame_values(index) {
                 apply_morphogenesis_modulation(
                     &mut frame_settings,
+                    &mut frame_fhn_settings,
                     &mut frame_composite,
                     target,
                     value,
@@ -7881,21 +7887,27 @@ pub(crate) fn render_morphogenesis_sequence(
                     // equation, sampled once per output frame (same
                     // "current B frame" convention as Gray-Scott's param
                     // map) and held constant across this frame's substeps.
-                    let injection_current = if fhn_settings.inject != 0.0 {
+                    // Track A1-S2: `frame_fhn_settings` is the
+                    // routes-resolved copy, so `inject=audio-rms` etc. drive
+                    // it exactly like Gray-Scott's routed knobs.
+                    let injection_current = if frame_fhn_settings.inject != 0.0 {
                         let current_luma = sampled_luma.as_deref().unwrap_or(&[]);
-                        let w = match fhn_settings.inject_source {
-                            InjectSource::Luma => {
-                                injection_weight_luma(current_luma, fhn_settings.seed_threshold)
-                            }
+                        let w = match frame_fhn_settings.inject_source {
+                            InjectSource::Luma => injection_weight_luma(
+                                current_luma,
+                                frame_fhn_settings.seed_threshold,
+                            ),
                             InjectSource::Motion => {
                                 injection_weight_motion(current_luma, previous_luma.as_deref())
                             }
                         };
-                        w.into_iter().map(|w| fhn_settings.inject * w).collect()
+                        w.into_iter()
+                            .map(|w| frame_fhn_settings.inject * w)
+                            .collect()
                     } else {
                         vec![0.0; field.u.len()]
                     };
-                    field = advance_fhn_frame(&field, &fhn_settings, &injection_current)?;
+                    field = advance_fhn_frame(&field, &frame_fhn_settings, &injection_current)?;
                 }
             }
         }

@@ -25,7 +25,7 @@ use morphogen_render::{
     parse_modulation_route, validate_route_targets, BlendMode, BlockCollageSettings,
     CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings, ChannelShiftSettings,
     CoagulationFlowSource, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
-    FhnSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FhnPreset, FhnSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, InjectSource,
     LfoShape, MaskSource, MatteSource, ModulationSampling, ModulationSource,
     MorphogenesisCompositeSettings, MorphogenesisModel, MorphogenesisPreset, MorphogenesisSettings,
@@ -6588,6 +6588,32 @@ pub(crate) fn morphogenesis_preset_label(preset: MorphogenesisPreset) -> String 
     }
 }
 
+/// Label for a resolved [`FhnPreset`] — round-trip display only, same
+/// convention as `morphogenesis_preset_label`.
+pub(crate) fn morphogenesis_fhn_preset_label(preset: FhnPreset) -> String {
+    match preset {
+        FhnPreset::Pulse => "pulse".to_string(),
+        FhnPreset::Spiral => "spiral".to_string(),
+        FhnPreset::Labyrinth => "labyrinth".to_string(),
+    }
+}
+
+/// Track A1 `--model` label; same display-label convention as
+/// `morphogenesis_preset_label`.
+fn morphogenesis_model_label(model: MorphogenesisModel) -> String {
+    match model {
+        MorphogenesisModel::GrayScott => "gray_scott".to_string(),
+        MorphogenesisModel::FitzhughNagumo => "fitzhugh_nagumo".to_string(),
+    }
+}
+
+fn parse_morphogenesis_model(label: &str) -> MorphogenesisModel {
+    match label {
+        "fitzhugh_nagumo" => MorphogenesisModel::FitzhughNagumo,
+        _ => MorphogenesisModel::GrayScott,
+    }
+}
+
 fn morphogenesis_pattern_color_mode_label(mode: PatternColorMode) -> String {
     match mode {
         PatternColorMode::Hue => "hue".to_string(),
@@ -6641,10 +6667,17 @@ pub(crate) struct QueueAddMorphogenesisSequenceRequest<'a> {
     pub(crate) output_root_dir: &'a Path,
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
+    /// Track A1 (`docs/MORPHOGENESIS_FHN_MILESTONE.md`): which field model
+    /// this job renders.
+    pub(crate) model: MorphogenesisModel,
     /// Preset label for the manifest/checkpoint only — `settings`/`composite`
     /// below are already the fully resolved (preset + CLI overrides) knobs.
     pub(crate) preset_label: String,
+    /// FHN preset label, same "display only" convention as `preset_label`.
+    pub(crate) fhn_preset_label: String,
     pub(crate) settings: MorphogenesisSettings,
+    /// Track A1: only consulted when `model == FitzhughNagumo`.
+    pub(crate) fhn_settings: FhnSettings,
     pub(crate) composite: MorphogenesisCompositeSettings,
     /// Field View milestone: which representation the job renders
     /// (`OutputView::Composite` = pre-milestone default).
@@ -6673,8 +6706,11 @@ pub(crate) fn queue_add_morphogenesis_sequence(
         output_root_dir,
         frames,
         frame_rate,
+        model,
         preset_label,
+        fhn_preset_label,
         settings,
+        fhn_settings,
         composite,
         output_view,
         project_path,
@@ -6689,6 +6725,7 @@ pub(crate) fn queue_add_morphogenesis_sequence(
     } = request;
 
     settings.validate()?;
+    fhn_settings.validate()?;
     composite.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
 
@@ -6702,15 +6739,46 @@ pub(crate) fn queue_add_morphogenesis_sequence(
         named_modulator_midi,
         |target| {
             let mut probe_settings = settings;
+            let mut probe_fhn_settings = fhn_settings;
             let mut probe_composite = composite;
-            apply_morphogenesis_modulation(&mut probe_settings, &mut probe_composite, target, 0.0)
-                .map_err(CliError::from)
+            apply_morphogenesis_modulation(
+                &mut probe_settings,
+                &mut probe_fhn_settings,
+                &mut probe_composite,
+                target,
+                0.0,
+            )
+            .map_err(CliError::from)
         },
     )?;
 
     let mut queue = load_or_default_queue(queue_path)?;
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
     let job_output_dir = output_root_dir.join(&job_id);
+
+    // Track A1: du/dt/substeps/sim_scale/seed_threshold/seed/inject are
+    // shared knob names across models — persist whichever model is
+    // actually active so queue-run reconstructs the correct settings.
+    let (du, dt, substeps, sim_scale, seed_threshold, seed, inject) = match model {
+        MorphogenesisModel::GrayScott => (
+            settings.du,
+            settings.dt,
+            settings.substeps,
+            settings.sim_scale,
+            settings.seed_threshold,
+            settings.seed,
+            settings.inject,
+        ),
+        MorphogenesisModel::FitzhughNagumo => (
+            fhn_settings.du,
+            fhn_settings.dt,
+            fhn_settings.substeps,
+            fhn_settings.sim_scale,
+            fhn_settings.seed_threshold,
+            fhn_settings.seed,
+            fhn_settings.inject,
+        ),
+    };
 
     queue.enqueue(RenderJob {
         id: job_id.clone(),
@@ -6721,16 +6789,22 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             output_directory: job_output_dir.to_string_lossy().to_string(),
             frames,
             frame_rate,
+            model: morphogenesis_model_label(model),
             preset: preset_label,
-            du: settings.du,
+            fhn_preset: fhn_preset_label,
+            epsilon: fhn_settings.epsilon,
+            a: fhn_settings.a,
+            b: fhn_settings.b,
+            stimulus: fhn_settings.stimulus,
+            du,
             dv: settings.dv,
             feed: settings.feed,
             kill: settings.kill,
-            dt: settings.dt,
-            substeps: settings.substeps,
-            sim_scale: settings.sim_scale,
-            seed_threshold: settings.seed_threshold,
-            seed: settings.seed,
+            dt,
+            substeps,
+            sim_scale,
+            seed_threshold,
+            seed,
             param_map_strength: settings.param_map_strength,
             pattern_mix: composite.pattern_mix,
             displace: composite.displace,
@@ -6745,7 +6819,7 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             shade_specular: composite.shade_specular,
             shade_shininess: composite.shade_shininess,
             output_view: morphogenesis_output_view_label(output_view),
-            inject: settings.inject,
+            inject,
             erode: settings.erode,
             inject_source: morphogenesis_inject_source_label(settings.inject_source),
             coverage_target: settings.coverage_target,
@@ -6806,7 +6880,13 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         output_directory,
         frames,
         frame_rate,
+        model,
         preset: _preset,
+        fhn_preset: _fhn_preset,
+        epsilon,
+        a,
+        b,
+        stimulus,
         du,
         dv,
         feed,
@@ -6875,6 +6955,26 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         inject_source: parse_morphogenesis_inject_source(&inject_source),
         coverage_target,
     };
+    // Track A1: du/dt/substeps/sim_scale/seed_threshold/seed/inject are
+    // shared knob names — the persisted fields already carry whichever
+    // model's values were resolved at enqueue time (see
+    // `queue_add_morphogenesis_sequence`), so they round-trip correctly for
+    // the ACTIVE model and stay inert (unused) for the other.
+    let fhn_settings = FhnSettings {
+        du,
+        epsilon,
+        a,
+        b,
+        dt,
+        substeps,
+        sim_scale,
+        seed_threshold,
+        seed,
+        stimulus,
+        inject,
+        inject_source: parse_morphogenesis_inject_source(&inject_source),
+    };
+    let model = parse_morphogenesis_model(&model);
     let composite = MorphogenesisCompositeSettings {
         pattern_mix,
         displace,
@@ -6898,12 +6998,9 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
             source_b_dir: Path::new(&carrier_frame_directory),
             output_dir: &output_dir,
             frames,
-            // Track A1 (`docs/MORPHOGENESIS_FHN_MILESTONE.md`): the queue
-            // path doesn't expose `--model` yet (A1-S2) — always Gray-Scott,
-            // the inert FHN default, for now.
-            model: MorphogenesisModel::GrayScott,
+            model,
             settings,
-            fhn_settings: FhnSettings::default(),
+            fhn_settings,
             composite,
             output_view,
             job_id: &job_id,

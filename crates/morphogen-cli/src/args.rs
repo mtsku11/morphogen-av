@@ -3765,9 +3765,35 @@ pub(crate) enum Commands {
         frames: u32,
         #[arg(long, default_value_t = 24.0)]
         frame_rate: f64,
+        /// Track A1 (`docs/MORPHOGENESIS_FHN_MILESTONE.md`): which field
+        /// model to run. See `render-morphogenesis-sequence --model` for the
+        /// shared-vs-model-specific knob-name rules.
+        #[arg(long, value_enum, default_value_t = CliMorphogenesisModel::GrayScott)]
+        model: CliMorphogenesisModel,
         #[arg(long, value_enum, default_value_t = CliMorphogenesisPreset::Coral)]
         preset: CliMorphogenesisPreset,
-        /// `U` diffusion rate. Overrides the preset when given.
+        /// FitzHugh-Nagumo named preset (only consulted when `--model
+        /// fitzhugh-nagumo`).
+        #[arg(long, value_enum, default_value_t = CliFhnPreset::Pulse)]
+        fhn_preset: CliFhnPreset,
+        /// FHN recovery time-scale separation (`ε`). Overrides the FHN
+        /// preset when given.
+        #[arg(long)]
+        fhn_epsilon: Option<f32>,
+        /// FHN nullcline shape parameter `a`. Overrides the FHN preset when
+        /// given.
+        #[arg(long)]
+        fhn_a: Option<f32>,
+        /// FHN nullcline shape parameter `b`. Overrides the FHN preset when
+        /// given.
+        #[arg(long)]
+        fhn_b: Option<f32>,
+        /// FHN stimulus: how far above resting `u` a seeded/injected cell is
+        /// pushed. Overrides the FHN preset when given.
+        #[arg(long)]
+        fhn_stimulus: Option<f32>,
+        /// `U` diffusion rate (Gray-Scott) / FHN's `Du`. Overrides the preset
+        /// when given.
         #[arg(long)]
         du: Option<f32>,
         /// `V` diffusion rate. Overrides the preset when given.
@@ -3779,15 +3805,16 @@ pub(crate) enum Commands {
         /// Kill rate. Overrides the preset when given.
         #[arg(long)]
         kill: Option<f32>,
-        /// Per-substep integration step. Overrides the preset when given.
+        /// Per-substep integration step (both models). Overrides the preset
+        /// when given.
         #[arg(long)]
         dt: Option<f32>,
-        /// Gray-Scott substeps per output frame. `0` freezes the field.
+        /// Substeps per output frame, both models. `0` freezes the field.
         /// Overrides the preset when given.
         #[arg(long)]
         substeps: Option<u32>,
-        /// Sim resolution divisor relative to the carrier frame. Overrides
-        /// the preset when given.
+        /// Sim resolution divisor relative to the carrier frame, both
+        /// models. Overrides the preset when given.
         #[arg(long)]
         sim_scale: Option<u32>,
         /// Frame-zero seed threshold: carrier luma >= this seeds V. Overrides

@@ -2363,6 +2363,68 @@ final class RustBridgePlaceholderTests: XCTestCase {
     )
   }
 
+  func testQueuedMorphogenesisSequenceDefaultModelKeepsArgumentsByteIdentical() throws {
+    // Track A1 (docs/MORPHOGENESIS_FHN_MILESTONE.md): model/fhn-* default to
+    // Gray-Scott/pulse — none of the six flags should ever appear unless the
+    // panel actually moves a knob.
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: makeMorphogenesisRequest()
+    )
+    XCTAssertFalse(arguments.contains("--model"))
+    XCTAssertFalse(arguments.contains("--fhn-preset"))
+    XCTAssertFalse(arguments.contains("--fhn-epsilon"))
+    XCTAssertFalse(arguments.contains { $0.hasPrefix("--fhn-a") })
+    XCTAssertFalse(arguments.contains("--fhn-b"))
+    XCTAssertFalse(arguments.contains { $0.hasPrefix("--fhn-stimulus") })
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsIncludeFhnKnobsWhenActive() throws {
+    var request = makeMorphogenesisRequest()
+    request.model = .fitzhughNagumo
+    request.fhnPreset = .spiral
+    request.fhnEpsilon = 0.05
+    request.fhnA = 0.6
+    request.fhnB = 0.75
+    request.fhnStimulus = 3.0
+
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: request
+    )
+
+    guard let modelIndex = arguments.firstIndex(of: "--model") else {
+      return XCTFail("expected a --model flag")
+    }
+    XCTAssertEqual(arguments[modelIndex + 1], "fitzhugh-nagumo")
+    guard let presetIndex = arguments.firstIndex(of: "--fhn-preset") else {
+      return XCTFail("expected a --fhn-preset flag")
+    }
+    XCTAssertEqual(arguments[presetIndex + 1], "spiral")
+    guard let epsilonIndex = arguments.firstIndex(of: "--fhn-epsilon") else {
+      return XCTFail("expected a --fhn-epsilon flag")
+    }
+    XCTAssertEqual(arguments[epsilonIndex + 1], "0.05")
+    XCTAssertTrue(arguments.contains("--fhn-a=0.6"))
+    guard let bIndex = arguments.firstIndex(of: "--fhn-b") else {
+      return XCTFail("expected a --fhn-b flag")
+    }
+    XCTAssertEqual(arguments[bIndex + 1], "0.75")
+    XCTAssertTrue(arguments.contains("--fhn-stimulus=3"))
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsRejectOutOfRangeFhnKnobs() {
+    var invalidEpsilon = makeMorphogenesisRequest()
+    invalidEpsilon.fhnEpsilon = 0.0
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidEpsilon)
+    )
+
+    var invalidB = makeMorphogenesisRequest()
+    invalidB.fhnB = 0.0
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidB)
+    )
+  }
+
   func testQueuedMorphogenesisSequenceArgumentsRejectInvalidValues() {
     let base = makeMorphogenesisRequest()
 

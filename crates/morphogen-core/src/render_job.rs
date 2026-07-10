@@ -199,6 +199,39 @@ fn default_morphogenesis_shade_shininess() -> f32 {
     16.0
 }
 
+/// Track A1 (`docs/MORPHOGENESIS_FHN_MILESTONE.md`) model selector label;
+/// mirrors `morphogen_render::MorphogenesisModel`'s default (`GrayScott`).
+/// Same display-label convention as `pattern_color_mode`/`inject_source`
+/// above — `#[serde(default = ...)]` so every pre-A1 queue JSON (no `model`
+/// key) parses as Gray-Scott.
+fn default_morphogenesis_model() -> String {
+    "gray_scott".to_string()
+}
+
+/// FHN preset label; mirrors `morphogen_render::FhnPreset`'s default (`Pulse`).
+fn default_fhn_preset() -> String {
+    "pulse".to_string()
+}
+
+/// FHN default knobs; mirror `FhnSettings::pulse()` so a pre-A1-S2 job (no
+/// `epsilon`/`a`/`b`/`stimulus` keys) resolves to the exact same FHN settings
+/// a fresh `--fhn-preset pulse` render would use.
+fn default_fhn_epsilon() -> f32 {
+    0.08
+}
+
+fn default_fhn_a() -> f32 {
+    0.7
+}
+
+fn default_fhn_b() -> f32 {
+    0.8
+}
+
+fn default_fhn_stimulus() -> f32 {
+    2.5
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -1334,9 +1367,35 @@ pub enum RenderJobTask {
         output_directory: String,
         frames: u32,
         frame_rate: f64,
+        /// Track A1 (`docs/MORPHOGENESIS_FHN_MILESTONE.md`): which field
+        /// model this job renders (`"gray_scott"` or `"fitzhugh_nagumo"`).
+        /// `#[serde(default)]` so every pre-A1 job (no `model` key)
+        /// deserializes as Gray-Scott and stays resumable.
+        #[serde(default = "default_morphogenesis_model")]
+        model: String,
         /// Preset label (`coral`/`mitosis`/`worms`/`spots`) — display only.
         #[serde(default = "default_morphogenesis_preset")]
         preset: String,
+        /// FHN preset label (`pulse`/`spiral`/`labyrinth`) — display only,
+        /// only consulted when `model == "fitzhugh_nagumo"`.
+        #[serde(default = "default_fhn_preset")]
+        fhn_preset: String,
+        /// FHN recovery time-scale separation (`ε`). Only consulted when
+        /// `model == "fitzhugh_nagumo"`.
+        #[serde(default = "default_fhn_epsilon")]
+        epsilon: f32,
+        /// FHN nullcline shape parameter `a`.
+        #[serde(default = "default_fhn_a")]
+        a: f32,
+        /// FHN nullcline shape parameter `b`.
+        #[serde(default = "default_fhn_b")]
+        b: f32,
+        /// FHN stimulus: how far above resting `u` a seeded/injected cell is
+        /// pushed.
+        #[serde(default = "default_fhn_stimulus")]
+        stimulus: f32,
+        /// `U` diffusion rate (Gray-Scott) / FHN's `Du` — a shared knob name,
+        /// same convention as the direct CLI's `--du`.
         du: f32,
         dv: f32,
         feed: f32,
@@ -2289,13 +2348,70 @@ mod tests {
     }
 
     #[test]
+    fn morphogenesis_task_without_model_keys_defaults_to_gray_scott_and_fhn_pulse() {
+        // Track A1-S2: pre-A1 queue JSON (predating model/fhn_preset/epsilon/
+        // a/b/stimulus entirely) still parses, defaulting to Gray-Scott and
+        // FhnSettings::pulse()'s own values, so a resumed/re-run pre-A1 job
+        // resolves to the exact same render it always did.
+        let json = r#"{
+            "type": "render_morphogenesis_sequence",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "frames": 4,
+            "frame_rate": 24.0,
+            "du": 0.16,
+            "dv": 0.08,
+            "feed": 0.037,
+            "kill": 0.06,
+            "dt": 1.0,
+            "substeps": 12,
+            "sim_scale": 2,
+            "seed_threshold": 0.5,
+            "seed": 71,
+            "param_map_strength": 1.0,
+            "pattern_mix": 0.85,
+            "displace": 0.0,
+            "pattern_hue": 0.02
+        }"#;
+
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize legacy-shaped task");
+        let RenderJobTask::RenderMorphogenesisSequence {
+            model,
+            fhn_preset,
+            epsilon,
+            a,
+            b,
+            stimulus,
+            ..
+        } = task
+        else {
+            panic!("expected morphogenesis task");
+        };
+        assert_eq!(model, "gray_scott");
+        assert_eq!(fhn_preset, "pulse");
+        assert_eq!(epsilon, 0.08);
+        assert_eq!(a, 0.7);
+        assert_eq!(b, 0.8);
+        assert_eq!(stimulus, 2.5);
+    }
+
+    #[test]
     fn morphogenesis_task_round_trips_with_modulation() {
         let task = RenderJobTask::RenderMorphogenesisSequence {
             carrier_frame_directory: "/tmp/car".to_string(),
             output_directory: "/tmp/out".to_string(),
             frames: 60,
             frame_rate: 24.0,
+            // Track A1-S2: nonzero-from-default so the round-trip actually
+            // exercises the FHN fields, not just their defaults.
+            model: "fitzhugh_nagumo".to_string(),
             preset: "mitosis".to_string(),
+            fhn_preset: "spiral".to_string(),
+            epsilon: 0.05,
+            a: 0.6,
+            b: 0.75,
+            stimulus: 3.0,
             du: 0.16,
             dv: 0.08,
             feed: 0.0367,

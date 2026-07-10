@@ -21,10 +21,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CascadeCollageSettings, CascadeTrailSettings, ChannelShiftSettings, CoagulationSettings,
-    DispersionSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, FluidMosaicSettings, MorphogenesisCompositeSettings,
-    MorphogenesisSettings, PaletteQuantizeSettings, PixelSortSettings, QuantizeMode, RenderError,
-    RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
+    DispersionSettings, FhnSettings, FieldParticleSettings, FlowFeedbackSettings,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
+    MorphogenesisCompositeSettings, MorphogenesisSettings, PaletteQuantizeSettings,
+    PixelSortSettings, QuantizeMode, RenderError, RetroStaticSettings, RuttEtraSettings,
+    ScanlineFilter, SortAxis, SortDirection,
 };
 
 /// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
@@ -995,20 +996,26 @@ pub const DISPERSION_MODULATION_TARGETS: &[&str] =
 
 /// Morphogenesis (Tier "Morphogenesis" S3, `docs/MORPHOGENESIS_MILESTONE.md`;
 /// Live Coupling L-S2, `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`;
-/// Relief Shading B1, `docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`) —
-/// three chemistry knobs (`feed`, `kill`, `param_map_strength`, all on
-/// [`MorphogenesisSettings`]), five composite knobs (`pattern_mix`,
-/// `displace`, `shade`, `shade_azimuth`, `shade_height`, on
-/// [`MorphogenesisCompositeSettings`]), and three Live Coupling knobs
-/// (`inject`, `erode`, `coverage_target`, all on [`MorphogenesisSettings`]);
-/// a single apply function threads both structs since the routes span them.
-/// Structural knobs (`du`, `dv`, `dt`, `substeps`, `sim_scale`,
+/// Relief Shading B1, `docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`;
+/// FHN Track A1-S2, `docs/MORPHOGENESIS_FHN_MILESTONE.md`) — three chemistry
+/// knobs (`feed`, `kill`, `param_map_strength`, all on
+/// [`MorphogenesisSettings`], Gray-Scott only), five composite knobs
+/// (`pattern_mix`, `displace`, `shade`, `shade_azimuth`, `shade_height`, on
+/// [`MorphogenesisCompositeSettings`], shared by both models), and three Live
+/// Coupling knobs (`inject`, `erode`, `coverage_target`, all on
+/// [`MorphogenesisSettings`]); a single apply function threads all three
+/// structs since the routes span them. `inject` is the one target that
+/// exists on BOTH models' settings (Gray-Scott's `V`-bump and FHN's forcing
+/// current mean different things physically, but share a name and a `[0,1]`
+/// range) — a routed `inject=...` writes to whichever struct is active,
+/// harmlessly writing the inert one too (only the render's own `model`
+/// consults it). Structural knobs (`du`, `dv`, `dt`, `substeps`, `sim_scale`,
 /// `seed_threshold`, `seed`, `inject_source`, `pattern_hue`,
 /// `pattern_color_mode`, `shade_elevation`, `shade_specular`,
-/// `shade_shininess`) restructure the field/seed, select a mode, or are
-/// left as static per-render tuning (not part of the "live" surface) and
-/// are excluded. Stateful with a checkpoint path → routes join the sequence
-/// contract like flow-feedback.
+/// `shade_shininess`, and FHN's `epsilon`/`a`/`b`/`stimulus`) restructure the
+/// field/seed, select a mode, or are left as static per-render tuning (not
+/// part of the "live" surface) and are excluded. Stateful with a checkpoint
+/// path → routes join the sequence contract like flow-feedback.
 pub const MORPHOGENESIS_MODULATION_TARGETS: &[&str] = &[
     "feed",
     "kill",
@@ -1448,11 +1455,17 @@ pub fn apply_rutt_etra_modulation(
 /// precedent ([`SHIFT_RANGE`]) since `MorphogenesisCompositeSettings::validate`
 /// only requires finiteness. `inject`/`erode`/`coverage_target` (Live
 /// Coupling L-S2) each clamp to `[0, 1]`, mirroring their own validate rule.
-/// The routes span two structs ([`MorphogenesisSettings`] for the chemistry
-/// and Live Coupling knobs, [`MorphogenesisCompositeSettings`] for the
-/// composite) because the milestone's eight targets do.
+/// Track A1-S2: `inject` also writes `fhn_settings.inject` (same clamp) since
+/// both models share that target name — harmless on the model that isn't
+/// active, since only `render_morphogenesis_sequence`'s own `model` selects
+/// which struct's `inject` is actually consulted. The routes span three
+/// structs ([`MorphogenesisSettings`] for Gray-Scott's chemistry/Live
+/// Coupling knobs, [`MorphogenesisCompositeSettings`] for the shared
+/// composite, [`FhnSettings`] for FHN's `inject`) because the milestones'
+/// targets do.
 pub fn apply_morphogenesis_modulation(
     settings: &mut MorphogenesisSettings,
+    fhn_settings: &mut FhnSettings,
     composite: &mut MorphogenesisCompositeSettings,
     target: &str,
     value: f32,
@@ -1473,7 +1486,11 @@ pub fn apply_morphogenesis_modulation(
         "param_map_strength" => settings.param_map_strength = value.max(0.0),
         "pattern_mix" => composite.pattern_mix = value.clamp(0.0, 1.0),
         "displace" => composite.displace = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
-        "inject" => settings.inject = value.clamp(0.0, 1.0),
+        "inject" => {
+            let clamped = value.clamp(0.0, 1.0);
+            settings.inject = clamped;
+            fhn_settings.inject = clamped;
+        }
         "erode" => settings.erode = value.clamp(0.0, 1.0),
         "coverage_target" => settings.coverage_target = value.clamp(0.0, 1.0),
         "shade" => composite.shade = value.clamp(0.0, 1.0),
@@ -1904,80 +1921,233 @@ mod tests {
     #[test]
     fn morphogenesis_targets_clamp_to_declared_ranges() {
         let mut settings = MorphogenesisSettings::coral();
+        let mut fhn_settings = FhnSettings::default();
         let mut composite = MorphogenesisCompositeSettings::default();
 
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "feed", 99.0).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "feed",
+            99.0,
+        )
+        .unwrap();
         assert_eq!(settings.feed, 0.12);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "feed", -5.0).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "feed",
+            -5.0,
+        )
+        .unwrap();
         assert_eq!(settings.feed, 0.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "kill", 99.0).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "kill",
+            99.0,
+        )
+        .unwrap();
         assert_eq!(settings.kill, 0.12);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "kill", -5.0).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "kill",
+            -5.0,
+        )
+        .unwrap();
         assert_eq!(settings.kill, 0.0);
 
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "param_map_strength", -3.0)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "param_map_strength",
+            -3.0,
+        )
+        .unwrap();
         assert_eq!(settings.param_map_strength, 0.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "param_map_strength", 5.0)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "param_map_strength",
+            5.0,
+        )
+        .unwrap();
         assert_eq!(
             settings.param_map_strength, 5.0,
             "param_map_strength clamp is one-sided (>= 0 only)"
         );
 
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "pattern_mix", 1.5).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "pattern_mix",
+            1.5,
+        )
+        .unwrap();
         assert_eq!(composite.pattern_mix, 1.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "pattern_mix", -0.5).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "pattern_mix",
+            -0.5,
+        )
+        .unwrap();
         assert_eq!(composite.pattern_mix, 0.0);
 
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "displace", 99999.0).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "displace",
+            99999.0,
+        )
+        .unwrap();
         assert_eq!(composite.displace, 4096.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "displace", -99999.0)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "displace",
+            -99999.0,
+        )
+        .unwrap();
         assert_eq!(composite.displace, -4096.0);
 
-        // Live Coupling L-S2: inject/erode/coverage_target each clamp to [0, 1].
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "inject", 1.5).unwrap();
+        // Live Coupling L-S2: inject/erode/coverage_target each clamp to
+        // [0, 1]. Track A1-S2: inject writes BOTH models' settings.
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "inject",
+            1.5,
+        )
+        .unwrap();
         assert_eq!(settings.inject, 1.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "inject", -0.5).unwrap();
+        assert_eq!(
+            fhn_settings.inject, 1.0,
+            "inject must also drive FHN's settings"
+        );
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "inject",
+            -0.5,
+        )
+        .unwrap();
         assert_eq!(settings.inject, 0.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "erode", 1.5).unwrap();
+        assert_eq!(fhn_settings.inject, 0.0);
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "erode",
+            1.5,
+        )
+        .unwrap();
         assert_eq!(settings.erode, 1.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "erode", -0.5).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "erode",
+            -0.5,
+        )
+        .unwrap();
         assert_eq!(settings.erode, 0.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "coverage_target", 1.5)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "coverage_target",
+            1.5,
+        )
+        .unwrap();
         assert_eq!(settings.coverage_target, 1.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "coverage_target", -0.5)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "coverage_target",
+            -0.5,
+        )
+        .unwrap();
         assert_eq!(settings.coverage_target, 0.0);
 
         // Track B1: shade/shade_specular-adjacent clamp [0,1], shade_azimuth
         // wraps (turns), shade_height clamps to the declared range.
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade", 1.5).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "shade",
+            1.5,
+        )
+        .unwrap();
         assert_eq!(composite.shade, 1.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade", -0.5).unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "shade",
+            -0.5,
+        )
+        .unwrap();
         assert_eq!(composite.shade, 0.0);
 
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_azimuth", 1.25)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "shade_azimuth",
+            1.25,
+        )
+        .unwrap();
         assert_eq!(
             composite.shade_azimuth, 0.25,
             "shade_azimuth wraps, not clamps"
         );
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_azimuth", -0.25)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "shade_azimuth",
+            -0.25,
+        )
+        .unwrap();
         assert_eq!(composite.shade_azimuth, 0.75);
 
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_height", 99999.0)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "shade_height",
+            99999.0,
+        )
+        .unwrap();
         assert_eq!(composite.shade_height, 64.0);
-        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_height", -5.0)
-            .unwrap();
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "shade_height",
+            -5.0,
+        )
+        .unwrap();
         assert_eq!(composite.shade_height, 0.0);
 
         // Every clamped combination stays legal for the render.
         settings.validate().unwrap();
+        fhn_settings.validate().unwrap();
         composite.validate().unwrap();
 
         // Structural knobs are deliberately not targets.
@@ -1995,10 +2165,20 @@ mod tests {
             "shade_elevation",
             "shade_specular",
             "shade_shininess",
+            "epsilon",
+            "a",
+            "b",
+            "stimulus",
         ] {
             assert!(
-                apply_morphogenesis_modulation(&mut settings, &mut composite, excluded, 1.0)
-                    .is_err(),
+                apply_morphogenesis_modulation(
+                    &mut settings,
+                    &mut fhn_settings,
+                    &mut composite,
+                    excluded,
+                    1.0
+                )
+                .is_err(),
                 "'{excluded}' must not be a modulation target"
             );
         }

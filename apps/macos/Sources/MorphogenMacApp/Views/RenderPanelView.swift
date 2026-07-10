@@ -1447,6 +1447,59 @@ struct RenderPanelView: View {
             .help("Specular exponent (Phong shininess).")
           }
 
+          HStack(spacing: 16) {
+            Picker("Model", selection: $state.morphogenesisModel) {
+              ForEach(MorphogenesisModelOption.allCases) { model in
+                Text(model.rawValue).tag(model)
+              }
+            }
+            .frame(width: 190)
+            .help(
+              "Gray-Scott: patterns that grow and settle. FitzHugh-Nagumo: an excitable medium — "
+                + "travelling pulse waves, never settles. FHN knobs below stay legal but inert "
+                + "in Gray-Scott."
+            )
+
+            Picker("FHN Preset", selection: $state.morphogenesisFhnPreset) {
+              ForEach(FhnPresetOption.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+              }
+            }
+            .frame(width: 170)
+            .disabled(state.morphogenesisModel != .fitzhughNagumo)
+            .help("Pulse: fires and dies out. Spiral: self-sustaining rotors. Labyrinth: standing structure.")
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.morphogenesisFhnEpsilon, in: 0.01...0.5, step: 0.01) {
+              Text("Epsilon \(state.morphogenesisFhnEpsilon, specifier: "%.2f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .disabled(state.morphogenesisModel != .fitzhughNagumo)
+            .help("Recovery time-scale separation; small = slower recovery = longer pulses.")
+
+            Stepper(value: $state.morphogenesisFhnA, in: -2...2, step: 0.05) {
+              Text("A \(state.morphogenesisFhnA, specifier: "%.2f")")
+            }
+            .frame(width: 110, alignment: .leading)
+            .disabled(state.morphogenesisModel != .fitzhughNagumo)
+            .help("FHN nullcline shape parameter a.")
+
+            Stepper(value: $state.morphogenesisFhnB, in: 0.1...2, step: 0.05) {
+              Text("B \(state.morphogenesisFhnB, specifier: "%.2f")")
+            }
+            .frame(width: 110, alignment: .leading)
+            .disabled(state.morphogenesisModel != .fitzhughNagumo)
+            .help("FHN nullcline shape parameter b.")
+
+            Stepper(value: $state.morphogenesisFhnStimulus, in: 0.5...6, step: 0.1) {
+              Text("Stimulus \(state.morphogenesisFhnStimulus, specifier: "%.1f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .disabled(state.morphogenesisModel != .fitzhughNagumo)
+            .help("How far above resting u a seeded/injected cell is pushed.")
+          }
+
           ModulationSlotRow(
             label: "Feed",
             source: $state.morphogenesisModFeedSource,

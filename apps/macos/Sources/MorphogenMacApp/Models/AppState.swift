@@ -565,6 +565,15 @@ final class AppState: ObservableObject {
   // docs/MORPHOGENESIS_MILESTONE.md). CPU-only (stateful checkpoint; no Metal
   // slice yet) — no backend picker, unlike Rutt-Etra.
   @Published var morphogenesisPreset = MorphogenesisPresetOption.coral
+  // Track A1 (docs/MORPHOGENESIS_FHN_MILESTONE.md): which field model to
+  // run; FHN knobs stay legal but inert while model == .grayScott. `inject`
+  // (above under Live Coupling) is shared by both models — no new mod slot.
+  @Published var morphogenesisModel = MorphogenesisModelOption.grayScott
+  @Published var morphogenesisFhnPreset = FhnPresetOption.pulse
+  @Published var morphogenesisFhnEpsilon = 0.08
+  @Published var morphogenesisFhnA = 0.7
+  @Published var morphogenesisFhnB = 0.8
+  @Published var morphogenesisFhnStimulus = 2.5
   // Field View milestone (docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md):
   // Composite (default) or Field (the raw V field, upsampled to carrier
   // resolution). Composite knobs below stay legal but inert in field view.
@@ -3949,6 +3958,12 @@ final class AppState: ObservableObject {
       patternHue: morphogenesisPatternHue,
       patternColorMode: morphogenesisPatternColorMode,
       projectURL: projectURL,
+      model: morphogenesisModel,
+      fhnPreset: morphogenesisFhnPreset,
+      fhnEpsilon: morphogenesisFhnEpsilon,
+      fhnA: morphogenesisFhnA,
+      fhnB: morphogenesisFhnB,
+      fhnStimulus: morphogenesisFhnStimulus,
       outputView: morphogenesisOutputView,
       inject: morphogenesisInject,
       erode: morphogenesisErode,
@@ -5452,6 +5467,40 @@ enum MorphogenesisInjectSourceOption: String, CaseIterable, Identifiable {
     switch self {
     case .luma: return "luma"
     case .motion: return "motion"
+    }
+  }
+}
+
+/// `--model` (Track A1, docs/MORPHOGENESIS_FHN_MILESTONE.md): which field
+/// model `render-morphogenesis-sequence` runs.
+enum MorphogenesisModelOption: String, CaseIterable, Identifiable {
+  case grayScott = "Gray-Scott"
+  case fitzhughNagumo = "FitzHugh-Nagumo"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .grayScott: return "gray-scott"
+    case .fitzhughNagumo: return "fitzhugh-nagumo"
+    }
+  }
+}
+
+/// `--fhn-preset` (Track A1): FitzHugh-Nagumo named preset, only consulted
+/// when `--model fitzhugh-nagumo`.
+enum FhnPresetOption: String, CaseIterable, Identifiable {
+  case pulse = "Pulse"
+  case spiral = "Spiral"
+  case labyrinth = "Labyrinth"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .pulse: return "pulse"
+    case .spiral: return "spiral"
+    case .labyrinth: return "labyrinth"
     }
   }
 }
