@@ -6724,8 +6724,13 @@ pub(crate) fn queue_add_morphogenesis_sequence(
         named_modulator_midi,
     } = request;
 
-    settings.validate()?;
-    fhn_settings.validate()?;
+    // Track A1-S2 fix: only the ACTIVE model's settings are validated (see
+    // render.rs's matching comment) — the inactive struct is never
+    // consulted, and FHN's inject legally exceeds Gray-Scott's [0,1] range.
+    match model {
+        MorphogenesisModel::GrayScott => settings.validate()?,
+        MorphogenesisModel::FitzhughNagumo => fhn_settings.validate()?,
+    }
     composite.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
 

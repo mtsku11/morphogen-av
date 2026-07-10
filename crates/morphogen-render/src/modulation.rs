@@ -25,7 +25,7 @@ use crate::{
     FluidAdvectSettings, FluidAdvectTwoSourceSettings, FluidMosaicSettings,
     MorphogenesisCompositeSettings, MorphogenesisSettings, PaletteQuantizeSettings,
     PixelSortSettings, QuantizeMode, RenderError, RetroStaticSettings, RuttEtraSettings,
-    ScanlineFilter, SortAxis, SortDirection,
+    ScanlineFilter, SortAxis, SortDirection, FHN_INJECT_RANGE,
 };
 
 /// An LFO waveform shape (milestone doc, "Semantics"). Every shape emits
@@ -1487,9 +1487,12 @@ pub fn apply_morphogenesis_modulation(
         "pattern_mix" => composite.pattern_mix = value.clamp(0.0, 1.0),
         "displace" => composite.displace = value.clamp(SHIFT_RANGE.0, SHIFT_RANGE.1),
         "inject" => {
-            let clamped = value.clamp(0.0, 1.0);
-            settings.inject = clamped;
-            fhn_settings.inject = clamped;
+            // Track A1-S2 fix: FHN's inject needs headroom above 1.0 (it's a
+            // multiplier of `stimulus`, not a fraction of a [0,1] field) to
+            // ever cross the firing threshold from real, usually-weak motion
+            // weights — each struct clamps to its own legal range.
+            settings.inject = value.clamp(0.0, 1.0);
+            fhn_settings.inject = value.clamp(FHN_INJECT_RANGE.0, FHN_INJECT_RANGE.1);
         }
         "erode" => settings.erode = value.clamp(0.0, 1.0),
         "coverage_target" => settings.coverage_target = value.clamp(0.0, 1.0),
@@ -2021,8 +2024,11 @@ mod tests {
         .unwrap();
         assert_eq!(composite.displace, -4096.0);
 
-        // Live Coupling L-S2: inject/erode/coverage_target each clamp to
-        // [0, 1]. Track A1-S2: inject writes BOTH models' settings.
+        // Live Coupling L-S2: Gray-Scott's inject/erode/coverage_target each
+        // clamp to [0, 1]. Track A1-S2 fix: inject also writes FHN's
+        // settings, but FHN clamps to the wider FHN_INJECT_RANGE (a
+        // multiplier of stimulus, not a [0,1] field fraction) — 1.5 is
+        // legal for FHN but clamps to 1.0 for Gray-Scott.
         apply_morphogenesis_modulation(
             &mut settings,
             &mut fhn_settings,
@@ -2033,9 +2039,19 @@ mod tests {
         .unwrap();
         assert_eq!(settings.inject, 1.0);
         assert_eq!(
-            fhn_settings.inject, 1.0,
-            "inject must also drive FHN's settings"
+            fhn_settings.inject, 1.5,
+            "FHN's inject must NOT clamp to Gray-Scott's [0,1] range"
         );
+        apply_morphogenesis_modulation(
+            &mut settings,
+            &mut fhn_settings,
+            &mut composite,
+            "inject",
+            99.0,
+        )
+        .unwrap();
+        assert_eq!(settings.inject, 1.0);
+        assert_eq!(fhn_settings.inject, 8.0, "FHN's inject clamps at its own ceiling");
         apply_morphogenesis_modulation(
             &mut settings,
             &mut fhn_settings,

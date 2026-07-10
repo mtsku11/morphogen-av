@@ -155,17 +155,17 @@ pub use modulation::{
 };
 pub use morphogenesis::{
     advance_fhn_frame, advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
-    apply_coverage_homeostat, apply_inject_erode, composite_morphogenesis_frame, fhn_display_field,
-    fhn_resting_state, fhn_substep, injection_weight_luma, injection_weight_motion,
-    morphogenesis_field_dimensions, morphogenesis_field_from_rgba32f,
+    apply_coverage_homeostat, apply_fhn_inject, apply_inject_erode, composite_morphogenesis_frame,
+    fhn_display_field, fhn_resting_state, fhn_substep, injection_weight_luma,
+    injection_weight_motion, morphogenesis_field_dimensions, morphogenesis_field_from_rgba32f,
     morphogenesis_field_to_rgba32f, morphogenesis_substep, morphogenesis_substep_with_param_map,
     render_v_field_grayscale, render_v_field_grayscale_upsampled,
     render_v_field_grayscale_upsampled_with_shading, sample_carrier_luma_at_sim_resolution,
     seed_fhn_field, seed_morphogenesis_field, FhnPreset, FhnSettings, InjectSource,
     MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisModel, MorphogenesisPreset,
-    MorphogenesisSettings, OutputView, PatternColorMode, COVERAGE_GAIN, FHN_SAFETY_BOX,
-    MORPHOGENESIS_ALGORITHM, MORPHOGENESIS_FHN_ALGORITHM, PARAM_MAP_SEGMENT_DELTA_FEED,
-    PARAM_MAP_SEGMENT_DELTA_KILL, PARAM_MAP_STRENGTH_DEFAULT,
+    MorphogenesisSettings, OutputView, PatternColorMode, COVERAGE_GAIN, FHN_INJECT_RANGE,
+    FHN_SAFETY_BOX, MORPHOGENESIS_ALGORITHM, MORPHOGENESIS_FHN_ALGORITHM,
+    PARAM_MAP_SEGMENT_DELTA_FEED, PARAM_MAP_SEGMENT_DELTA_KILL, PARAM_MAP_STRENGTH_DEFAULT,
 };
 pub use optical_flow::{
     lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu,

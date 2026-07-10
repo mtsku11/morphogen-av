@@ -1421,6 +1421,18 @@ pub const MORPHOGENESIS_FHN_ALGORITHM: &str = "morphogenesis_fhn_cpu_v1";
 /// only; the excitable dynamics need signed values well outside `[0,1]`.
 pub const FHN_SAFETY_BOX: f32 = 3.0;
 
+/// FHN `inject`'s legal range — wider than Gray-Scott's `[0,1]` (the same
+/// CLI/queue flag name, but a different physical quantity: a MULTIPLIER of
+/// `stimulus`, not a fraction of `V`'s own `[0,1]` range). Real footage
+/// motion weights are usually well under 1.0 (subtle movement), so
+/// `inject * stimulus * w` needs headroom above 1.0 to ever reach the ≈half-
+/// stimulus kick required to cross the firing threshold — confirmed
+/// empirically: `inject == 0.1` (Gray-Scott's whole legal range) on real
+/// footage produced a mean 5.4/255 delta after 143 frames with no visually
+/// distinct NEW pulses, only faint boundary jitter on the already-seeded
+/// front.
+pub const FHN_INJECT_RANGE: (f32, f32) = (0.0, 8.0);
+
 /// Which of the two field models a `render-morphogenesis-sequence` render
 /// uses. `#[serde(default)]` (`GrayScott`) so every pre-A1 checkpoint/queue
 /// task (no `model` key at all) deserializes as Gray-Scott and stays
@@ -1465,11 +1477,15 @@ pub struct FhnSettings {
     /// threshold to reliably fire a pulse rather than relaxing straight
     /// back to rest.
     pub stimulus: f32,
-    /// Live coupling: per-frame forcing current `I(x,y) = inject * w(x,y)`
-    /// added into the `du` equation each substep (see the milestone doc —
-    /// this is a CURRENT, not an additive `V` bump like Gray-Scott's
-    /// inject). `0` = off. `#[serde(default)]` so pre-A1-S2 checkpoints
-    /// deserialize unmodulated and stay resumable.
+    /// Live coupling: `u += inject * stimulus * w(x,y)`, a discrete kick
+    /// applied ONCE per output frame BEFORE the substeps (see
+    /// [`apply_fhn_inject`] — scaled by `stimulus` so `inject == 1.0` at
+    /// full weight reliably fires a new pulse, matching the seed's own
+    /// kick strength). Legal range [`FHN_INJECT_RANGE`] — wider than
+    /// Gray-Scott's `[0,1]` `inject`, since real motion weights are usually
+    /// well under 1.0 and need headroom to reach a firing-strength kick.
+    /// `0` = off. `#[serde(default)]` so pre-A1-S2 checkpoints deserialize
+    /// unmodulated and stay resumable.
     #[serde(default)]
     pub inject: f32,
     /// Which weight field `--inject` reads (same [`InjectSource`] as
@@ -1563,10 +1579,13 @@ impl FhnSettings {
                 "stimulus must be finite".into(),
             ));
         }
-        if !(self.inject.is_finite() && (0.0..=1.0).contains(&self.inject)) {
-            return Err(RenderError::InvalidMorphogenesisSettings(
-                "inject must be finite and in [0, 1]".into(),
-            ));
+        if !(self.inject.is_finite()
+            && (FHN_INJECT_RANGE.0..=FHN_INJECT_RANGE.1).contains(&self.inject))
+        {
+            return Err(RenderError::InvalidMorphogenesisSettings(format!(
+                "inject must be finite and in [{}, {}]",
+                FHN_INJECT_RANGE.0, FHN_INJECT_RANGE.1
+            )));
         }
         Ok(())
     }
@@ -1663,25 +1682,15 @@ pub fn seed_fhn_field(
 
 /// One FHN substep: a 5-point Laplacian on `u` only (clamped edges, same
 /// stencil convention as [`morphogenesis_substep`]), `v` has no spatial
-/// term. `injection_current` is `I(x,y)`, one sample per cell (all zero when
-/// `inject == 0`, the off case). Both channels clamp to
-/// `[-FHN_SAFETY_BOX, FHN_SAFETY_BOX]` afterward (a float-blowup guard, not
-/// part of the physics).
+/// term. Both channels clamp to `[-FHN_SAFETY_BOX, FHN_SAFETY_BOX]`
+/// afterward (a float-blowup guard, not part of the physics).
 pub fn fhn_substep(
     field: &MorphogenesisField,
     settings: &FhnSettings,
-    injection_current: &[f32],
 ) -> Result<MorphogenesisField, RenderError> {
     let width = field.width;
     let height = field.height;
     let w = width as usize;
-    if injection_current.len() != field.u.len() {
-        return Err(RenderError::InvalidMorphogenesisField(format!(
-            "FHN injection current expected {} samples, got {}",
-            field.u.len(),
-            injection_current.len()
-        )));
-    }
     let mut new_u = vec![0.0_f32; field.u.len()];
     let mut new_v = vec![0.0_f32; field.v.len()];
 
@@ -1704,8 +1713,7 @@ pub fn fhn_substep(
                 + field.u[row_next + x as usize]
                 - 4.0 * u_c;
 
-            let du =
-                settings.du * lap_u + u_c - (u_c * u_c * u_c) / 3.0 - v_c + injection_current[idx];
+            let du = settings.du * lap_u + u_c - (u_c * u_c * u_c) / 3.0 - v_c;
             let dv = settings.epsilon * (u_c + settings.a - settings.b * v_c);
 
             new_u[idx] = (u_c + settings.dt * du).clamp(-FHN_SAFETY_BOX, FHN_SAFETY_BOX);
@@ -1716,21 +1724,55 @@ pub fn fhn_substep(
     MorphogenesisField::new(width, height, new_u, new_v)
 }
 
-/// Advance one output frame: `settings.substeps` FHN substeps, all reading
-/// the SAME `injection_current` (sampled once per output frame from the
-/// carrier's CURRENT frame, held constant across the frame's substeps — the
-/// same convention as Gray-Scott's per-frame param map). `substeps == 0`
-/// leaves the field unchanged.
+/// Advance one output frame: `settings.substeps` FHN substeps. `substeps ==
+/// 0` leaves the field unchanged.
 pub fn advance_fhn_frame(
     field: &MorphogenesisField,
     settings: &FhnSettings,
-    injection_current: &[f32],
 ) -> Result<MorphogenesisField, RenderError> {
     let mut current = field.clone();
     for _ in 0..settings.substeps {
-        current = fhn_substep(&current, settings, injection_current)?;
+        current = fhn_substep(&current, settings)?;
     }
     Ok(current)
+}
+
+/// Live coupling: `--inject` as a DISCRETE per-frame kick to `u`, applied
+/// ONCE per output frame BEFORE the substeps (the same declared order as
+/// Gray-Scott's inject — see `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`),
+/// rather than as a continuous forcing current inside the ODE.
+///
+/// This replaces an earlier design (a continuous current `I(x,y)` added
+/// into the `du` equation every substep) that was empirically too weak to
+/// ever be useful: with `dt ≈ 0.1` and a handful of substeps per frame, a
+/// realistic `inject·w` current only nudged `u` by a few hundredths per
+/// frame — nowhere near the `stimulus` (≈2.5) needed to cross the nullcline
+/// threshold and fire a genuine travelling pulse, so real footage motion
+/// could never launch a NEW wave (confirmed by rendering: `--inject 0.1
+/// --inject-source motion` vs. no inject at all differed by a mean 0.694/255
+/// after 143 frames — imperceptible). Scaling the kick by the model's own
+/// `stimulus` (the same magnitude the frame-zero seed uses to reliably fire
+/// a cell) is what makes `inject == 1.0` at full weight actually launch a
+/// new pulse, matching Gray-Scott's `inject`/`erode` being a meaningfully-
+/// sized perturbation relative to `V`'s own dynamic range.
+pub fn apply_fhn_inject(
+    field: &MorphogenesisField,
+    settings: &FhnSettings,
+    w: &[f32],
+) -> Result<MorphogenesisField, RenderError> {
+    if w.len() != field.u.len() {
+        return Err(RenderError::InvalidMorphogenesisField(format!(
+            "FHN inject weight field expected {} samples, got {}",
+            field.u.len(),
+            w.len()
+        )));
+    }
+    let mut u = field.u.clone();
+    for (value, &w) in u.iter_mut().zip(w) {
+        *value = (*value + settings.inject * settings.stimulus * w)
+            .clamp(-FHN_SAFETY_BOX, FHN_SAFETY_BOX);
+    }
+    MorphogenesisField::new(field.width, field.height, u, field.v.clone())
 }
 
 /// Display adapter (Track A1): the SAME two output-view functions
@@ -2876,10 +2918,6 @@ mod tests {
 
     // ─── Track A1: FitzHugh-Nagumo ─────────────────────────────────────────
 
-    fn zero_injection(field: &MorphogenesisField) -> Vec<f32> {
-        vec![0.0; field.u.len()]
-    }
-
     /// FHN1: the Newton solver's fixed point satisfies both nullcline
     /// equations (`v = u - u^3/3` and `v = (u+a)/b`) to within 1e-4, for
     /// every shipped preset's `(a, b)`.
@@ -2935,8 +2973,7 @@ mod tests {
 
             let mut max_variance = initial_variance;
             for _ in 0..60 {
-                let injection = zero_injection(&field);
-                field = advance_fhn_frame(&field, &settings, &injection).expect("advance");
+                field = advance_fhn_frame(&field, &settings).expect("advance");
                 max_variance = max_variance.max(field.v_variance());
             }
             assert!(
@@ -3008,8 +3045,7 @@ mod tests {
 
             let mut radii = vec![initial_radius];
             for _ in 0..40 {
-                let injection = zero_injection(&field);
-                field = advance_fhn_frame(&field, &settings, &injection).expect("advance");
+                field = advance_fhn_frame(&field, &settings).expect("advance");
                 radii.push(max_radius_crossing_threshold(&field));
             }
             let final_radius = *radii.last().unwrap();
@@ -3034,21 +3070,17 @@ mod tests {
 
         let mut uninterrupted = seed_fhn_field(&carrier, &settings).expect("seed");
         for _ in 0..5 {
-            let injection = zero_injection(&uninterrupted);
-            uninterrupted =
-                advance_fhn_frame(&uninterrupted, &settings, &injection).expect("advance");
+            uninterrupted = advance_fhn_frame(&uninterrupted, &settings).expect("advance");
         }
 
         let mut resumed = seed_fhn_field(&carrier, &settings).expect("seed");
         for _ in 0..2 {
-            let injection = zero_injection(&resumed);
-            resumed = advance_fhn_frame(&resumed, &settings, &injection).expect("advance");
+            resumed = advance_fhn_frame(&resumed, &settings).expect("advance");
         }
         let packed = morphogenesis_field_to_rgba32f(&resumed).expect("pack");
         let mut resumed = morphogenesis_field_from_rgba32f(&packed).expect("unpack");
         for _ in 0..3 {
-            let injection = zero_injection(&resumed);
-            resumed = advance_fhn_frame(&resumed, &settings, &injection).expect("advance");
+            resumed = advance_fhn_frame(&resumed, &settings).expect("advance");
         }
 
         assert_eq!(
@@ -3070,8 +3102,7 @@ mod tests {
         let carrier = nucleus_carrier(32, 32);
         let mut field = seed_fhn_field(&carrier, &settings).expect("seed");
         for _ in 0..8 {
-            let injection = zero_injection(&field);
-            field = advance_fhn_frame(&field, &settings, &injection).expect("advance");
+            field = advance_fhn_frame(&field, &settings).expect("advance");
         }
 
         let display = fhn_display_field(&field).expect("display adapter");
@@ -3093,6 +3124,43 @@ mod tests {
         assert!(
             composite.pixels.iter().any(|p| p != &carrier.pixels[0]),
             "FHN5: the composite view must diverge from the plain carrier once a stimulus has fired"
+        );
+    }
+
+    /// FHN6 (live-coupling regression): `apply_fhn_inject` at `inject == 1.0`
+    /// and full weight (`w == 1.0`) must push `u` past the same fire
+    /// threshold FHN3 uses, in a region that was NEVER seeded — proving
+    /// `--inject`/`--inject-source` can launch a genuinely NEW pulse from
+    /// footage motion/luma, not just nudge the field imperceptibly. This is
+    /// the regression test for the bug this fixed: the original design (a
+    /// continuous ODE forcing current, scaled down by `dt` across every
+    /// substep) was empirically too weak at any realistic `--inject` value
+    /// to ever cross the threshold — a real render (`--inject 0.1
+    /// --inject-source motion` vs. no inject) differed by a mean 0.694/255
+    /// after 143 frames, imperceptible.
+    #[test]
+    fn fhn6_inject_fires_a_new_pulse_in_a_never_seeded_region() {
+        let settings = FhnSettings {
+            sim_scale: 1,
+            inject: 1.0,
+            ..FhnSettings::pulse()
+        };
+        let (u_rest, v_rest) = fhn_resting_state(settings.a, settings.b);
+        let fire_threshold = u_rest + 0.5 * settings.stimulus;
+        let count = 16 * 16;
+        let field = MorphogenesisField::new(16, 16, vec![u_rest; count], vec![v_rest; count])
+            .expect("build resting field");
+        assert!(
+            field.u.iter().all(|&u| u <= fire_threshold),
+            "sanity: the whole field must start below the fire threshold"
+        );
+
+        let w = vec![1.0; count];
+        let injected = apply_fhn_inject(&field, &settings, &w).expect("inject");
+        assert!(
+            injected.u.iter().all(|&u| u > fire_threshold),
+            "FHN6: a full-strength inject must push u past the fire threshold everywhere \
+             (a never-seeded region must be able to fire a new pulse from live footage)"
         );
     }
 }

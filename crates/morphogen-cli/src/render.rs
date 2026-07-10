@@ -72,8 +72,8 @@ use morphogen_render::{
 };
 use morphogen_render::{
     advance_fhn_frame, advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
-    apply_coverage_homeostat, apply_inject_erode, composite_morphogenesis_frame, fhn_display_field,
-    injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
+    apply_coverage_homeostat, apply_fhn_inject, apply_inject_erode, composite_morphogenesis_frame,
+    fhn_display_field, injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
     morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f, render_v_field_grayscale,
     render_v_field_grayscale_upsampled_with_shading, sample_carrier_luma_at_sim_resolution,
     seed_fhn_field, seed_morphogenesis_field, FhnSettings, InjectSource,
@@ -7667,8 +7667,17 @@ pub(crate) fn render_morphogenesis_sequence(
         modulation,
     } = request;
 
-    settings.validate()?;
-    fhn_settings.validate()?;
+    // Track A1-S2 fix: only the ACTIVE model's settings are validated — the
+    // two structs share CLI/queue flag names (du/dt/inject/...) but have
+    // independently-legal ranges (FHN's inject in particular needs headroom
+    // above Gray-Scott's [0,1]), and the inactive struct is never consulted
+    // for rendering (a model switch on an existing checkpoint already
+    // refuses to resume via the contract's `model`/`algorithm` fields, so
+    // there's no correctness need for the inert copy to validate too).
+    match model {
+        MorphogenesisModel::GrayScott => settings.validate()?,
+        MorphogenesisModel::FitzhughNagumo => fhn_settings.validate()?,
+    }
     composite.validate()?;
     if frames == 0 {
         return Err(CliError::Message(
@@ -7883,31 +7892,29 @@ pub(crate) fn render_morphogenesis_sequence(
                     )?;
                 }
                 MorphogenesisModel::FitzhughNagumo => {
-                    // Track A1: inject is a forcing CURRENT in the `du`
-                    // equation, sampled once per output frame (same
-                    // "current B frame" convention as Gray-Scott's param
-                    // map) and held constant across this frame's substeps.
-                    // Track A1-S2: `frame_fhn_settings` is the
+                    // Track A1-S2 fix: inject is a DISCRETE per-frame kick to
+                    // `u` (see `apply_fhn_inject`'s doc comment for why the
+                    // original continuous-current design was empirically too
+                    // weak to ever fire a new pulse), applied BEFORE the
+                    // substeps — same declared order as Gray-Scott's
+                    // inject → substeps. `frame_fhn_settings` is the
                     // routes-resolved copy, so `inject=audio-rms` etc. drive
                     // it exactly like Gray-Scott's routed knobs.
-                    let injection_current = if frame_fhn_settings.inject != 0.0 {
-                        let current_luma = sampled_luma.as_deref().unwrap_or(&[]);
-                        let w = match frame_fhn_settings.inject_source {
-                            InjectSource::Luma => injection_weight_luma(
-                                current_luma,
-                                frame_fhn_settings.seed_threshold,
-                            ),
-                            InjectSource::Motion => {
-                                injection_weight_motion(current_luma, previous_luma.as_deref())
-                            }
-                        };
-                        w.into_iter()
-                            .map(|w| frame_fhn_settings.inject * w)
-                            .collect()
-                    } else {
-                        vec![0.0; field.u.len()]
-                    };
-                    field = advance_fhn_frame(&field, &frame_fhn_settings, &injection_current)?;
+                    if frame_fhn_settings.inject != 0.0 {
+                        if let Some(current_luma) = &sampled_luma {
+                            let w = match frame_fhn_settings.inject_source {
+                                InjectSource::Luma => injection_weight_luma(
+                                    current_luma,
+                                    frame_fhn_settings.seed_threshold,
+                                ),
+                                InjectSource::Motion => {
+                                    injection_weight_motion(current_luma, previous_luma.as_deref())
+                                }
+                            };
+                            field = apply_fhn_inject(&field, &frame_fhn_settings, &w)?;
+                        }
+                    }
+                    field = advance_fhn_frame(&field, &frame_fhn_settings)?;
                 }
             }
         }
