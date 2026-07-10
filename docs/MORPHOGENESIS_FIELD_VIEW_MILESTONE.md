@@ -1,6 +1,23 @@
 # Morphogenesis Field View — the raw chemistry as a first-class output
 
-Status: **PLANNED.** Written 2026-07-10 from the user's reaction to the
+Status: **MILESTONE COMPLETE (2026-07-10).** Sonnet build to ~95% (died on
+its session limit re-running the readout), orchestrator finished + verified:
+cargo 724 → **733/0**, swift 150 → **152/0**, clippy clean, zero new fmt
+diffs. All anchors pinned:
+`render_morphogenesis_sequence_output_view_composite_matches_omitting_the_flag`
+(FV1), `…field_view_matches_debug_field_command_at_sim_scale_one` (FV2, the
+shared-renderer pin), `…field_view_ignores_composite_knobs`,
+`…refuses_resume_on_changed_output_view` +
+`…legacy_checkpoint_without_output_view_resumes_as_composite` (FV4),
+`queue_morphogenesis_field_view_matches_direct_and_records_output_view`
+(FV5), swift Output-picker token tests. FV3 readout
+(orchestrator-run: field view + `inject=audio-rms:0.15,0@smooth` + erode
+0.03 on the cello fixture): early/late window deltas **1.891/1.079**
+(ratio 0.57, no freeze); loud frame 112 = dense full-frame labyrinth,
+quiet frame 120 = the lower third burned to sparse dots — the raw field
+surges with the music (frames orchestrator-Read). Deliverable clip sent.
+
+Origin: written 2026-07-10 from the user's reaction to the
 live-coupling showcase: the black-and-white raw V field *is the look* — make
 it a rendered output option with the full modulation surface (the composite
 clip's `inject = audio-rms` surge, but in the raw field view). Follow-up to

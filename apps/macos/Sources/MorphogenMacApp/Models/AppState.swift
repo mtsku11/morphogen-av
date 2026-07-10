@@ -565,6 +565,10 @@ final class AppState: ObservableObject {
   // docs/MORPHOGENESIS_MILESTONE.md). CPU-only (stateful checkpoint; no Metal
   // slice yet) — no backend picker, unlike Rutt-Etra.
   @Published var morphogenesisPreset = MorphogenesisPresetOption.coral
+  // Field View milestone (docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md):
+  // Composite (default) or Field (the raw V field, upsampled to carrier
+  // resolution). Composite knobs below stay legal but inert in field view.
+  @Published var morphogenesisOutputView = MorphogenesisOutputViewOption.composite
   @Published var morphogenesisPatternMix = 0.85
   @Published var morphogenesisDisplace = 0.0
   @Published var morphogenesisPatternHue = 0.02
@@ -3877,6 +3881,7 @@ final class AppState: ObservableObject {
       patternHue: morphogenesisPatternHue,
       patternColorMode: morphogenesisPatternColorMode,
       projectURL: projectURL,
+      outputView: morphogenesisOutputView,
       inject: morphogenesisInject,
       erode: morphogenesisErode,
       injectSource: morphogenesisInjectSource,
@@ -5339,6 +5344,23 @@ enum MorphogenesisColorModeOption: String, CaseIterable, Identifiable {
     switch self {
     case .hue: return "hue"
     case .inherit: return "inherit"
+    }
+  }
+}
+
+/// `--output-view` (Field View milestone,
+/// docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md): which representation
+/// `render-morphogenesis-sequence` writes as its output frame.
+enum MorphogenesisOutputViewOption: String, CaseIterable, Identifiable {
+  case composite = "Composite"
+  case field = "Field"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .composite: return "composite"
+    case .field: return "field"
     }
   }
 }

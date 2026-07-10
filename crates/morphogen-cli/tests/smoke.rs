@@ -12713,3 +12713,457 @@ fn render_morphogenesis_sequence_resumes_byte_identically_with_a_routed_inject_a
         );
     }
 }
+
+// ─── Morphogenesis Field View (docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md) ──
+//
+// `--output-view <composite|field>` on `render-morphogenesis-sequence`:
+// FV1 (default/explicit-composite identity), FV2 (shared-renderer pin against
+// `render-morphogenesis-field`), FV4 (resume/refuse/legacy-checkpoint
+// compat), FV5 (queue add-run byte-identity). FV3 (the audio-surge readout on
+// real footage) is an exploratory render, not a smoke test.
+
+#[test]
+fn render_morphogenesis_sequence_output_view_composite_matches_omitting_the_flag() {
+    // FV1: `--output-view composite` explicit must be byte-identical to
+    // omitting the flag entirely (the pre-milestone default).
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let implicit_dir = temp_dir.path().join("implicit-output");
+    let explicit_dir = temp_dir.path().join("explicit-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            implicit_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            explicit_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--output-view",
+            "composite",
+        ])
+        .assert()
+        .success();
+
+    assert_png_frames_identical(
+        &implicit_dir.join("frames"),
+        &explicit_dir.join("frames"),
+        3,
+    );
+
+    let manifest = read_json(&explicit_dir.join("manifest.json"));
+    assert_eq!(manifest["output_view"], "composite");
+}
+
+/// FV2 (the can't-drift proof): at `--sim-scale 1`, unmodulated, identical
+/// chemistry knobs, `render-morphogenesis-sequence --output-view field`'s
+/// frames must be byte-identical to `render-morphogenesis-field`'s — the
+/// upsample is an exact identity at that scale (see
+/// `render_v_field_grayscale_upsampled_matches_debug_view_at_identity_scale`
+/// for the algorithm-level pin).
+#[test]
+fn render_morphogenesis_sequence_field_view_matches_debug_field_command_at_sim_scale_one() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let debug_dir = temp_dir.path().join("debug-field-output");
+    let sequence_dir = temp_dir.path().join("sequence-field-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "4",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-field",
+            carrier_arg.as_str(),
+            debug_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "4",
+            "--preset",
+            "coral",
+            "--sim-scale",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            sequence_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "4",
+            "--preset",
+            "coral",
+            "--sim-scale",
+            "1",
+            "--output-view",
+            "field",
+            // `render-morphogenesis-field` has no S3 param-map knob at all —
+            // it always advances with a uniform (feed, kill). The sequence
+            // command's `coral` preset defaults `param_map_strength` to
+            // `PARAM_MAP_STRENGTH_DEFAULT` (1.0), so it must be zeroed here
+            // for the two commands' field trajectories to match; this is the
+            // declared FV2 scope (identical CHEMISTRY knobs), not a knob the
+            // milestone changes.
+            "--param-map-strength",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    assert_png_frames_identical(&debug_dir.join("frames"), &sequence_dir.join("frames"), 4);
+}
+
+/// FV4a: composite knobs stay legal but inert in field view — a render with
+/// wildly different `pattern_mix`/`displace` produces byte-identical field
+/// frames, since those knobs never reach the output pixels in that view.
+#[test]
+fn render_morphogenesis_sequence_field_view_ignores_composite_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let a_dir = temp_dir.path().join("a-output");
+    let b_dir = temp_dir.path().join("b-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            a_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--output-view",
+            "field",
+            "--pattern-mix",
+            "0",
+            "--displace",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            b_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--output-view",
+            "field",
+            "--pattern-mix",
+            "0.85",
+            "--displace=32",
+        ])
+        .assert()
+        .success();
+
+    assert_png_frames_identical(&a_dir.join("frames"), &b_dir.join("frames"), 3);
+}
+
+/// FV4b: switching `--output-view` on an existing output directory refuses
+/// to resume (frames written in one view are inconsistent with the other).
+#[test]
+fn render_morphogenesis_sequence_refuses_resume_on_changed_output_view() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let output_dir = temp_dir.path().join("output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--output-view",
+            "field",
+        ])
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            output_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "3",
+            "--preset",
+            "coral",
+            "--output-view",
+            "composite",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "settings changed; start with a new output directory",
+        ));
+}
+
+/// FV4c: a pre-milestone checkpoint (predating `output_view` entirely) still
+/// resumes, defaulting to composite.
+#[test]
+fn render_morphogenesis_sequence_legacy_checkpoint_without_output_view_resumes_as_composite() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+    let legacy_dir = temp_dir.path().join("legacy-output");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "3",
+            "--rate",
+            "0.05",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let legacy_arg = legacy_dir.to_string_lossy().to_string();
+    let base_args = [
+        "render-morphogenesis-sequence",
+        carrier_arg.as_str(),
+        legacy_arg.as_str(),
+        "--frames",
+        "3",
+        "--preset",
+        "coral",
+    ];
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args)
+        .arg("--stop-after-frame")
+        .assert()
+        .success();
+
+    let checkpoint_path = legacy_dir.join("checkpoint.json");
+    let mut legacy_checkpoint: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&checkpoint_path).expect("read legacy"))
+            .expect("parse legacy");
+    assert!(legacy_checkpoint["contract"]
+        .as_object_mut()
+        .expect("contract object")
+        .remove("output_view")
+        .is_some());
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_string(&legacy_checkpoint).expect("serialize legacy"),
+    )
+    .expect("write legacy checkpoint");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(base_args)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rendered morphogenesis sequence with 3 frame(s)",
+        ));
+
+    let manifest = read_json(&legacy_dir.join("manifest.json"));
+    assert_eq!(manifest["output_view"], "composite");
+}
+
+/// FV5: queue add→run with `--output-view field` plus live-coupling knobs is
+/// byte-identical to the direct CLI, and the manifest records the view.
+#[test]
+fn queue_morphogenesis_field_view_matches_direct_and_records_output_view() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "4",
+            "--rate",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+
+    let direct_dir = temp_dir.path().join("direct");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "4",
+            "--preset",
+            "coral",
+            "--frame-rate",
+            "4",
+            "--inject",
+            "0.1",
+            "--erode",
+            "0.03",
+            "--output-view",
+            "field",
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-morphogenesis-sequence",
+            queue_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "4",
+            "--preset",
+            "coral",
+            "--frame-rate",
+            "4",
+            "--inject",
+            "0.1",
+            "--erode",
+            "0.03",
+            "--output-view",
+            "field",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-morphogenesis-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let job_frames = output_root.join("job-0001/frames");
+    assert_png_frames_identical(&direct_dir.join("frames"), &job_frames, 4);
+
+    let manifest = read_json(&output_root.join("job-0001/manifest.json"));
+    assert_eq!(manifest["output_view"], "field");
+}

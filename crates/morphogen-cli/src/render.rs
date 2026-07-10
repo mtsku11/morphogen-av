@@ -75,8 +75,9 @@ use morphogen_render::{
     apply_coverage_homeostat, apply_inject_erode, composite_morphogenesis_frame,
     injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
     morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
-    sample_carrier_luma_at_sim_resolution, render_v_field_grayscale, seed_morphogenesis_field,
-    InjectSource, MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisSettings,
+    render_v_field_grayscale, render_v_field_grayscale_upsampled,
+    sample_carrier_luma_at_sim_resolution, seed_morphogenesis_field, InjectSource,
+    MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisSettings, OutputView,
     MORPHOGENESIS_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
@@ -7471,6 +7472,15 @@ pub(crate) struct MorphogenesisSequenceContract {
     composite: MorphogenesisCompositeSettings,
     width: u32,
     height: u32,
+    /// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`):
+    /// which representation this render wrote as its output frame.
+    /// `#[serde(default)]` (`OutputView::Composite`) so pre-milestone
+    /// checkpoints (no `output_view` key) deserialize as composite and stay
+    /// resumable (FV4); a resume with a CHANGED output_view refuses like any
+    /// other contract field, since frames written in one view are
+    /// inconsistent with the other.
+    #[serde(default)]
+    output_view: OutputView,
     /// S3 modulation routes join the sequence contract exactly like flow-
     /// feedback's (`FeedbackModulationContract` reused verbatim — it's
     /// generic over which effect's routes it carries): frame N's field state
@@ -7602,6 +7612,9 @@ pub(crate) struct MorphogenesisSequenceRenderRequest<'a> {
     pub(crate) frames: u32,
     pub(crate) settings: MorphogenesisSettings,
     pub(crate) composite: MorphogenesisCompositeSettings,
+    /// Field View milestone: which representation the output frames are
+    /// (`OutputView::Composite` = pre-milestone S2 output, the default).
+    pub(crate) output_view: OutputView,
     pub(crate) job_id: &'a str,
     pub(crate) stop_after_frame: bool,
     /// The render's own timeline (the flow-feedback precedent: one timeline
@@ -7625,6 +7638,7 @@ pub(crate) fn render_morphogenesis_sequence(
         frames,
         settings,
         composite,
+        output_view,
         job_id,
         stop_after_frame,
         frame_rate,
@@ -7695,6 +7709,7 @@ pub(crate) fn render_morphogenesis_sequence(
         composite,
         width: sim_width,
         height: sim_height,
+        output_view,
         modulation: modulation_contract,
     };
 
@@ -7816,7 +7831,18 @@ pub(crate) fn render_morphogenesis_sequence(
             previous_luma = sampled_luma;
         }
 
-        let output = composite_morphogenesis_frame(&carrier, &field, &frame_composite)?;
+        // Field View milestone: `frame_composite` is still resolved above
+        // (routes may target its knobs) so it stays legal-but-inert in field
+        // view — the manifest records it as given, it just isn't consulted
+        // for pixels here.
+        let output = match output_view {
+            OutputView::Composite => {
+                composite_morphogenesis_frame(&carrier, &field, &frame_composite)?
+            }
+            OutputView::Field => {
+                render_v_field_grayscale_upsampled(&field, carrier.width, carrier.height)?
+            }
+        };
         save_png(&output, &frame_dir.join(format!("frame_{index:06}.png")))?;
 
         let state_image = pack_morphogenesis_state(
@@ -7867,6 +7893,7 @@ pub(crate) fn render_morphogenesis_sequence(
         "status": "complete",
         "settings": contract.settings,
         "composite": contract.composite,
+        "output_view": contract.output_view,
         "width": contract.width,
         "height": contract.height,
         "source_b_dir": source_b_dir.to_string_lossy(),

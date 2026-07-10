@@ -15,8 +15,8 @@ use morphogen_core::{
 };
 use morphogen_render::{
     BlendMode, CoagulationFlowSource, GeneratorPreset, InjectSource, MatteSource,
-    ModulationSampling, MorphogenesisPreset, PatternColorMode, ScanlineFilter, StructureMode,
-    VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
+    ModulationSampling, MorphogenesisPreset, OutputView, PatternColorMode, ScanlineFilter,
+    StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
     GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
@@ -2196,6 +2196,12 @@ pub(crate) enum Commands {
         /// `--pattern-hue`) or `inherit` (the sample's own hue, saturated).
         #[arg(long, value_enum, default_value_t = CliPatternColorMode::Hue)]
         pattern_color_mode: CliPatternColorMode,
+        /// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`):
+        /// `composite` (default, the S2 pattern-mix/displace output) or
+        /// `field` (the raw `V` field, greyscale, upsampled to carrier
+        /// resolution). Composite knobs stay legal but inert in field view.
+        #[arg(long, value_enum, default_value_t = CliOutputView::Composite)]
+        output_view: CliOutputView,
         /// Checkpoint after one frame and exit (resume semantics test hook).
         #[arg(long)]
         stop_after_frame: bool,
@@ -3781,6 +3787,12 @@ pub(crate) enum Commands {
         /// `--pattern-hue`) or `inherit` (the sample's own hue, saturated).
         #[arg(long, value_enum, default_value_t = CliPatternColorMode::Hue)]
         pattern_color_mode: CliPatternColorMode,
+        /// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`):
+        /// `composite` (default) or `field` (the raw `V` field, upsampled to
+        /// carrier resolution). Composite knobs stay legal but inert in field
+        /// view.
+        #[arg(long, value_enum, default_value_t = CliOutputView::Composite)]
+        output_view: CliOutputView,
         #[arg(long)]
         project_path: Option<PathBuf>,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
@@ -3991,6 +4003,24 @@ impl From<CliPatternColorMode> for PatternColorMode {
         match value {
             CliPatternColorMode::Hue => Self::Hue,
             CliPatternColorMode::Inherit => Self::Inherit,
+        }
+    }
+}
+
+/// `--output-view` (Field View milestone,
+/// `docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`); see [`OutputView`].
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliOutputView {
+    #[default]
+    Composite,
+    Field,
+}
+
+impl From<CliOutputView> for OutputView {
+    fn from(value: CliOutputView) -> Self {
+        match value {
+            CliOutputView::Composite => Self::Composite,
+            CliOutputView::Field => Self::Field,
         }
     }
 }

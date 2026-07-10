@@ -29,7 +29,7 @@ use morphogen_render::{
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, InjectSource,
     LfoShape, MaskSource, MatteSource, ModulationSampling, ModulationSource,
     MorphogenesisCompositeSettings,
-    MorphogenesisPreset, MorphogenesisSettings, PaletteQuantizeSettings,
+    MorphogenesisPreset, MorphogenesisSettings, OutputView, PaletteQuantizeSettings,
     PatternColorMode, PixelSortSettings,
     QuantizeMode, RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection,
     SortKey, StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM,
@@ -6604,6 +6604,23 @@ fn parse_morphogenesis_pattern_color_mode(label: &str) -> PatternColorMode {
     }
 }
 
+/// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`)
+/// `output_view` label; same display-label convention as
+/// `morphogenesis_pattern_color_mode_label`.
+fn morphogenesis_output_view_label(view: OutputView) -> String {
+    match view {
+        OutputView::Composite => "composite".to_string(),
+        OutputView::Field => "field".to_string(),
+    }
+}
+
+fn parse_morphogenesis_output_view(label: &str) -> OutputView {
+    match label {
+        "field" => OutputView::Field,
+        _ => OutputView::Composite,
+    }
+}
+
 /// Live Coupling L-S1 `inject`/`erode` weight-field source label; same
 /// display-label convention as `morphogenesis_pattern_color_mode_label`.
 fn morphogenesis_inject_source_label(source: InjectSource) -> String {
@@ -6631,6 +6648,9 @@ pub(crate) struct QueueAddMorphogenesisSequenceRequest<'a> {
     pub(crate) preset_label: String,
     pub(crate) settings: MorphogenesisSettings,
     pub(crate) composite: MorphogenesisCompositeSettings,
+    /// Field View milestone: which representation the job renders
+    /// (`OutputView::Composite` = pre-milestone default).
+    pub(crate) output_view: OutputView,
     pub(crate) project_path: Option<&'a Path>,
     pub(crate) modulate: &'a [String],
     pub(crate) modulator_audio: Option<&'a Path>,
@@ -6658,6 +6678,7 @@ pub(crate) fn queue_add_morphogenesis_sequence(
         preset_label,
         settings,
         composite,
+        output_view,
         project_path,
         modulate,
         modulator_audio,
@@ -6719,6 +6740,7 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             pattern_color_mode: morphogenesis_pattern_color_mode_label(
                 composite.pattern_color_mode,
             ),
+            output_view: morphogenesis_output_view_label(output_view),
             inject: settings.inject,
             erode: settings.erode,
             inject_source: morphogenesis_inject_source_label(settings.inject_source),
@@ -6799,6 +6821,7 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         displace,
         pattern_hue,
         pattern_color_mode,
+        output_view,
         modulation_routes,
         modulator_audio_path,
         modulator_frames_directory,
@@ -6848,6 +6871,7 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         pattern_hue,
         pattern_color_mode: parse_morphogenesis_pattern_color_mode(&pattern_color_mode),
     };
+    let output_view = parse_morphogenesis_output_view(&output_view);
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
@@ -6860,6 +6884,7 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
             frames,
             settings,
             composite,
+            output_view,
             job_id: &job_id,
             stop_after_frame: false,
             frame_rate,

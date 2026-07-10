@@ -2198,6 +2198,31 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--modulation-sampling"))
   }
 
+  func testQueuedMorphogenesisSequenceDefaultOutputViewKeepsArgumentsByteIdentical() throws {
+    // Field View milestone: outputView defaults to .composite — no
+    // --output-view flag should ever appear unless the panel picks Field
+    // (the testQueuedMorphogenesisSequenceArgumentsIncludeKnobs pin covers
+    // the exact no-flag array).
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: makeMorphogenesisRequest()
+    )
+    XCTAssertFalse(arguments.contains("--output-view"))
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsIncludeOutputViewWhenField() throws {
+    var request = makeMorphogenesisRequest()
+    request.outputView = .field
+
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: request
+    )
+
+    guard let index = arguments.firstIndex(of: "--output-view") else {
+      return XCTFail("expected an --output-view flag")
+    }
+    XCTAssertEqual(arguments[index + 1], "field")
+  }
+
   func testQueuedMorphogenesisSequenceDefaultLiveCouplingKeepsArgumentsByteIdentical() throws {
     // Live Coupling L-S3: inject/erode/coverage-target default to 0 and
     // inject-source to Motion — none of the four flags should ever appear

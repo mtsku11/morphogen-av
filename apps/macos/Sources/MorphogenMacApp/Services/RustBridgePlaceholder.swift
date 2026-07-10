@@ -2476,6 +2476,13 @@ enum RustBridgePlaceholder {
       "--pattern-color-mode",
       request.patternColorMode.cliValue
     ]
+    // Field View milestone: only emit a flag when it differs from the
+    // pre-milestone default, so an unmodified panel keeps the exact
+    // byte-identical composite-only argument array.
+    if request.outputView != .composite {
+      arguments.append("--output-view")
+      arguments.append(request.outputView.cliValue)
+    }
     // Live Coupling L-S3: only emit a flag when it differs from the
     // pre-Live-Coupling default, so an unmodified panel keeps the exact
     // byte-identical unmodulated argument array (pinned by
@@ -4239,6 +4246,11 @@ struct MorphogenesisSequenceRenderQueueCommandRequest {
   let patternHue: Double
   let patternColorMode: MorphogenesisColorModeOption
   let projectURL: URL?
+  // Field View milestone (docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md);
+  // defaulted composite so call sites predating this slice keep their
+  // pre-milestone meaning (the flag is only emitted when non-default — see
+  // queueAddMorphogenesisSequenceArguments).
+  var outputView: MorphogenesisOutputViewOption = .composite
   // Live Coupling L-S3 (docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md);
   // defaulted off so call sites predating this slice keep their unmodulated,
   // pre-Live-Coupling meaning (the flags are only emitted when nonzero/

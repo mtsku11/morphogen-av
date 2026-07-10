@@ -801,14 +801,66 @@ pub fn morphogenesis_field_from_rgba32f(
     MorphogenesisField::new(image.width, image.height, u, v)
 }
 
-/// Debug visualization: `V` as a greyscale image (the S1 scaffold's only
-/// composite — S2 replaces this with the real pattern-mix/displace output).
+/// The shared `V` -> greyscale pixel mapping used by every raw-field render
+/// path (the S1 debug scaffold and the Field View milestone's sequence
+/// output, `docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`) — kept as its own
+/// function so the two call sites cannot drift apart.
+fn v_to_grayscale_pixel(v: f32) -> [f32; 4] {
+    [v, v, v, 1.0]
+}
+
+/// Debug visualization: `V` as a greyscale image at SIM resolution (the S1
+/// scaffold's only composite — S2 replaces this with the real
+/// pattern-mix/displace output for `render-morphogenesis-sequence`). Stays
+/// sim-res raw; unchanged by the Field View milestone (its own niche).
 pub fn render_v_field_grayscale(field: &MorphogenesisField) -> Result<ImageBufferF32, RenderError> {
     ImageBufferF32::from_fn(field.width, field.height, |x, y| {
         let idx = (y as usize) * (field.width as usize) + (x as usize);
-        let v = field.v[idx];
-        [v, v, v, 1.0]
+        v_to_grayscale_pixel(field.v[idx])
     })
+}
+
+/// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`, FV2):
+/// the same `V` -> greyscale mapping as [`render_v_field_grayscale`], but
+/// bilinearly upsampled from sim resolution to `carrier_width x
+/// carrier_height` (via [`sample_scalar_grid`], the composite's own upsample
+/// convention) so `render-morphogenesis-sequence`'s field-view output is
+/// carrier-resolution regardless of `--sim-scale`. At `sim_scale == 1` (sim
+/// resolution == carrier resolution) [`sample_scalar_grid`] samples each
+/// output pixel at its own integer coordinate with zero interpolation
+/// weight, so this is byte-identical to [`render_v_field_grayscale`]
+/// sample-for-sample — the can't-drift proof, not a coincidence.
+pub fn render_v_field_grayscale_upsampled(
+    field: &MorphogenesisField,
+    carrier_width: u32,
+    carrier_height: u32,
+) -> Result<ImageBufferF32, RenderError> {
+    ImageBufferF32::from_fn(carrier_width, carrier_height, |x, y| {
+        let v = sample_scalar_grid(
+            field.width,
+            field.height,
+            &field.v,
+            carrier_width,
+            carrier_height,
+            x as f32,
+            y as f32,
+        );
+        v_to_grayscale_pixel(v)
+    })
+}
+
+/// Which representation `render-morphogenesis-sequence` writes as its output
+/// frame (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`). `Composite` is the
+/// pre-milestone S2 behaviour (default, FV1 byte-identity); `Field` is the
+/// raw `V` field, greyscale, upsampled to carrier resolution
+/// ([`render_v_field_grayscale_upsampled`]) — the composite knobs
+/// (`pattern_mix`/`displace`/`hue`/`mode`) stay legal but inert in this view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputView {
+    #[default]
+    Composite,
+    Field,
 }
 
 // ─── S2 composite: pattern-mix colourize + displace-along-∇V ──────────────
@@ -2075,5 +2127,47 @@ mod tests {
             (unregulated_final - coverage_target).abs() > 0.1,
             "contrast: without the homeostat, mean(V)={unregulated_final} should NOT already sit near the target"
         );
+    }
+
+    /// Field View milestone unit pin (FV2, sim_scale == 1 half): at identity
+    /// scale, [`render_v_field_grayscale_upsampled`] must sample every pixel
+    /// at zero interpolation weight and reproduce
+    /// [`render_v_field_grayscale`] exactly — the shared-renderer proof at
+    /// the algorithm level (the CLI-level half lives in
+    /// `morphogen-cli`'s smoke test comparing the two commands' PNGs).
+    #[test]
+    fn render_v_field_grayscale_upsampled_matches_debug_view_at_identity_scale() {
+        let carrier = structured_carrier(20, 16);
+        let settings = MorphogenesisSettings {
+            sim_scale: 1,
+            ..MorphogenesisSettings::coral()
+        };
+        let mut field = seed_morphogenesis_field(&carrier, &settings).expect("seed");
+        field = advance_morphogenesis_frame(&field, &settings).expect("advance");
+
+        let debug = render_v_field_grayscale(&field).expect("debug view");
+        let upsampled = render_v_field_grayscale_upsampled(&field, field.width, field.height)
+            .expect("upsampled view");
+        assert_eq!(
+            debug.pixels, upsampled.pixels,
+            "identity-scale upsample must be byte-identical to the raw debug mapping"
+        );
+    }
+
+    /// At a non-identity scale the upsample legitimately differs (bilinear
+    /// interpolation vs raw sim-res dump) but must still stay within `[0,1]`
+    /// and match the field's own extremes closely at the corners (a sanity
+    /// check, not a byte pin — the declared FV2 divergence above sim_scale 1).
+    #[test]
+    fn render_v_field_grayscale_upsampled_scales_to_the_requested_carrier_resolution() {
+        let carrier = structured_carrier(20, 16);
+        let settings = MorphogenesisSettings {
+            sim_scale: 4,
+            ..MorphogenesisSettings::coral()
+        };
+        let field = seed_morphogenesis_field(&carrier, &settings).expect("seed");
+        let upsampled = render_v_field_grayscale_upsampled(&field, 20, 16).expect("upsampled");
+        assert_eq!(upsampled.width, 20);
+        assert_eq!(upsampled.height, 16);
     }
 }

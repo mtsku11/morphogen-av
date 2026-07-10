@@ -174,6 +174,15 @@ fn default_morphogenesis_inject_source() -> String {
     "motion".to_string()
 }
 
+/// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`) output
+/// view label; mirrors `morphogen_render::OutputView`'s default (`Composite`).
+/// Same label-not-typed-enum convention as `pattern_color_mode`/
+/// `inject_source` above, and `#[serde(default = ...)]` so pre-milestone
+/// queue JSON (no `output_view` key) parses as composite.
+fn default_morphogenesis_output_view() -> String {
+    "composite".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -1333,6 +1342,11 @@ pub enum RenderJobTask {
         /// `hue` or `inherit`.
         #[serde(default = "default_morphogenesis_pattern_color_mode")]
         pattern_color_mode: String,
+        /// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`):
+        /// `"composite"` (default) or `"field"`, same display-label
+        /// convention as `pattern_color_mode`/`inject_source`.
+        #[serde(default = "default_morphogenesis_output_view")]
+        output_view: String,
         /// Live Coupling L-S1 (`docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`)
         /// per-frame source strength: `V += inject * w` each frame. `0` = off,
         /// matching a pre-milestone job (`#[serde(default)]`).
@@ -2156,6 +2170,40 @@ mod tests {
     }
 
     #[test]
+    fn morphogenesis_task_without_output_view_defaults_to_composite() {
+        // Field View milestone: pre-milestone queue JSON (predating
+        // `output_view` entirely) still parses, defaulting to "composite" —
+        // the pre-milestone rendering behaviour.
+        let json = r#"{
+            "type": "render_morphogenesis_sequence",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "frames": 4,
+            "frame_rate": 24.0,
+            "du": 0.16,
+            "dv": 0.08,
+            "feed": 0.037,
+            "kill": 0.06,
+            "dt": 1.0,
+            "substeps": 12,
+            "sim_scale": 2,
+            "seed_threshold": 0.5,
+            "seed": 71,
+            "param_map_strength": 1.0,
+            "pattern_mix": 0.85,
+            "displace": 0.0,
+            "pattern_hue": 0.02
+        }"#;
+
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize legacy-shaped task");
+        let RenderJobTask::RenderMorphogenesisSequence { output_view, .. } = task else {
+            panic!("expected morphogenesis task");
+        };
+        assert_eq!(output_view, "composite");
+    }
+
+    #[test]
     fn morphogenesis_task_round_trips_with_modulation() {
         let task = RenderJobTask::RenderMorphogenesisSequence {
             carrier_frame_directory: "/tmp/car".to_string(),
@@ -2177,6 +2225,9 @@ mod tests {
             displace: 0.0,
             pattern_hue: 0.02,
             pattern_color_mode: "hue".to_string(),
+            // Field View milestone: nonzero-from-default so the round-trip
+            // actually exercises the field, not just its default.
+            output_view: "field".to_string(),
             // Live Coupling L-S3: nonzero so the round-trip actually exercises
             // the new fields, not just their defaults.
             inject: 0.1,

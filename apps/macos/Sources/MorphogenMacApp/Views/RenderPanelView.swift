@@ -1310,6 +1310,17 @@ struct RenderPanelView: View {
             .frame(width: 160)
             .help("Named (feed, kill) atlas points — most of that space is dead (uniform grey).")
 
+            Picker("Output", selection: $state.morphogenesisOutputView) {
+              ForEach(MorphogenesisOutputViewOption.allCases) { view in
+                Text(view.rawValue).tag(view)
+              }
+            }
+            .frame(width: 160)
+            .help(
+              "Composite: the pattern-mix/displace look. Field: the raw V field, greyscale — "
+                + "the composite knobs below stay legal but inert in this view."
+            )
+
             Stepper(value: $state.morphogenesisPatternMix, in: 0...1, step: 0.05) {
               Text("Pattern Mix \(state.morphogenesisPatternMix, specifier: "%.2f")")
             }
