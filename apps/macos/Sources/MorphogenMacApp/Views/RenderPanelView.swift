@@ -1366,6 +1366,36 @@ struct RenderPanelView: View {
             .help("Gray-Scott substeps per output frame; 0 freezes the field at its seed.")
           }
 
+          HStack(spacing: 16) {
+            Stepper(value: $state.morphogenesisInject, in: 0...1, step: 0.01) {
+              Text("Inject \(state.morphogenesisInject, specifier: "%.2f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Per-frame V source strength; 0 = off (the pre-Live-Coupling behaviour).")
+
+            Stepper(value: $state.morphogenesisErode, in: 0...1, step: 0.01) {
+              Text("Erode \(state.morphogenesisErode, specifier: "%.2f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Per-frame V sink strength (the same weight field as Inject); 0 = off.")
+
+            if state.morphogenesisInject > 0 {
+              Picker("Inject Source", selection: $state.morphogenesisInjectSource) {
+                ForEach(MorphogenesisInjectSourceOption.allCases) { source in
+                  Text(source.rawValue).tag(source)
+                }
+              }
+              .frame(width: 190)
+              .help("Which weight field Inject/Erode read: bright regions (Luma) or motion.")
+            }
+
+            Stepper(value: $state.morphogenesisCoverageTarget, in: 0...1, step: 0.05) {
+              Text("Coverage Target \(state.morphogenesisCoverageTarget, specifier: "%.2f")")
+            }
+            .frame(width: 200, alignment: .leading)
+            .help("Homeostat target for mean(V); 0 = off (no coverage feedback).")
+          }
+
           ModulationSlotRow(
             label: "Feed",
             source: $state.morphogenesisModFeedSource,
@@ -1444,11 +1474,58 @@ struct RenderPanelView: View {
             midiCcNumber: $state.morphogenesisModDisplaceMidiCc
           )
 
+          ModulationSlotRow(
+            label: "Inject",
+            source: $state.morphogenesisModInjectSource,
+            scale: $state.morphogenesisModInjectScale,
+            offset: $state.morphogenesisModInjectOffset,
+            samplingOverride: $state.morphogenesisModInjectSamplingOverride,
+            modulator: $state.morphogenesisModInjectModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModInjectLfoShape,
+            lfoRate: $state.morphogenesisModInjectLfoRate,
+            lfoPhase: $state.morphogenesisModInjectLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModInjectMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Erode",
+            source: $state.morphogenesisModErodeSource,
+            scale: $state.morphogenesisModErodeScale,
+            offset: $state.morphogenesisModErodeOffset,
+            samplingOverride: $state.morphogenesisModErodeSamplingOverride,
+            modulator: $state.morphogenesisModErodeModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModErodeLfoShape,
+            lfoRate: $state.morphogenesisModErodeLfoRate,
+            lfoPhase: $state.morphogenesisModErodeLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModErodeMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Coverage Target",
+            source: $state.morphogenesisModCoverageTargetSource,
+            scale: $state.morphogenesisModCoverageTargetScale,
+            offset: $state.morphogenesisModCoverageTargetOffset,
+            samplingOverride: $state.morphogenesisModCoverageTargetSamplingOverride,
+            modulator: $state.morphogenesisModCoverageTargetModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModCoverageTargetLfoShape,
+            lfoRate: $state.morphogenesisModCoverageTargetLfoRate,
+            lfoPhase: $state.morphogenesisModCoverageTargetLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModCoverageTargetMidiCc
+          )
+
           ModulationMediaRow(
             sources: [
               state.morphogenesisModFeedSource, state.morphogenesisModKillSource,
               state.morphogenesisModParamMapStrengthSource, state.morphogenesisModPatternMixSource,
               state.morphogenesisModDisplaceSource,
+              state.morphogenesisModInjectSource, state.morphogenesisModErodeSource,
+              state.morphogenesisModCoverageTargetSource,
             ],
             audioURL: state.morphogenesisModulatorAudioURL,
             framesURL: state.morphogenesisModulatorFramesURL,

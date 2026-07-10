@@ -1947,6 +1947,10 @@ fn run() -> Result<(), CliError> {
             seed_threshold,
             seed,
             param_map_strength,
+            inject,
+            erode,
+            inject_source,
+            coverage_target,
             pattern_mix,
             displace,
             pattern_hue,
@@ -1993,6 +1997,10 @@ fn run() -> Result<(), CliError> {
             if let Some(param_map_strength) = param_map_strength {
                 settings.param_map_strength = param_map_strength;
             }
+            settings.inject = inject;
+            settings.erode = erode;
+            settings.inject_source = inject_source.into();
+            settings.coverage_target = coverage_target;
             let composite = MorphogenesisCompositeSettings {
                 pattern_mix,
                 displace,

@@ -1,7 +1,9 @@
 # Morphogenesis Live Coupling — perpetual growth driven by every frame
 
-Status: **IN PROGRESS — L-S1 DONE (2026-07-09, cargo 693→711/0); L-S2
-(homeostat + mod targets) and L-S3 (queue + SwiftUI + showcase) pending.**
+Status: **MILESTONE COMPLETE (2026-07-10) — L-S1–L-S3 built and verified.**
+Final: cargo **724/0**, swift **150/0**. The freeze is fixed: late-window
+field motion 0.130 → 1.091/255 at the recommended knobs (ratio 0.08 → 0.75),
+and `inject = audio-rms` makes the growth surge with the soundtrack.
 Written 2026-07-09 from the user's observation on the first showcase renders:
 *"it animates for ~4 seconds, then it's static when the cells fill the
 screen — is there a way to update the reaction-diffusion with each new frame?
@@ -213,10 +215,18 @@ the checkpoint contract exactly like the S3 targets.
   across the stage floor, quiet lull 8 frames later = sparse flecks — the
   growth surges and decays in lockstep with the music (frames
   orchestrator-Read).)
-- **L-S3 — queue + SwiftUI + showcase.** The three knobs on the queue task
-  (serde-default, add→run byte-identity) and panel steppers + mod slots;
-  final showcase render for the user (field view + composite, 6 s, audio
-  muxed — the orchestrator delivers it with SendUserFile).
+- **L-S3 — queue + SwiftUI + showcase. DONE (2026-07-10,** Sonnet build to
+  one Swift arg-order error from completion (session limit), orchestrator
+  fixed + verified: cargo 723 → **724/0**, swift 147 → **150/0**, clippy
+  clean, zero new fmt diffs. Queue task persists inject/erode/inject-source/
+  coverage-target (serde-default; the L-S1/L-S2 compile-fix literals replaced
+  with real threading); add→run byte-identical pinned by smoke
+  (`queue_morphogenesis_live_coupling_matches_direct_and_records_knobs`,
+  incl. a routed inject) AND re-proven live (`diff -r` empty, 24 cello
+  frames at inject .1/erode .03). SwiftUI "Alive" row on the Morphogenesis
+  panel (inject/erode steppers, source picker, coverage stepper) + the three
+  new mod-slot targets; no-live-coupling arg arrays byte-identical (pinned).
+  Showcase delivered to the user (composite; the raw-field cut follows).)
 
 ## Deferred (listed so nobody scope-creeps)
 

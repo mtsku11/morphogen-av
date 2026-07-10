@@ -573,6 +573,12 @@ final class AppState: ObservableObject {
   @Published var morphogenesisSeedThreshold = 0.5
   @Published var morphogenesisSimScale = 2
   @Published var morphogenesisSubsteps = 12
+  // Live Coupling L-S3 (docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md) — the
+  // "Alive" knobs; all default off/0, matching a pre-milestone render.
+  @Published var morphogenesisInject = 0.0
+  @Published var morphogenesisErode = 0.0
+  @Published var morphogenesisInjectSource = MorphogenesisInjectSourceOption.motion
+  @Published var morphogenesisCoverageTarget = 0.0
   @Published var morphogenesisSummary = "No morphogenesis sequence rendered"
   @Published var morphogenesisModFeedSource = ModulationSourceOption.off
   @Published var morphogenesisModFeedScale = 0.014
@@ -620,6 +626,34 @@ final class AppState: ObservableObject {
   @Published var morphogenesisModDisplaceLfoRate = 1.0
   @Published var morphogenesisModDisplaceLfoPhase = 0.0
   @Published var morphogenesisModDisplaceMidiCc = 74
+  @Published var morphogenesisModInjectSource = ModulationSourceOption.off
+  @Published var morphogenesisModInjectScale = 1.0
+  @Published var morphogenesisModInjectOffset = 0.0
+  @Published var morphogenesisModInjectSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModInjectModulator = ""
+  @Published var morphogenesisModInjectLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModInjectLfoRate = 1.0
+  @Published var morphogenesisModInjectLfoPhase = 0.0
+  @Published var morphogenesisModInjectMidiCc = 74
+  @Published var morphogenesisModErodeSource = ModulationSourceOption.off
+  @Published var morphogenesisModErodeScale = 1.0
+  @Published var morphogenesisModErodeOffset = 0.0
+  @Published var morphogenesisModErodeSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModErodeModulator = ""
+  @Published var morphogenesisModErodeLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModErodeLfoRate = 1.0
+  @Published var morphogenesisModErodeLfoPhase = 0.0
+  @Published var morphogenesisModErodeMidiCc = 74
+  @Published var morphogenesisModCoverageTargetSource = ModulationSourceOption.off
+  @Published var morphogenesisModCoverageTargetScale = 1.0
+  @Published var morphogenesisModCoverageTargetOffset = 0.0
+  @Published var morphogenesisModCoverageTargetSamplingOverride =
+    ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModCoverageTargetModulator = ""
+  @Published var morphogenesisModCoverageTargetLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModCoverageTargetLfoRate = 1.0
+  @Published var morphogenesisModCoverageTargetLfoPhase = 0.0
+  @Published var morphogenesisModCoverageTargetMidiCc = 74
   @Published var morphogenesisModulatorAudioURL: URL?
   @Published var morphogenesisModulatorFramesURL: URL?
   @Published var morphogenesisModulatorMidiURL: URL?
@@ -2862,6 +2896,11 @@ final class AppState: ObservableObject {
     }
     if morphogenesisModPatternMixModulator == name { morphogenesisModPatternMixModulator = "" }
     if morphogenesisModDisplaceModulator == name { morphogenesisModDisplaceModulator = "" }
+    if morphogenesisModInjectModulator == name { morphogenesisModInjectModulator = "" }
+    if morphogenesisModErodeModulator == name { morphogenesisModErodeModulator = "" }
+    if morphogenesisModCoverageTargetModulator == name {
+      morphogenesisModCoverageTargetModulator = ""
+    }
   }
 
   var datamoshDeclaredModulatorNames: [String] {
@@ -3757,6 +3796,21 @@ final class AppState: ObservableObject {
           morphogenesisModDisplaceScale, morphogenesisModDisplaceOffset,
           morphogenesisModDisplaceSamplingOverride
         ),
+        (
+          "inject", morphogenesisModInjectSource,
+          morphogenesisModInjectScale, morphogenesisModInjectOffset,
+          morphogenesisModInjectSamplingOverride
+        ),
+        (
+          "erode", morphogenesisModErodeSource,
+          morphogenesisModErodeScale, morphogenesisModErodeOffset,
+          morphogenesisModErodeSamplingOverride
+        ),
+        (
+          "coverage_target", morphogenesisModCoverageTargetSource,
+          morphogenesisModCoverageTargetScale, morphogenesisModCoverageTargetOffset,
+          morphogenesisModCoverageTargetSamplingOverride
+        ),
       ],
       modulatorAudioURL: morphogenesisModulatorAudioURL,
       modulatorFramesURL: morphogenesisModulatorFramesURL,
@@ -3766,6 +3820,8 @@ final class AppState: ObservableObject {
         morphogenesisModFeedModulator, morphogenesisModKillModulator,
         morphogenesisModParamMapStrengthModulator, morphogenesisModPatternMixModulator,
         morphogenesisModDisplaceModulator,
+        morphogenesisModInjectModulator, morphogenesisModErodeModulator,
+        morphogenesisModCoverageTargetModulator,
       ],
       slotLfos: [
         (morphogenesisModFeedLfoShape, morphogenesisModFeedLfoRate, morphogenesisModFeedLfoPhase),
@@ -3782,11 +3838,25 @@ final class AppState: ObservableObject {
           morphogenesisModDisplaceLfoShape, morphogenesisModDisplaceLfoRate,
           morphogenesisModDisplaceLfoPhase
         ),
+        (
+          morphogenesisModInjectLfoShape, morphogenesisModInjectLfoRate,
+          morphogenesisModInjectLfoPhase
+        ),
+        (
+          morphogenesisModErodeLfoShape, morphogenesisModErodeLfoRate,
+          morphogenesisModErodeLfoPhase
+        ),
+        (
+          morphogenesisModCoverageTargetLfoShape, morphogenesisModCoverageTargetLfoRate,
+          morphogenesisModCoverageTargetLfoPhase
+        ),
       ],
       slotMidiCcNumbers: [
         morphogenesisModFeedMidiCc, morphogenesisModKillMidiCc,
         morphogenesisModParamMapStrengthMidiCc, morphogenesisModPatternMixMidiCc,
         morphogenesisModDisplaceMidiCc,
+        morphogenesisModInjectMidiCc, morphogenesisModErodeMidiCc,
+        morphogenesisModCoverageTargetMidiCc,
       ],
       effectLabel: "morphogenesis"
     ) else { return }
@@ -3807,6 +3877,10 @@ final class AppState: ObservableObject {
       patternHue: morphogenesisPatternHue,
       patternColorMode: morphogenesisPatternColorMode,
       projectURL: projectURL,
+      inject: morphogenesisInject,
+      erode: morphogenesisErode,
+      injectSource: morphogenesisInjectSource,
+      coverageTarget: morphogenesisCoverageTarget,
       modulationRoutes: routes,
       modulatorAudioURL: morphogenesisModulatorAudioURL,
       modulatorFramesURL: morphogenesisModulatorFramesURL,
@@ -5265,6 +5339,23 @@ enum MorphogenesisColorModeOption: String, CaseIterable, Identifiable {
     switch self {
     case .hue: return "hue"
     case .inherit: return "inherit"
+    }
+  }
+}
+
+/// `--inject-source` (Tier "Morphogenesis Live Coupling" L-S1/L-S3,
+/// docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md): which weight field
+/// `--inject`/`--erode` read.
+enum MorphogenesisInjectSourceOption: String, CaseIterable, Identifiable {
+  case luma = "Luma"
+  case motion = "Motion"
+
+  var id: String { rawValue }
+
+  var cliValue: String {
+    switch self {
+    case .luma: return "luma"
+    case .motion: return "motion"
     }
   }
 }

@@ -2198,6 +2198,70 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertFalse(arguments.contains("--modulation-sampling"))
   }
 
+  func testQueuedMorphogenesisSequenceDefaultLiveCouplingKeepsArgumentsByteIdentical() throws {
+    // Live Coupling L-S3: inject/erode/coverage-target default to 0 and
+    // inject-source to Motion — none of the four flags should ever appear
+    // unless the panel actually moves a knob (the
+    // testQueuedMorphogenesisSequenceArgumentsIncludeKnobs pin covers the
+    // exact no-live-coupling array).
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: makeMorphogenesisRequest()
+    )
+    XCTAssertFalse(arguments.contains("--inject"))
+    XCTAssertFalse(arguments.contains("--erode"))
+    XCTAssertFalse(arguments.contains("--inject-source"))
+    XCTAssertFalse(arguments.contains("--coverage-target"))
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsIncludeLiveCouplingKnobsWhenActive() throws {
+    var request = makeMorphogenesisRequest()
+    request.inject = 0.1
+    request.erode = 0.03
+    request.injectSource = .luma
+    request.coverageTarget = 0.3
+
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: request
+    )
+
+    guard let injectIndex = arguments.firstIndex(of: "--inject") else {
+      return XCTFail("expected an --inject flag")
+    }
+    XCTAssertEqual(arguments[injectIndex + 1], "0.1")
+    guard let erodeIndex = arguments.firstIndex(of: "--erode") else {
+      return XCTFail("expected an --erode flag")
+    }
+    XCTAssertEqual(arguments[erodeIndex + 1], "0.03")
+    guard let sourceIndex = arguments.firstIndex(of: "--inject-source") else {
+      return XCTFail("expected an --inject-source flag")
+    }
+    XCTAssertEqual(arguments[sourceIndex + 1], "luma")
+    guard let coverageIndex = arguments.firstIndex(of: "--coverage-target") else {
+      return XCTFail("expected a --coverage-target flag")
+    }
+    XCTAssertEqual(arguments[coverageIndex + 1], "0.3")
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsRejectOutOfRangeLiveCouplingKnobs() {
+    var invalidInject = makeMorphogenesisRequest()
+    invalidInject.inject = 1.5
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidInject)
+    )
+
+    var invalidErode = makeMorphogenesisRequest()
+    invalidErode.erode = -0.1
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidErode)
+    )
+
+    var invalidCoverage = makeMorphogenesisRequest()
+    invalidCoverage.coverageTarget = 1.1
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidCoverage)
+    )
+  }
+
   func testQueuedMorphogenesisSequenceArgumentsRejectInvalidValues() {
     let base = makeMorphogenesisRequest()
 

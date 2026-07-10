@@ -166,6 +166,14 @@ fn default_morphogenesis_pattern_color_mode() -> String {
     "hue".to_string()
 }
 
+/// Live Coupling L-S1 `inject`/`erode` weight-field source label; mirrors
+/// `morphogen_render::InjectSource`'s default (`Motion`). Same display-label
+/// convention as `pattern_color_mode` above — `morphogen-core` doesn't depend
+/// on `morphogen-render`'s enum, so the resolved label is the wire format.
+fn default_morphogenesis_inject_source() -> String {
+    "motion".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -1325,6 +1333,23 @@ pub enum RenderJobTask {
         /// `hue` or `inherit`.
         #[serde(default = "default_morphogenesis_pattern_color_mode")]
         pattern_color_mode: String,
+        /// Live Coupling L-S1 (`docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`)
+        /// per-frame source strength: `V += inject * w` each frame. `0` = off,
+        /// matching a pre-milestone job (`#[serde(default)]`).
+        #[serde(default)]
+        inject: f32,
+        /// Live Coupling L-S1 per-frame sink strength: `V *= (1 - erode * (1
+        /// - w))`, the same `w` as `inject`. `0` = off.
+        #[serde(default)]
+        erode: f32,
+        /// Which weight field `inject`/`erode` read: `"luma"` or `"motion"`
+        /// (display label only, same convention as `pattern_color_mode`).
+        #[serde(default = "default_morphogenesis_inject_source")]
+        inject_source: String,
+        /// Live Coupling L-S2 global negative-feedback homeostat target for
+        /// mean(V) coverage, `[0, 1]`. `0` = off.
+        #[serde(default)]
+        coverage_target: f32,
         /// Persisted modulation routes (empty = unmodulated). Envelope times
         /// are sampled against this job's `frame_rate`. Stateful: routes join
         /// the render's checkpoint contract.
@@ -2102,6 +2127,10 @@ mod tests {
         let RenderJobTask::RenderMorphogenesisSequence {
             preset,
             pattern_color_mode,
+            inject,
+            erode,
+            inject_source,
+            coverage_target,
             modulation_routes,
             named_modulator_audio,
             named_modulator_frames,
@@ -2113,6 +2142,13 @@ mod tests {
         };
         assert_eq!(preset, "coral");
         assert_eq!(pattern_color_mode, "hue");
+        // Live Coupling L-S3: pre-slice queue JSON (predating inject/erode/
+        // inject_source/coverage_target entirely) still parses, defaulting to
+        // the off/motion values that reproduce a pre-milestone render.
+        assert_eq!(inject, 0.0);
+        assert_eq!(erode, 0.0);
+        assert_eq!(inject_source, "motion");
+        assert_eq!(coverage_target, 0.0);
         assert!(modulation_routes.is_empty());
         assert!(named_modulator_audio.is_empty());
         assert!(named_modulator_frames.is_empty());
@@ -2141,6 +2177,12 @@ mod tests {
             displace: 0.0,
             pattern_hue: 0.02,
             pattern_color_mode: "hue".to_string(),
+            // Live Coupling L-S3: nonzero so the round-trip actually exercises
+            // the new fields, not just their defaults.
+            inject: 0.1,
+            erode: 0.03,
+            inject_source: "luma".to_string(),
+            coverage_target: 0.3,
             modulation_routes: vec![RenderJobModulationRoute {
                 target: "feed".to_string(),
                 source: ModulationSource::AudioRms,

@@ -2431,6 +2431,15 @@ enum RustBridgePlaceholder {
     guard request.seedThreshold.isFinite && (0...1).contains(request.seedThreshold) else {
       throw RustBridgeError.invalidFrameSequenceRequest("seed threshold must be finite and in [0, 1]")
     }
+    guard request.inject.isFinite && (0...1).contains(request.inject) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("inject must be finite and in [0, 1]")
+    }
+    guard request.erode.isFinite && (0...1).contains(request.erode) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("erode must be finite and in [0, 1]")
+    }
+    guard request.coverageTarget.isFinite && (0...1).contains(request.coverageTarget) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("coverage target must be finite and in [0, 1]")
+    }
 
     var arguments = [
       "cargo",
@@ -2467,6 +2476,28 @@ enum RustBridgePlaceholder {
       "--pattern-color-mode",
       request.patternColorMode.cliValue
     ]
+    // Live Coupling L-S3: only emit a flag when it differs from the
+    // pre-Live-Coupling default, so an unmodified panel keeps the exact
+    // byte-identical unmodulated argument array (pinned by
+    // testQueuedMorphogenesisSequenceNoModulationKeepsArgumentsByteIdentical).
+    if request.inject > 0 {
+      arguments.append("--inject")
+      arguments.append(cliNumber(request.inject))
+    }
+    if request.erode > 0 {
+      arguments.append("--erode")
+      arguments.append(cliNumber(request.erode))
+    }
+    // `--inject-source` is only meaningful when inject or erode is active;
+    // still gated on non-default so an untouched picker never appends it.
+    if (request.inject > 0 || request.erode > 0) && request.injectSource != .motion {
+      arguments.append("--inject-source")
+      arguments.append(request.injectSource.cliValue)
+    }
+    if request.coverageTarget > 0 {
+      arguments.append("--coverage-target")
+      arguments.append(cliNumber(request.coverageTarget))
+    }
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
       arguments.append(projectURL.path)
@@ -4208,6 +4239,14 @@ struct MorphogenesisSequenceRenderQueueCommandRequest {
   let patternHue: Double
   let patternColorMode: MorphogenesisColorModeOption
   let projectURL: URL?
+  // Live Coupling L-S3 (docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md);
+  // defaulted off so call sites predating this slice keep their unmodulated,
+  // pre-Live-Coupling meaning (the flags are only emitted when nonzero/
+  // non-default — see queueAddMorphogenesisSequenceArguments).
+  var inject: Double = 0.0
+  var erode: Double = 0.0
+  var injectSource: MorphogenesisInjectSourceOption = .motion
+  var coverageTarget: Double = 0.0
   // Modulation-matrix routes; defaulted off so call sites predating this
   // slice keep their unmodulated meaning.
   var modulationRoutes: [ModulationRouteSpec] = []

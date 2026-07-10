@@ -6604,6 +6604,22 @@ fn parse_morphogenesis_pattern_color_mode(label: &str) -> PatternColorMode {
     }
 }
 
+/// Live Coupling L-S1 `inject`/`erode` weight-field source label; same
+/// display-label convention as `morphogenesis_pattern_color_mode_label`.
+fn morphogenesis_inject_source_label(source: InjectSource) -> String {
+    match source {
+        InjectSource::Luma => "luma".to_string(),
+        InjectSource::Motion => "motion".to_string(),
+    }
+}
+
+fn parse_morphogenesis_inject_source(label: &str) -> InjectSource {
+    match label {
+        "luma" => InjectSource::Luma,
+        _ => InjectSource::Motion,
+    }
+}
+
 pub(crate) struct QueueAddMorphogenesisSequenceRequest<'a> {
     pub(crate) queue_path: &'a Path,
     pub(crate) source_b_dir: &'a Path,
@@ -6703,6 +6719,10 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             pattern_color_mode: morphogenesis_pattern_color_mode_label(
                 composite.pattern_color_mode,
             ),
+            inject: settings.inject,
+            erode: settings.erode,
+            inject_source: morphogenesis_inject_source_label(settings.inject_source),
+            coverage_target: settings.coverage_target,
             modulation_routes: modulation.routes,
             modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
             modulator_frames_directory: modulator_frames.map(|p| p.to_string_lossy().to_string()),
@@ -6771,6 +6791,10 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         seed_threshold,
         seed,
         param_map_strength,
+        inject,
+        erode,
+        inject_source,
+        coverage_target,
         pattern_mix,
         displace,
         pattern_hue,
@@ -6810,13 +6834,13 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         seed_threshold,
         seed,
         param_map_strength,
-        // Live Coupling L-S1/L-S2 (`docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`)
-        // isn't exposed on the queue task yet (L-S3 scope) — queue-run jobs
-        // stay at the off defaults, matching a pre-milestone direct render.
-        inject: 0.0,
-        erode: 0.0,
-        inject_source: InjectSource::Motion,
-        coverage_target: 0.0,
+        // Live Coupling L-S1/L-S2 (`docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`),
+        // exposed on the queue task since L-S3: the persisted job fields are
+        // the real source of truth, matching the direct CLI's settings.
+        inject,
+        erode,
+        inject_source: parse_morphogenesis_inject_source(&inject_source),
+        coverage_target,
     };
     let composite = MorphogenesisCompositeSettings {
         pattern_mix,

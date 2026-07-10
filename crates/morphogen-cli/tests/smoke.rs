@@ -9865,6 +9865,133 @@ fn queue_add_morphogenesis_sequence_rejects_invalid_settings_before_persisting()
     );
 }
 
+/// Live Coupling L-S3 (`docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`):
+/// `--inject`/`--erode`/`--inject-source`/`--coverage-target` on the queue
+/// task, threaded all the way through `queue-run` (replacing the L-S1/L-S2
+/// compile-fix literals), stay add→run byte-identical with the direct CLI —
+/// including a routed `inject` target, proving the checkpoint contract carries
+/// both the resolved knobs and the route.
+#[test]
+fn queue_morphogenesis_live_coupling_matches_direct_and_records_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let carrier_dir = temp_dir.path().join("carrier-frames");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "generate-frames",
+            "radial",
+            carrier_dir.to_string_lossy().as_ref(),
+            "--width",
+            "24",
+            "--height",
+            "16",
+            "--frames",
+            "4",
+            "--rate",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    let modulator_wav = temp_dir.path().join("ramp.wav");
+    let ramp: Vec<f32> = (0..6144)
+        .map(|i| (i as f32 / 6144.0) * (i as f32 * 0.4).sin())
+        .collect();
+    write_test_wav_at(&modulator_wav, 8192, &ramp);
+
+    let carrier_arg = carrier_dir.to_string_lossy().to_string();
+    let wav_arg = modulator_wav.to_string_lossy().to_string();
+    let route = "inject=audio-rms:0.05,0.05";
+
+    // Direct render: inject/erode/inject-source/coverage-target active, plus
+    // a routed inject target.
+    let direct_dir = temp_dir.path().join("direct");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-morphogenesis-sequence",
+            carrier_arg.as_str(),
+            direct_dir.to_string_lossy().as_ref(),
+            "--frames",
+            "4",
+            "--preset",
+            "coral",
+            "--frame-rate",
+            "4",
+            "--inject",
+            "0.1",
+            "--erode",
+            "0.03",
+            "--inject-source",
+            "luma",
+            "--coverage-target",
+            "0.3",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+
+    let queue_path = temp_dir.path().join("queue.json");
+    let queue_arg = queue_path.to_string_lossy().to_string();
+    let output_root = temp_dir.path().join("out");
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "queue-add-morphogenesis-sequence",
+            queue_arg.as_str(),
+            carrier_arg.as_str(),
+            output_root.to_string_lossy().as_ref(),
+            "--frames",
+            "4",
+            "--preset",
+            "coral",
+            "--frame-rate",
+            "4",
+            "--inject",
+            "0.1",
+            "--erode",
+            "0.03",
+            "--inject-source",
+            "luma",
+            "--coverage-target",
+            "0.3",
+            "--modulate",
+            route,
+            "--modulator-audio",
+            wav_arg.as_str(),
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["queue-run-morphogenesis-sequence", queue_arg.as_str()])
+        .assert()
+        .success();
+
+    let job_frames = output_root.join("job-0001/frames");
+    assert_png_frames_identical(&direct_dir.join("frames"), &job_frames, 4);
+
+    let manifest = read_json(&output_root.join("job-0001/manifest.json"));
+    assert_eq!(manifest["algorithm"], "morphogenesis_cpu_v1");
+    assert_eq!(manifest["task"], "render_morphogenesis_sequence");
+
+    // The checkpoint contract carries the resolved live-coupling knobs and
+    // the routed inject target — a re-run with a different inject/erode
+    // value would refuse to resume (mirrors the S3 param-map precedent).
+    let checkpoint = read_json(&output_root.join("job-0001/checkpoint.json"));
+    let contract = &checkpoint["contract"];
+    assert_eq!(contract["settings"]["inject"], 0.1);
+    assert_eq!(contract["settings"]["erode"], 0.03);
+    assert_eq!(contract["settings"]["coverage_target"], 0.3);
+    let modulation = &contract["modulation"];
+    assert_eq!(modulation["routes"][0]["target"], "inject");
+    assert_eq!(modulation["routes"][0]["source"], "audio-rms");
+}
+
 #[test]
 fn queue_datamosh_modulated_matches_direct_and_records_routes() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");

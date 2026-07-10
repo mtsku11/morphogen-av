@@ -3747,6 +3747,25 @@ pub(crate) enum Commands {
         /// sim. Overrides the preset when given.
         #[arg(long)]
         param_map_strength: Option<f32>,
+        /// Live Coupling L-S1 per-frame source strength: `V += inject * w`
+        /// each frame, `w` chosen by `--inject-source`. `0` = off (anchor
+        /// L1). See `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`.
+        #[arg(long, default_value_t = 0.0)]
+        inject: f32,
+        /// Live Coupling L-S1 per-frame sink strength: `V *= (1 - erode *
+        /// (1 - w))`, same `w` as `--inject`. `0` = off.
+        #[arg(long, default_value_t = 0.0)]
+        erode: f32,
+        /// Which weight field `--inject`/`--erode` read: `luma` (bright
+        /// regions feed growth) or `motion` (frame-to-frame luma diff — the
+        /// default). Only meaningful when `--inject`/`--erode` > 0.
+        #[arg(long, value_enum, default_value_t = CliMorphogenesisInjectSource::Motion)]
+        inject_source: CliMorphogenesisInjectSource,
+        /// Live Coupling L-S2 global negative-feedback homeostat target for
+        /// mean(V) coverage, `[0, 1]`. `0` = off (no mean(V) computation).
+        /// See `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`.
+        #[arg(long, default_value_t = 0.0)]
+        coverage_target: f32,
         /// `[0,1]`: strength of the `V`-weighted colourize tint. `0` = the
         /// (possibly displaced) carrier passes through unmodified.
         #[arg(long, default_value_t = 0.85)]
@@ -3765,7 +3784,8 @@ pub(crate) enum Commands {
         #[arg(long)]
         project_path: Option<PathBuf>,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
-        /// Targets: feed, kill, param_map_strength, pattern_mix, displace.
+        /// Targets: feed, kill, param_map_strength, pattern_mix, displace,
+        /// inject, erode, coverage_target.
         /// Persisted on the job (they join the render's checkpoint contract);
         /// envelope times sample against the job's --frame-rate.
         #[arg(long = "modulate")]
