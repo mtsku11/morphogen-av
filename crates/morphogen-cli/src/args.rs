@@ -14,10 +14,10 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    BlendMode, CoagulationFlowSource, GeneratorPreset, InjectSource, MatteSource,
-    ModulationSampling, MorphogenesisPreset, OutputView, PatternColorMode, ScanlineFilter,
-    StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM, CONVOLUTION_BLEND_COLOR_ALGORITHM,
-    GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
+    BlendMode, CoagulationFlowSource, FhnPreset, GeneratorPreset, InjectSource, MatteSource,
+    ModulationSampling, MorphogenesisModel, MorphogenesisPreset, OutputView, PatternColorMode,
+    ScanlineFilter, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
+    CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
 #[command(name = "morphogen")]
@@ -2123,9 +2123,38 @@ pub(crate) enum Commands {
         output_dir: PathBuf,
         #[arg(long, default_value_t = 60)]
         frames: u32,
+        /// Track A1 (`docs/MORPHOGENESIS_FHN_MILESTONE.md`): which field
+        /// model to run. `du`/`dt`/`substeps`/`sim-scale`/`seed-threshold`/
+        /// `seed`/`inject`/`inject-source` are shared knob names that write
+        /// to whichever model's settings is active; `feed`/`kill`/
+        /// `param-map-strength`/`erode`/`coverage-target` are Gray-Scott
+        /// only, `--fhn-*` are FitzHugh-Nagumo only.
+        #[arg(long, value_enum, default_value_t = CliMorphogenesisModel::GrayScott)]
+        model: CliMorphogenesisModel,
         #[arg(long, value_enum, default_value_t = CliMorphogenesisPreset::Coral)]
         preset: CliMorphogenesisPreset,
-        /// `U` diffusion rate. Overrides the preset when given.
+        /// FitzHugh-Nagumo named preset (only consulted when `--model
+        /// fitzhugh-nagumo`).
+        #[arg(long, value_enum, default_value_t = CliFhnPreset::Pulse)]
+        fhn_preset: CliFhnPreset,
+        /// FHN recovery time-scale separation (`ε`). Overrides the FHN
+        /// preset when given.
+        #[arg(long)]
+        fhn_epsilon: Option<f32>,
+        /// FHN nullcline shape parameter `a`. Overrides the FHN preset when
+        /// given.
+        #[arg(long)]
+        fhn_a: Option<f32>,
+        /// FHN nullcline shape parameter `b`. Overrides the FHN preset when
+        /// given.
+        #[arg(long)]
+        fhn_b: Option<f32>,
+        /// FHN stimulus: how far above resting `u` a seeded/injected cell is
+        /// pushed. Overrides the FHN preset when given.
+        #[arg(long)]
+        fhn_stimulus: Option<f32>,
+        /// `U` diffusion rate (Gray-Scott) / FHN's `Du`. Overrides the preset
+        /// when given.
         #[arg(long)]
         du: Option<f32>,
         /// `V` diffusion rate. Overrides the preset when given.
@@ -2137,15 +2166,16 @@ pub(crate) enum Commands {
         /// Kill rate. Overrides the preset when given.
         #[arg(long)]
         kill: Option<f32>,
-        /// Per-substep integration step. Overrides the preset when given.
+        /// Per-substep integration step (both models). Overrides the preset
+        /// when given.
         #[arg(long)]
         dt: Option<f32>,
-        /// Gray-Scott substeps per output frame. `0` freezes the field
+        /// Substeps per output frame, both models. `0` freezes the field
         /// (anchor A2). Overrides the preset when given.
         #[arg(long)]
         substeps: Option<u32>,
-        /// Sim resolution divisor relative to the carrier frame. Overrides
-        /// the preset when given.
+        /// Sim resolution divisor relative to the carrier frame, both
+        /// models. Overrides the preset when given.
         #[arg(long)]
         sim_scale: Option<u32>,
         /// Frame-zero seed threshold: carrier luma >= this seeds V.
@@ -4008,6 +4038,42 @@ impl From<CliMorphogenesisPreset> for MorphogenesisPreset {
             CliMorphogenesisPreset::Mitosis => Self::Mitosis,
             CliMorphogenesisPreset::Worms => Self::Worms,
             CliMorphogenesisPreset::Spots => Self::Spots,
+        }
+    }
+}
+
+/// Track A1 `--model` (see [`MorphogenesisModel`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub(crate) enum CliMorphogenesisModel {
+    #[default]
+    GrayScott,
+    FitzhughNagumo,
+}
+
+impl From<CliMorphogenesisModel> for MorphogenesisModel {
+    fn from(value: CliMorphogenesisModel) -> Self {
+        match value {
+            CliMorphogenesisModel::GrayScott => Self::GrayScott,
+            CliMorphogenesisModel::FitzhughNagumo => Self::FitzhughNagumo,
+        }
+    }
+}
+
+/// Track A1 `--fhn-preset` (see [`FhnPreset`]).
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliFhnPreset {
+    #[default]
+    Pulse,
+    Spiral,
+    Labyrinth,
+}
+
+impl From<CliFhnPreset> for FhnPreset {
+    fn from(value: CliFhnPreset) -> Self {
+        match value {
+            CliFhnPreset::Pulse => Self::Pulse,
+            CliFhnPreset::Spiral => Self::Spiral,
+            CliFhnPreset::Labyrinth => Self::Labyrinth,
         }
     }
 }

@@ -71,14 +71,14 @@ use morphogen_render::{
     ModulationRoute, ModulationSampling,
 };
 use morphogen_render::{
-    advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
-    apply_coverage_homeostat, apply_inject_erode, composite_morphogenesis_frame,
+    advance_fhn_frame, advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
+    apply_coverage_homeostat, apply_inject_erode, composite_morphogenesis_frame, fhn_display_field,
     injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
-    morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
-    render_v_field_grayscale, render_v_field_grayscale_upsampled_with_shading,
-    sample_carrier_luma_at_sim_resolution, seed_morphogenesis_field, InjectSource,
-    MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisSettings, OutputView,
-    MORPHOGENESIS_ALGORITHM,
+    morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f, render_v_field_grayscale,
+    render_v_field_grayscale_upsampled_with_shading, sample_carrier_luma_at_sim_resolution,
+    seed_fhn_field, seed_morphogenesis_field, FhnSettings, InjectSource,
+    MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisModel, MorphogenesisSettings,
+    OutputView, MORPHOGENESIS_ALGORITHM, MORPHOGENESIS_FHN_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -7468,7 +7468,23 @@ pub(crate) struct MorphogenesisSequenceContract {
     version: u32,
     algorithm: String,
     source: FeedbackSequenceSourceFingerprint,
+    /// Track A1 (`docs/MORPHOGENESIS_FHN_MILESTONE.md`): which field model
+    /// this render used. `#[serde(default)]` (`GrayScott`) so every pre-A1
+    /// checkpoint (no `model` key) deserializes as Gray-Scott and stays
+    /// resumable (anchor FHN0); a changed `model` also changes `algorithm`
+    /// (see [`MORPHOGENESIS_FHN_ALGORITHM`]), so either field alone would
+    /// already refuse a cross-model resume — both are kept for a legible
+    /// manifest/checkpoint.
+    #[serde(default)]
+    model: MorphogenesisModel,
     settings: MorphogenesisSettings,
+    /// Track A1: FHN's own settings. Always present (mirrors
+    /// `render_job.rs`'s flattened-queue-task precedent of always-present,
+    /// model-selects-meaning fields) but only authoritative when `model ==
+    /// FitzhughNagumo`. `#[serde(default)]` so pre-A1 checkpoints deserialize
+    /// with the inert default.
+    #[serde(default)]
+    fhn_settings: FhnSettings,
     composite: MorphogenesisCompositeSettings,
     width: u32,
     height: u32,
@@ -7610,7 +7626,11 @@ pub(crate) struct MorphogenesisSequenceRenderRequest<'a> {
     pub(crate) source_b_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
     pub(crate) frames: u32,
+    /// Track A1: which field model this render uses.
+    pub(crate) model: MorphogenesisModel,
     pub(crate) settings: MorphogenesisSettings,
+    /// Track A1: only consulted when `model == FitzhughNagumo`.
+    pub(crate) fhn_settings: FhnSettings,
     pub(crate) composite: MorphogenesisCompositeSettings,
     /// Field View milestone: which representation the output frames are
     /// (`OutputView::Composite` = pre-milestone S2 output, the default).
@@ -7636,7 +7656,9 @@ pub(crate) fn render_morphogenesis_sequence(
         source_b_dir,
         output_dir,
         frames,
+        model,
         settings,
+        fhn_settings,
         composite,
         output_view,
         job_id,
@@ -7646,6 +7668,7 @@ pub(crate) fn render_morphogenesis_sequence(
     } = request;
 
     settings.validate()?;
+    fhn_settings.validate()?;
     composite.validate()?;
     if frames == 0 {
         return Err(CliError::Message(
@@ -7671,10 +7694,14 @@ pub(crate) fn render_morphogenesis_sequence(
     })?;
 
     let carrier_frame_zero = load_image_f32(&carrier_frames[0])?;
+    let sim_scale = match model {
+        MorphogenesisModel::GrayScott => settings.sim_scale,
+        MorphogenesisModel::FitzhughNagumo => fhn_settings.sim_scale,
+    };
     let (sim_width, sim_height) = morphogenesis_field_dimensions(
         carrier_frame_zero.width,
         carrier_frame_zero.height,
-        settings.sim_scale,
+        sim_scale,
     );
 
     // S3: routes span both the chemistry (feed/kill/param_map_strength) and
@@ -7701,11 +7728,17 @@ pub(crate) fn render_morphogenesis_sequence(
         .map(|plan| feedback_modulation_contract(plan, &modulation))
         .transpose()?;
 
+    let algorithm = match model {
+        MorphogenesisModel::GrayScott => MORPHOGENESIS_ALGORITHM,
+        MorphogenesisModel::FitzhughNagumo => MORPHOGENESIS_FHN_ALGORITHM,
+    };
     let contract = MorphogenesisSequenceContract {
         version: MORPHOGENESIS_SEQUENCE_CHECKPOINT_VERSION,
-        algorithm: MORPHOGENESIS_ALGORITHM.to_string(),
+        algorithm: algorithm.to_string(),
         source: feedback_source_fingerprint(source_b_dir, &carrier_frames)?,
+        model,
         settings,
+        fhn_settings,
         composite,
         width: sim_width,
         height: sim_height,
@@ -7735,13 +7768,27 @@ pub(crate) fn render_morphogenesis_sequence(
                 .any(|route| route.target == "inject" || route.target == "erode")
         })
         .unwrap_or(false);
-    let track_prev_luma = settings.inject != 0.0 || settings.erode != 0.0 || routes_inject_or_erode;
+    // Track A1: FHN has no modulation routes yet (A1-S2), so its inject
+    // tracking only ever depends on its own static knob.
+    let track_prev_luma = match model {
+        MorphogenesisModel::GrayScott => {
+            settings.inject != 0.0 || settings.erode != 0.0 || routes_inject_or_erode
+        }
+        MorphogenesisModel::FitzhughNagumo => fhn_settings.inject != 0.0,
+    };
 
     let (start_frame, resumed_state) =
         load_morphogenesis_sequence_resume_state(output_dir, job_id, &contract, frame_count_u32)?;
     let mut field = match &resumed_state {
         Some(state_image) => morphogenesis_field_from_rgba32f(state_image)?,
-        None => seed_morphogenesis_field(&carrier_frame_zero, &settings)?,
+        None => match model {
+            MorphogenesisModel::GrayScott => {
+                seed_morphogenesis_field(&carrier_frame_zero, &settings)?
+            }
+            MorphogenesisModel::FitzhughNagumo => {
+                seed_fhn_field(&carrier_frame_zero, &fhn_settings)?
+            }
+        },
     };
     let mut previous_luma: Option<Vec<f32>> = if track_prev_luma {
         resumed_state.as_ref().map(unpack_morphogenesis_prev_luma)
@@ -7779,53 +7826,78 @@ pub(crate) fn render_morphogenesis_sequence(
         // One luma sample per frame serves both the param map's cell_luma
         // AND the live-coupling weight field (same carrier, same sim_scale)
         // — sampled once when either consumer needs it.
-        let need_luma_sample = track_prev_luma || frame_settings.param_map_strength != 0.0;
+        let need_luma_sample = track_prev_luma
+            || (model == MorphogenesisModel::GrayScott && frame_settings.param_map_strength != 0.0);
         let sampled_luma = if need_luma_sample {
             Some(sample_carrier_luma_at_sim_resolution(
-                &carrier,
-                sim_width,
-                sim_height,
-                frame_settings.sim_scale,
+                &carrier, sim_width, sim_height, sim_scale,
             )?)
         } else {
             None
         };
 
         if index > 0 {
-            // Declared pass order: inject → erode → substeps.
-            if track_prev_luma {
-                if let Some(current_luma) = &sampled_luma {
-                    if frame_settings.inject != 0.0 || frame_settings.erode != 0.0 {
-                        let w = match frame_settings.inject_source {
+            match model {
+                MorphogenesisModel::GrayScott => {
+                    // Declared pass order: inject → erode → substeps.
+                    if track_prev_luma {
+                        if let Some(current_luma) = &sampled_luma {
+                            if frame_settings.inject != 0.0 || frame_settings.erode != 0.0 {
+                                let w = match frame_settings.inject_source {
+                                    InjectSource::Luma => injection_weight_luma(
+                                        current_luma,
+                                        frame_settings.seed_threshold,
+                                    ),
+                                    InjectSource::Motion => injection_weight_motion(
+                                        current_luma,
+                                        previous_luma.as_deref(),
+                                    ),
+                                };
+                                field = apply_inject_erode(&field, &frame_settings, &w)?;
+                            }
+                        }
+                    }
+
+                    let cell_luma: &[f32] = if frame_settings.param_map_strength != 0.0 {
+                        sampled_luma.as_deref().unwrap_or(&[])
+                    } else {
+                        &[]
+                    };
+                    // Live Coupling L-S2: the coverage-target homeostat rides
+                    // on top of the routes-resolved `frame_settings`
+                    // (declared order: routes → param map → homeostat) — its
+                    // shifted (feed, kill) is the base the per-cell param map
+                    // then divides around for this frame's substeps.
+                    let advance_settings = apply_coverage_homeostat(&frame_settings, &field);
+                    field = advance_morphogenesis_frame_with_param_map(
+                        &field,
+                        &advance_settings,
+                        advance_settings.param_map_strength,
+                        cell_luma,
+                    )?;
+                }
+                MorphogenesisModel::FitzhughNagumo => {
+                    // Track A1: inject is a forcing CURRENT in the `du`
+                    // equation, sampled once per output frame (same
+                    // "current B frame" convention as Gray-Scott's param
+                    // map) and held constant across this frame's substeps.
+                    let injection_current = if fhn_settings.inject != 0.0 {
+                        let current_luma = sampled_luma.as_deref().unwrap_or(&[]);
+                        let w = match fhn_settings.inject_source {
                             InjectSource::Luma => {
-                                injection_weight_luma(current_luma, frame_settings.seed_threshold)
+                                injection_weight_luma(current_luma, fhn_settings.seed_threshold)
                             }
                             InjectSource::Motion => {
                                 injection_weight_motion(current_luma, previous_luma.as_deref())
                             }
                         };
-                        field = apply_inject_erode(&field, &frame_settings, &w)?;
-                    }
+                        w.into_iter().map(|w| fhn_settings.inject * w).collect()
+                    } else {
+                        vec![0.0; field.u.len()]
+                    };
+                    field = advance_fhn_frame(&field, &fhn_settings, &injection_current)?;
                 }
             }
-
-            let cell_luma: &[f32] = if frame_settings.param_map_strength != 0.0 {
-                sampled_luma.as_deref().unwrap_or(&[])
-            } else {
-                &[]
-            };
-            // Live Coupling L-S2: the coverage-target homeostat rides on top
-            // of the routes-resolved `frame_settings` (declared order: routes
-            // → param map → homeostat) — its shifted (feed, kill) is the
-            // base the per-cell param map then divides around for this
-            // frame's substeps.
-            let advance_settings = apply_coverage_homeostat(&frame_settings, &field);
-            field = advance_morphogenesis_frame_with_param_map(
-                &field,
-                &advance_settings,
-                advance_settings.param_map_strength,
-                cell_luma,
-            )?;
         }
         if track_prev_luma {
             previous_luma = sampled_luma;
@@ -7834,13 +7906,20 @@ pub(crate) fn render_morphogenesis_sequence(
         // Field View milestone: `frame_composite` is still resolved above
         // (routes may target its knobs) so it stays legal-but-inert in field
         // view — the manifest records it as given, it just isn't consulted
-        // for pixels here.
+        // for pixels here. Track A1: FHN pipes its raw `(u, v)` state
+        // through `fhn_display_field` first — the adapter that lets both
+        // output-view functions stay unchanged (see the milestone doc).
+        let display_field = match model {
+            MorphogenesisModel::GrayScott => None,
+            MorphogenesisModel::FitzhughNagumo => Some(fhn_display_field(&field)?),
+        };
+        let field_for_output = display_field.as_ref().unwrap_or(&field);
         let output = match output_view {
             OutputView::Composite => {
-                composite_morphogenesis_frame(&carrier, &field, &frame_composite)?
+                composite_morphogenesis_frame(&carrier, field_for_output, &frame_composite)?
             }
             OutputView::Field => render_v_field_grayscale_upsampled_with_shading(
-                &field,
+                field_for_output,
                 carrier.width,
                 carrier.height,
                 &frame_composite,
@@ -7890,11 +7969,13 @@ pub(crate) fn render_morphogenesis_sequence(
     }
 
     let manifest = serde_json::json!({
-        "algorithm": MORPHOGENESIS_ALGORITHM,
+        "algorithm": algorithm,
         "task": "render_morphogenesis_sequence",
         "job_id": job_id,
         "status": "complete",
+        "model": contract.model,
         "settings": contract.settings,
+        "fhn_settings": contract.fhn_settings,
         "composite": contract.composite,
         "output_view": contract.output_view,
         "width": contract.width,
@@ -7909,7 +7990,7 @@ pub(crate) fn render_morphogenesis_sequence(
 
     println!(
         "rendered morphogenesis sequence with {frame_count} frame(s) (algorithm {}, {}x{} sim) from {} to {}",
-        MORPHOGENESIS_ALGORITHM,
+        algorithm,
         sim_width,
         sim_height,
         source_b_dir.display(),

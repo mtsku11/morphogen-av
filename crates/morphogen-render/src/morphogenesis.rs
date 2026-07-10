@@ -1400,6 +1400,358 @@ pub fn render_v_field_grayscale_upsampled_with_shading(
     })
 }
 
+// ─── Track A1: FitzHugh–Nagumo excitable media ─────────────────────────────
+//
+// `docs/MORPHOGENESIS_FHN_MILESTONE.md`: a second field model, selected by
+// `--model`, reusing [`MorphogenesisField`] as its raw `(u, v)` grid (nothing
+// about that struct assumes Gray-Scott's `[0,1]` range) and the SAME RGBA32F
+// checkpoint codec. `u` is the fast, signed activator; `v` the slow,
+// signed recovery variable — no Laplacian on `v`. See the milestone doc for
+// the full design rationale (why a separate settings struct, why the
+// resting-state solver, why inject is a forcing current not an additive V
+// bump).
+
+/// Algorithm identifier for the FHN model — a distinct id from
+/// [`MORPHOGENESIS_ALGORITHM`] so a `--model` change on an existing output
+/// directory can never be mistaken for a resumable Gray-Scott checkpoint.
+pub const MORPHOGENESIS_FHN_ALGORITHM: &str = "morphogenesis_fhn_cpu_v1";
+
+/// Safety box: both `u` and `v` are clamped to `[-SAFETY, SAFETY]` after
+/// every substep. Not part of the physics — a guard against float blow-up
+/// only; the excitable dynamics need signed values well outside `[0,1]`.
+pub const FHN_SAFETY_BOX: f32 = 3.0;
+
+/// Which of the two field models a `render-morphogenesis-sequence` render
+/// uses. `#[serde(default)]` (`GrayScott`) so every pre-A1 checkpoint/queue
+/// task (no `model` key at all) deserializes as Gray-Scott and stays
+/// resumable — continuity anchor FHN0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MorphogenesisModel {
+    #[default]
+    GrayScott,
+    FitzhughNagumo,
+}
+
+/// FitzHugh–Nagumo parameters + sim/seeding knobs, parallel in shape to
+/// [`MorphogenesisSettings`] but deliberately a separate struct — the
+/// parameters mean different things physically and folding them together
+/// would make every Gray-Scott-only field awkwardly optional.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FhnSettings {
+    /// `u` diffusion rate (`Du` in the PDE).
+    pub du: f32,
+    /// Recovery time-scale separation (`ε`); small = slow recovery = longer,
+    /// more persistent pulses.
+    pub epsilon: f32,
+    /// Nullcline shape parameter `a`.
+    pub a: f32,
+    /// Nullcline shape parameter `b`.
+    pub b: f32,
+    /// Per-substep integration step.
+    pub dt: f32,
+    /// Substeps run per output frame. `0` freezes the field (byte-identical
+    /// to the frame-zero seed forever, same anchor shape as Gray-Scott's
+    /// A2).
+    pub substeps: u32,
+    /// Sim resolution divisor relative to the carrier frame.
+    pub sim_scale: u32,
+    /// Frame-zero seed threshold: carrier luma `>=` this fires a stimulus.
+    pub seed_threshold: f32,
+    /// Deterministic seed for the frame-zero speckle.
+    pub seed: u64,
+    /// How far above the resting `u` a seeded/injected cell is pushed
+    /// (`u = u_rest + stimulus`) — must clear the nullcline's local-max
+    /// threshold to reliably fire a pulse rather than relaxing straight
+    /// back to rest.
+    pub stimulus: f32,
+    /// Live coupling: per-frame forcing current `I(x,y) = inject * w(x,y)`
+    /// added into the `du` equation each substep (see the milestone doc —
+    /// this is a CURRENT, not an additive `V` bump like Gray-Scott's
+    /// inject). `0` = off. `#[serde(default)]` so pre-A1-S2 checkpoints
+    /// deserialize unmodulated and stay resumable.
+    #[serde(default)]
+    pub inject: f32,
+    /// Which weight field `--inject` reads (same [`InjectSource`] as
+    /// Gray-Scott). `#[serde(default)]` (`InjectSource::Motion`).
+    #[serde(default)]
+    pub inject_source: InjectSource,
+}
+
+impl FhnSettings {
+    /// `pulse`: excitable, a single stimulus fires and dies out — pure
+    /// music-reactive one-shot, no self-sustaining structure.
+    pub fn pulse() -> Self {
+        Self {
+            du: 1.0,
+            epsilon: 0.08,
+            a: 0.7,
+            b: 0.8,
+            dt: 0.1,
+            substeps: 4,
+            sim_scale: 2,
+            seed_threshold: 0.5,
+            seed: 71,
+            stimulus: 2.5,
+            inject: 0.0,
+            inject_source: InjectSource::Motion,
+        }
+    }
+
+    /// `spiral`: a broken-symmetry stimulus (an off-centre seed patch) seeds
+    /// self-sustaining rotating wavefronts rather than a single dying pulse.
+    pub fn spiral() -> Self {
+        Self {
+            epsilon: 0.05,
+            stimulus: 3.0,
+            substeps: 6,
+            ..Self::pulse()
+        }
+    }
+
+    /// `labyrinth`: a Turing-ish FHN regime — dense, standing wavefront
+    /// structure rather than a clean travelling pulse.
+    pub fn labyrinth() -> Self {
+        Self {
+            epsilon: 0.12,
+            a: 0.5,
+            b: 0.6,
+            stimulus: 2.0,
+            substeps: 4,
+            ..Self::pulse()
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), RenderError> {
+        if !(self.du.is_finite() && self.du >= 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "du must be finite and >= 0".into(),
+            ));
+        }
+        if !(self.epsilon.is_finite() && self.epsilon > 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "epsilon must be finite and > 0".into(),
+            ));
+        }
+        if !self.a.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "a must be finite".into(),
+            ));
+        }
+        if !(self.b.is_finite() && self.b > 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "b must be finite and > 0".into(),
+            ));
+        }
+        if !(self.dt.is_finite() && self.dt > 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "dt must be finite and > 0".into(),
+            ));
+        }
+        if self.sim_scale == 0 {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "sim_scale must be >= 1".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.seed_threshold) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "seed_threshold must be in [0, 1]".into(),
+            ));
+        }
+        if !self.stimulus.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "stimulus must be finite".into(),
+            ));
+        }
+        if !(self.inject.is_finite() && (0.0..=1.0).contains(&self.inject)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "inject must be finite and in [0, 1]".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for FhnSettings {
+    fn default() -> Self {
+        Self::pulse()
+    }
+}
+
+/// Named FHN presets, parallel to [`MorphogenesisPreset`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FhnPreset {
+    #[default]
+    Pulse,
+    Spiral,
+    Labyrinth,
+}
+
+impl FhnPreset {
+    pub fn settings(self) -> FhnSettings {
+        match self {
+            Self::Pulse => FhnSettings::pulse(),
+            Self::Spiral => FhnSettings::spiral(),
+            Self::Labyrinth => FhnSettings::labyrinth(),
+        }
+    }
+}
+
+/// The FHN fixed point (`I == 0`): solves `v = u - u³/3` (the `u`-nullcline
+/// at equilibrium) simultaneously with `v = (u + a) / b` (the `v`-nullcline)
+/// via their combined cubic `b/3·u³ - (b-1)·u + a = 0`, by Newton-Raphson
+/// from `u₀ = 0`. Monotonic (derivative `b·u² - (b-1)` has no real root for
+/// every preset's `b < 1`), so this converges to the single real root
+/// deterministically in a handful of iterations — the resting state every
+/// unstimulated cell starts at (FHN1/FHN2).
+pub fn fhn_resting_state(a: f32, b: f32) -> (f32, f32) {
+    let f = |u: f32| (b / 3.0) * u * u * u - (b - 1.0) * u + a;
+    let f_prime = |u: f32| b * u * u - (b - 1.0);
+    let mut u = 0.0_f32;
+    for _ in 0..64 {
+        let fu = f(u);
+        let dfu = f_prime(u);
+        if dfu.abs() < 1e-9 {
+            break;
+        }
+        let next = u - fu / dfu;
+        if (next - u).abs() < 1e-7 {
+            u = next;
+            break;
+        }
+        u = next;
+    }
+    let v = (u + a) / b;
+    (u, v)
+}
+
+/// Frame-zero seed (declared, mirroring [`seed_morphogenesis_field`]'s
+/// shape): every cell starts at the model's resting state
+/// ([`fhn_resting_state`]); carrier-luma-thresholded cells (plus the
+/// standard splitmix64 speckle) get `u = u_rest + settings.stimulus` (`v`
+/// untouched) — "fires u, not v."
+pub fn seed_fhn_field(
+    carrier_frame_zero: &ImageBufferF32,
+    settings: &FhnSettings,
+) -> Result<MorphogenesisField, RenderError> {
+    settings.validate()?;
+    let (width, height) = morphogenesis_field_dimensions(
+        carrier_frame_zero.width,
+        carrier_frame_zero.height,
+        settings.sim_scale,
+    );
+    let count = (width as usize) * (height as usize);
+    let (u_rest, v_rest) = fhn_resting_state(settings.a, settings.b);
+    let mut u = vec![u_rest; count];
+    let v = vec![v_rest; count];
+
+    for y in 0..height {
+        for x in 0..width {
+            let luma = carrier_luma_at_sim_cell(carrier_frame_zero, settings.sim_scale, x, y)?;
+            let luma_seeded = luma >= settings.seed_threshold;
+            let speckle_seeded = seed_hash_unit(settings.seed, x, y) < SPECKLE_DENSITY;
+            if luma_seeded || speckle_seeded {
+                let idx = (y as usize) * (width as usize) + (x as usize);
+                u[idx] = u_rest + settings.stimulus;
+            }
+        }
+    }
+
+    MorphogenesisField::new(width, height, u, v)
+}
+
+/// One FHN substep: a 5-point Laplacian on `u` only (clamped edges, same
+/// stencil convention as [`morphogenesis_substep`]), `v` has no spatial
+/// term. `injection_current` is `I(x,y)`, one sample per cell (all zero when
+/// `inject == 0`, the off case). Both channels clamp to
+/// `[-FHN_SAFETY_BOX, FHN_SAFETY_BOX]` afterward (a float-blowup guard, not
+/// part of the physics).
+pub fn fhn_substep(
+    field: &MorphogenesisField,
+    settings: &FhnSettings,
+    injection_current: &[f32],
+) -> Result<MorphogenesisField, RenderError> {
+    let width = field.width;
+    let height = field.height;
+    let w = width as usize;
+    if injection_current.len() != field.u.len() {
+        return Err(RenderError::InvalidMorphogenesisField(format!(
+            "FHN injection current expected {} samples, got {}",
+            field.u.len(),
+            injection_current.len()
+        )));
+    }
+    let mut new_u = vec![0.0_f32; field.u.len()];
+    let mut new_v = vec![0.0_f32; field.v.len()];
+
+    for y in 0..height {
+        let y_prev = clamp_prev(y) as usize;
+        let y_next = clamp_next(y, height) as usize;
+        let row = y as usize * w;
+        let row_prev = y_prev * w;
+        let row_next = y_next * w;
+        for x in 0..width {
+            let x_prev = clamp_prev(x) as usize;
+            let x_next = clamp_next(x, width) as usize;
+            let idx = row + x as usize;
+
+            let u_c = field.u[idx];
+            let v_c = field.v[idx];
+            let lap_u = field.u[row + x_prev]
+                + field.u[row + x_next]
+                + field.u[row_prev + x as usize]
+                + field.u[row_next + x as usize]
+                - 4.0 * u_c;
+
+            let du =
+                settings.du * lap_u + u_c - (u_c * u_c * u_c) / 3.0 - v_c + injection_current[idx];
+            let dv = settings.epsilon * (u_c + settings.a - settings.b * v_c);
+
+            new_u[idx] = (u_c + settings.dt * du).clamp(-FHN_SAFETY_BOX, FHN_SAFETY_BOX);
+            new_v[idx] = (v_c + settings.dt * dv).clamp(-FHN_SAFETY_BOX, FHN_SAFETY_BOX);
+        }
+    }
+
+    MorphogenesisField::new(width, height, new_u, new_v)
+}
+
+/// Advance one output frame: `settings.substeps` FHN substeps, all reading
+/// the SAME `injection_current` (sampled once per output frame from the
+/// carrier's CURRENT frame, held constant across the frame's substeps — the
+/// same convention as Gray-Scott's per-frame param map). `substeps == 0`
+/// leaves the field unchanged.
+pub fn advance_fhn_frame(
+    field: &MorphogenesisField,
+    settings: &FhnSettings,
+    injection_current: &[f32],
+) -> Result<MorphogenesisField, RenderError> {
+    let mut current = field.clone();
+    for _ in 0..settings.substeps {
+        current = fhn_substep(&current, settings, injection_current)?;
+    }
+    Ok(current)
+}
+
+/// Display adapter (Track A1): the SAME two output-view functions
+/// ([`composite_morphogenesis_frame`], [`render_v_field_grayscale_upsampled_with_shading`])
+/// that already exist for Gray-Scott's `V` field work UNCHANGED for FHN by
+/// feeding them a throwaway [`MorphogenesisField`] whose `.v` is a
+/// display-normalized `u` (`((u.clamp(-2,2) + 2) / 4).clamp(0,1)`, so resting
+/// `u ≈ -1.2` reads near-black and a firing pulse near-white) and whose `.u`
+/// is unused (a dummy `1.0` — neither function reads it). Proves the
+/// handoff's "everything downstream of the substep is model-agnostic" claim
+/// rather than asserting it: zero changes needed to either function.
+pub fn fhn_display_field(field: &MorphogenesisField) -> Result<MorphogenesisField, RenderError> {
+    let display_v: Vec<f32> = field
+        .u
+        .iter()
+        .map(|&u| ((u.clamp(-2.0, 2.0) + 2.0) / 4.0).clamp(0.0, 1.0))
+        .collect();
+    let dummy_u = vec![1.0_f32; field.u.len()];
+    MorphogenesisField::new(field.width, field.height, dummy_u, display_v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2520,5 +2872,227 @@ mod tests {
         let upsampled = render_v_field_grayscale_upsampled(&field, 20, 16).expect("upsampled");
         assert_eq!(upsampled.width, 20);
         assert_eq!(upsampled.height, 16);
+    }
+
+    // ─── Track A1: FitzHugh-Nagumo ─────────────────────────────────────────
+
+    fn zero_injection(field: &MorphogenesisField) -> Vec<f32> {
+        vec![0.0; field.u.len()]
+    }
+
+    /// FHN1: the Newton solver's fixed point satisfies both nullcline
+    /// equations (`v = u - u^3/3` and `v = (u+a)/b`) to within 1e-4, for
+    /// every shipped preset's `(a, b)`.
+    #[test]
+    fn fhn1_resting_state_satisfies_both_nullclines_for_every_preset() {
+        for preset in [FhnPreset::Pulse, FhnPreset::Spiral, FhnPreset::Labyrinth] {
+            let settings = preset.settings();
+            let (u, v) = fhn_resting_state(settings.a, settings.b);
+            let u_nullcline_v = u - u * u * u / 3.0;
+            let v_nullcline_v = (u + settings.a) / settings.b;
+            assert!(
+                (v - u_nullcline_v).abs() < 1e-4,
+                "{preset:?}: resting v={v} must satisfy the u-nullcline (expected {u_nullcline_v})"
+            );
+            assert!(
+                (v - v_nullcline_v).abs() < 1e-4,
+                "{preset:?}: resting v={v} must satisfy the v-nullcline (expected {v_nullcline_v})"
+            );
+        }
+    }
+
+    /// FHN0 continuity companion: `--model gray-scott` (i.e. simply not
+    /// touching the FHN path at all) leaves every existing Gray-Scott anchor
+    /// untouched — already proven by every test above staying green; this
+    /// test additionally pins that the two algorithm ids are distinct so a
+    /// model switch can never be mistaken for a resumable checkpoint of the
+    /// other model.
+    #[test]
+    fn fhn0_algorithm_ids_are_distinct() {
+        assert_ne!(MORPHOGENESIS_ALGORITHM, MORPHOGENESIS_FHN_ALGORITHM);
+    }
+
+    /// FHN2 (quiescence): a field built with EVERY cell at the resting state
+    /// (no seed, no speckle — [`seed_fhn_field`]'s speckle is a real
+    /// stimulus that can itself fire in an excitable medium, so it's
+    /// deliberately bypassed here to isolate the claim under test) must stay
+    /// at rest — proving [`fhn_resting_state`] is actually a fixed point of
+    /// the DISCRETIZED system (dt, substeps, the safety clamp), not just the
+    /// continuous ODE.
+    #[test]
+    fn fhn2_unstimulated_field_stays_quiescent() {
+        for preset in [FhnPreset::Pulse, FhnPreset::Spiral, FhnPreset::Labyrinth] {
+            let settings = FhnSettings {
+                sim_scale: 1,
+                ..preset.settings()
+            };
+            let (u_rest, v_rest) = fhn_resting_state(settings.a, settings.b);
+            let count = 24 * 24;
+            let mut field =
+                MorphogenesisField::new(24, 24, vec![u_rest; count], vec![v_rest; count])
+                    .expect("build resting field");
+            let initial_variance = field.v_variance();
+
+            let mut max_variance = initial_variance;
+            for _ in 0..60 {
+                let injection = zero_injection(&field);
+                field = advance_fhn_frame(&field, &settings, &injection).expect("advance");
+                max_variance = max_variance.max(field.v_variance());
+            }
+            assert!(
+                max_variance < 1e-4,
+                "{preset:?}: unstimulated field must stay quiescent (max_variance={max_variance})"
+            );
+        }
+    }
+
+    /// FHN3 (wave propagation, falsifiable): a single interior point
+    /// stimulus on an otherwise-resting field must propagate `u` past
+    /// threshold outward over time — the max sim-lattice radius (from the
+    /// stimulus) at which `u` has crossed a fixed threshold above rest must
+    /// grow over the run. Paired with the FHN2 quiescence control on the
+    /// SAME preset (no stimulus) proving the growth isn't just numerical
+    /// drift. Built directly (not via [`seed_fhn_field`]'s carrier/speckle
+    /// path) so the ONLY perturbation is the deliberate centre patch — a
+    /// stray speckle hit elsewhere in the frame would otherwise contaminate
+    /// the max-radius measurement with an unrelated, isolated point that
+    /// diffuses away rather than propagating (excitable media need a
+    /// critical nucleus SIZE, not just one point, to successfully fire).
+    #[test]
+    fn fhn3_point_stimulus_propagates_a_travelling_front() {
+        for preset in [FhnPreset::Pulse, FhnPreset::Spiral, FhnPreset::Labyrinth] {
+            let settings = FhnSettings {
+                sim_scale: 1,
+                ..preset.settings()
+            };
+            let size = 64u32;
+            let (u_rest, v_rest) = fhn_resting_state(settings.a, settings.b);
+            let mut u = vec![u_rest; (size * size) as usize];
+            let v = vec![v_rest; (size * size) as usize];
+            let patch = 5i64;
+            let half = patch / 2;
+            let (cxi, cyi) = (size as i64 / 2, size as i64 / 2);
+            for dy in -half..=half {
+                for dx in -half..=half {
+                    let x = (cxi + dx) as u32;
+                    let y = (cyi + dy) as u32;
+                    let idx = (y as usize) * (size as usize) + (x as usize);
+                    u[idx] = u_rest + settings.stimulus;
+                }
+            }
+            let mut field = MorphogenesisField::new(size, size, u, v).expect("build field");
+            let fire_threshold = u_rest + 0.5 * settings.stimulus;
+
+            let cx = size as f32 / 2.0;
+            let cy = size as f32 / 2.0;
+            let max_radius_crossing_threshold = |field: &MorphogenesisField| -> f32 {
+                let mut max_r: f32 = 0.0;
+                for y in 0..field.height {
+                    for x in 0..field.width {
+                        let idx = (y as usize) * (field.width as usize) + (x as usize);
+                        if field.u[idx] > fire_threshold {
+                            let dx = x as f32 - cx;
+                            let dy = y as f32 - cy;
+                            max_r = max_r.max((dx * dx + dy * dy).sqrt());
+                        }
+                    }
+                }
+                max_r
+            };
+
+            let initial_radius = max_radius_crossing_threshold(&field);
+            assert!(
+                initial_radius > 0.0,
+                "{preset:?}: the seed patch itself must cross the fire threshold"
+            );
+
+            let mut radii = vec![initial_radius];
+            for _ in 0..40 {
+                let injection = zero_injection(&field);
+                field = advance_fhn_frame(&field, &settings, &injection).expect("advance");
+                radii.push(max_radius_crossing_threshold(&field));
+            }
+            let final_radius = *radii.last().unwrap();
+            assert!(
+                final_radius > initial_radius * 1.5,
+                "{preset:?}: a stimulated front must propagate outward (radii={radii:?})"
+            );
+        }
+    }
+
+    /// FHN4 (checkpoint round-trip): resuming from the unquantized RGBA32F
+    /// state must be byte-identical to an uninterrupted run — same shape as
+    /// Gray-Scott's A4, proving the reused codec round-trips FHN's signed
+    /// values without loss.
+    #[test]
+    fn fhn4_resume_matches_uninterrupted_via_rgba32f_round_trip() {
+        let settings = FhnSettings {
+            sim_scale: 1,
+            ..FhnSettings::pulse()
+        };
+        let carrier = nucleus_carrier(24, 24);
+
+        let mut uninterrupted = seed_fhn_field(&carrier, &settings).expect("seed");
+        for _ in 0..5 {
+            let injection = zero_injection(&uninterrupted);
+            uninterrupted =
+                advance_fhn_frame(&uninterrupted, &settings, &injection).expect("advance");
+        }
+
+        let mut resumed = seed_fhn_field(&carrier, &settings).expect("seed");
+        for _ in 0..2 {
+            let injection = zero_injection(&resumed);
+            resumed = advance_fhn_frame(&resumed, &settings, &injection).expect("advance");
+        }
+        let packed = morphogenesis_field_to_rgba32f(&resumed).expect("pack");
+        let mut resumed = morphogenesis_field_from_rgba32f(&packed).expect("unpack");
+        for _ in 0..3 {
+            let injection = zero_injection(&resumed);
+            resumed = advance_fhn_frame(&resumed, &settings, &injection).expect("advance");
+        }
+
+        assert_eq!(
+            resumed, uninterrupted,
+            "FHN4: resuming from the unquantized RGBA32F state must be byte-identical to an uninterrupted run"
+        );
+    }
+
+    /// FHN5 (composite/field-view reuse): piping [`fhn_display_field`] into
+    /// the two EXISTING output-view functions (unchanged since Gray-Scott)
+    /// produces non-flat output once a stimulus has fired — proving the
+    /// reuse claim rather than asserting it.
+    #[test]
+    fn fhn5_display_adapter_feeds_the_existing_output_views_unchanged() {
+        let settings = FhnSettings {
+            sim_scale: 1,
+            ..FhnSettings::pulse()
+        };
+        let carrier = nucleus_carrier(32, 32);
+        let mut field = seed_fhn_field(&carrier, &settings).expect("seed");
+        for _ in 0..8 {
+            let injection = zero_injection(&field);
+            field = advance_fhn_frame(&field, &settings, &injection).expect("advance");
+        }
+
+        let display = fhn_display_field(&field).expect("display adapter");
+        let field_view =
+            render_v_field_grayscale_upsampled(&display, carrier.width, carrier.height)
+                .expect("field view");
+        let first = field_view.pixels[0];
+        assert!(
+            field_view.pixels.iter().any(|p| p != &first),
+            "FHN5: the field view must be non-flat once a stimulus has fired"
+        );
+
+        let composite_settings = MorphogenesisCompositeSettings {
+            pattern_mix: 0.9,
+            ..MorphogenesisCompositeSettings::passthrough()
+        };
+        let composite = composite_morphogenesis_frame(&carrier, &display, &composite_settings)
+            .expect("composite");
+        assert!(
+            composite.pixels.iter().any(|p| p != &carrier.pixels[0]),
+            "FHN5: the composite view must diverge from the plain carrier once a stimulus has fired"
+        );
     }
 }

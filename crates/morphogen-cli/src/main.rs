@@ -3,10 +3,11 @@ use morphogen_audio::StftConfig;
 use morphogen_render::{
     BlockCollageSettings, CascadeCollageSettings, CascadeFieldType, CascadeTrailSettings,
     ChannelShiftSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
-    FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings, FluidAdvectTwoSourceSettings,
-    FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings, MorphogenesisCompositeSettings,
-    MorphogenesisPreset, MorphogenesisSettings, PaletteQuantizeSettings, PixelSortSettings,
-    RetroStaticSettings, RuttEtraSettings, StructureMode, VideoVocoderSettings,
+    FhnPreset, FhnSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
+    FluidAdvectTwoSourceSettings, FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings,
+    MorphogenesisCompositeSettings, MorphogenesisModel, MorphogenesisPreset, MorphogenesisSettings,
+    PaletteQuantizeSettings, PixelSortSettings, RetroStaticSettings, RuttEtraSettings,
+    StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -1834,7 +1835,13 @@ fn run() -> Result<(), CliError> {
             source_b_dir,
             output_dir,
             frames,
+            model,
             preset,
+            fhn_preset,
+            fhn_epsilon,
+            fhn_a,
+            fhn_b,
+            fhn_stimulus,
             du,
             dv,
             feed,
@@ -1872,6 +1879,7 @@ fn run() -> Result<(), CliError> {
             named_modulator_frames,
             named_modulator_midi,
         } => {
+            let model: MorphogenesisModel = model.into();
             let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
             if let Some(du) = du {
                 settings.du = du;
@@ -1907,6 +1915,44 @@ fn run() -> Result<(), CliError> {
             settings.erode = erode;
             settings.inject_source = inject_source.into();
             settings.coverage_target = coverage_target;
+
+            // Track A1: the shared knob names (du/dt/substeps/sim_scale/
+            // seed_threshold/seed/inject/inject_source) write to whichever
+            // model's settings is active.
+            let mut fhn_settings: FhnSettings = FhnPreset::from(fhn_preset).settings();
+            if let Some(du) = du {
+                fhn_settings.du = du;
+            }
+            if let Some(fhn_epsilon) = fhn_epsilon {
+                fhn_settings.epsilon = fhn_epsilon;
+            }
+            if let Some(fhn_a) = fhn_a {
+                fhn_settings.a = fhn_a;
+            }
+            if let Some(fhn_b) = fhn_b {
+                fhn_settings.b = fhn_b;
+            }
+            if let Some(fhn_stimulus) = fhn_stimulus {
+                fhn_settings.stimulus = fhn_stimulus;
+            }
+            if let Some(dt) = dt {
+                fhn_settings.dt = dt;
+            }
+            if let Some(substeps) = substeps {
+                fhn_settings.substeps = substeps;
+            }
+            if let Some(sim_scale) = sim_scale {
+                fhn_settings.sim_scale = sim_scale;
+            }
+            if let Some(seed_threshold) = seed_threshold {
+                fhn_settings.seed_threshold = seed_threshold;
+            }
+            if let Some(seed) = seed {
+                fhn_settings.seed = seed;
+            }
+            fhn_settings.inject = inject;
+            fhn_settings.inject_source = inject_source.into();
+
             let composite = MorphogenesisCompositeSettings {
                 pattern_mix,
                 displace,
@@ -1923,7 +1969,9 @@ fn run() -> Result<(), CliError> {
                 source_b_dir: &source_b_dir,
                 output_dir: &output_dir,
                 frames,
+                model,
                 settings,
+                fhn_settings,
                 composite,
                 output_view: output_view.into(),
                 job_id: "direct-morphogenesis-sequence",
