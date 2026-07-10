@@ -72,13 +72,15 @@ use morphogen_render::{
 };
 use morphogen_render::{
     advance_fhn_frame, advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
-    apply_coverage_homeostat, apply_fhn_inject, apply_inject_erode, composite_morphogenesis_frame,
-    fhn_display_field, injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
+    advance_lenia_frame, apply_coverage_homeostat, apply_fhn_inject, apply_inject_erode,
+    apply_lenia_inject_erode, composite_morphogenesis_frame, fhn_display_field,
+    injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
     morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f, render_v_field_grayscale,
     render_v_field_grayscale_upsampled_with_shading, sample_carrier_luma_at_sim_resolution,
-    seed_fhn_field, seed_morphogenesis_field, FhnSettings, InjectSource,
-    MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisModel, MorphogenesisSettings,
-    OutputView, MORPHOGENESIS_ALGORITHM, MORPHOGENESIS_FHN_ALGORITHM,
+    seed_fhn_field, seed_lenia_field, seed_morphogenesis_field, FhnSettings, InjectSource,
+    LeniaSettings, MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisModel,
+    MorphogenesisSettings, OutputView, MORPHOGENESIS_ALGORITHM, MORPHOGENESIS_FHN_ALGORITHM,
+    MORPHOGENESIS_LENIA_ALGORITHM,
 };
 use serde::{Deserialize, Serialize};
 
@@ -7485,6 +7487,12 @@ pub(crate) struct MorphogenesisSequenceContract {
     /// with the inert default.
     #[serde(default)]
     fhn_settings: FhnSettings,
+    /// Track A2 (`docs/MORPHOGENESIS_LENIA_MILESTONE.md`): Lenia's own
+    /// settings, same always-present/model-selects-meaning shape as
+    /// `fhn_settings`. `#[serde(default)]` so pre-A2 checkpoints deserialize
+    /// with the inert default.
+    #[serde(default)]
+    lenia_settings: LeniaSettings,
     composite: MorphogenesisCompositeSettings,
     width: u32,
     height: u32,
@@ -7631,6 +7639,8 @@ pub(crate) struct MorphogenesisSequenceRenderRequest<'a> {
     pub(crate) settings: MorphogenesisSettings,
     /// Track A1: only consulted when `model == FitzhughNagumo`.
     pub(crate) fhn_settings: FhnSettings,
+    /// Track A2: only consulted when `model == Lenia`.
+    pub(crate) lenia_settings: LeniaSettings,
     pub(crate) composite: MorphogenesisCompositeSettings,
     /// Field View milestone: which representation the output frames are
     /// (`OutputView::Composite` = pre-milestone S2 output, the default).
@@ -7659,6 +7669,7 @@ pub(crate) fn render_morphogenesis_sequence(
         model,
         settings,
         fhn_settings,
+        lenia_settings,
         composite,
         output_view,
         job_id,
@@ -7667,16 +7678,18 @@ pub(crate) fn render_morphogenesis_sequence(
         modulation,
     } = request;
 
-    // Track A1-S2 fix: only the ACTIVE model's settings are validated — the
-    // two structs share CLI/queue flag names (du/dt/inject/...) but have
-    // independently-legal ranges (FHN's inject in particular needs headroom
-    // above Gray-Scott's [0,1]), and the inactive struct is never consulted
-    // for rendering (a model switch on an existing checkpoint already
-    // refuses to resume via the contract's `model`/`algorithm` fields, so
-    // there's no correctness need for the inert copy to validate too).
+    // Track A1-S2 fix (extended for Track A2/Lenia): only the ACTIVE model's
+    // settings are validated — the structs share CLI/queue flag names
+    // (du/dt/inject/...) but have independently-legal ranges (FHN's inject
+    // in particular needs headroom above Gray-Scott's/Lenia's [0,1]), and an
+    // inactive struct is never consulted for rendering (a model switch on an
+    // existing checkpoint already refuses to resume via the contract's
+    // `model`/`algorithm` fields, so there's no correctness need for the
+    // inert copies to validate too).
     match model {
         MorphogenesisModel::GrayScott => settings.validate()?,
         MorphogenesisModel::FitzhughNagumo => fhn_settings.validate()?,
+        MorphogenesisModel::Lenia => lenia_settings.validate()?,
     }
     composite.validate()?;
     if frames == 0 {
@@ -7706,6 +7719,7 @@ pub(crate) fn render_morphogenesis_sequence(
     let sim_scale = match model {
         MorphogenesisModel::GrayScott => settings.sim_scale,
         MorphogenesisModel::FitzhughNagumo => fhn_settings.sim_scale,
+        MorphogenesisModel::Lenia => lenia_settings.sim_scale,
     };
     let (sim_width, sim_height) = morphogenesis_field_dimensions(
         carrier_frame_zero.width,
@@ -7742,6 +7756,7 @@ pub(crate) fn render_morphogenesis_sequence(
     let algorithm = match model {
         MorphogenesisModel::GrayScott => MORPHOGENESIS_ALGORITHM,
         MorphogenesisModel::FitzhughNagumo => MORPHOGENESIS_FHN_ALGORITHM,
+        MorphogenesisModel::Lenia => MORPHOGENESIS_LENIA_ALGORITHM,
     };
     let contract = MorphogenesisSequenceContract {
         version: MORPHOGENESIS_SEQUENCE_CHECKPOINT_VERSION,
@@ -7750,6 +7765,7 @@ pub(crate) fn render_morphogenesis_sequence(
         model,
         settings,
         fhn_settings,
+        lenia_settings,
         composite,
         width: sim_width,
         height: sim_height,
@@ -7783,11 +7799,19 @@ pub(crate) fn render_morphogenesis_sequence(
     // route can turn it on mid-render even when the render's own base
     // `fhn_settings.inject` is 0), so FHN's tracking also considers
     // `routes_inject_or_erode` — same reasoning as Gray-Scott's.
+    // Track A2: Lenia's inject/erode reuse Gray-Scott's plain [0,1] additive
+    // meaning (see `apply_lenia_inject_erode`), so the same tracking rule
+    // applies; routes don't target Lenia's settings yet (deferred to A2-S2,
+    // mirroring FHN's own S1/S2 split), but `routes_inject_or_erode` is kept
+    // here too so wiring that up later doesn't also require revisiting this.
     let track_prev_luma = match model {
         MorphogenesisModel::GrayScott => {
             settings.inject != 0.0 || settings.erode != 0.0 || routes_inject_or_erode
         }
         MorphogenesisModel::FitzhughNagumo => fhn_settings.inject != 0.0 || routes_inject_or_erode,
+        MorphogenesisModel::Lenia => {
+            lenia_settings.inject != 0.0 || lenia_settings.erode != 0.0 || routes_inject_or_erode
+        }
     };
 
     let (start_frame, resumed_state) =
@@ -7801,6 +7825,7 @@ pub(crate) fn render_morphogenesis_sequence(
             MorphogenesisModel::FitzhughNagumo => {
                 seed_fhn_field(&carrier_frame_zero, &fhn_settings)?
             }
+            MorphogenesisModel::Lenia => seed_lenia_field(&carrier_frame_zero, &lenia_settings)?,
         },
     };
     let mut previous_luma: Option<Vec<f32>> = if track_prev_luma {
@@ -7820,6 +7845,11 @@ pub(crate) fn render_morphogenesis_sequence(
         // them — the flow-feedback precedent, applied to both structs.
         let mut frame_settings = settings;
         let mut frame_fhn_settings = fhn_settings;
+        // Track A2: Lenia isn't wired into the modulation registry yet
+        // (deferred to A2-S2, mirroring FHN's own S1/S2 split) — this copy
+        // stays unmodulated for now, kept per-frame for shape-consistency
+        // with the other two models and so wiring it up later is additive.
+        let frame_lenia_settings = lenia_settings;
         let mut frame_composite = composite;
         if let Some(plan) = &modulation_plan {
             for (target, value) in plan.frame_values(index) {
@@ -7916,6 +7946,34 @@ pub(crate) fn render_morphogenesis_sequence(
                     }
                     field = advance_fhn_frame(&field, &frame_fhn_settings)?;
                 }
+                MorphogenesisModel::Lenia => {
+                    // Track A2: inject/erode reuse Gray-Scott's plain
+                    // additive/multiplicative `[0,1]` equations verbatim
+                    // (see `apply_lenia_inject_erode`) since Lenia's `A` is
+                    // already a `[0,1]` density like `V` — same declared
+                    // order (inject/erode → substeps) as the other models.
+                    if track_prev_luma {
+                        if let Some(current_luma) = &sampled_luma {
+                            if frame_lenia_settings.inject != 0.0
+                                || frame_lenia_settings.erode != 0.0
+                            {
+                                let w = match frame_lenia_settings.inject_source {
+                                    InjectSource::Luma => injection_weight_luma(
+                                        current_luma,
+                                        frame_lenia_settings.seed_threshold,
+                                    ),
+                                    InjectSource::Motion => injection_weight_motion(
+                                        current_luma,
+                                        previous_luma.as_deref(),
+                                    ),
+                                };
+                                field =
+                                    apply_lenia_inject_erode(&field, &frame_lenia_settings, &w)?;
+                            }
+                        }
+                    }
+                    field = advance_lenia_frame(&field, &frame_lenia_settings)?;
+                }
             }
         }
         if track_prev_luma {
@@ -7928,9 +7986,12 @@ pub(crate) fn render_morphogenesis_sequence(
         // for pixels here. Track A1: FHN pipes its raw `(u, v)` state
         // through `fhn_display_field` first — the adapter that lets both
         // output-view functions stay unchanged (see the milestone doc).
+        // Track A2: Lenia needs no such adapter — `A` already lives in
+        // `.v`, the exact display contract these two functions expect.
         let display_field = match model {
             MorphogenesisModel::GrayScott => None,
             MorphogenesisModel::FitzhughNagumo => Some(fhn_display_field(&field)?),
+            MorphogenesisModel::Lenia => None,
         };
         let field_for_output = display_field.as_ref().unwrap_or(&field);
         let output = match output_view {
@@ -7995,6 +8056,7 @@ pub(crate) fn render_morphogenesis_sequence(
         "model": contract.model,
         "settings": contract.settings,
         "fhn_settings": contract.fhn_settings,
+        "lenia_settings": contract.lenia_settings,
         "composite": contract.composite,
         "output_view": contract.output_view,
         "width": contract.width,

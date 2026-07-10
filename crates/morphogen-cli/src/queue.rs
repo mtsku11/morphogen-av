@@ -27,18 +27,18 @@ use morphogen_render::{
     CoagulationFlowSource, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
     FhnPreset, FhnSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GranularMosaicSettings, InjectSource,
-    LfoShape, MaskSource, MatteSource, ModulationSampling, ModulationSource,
-    MorphogenesisCompositeSettings, MorphogenesisModel, MorphogenesisPreset, MorphogenesisSettings,
-    OutputView, PaletteQuantizeSettings, PatternColorMode, PixelSortSettings, QuantizeMode,
-    RetroStaticSettings, RuttEtraSettings, ScanlineFilter, SortAxis, SortDirection, SortKey,
-    StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM, CASCADE_COLLAGE_ALGORITHM,
-    CASCADE_TRAIL_ALGORITHM, CHANNEL_SHIFT_ALGORITHM, CHANNEL_SHIFT_FLOW_ALGORITHM,
-    COAGULATED_BLEND_ALGORITHM, DISPERSION_BLEND_ALGORITHM, FIELD_PARTICLES_ALGORITHM,
-    FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM, FLUID_MOSAIC_ALGORITHM,
-    PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM, PIXEL_SORT_CROSS_SYNTH_ALGORITHM,
-    POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM, RMS_DISPLACEMENT_ROUTE_ALGORITHM,
-    RUTT_ETRA_ALGORITHM, RUTT_ETRA_METAL_ALGORITHM, RUTT_ETRA_TWO_SOURCE_ALGORITHM,
-    RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
+    LeniaPreset, LeniaSettings, LfoShape, MaskSource, MatteSource, ModulationSampling,
+    ModulationSource, MorphogenesisCompositeSettings, MorphogenesisModel, MorphogenesisPreset,
+    MorphogenesisSettings, OutputView, PaletteQuantizeSettings, PatternColorMode,
+    PixelSortSettings, QuantizeMode, RetroStaticSettings, RuttEtraSettings, ScanlineFilter,
+    SortAxis, SortDirection, SortKey, StructureMode, VideoVocoderSettings, BLOCK_COLLAGE_ALGORITHM,
+    CASCADE_COLLAGE_ALGORITHM, CASCADE_TRAIL_ALGORITHM, CHANNEL_SHIFT_ALGORITHM,
+    CHANNEL_SHIFT_FLOW_ALGORITHM, COAGULATED_BLEND_ALGORITHM, DISPERSION_BLEND_ALGORITHM,
+    FIELD_PARTICLES_ALGORITHM, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
+    FLUID_MOSAIC_ALGORITHM, PALETTE_QUANTIZE_ALGORITHM, PIXEL_SORT_ALGORITHM,
+    PIXEL_SORT_CROSS_SYNTH_ALGORITHM, POOLED_GRAIN_ALGORITHM, RETRO_STATIC_ALGORITHM,
+    RMS_DISPLACEMENT_ROUTE_ALGORITHM, RUTT_ETRA_ALGORITHM, RUTT_ETRA_METAL_ALGORITHM,
+    RUTT_ETRA_TWO_SOURCE_ALGORITHM, RUTT_ETRA_TWO_SOURCE_METAL_ALGORITHM,
 };
 
 use crate::args::*;
@@ -6598,19 +6598,31 @@ pub(crate) fn morphogenesis_fhn_preset_label(preset: FhnPreset) -> String {
     }
 }
 
-/// Track A1 `--model` label; same display-label convention as
+/// Track A1/A2 `--model` label; same display-label convention as
 /// `morphogenesis_preset_label`.
 fn morphogenesis_model_label(model: MorphogenesisModel) -> String {
     match model {
         MorphogenesisModel::GrayScott => "gray_scott".to_string(),
         MorphogenesisModel::FitzhughNagumo => "fitzhugh_nagumo".to_string(),
+        MorphogenesisModel::Lenia => "lenia".to_string(),
     }
 }
 
 fn parse_morphogenesis_model(label: &str) -> MorphogenesisModel {
     match label {
         "fitzhugh_nagumo" => MorphogenesisModel::FitzhughNagumo,
+        "lenia" => MorphogenesisModel::Lenia,
         _ => MorphogenesisModel::GrayScott,
+    }
+}
+
+/// Label for a resolved [`LeniaPreset`] — round-trip display only, same
+/// convention as `morphogenesis_fhn_preset_label`.
+pub(crate) fn morphogenesis_lenia_preset_label(preset: LeniaPreset) -> String {
+    match preset {
+        LeniaPreset::Orbium => "orbium".to_string(),
+        LeniaPreset::Geminium => "geminium".to_string(),
+        LeniaPreset::Soup => "soup".to_string(),
     }
 }
 
@@ -6675,9 +6687,13 @@ pub(crate) struct QueueAddMorphogenesisSequenceRequest<'a> {
     pub(crate) preset_label: String,
     /// FHN preset label, same "display only" convention as `preset_label`.
     pub(crate) fhn_preset_label: String,
+    /// Lenia preset label, same "display only" convention as `preset_label`.
+    pub(crate) lenia_preset_label: String,
     pub(crate) settings: MorphogenesisSettings,
     /// Track A1: only consulted when `model == FitzhughNagumo`.
     pub(crate) fhn_settings: FhnSettings,
+    /// Track A2: only consulted when `model == Lenia`.
+    pub(crate) lenia_settings: LeniaSettings,
     pub(crate) composite: MorphogenesisCompositeSettings,
     /// Field View milestone: which representation the job renders
     /// (`OutputView::Composite` = pre-milestone default).
@@ -6709,8 +6725,10 @@ pub(crate) fn queue_add_morphogenesis_sequence(
         model,
         preset_label,
         fhn_preset_label,
+        lenia_preset_label,
         settings,
         fhn_settings,
+        lenia_settings,
         composite,
         output_view,
         project_path,
@@ -6724,12 +6742,14 @@ pub(crate) fn queue_add_morphogenesis_sequence(
         named_modulator_midi,
     } = request;
 
-    // Track A1-S2 fix: only the ACTIVE model's settings are validated (see
-    // render.rs's matching comment) — the inactive struct is never
-    // consulted, and FHN's inject legally exceeds Gray-Scott's [0,1] range.
+    // Track A1-S2 fix (extended for Lenia): only the ACTIVE model's settings
+    // are validated (see render.rs's matching comment) — an inactive struct
+    // is never consulted, and FHN's inject legally exceeds Gray-Scott's/
+    // Lenia's [0,1] range.
     match model {
         MorphogenesisModel::GrayScott => settings.validate()?,
         MorphogenesisModel::FitzhughNagumo => fhn_settings.validate()?,
+        MorphogenesisModel::Lenia => lenia_settings.validate()?,
     }
     composite.validate()?;
     validate_queued_sequence_timing(frames, frame_rate)?;
@@ -6761,10 +6781,16 @@ pub(crate) fn queue_add_morphogenesis_sequence(
     let job_id = format!("job-{:04}", queue.jobs.len() + 1);
     let job_output_dir = output_root_dir.join(&job_id);
 
-    // Track A1: du/dt/substeps/sim_scale/seed_threshold/seed/inject are
-    // shared knob names across models — persist whichever model is
-    // actually active so queue-run reconstructs the correct settings.
-    let (du, dt, substeps, sim_scale, seed_threshold, seed, inject) = match model {
+    // Track A1 (extended for Lenia): du/dt/substeps/sim_scale/
+    // seed_threshold/seed/inject/erode are shared knob names across models
+    // — persist whichever model is actually active so queue-run
+    // reconstructs the correct settings. FHN has no `du`-analogue-free
+    // `erode` (only Gray-Scott/Lenia's `A`/`V` support the additive erode
+    // equation) and Lenia has no `du` (its diffusion knob is the kernel
+    // `radius`/`mu`/`sigma`, persisted separately below) — both placeholder
+    // to `0.0` in the arm that doesn't have the concept, harmless since the
+    // OTHER model's reconstruction never reads it.
+    let (du, dt, substeps, sim_scale, seed_threshold, seed, inject, erode) = match model {
         MorphogenesisModel::GrayScott => (
             settings.du,
             settings.dt,
@@ -6773,6 +6799,7 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             settings.seed_threshold,
             settings.seed,
             settings.inject,
+            settings.erode,
         ),
         MorphogenesisModel::FitzhughNagumo => (
             fhn_settings.du,
@@ -6782,6 +6809,17 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             fhn_settings.seed_threshold,
             fhn_settings.seed,
             fhn_settings.inject,
+            0.0,
+        ),
+        MorphogenesisModel::Lenia => (
+            0.0,
+            lenia_settings.dt,
+            lenia_settings.substeps,
+            lenia_settings.sim_scale,
+            lenia_settings.seed_threshold,
+            lenia_settings.seed,
+            lenia_settings.inject,
+            lenia_settings.erode,
         ),
     };
 
@@ -6801,6 +6839,10 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             a: fhn_settings.a,
             b: fhn_settings.b,
             stimulus: fhn_settings.stimulus,
+            lenia_preset: lenia_preset_label,
+            lenia_radius: lenia_settings.radius,
+            lenia_mu: lenia_settings.mu,
+            lenia_sigma: lenia_settings.sigma,
             du,
             dv: settings.dv,
             feed: settings.feed,
@@ -6825,7 +6867,7 @@ pub(crate) fn queue_add_morphogenesis_sequence(
             shade_shininess: composite.shade_shininess,
             output_view: morphogenesis_output_view_label(output_view),
             inject,
-            erode: settings.erode,
+            erode,
             inject_source: morphogenesis_inject_source_label(settings.inject_source),
             coverage_target: settings.coverage_target,
             modulation_routes: modulation.routes,
@@ -6892,6 +6934,10 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         a,
         b,
         stimulus,
+        lenia_preset: _lenia_preset,
+        lenia_radius,
+        lenia_mu,
+        lenia_sigma,
         du,
         dv,
         feed,
@@ -6979,6 +7025,23 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
         inject,
         inject_source: parse_morphogenesis_inject_source(&inject_source),
     };
+    // Track A2: same shared-knob-name reuse as FHN above; `lenia_radius`/
+    // `lenia_mu`/`lenia_sigma` are Lenia-only persisted fields (no shared
+    // analogue), always round-tripped regardless of the active model,
+    // mirroring epsilon/a/b/stimulus's own always-present convention.
+    let lenia_settings = LeniaSettings {
+        radius: lenia_radius,
+        mu: lenia_mu,
+        sigma: lenia_sigma,
+        dt,
+        substeps,
+        sim_scale,
+        seed_threshold,
+        seed,
+        inject,
+        erode,
+        inject_source: parse_morphogenesis_inject_source(&inject_source),
+    };
     let model = parse_morphogenesis_model(&model);
     let composite = MorphogenesisCompositeSettings {
         pattern_mix,
@@ -7006,6 +7069,7 @@ pub(crate) fn queue_run_morphogenesis_sequence(queue_path: &Path) -> Result<(), 
             model,
             settings,
             fhn_settings,
+            lenia_settings,
             composite,
             output_view,
             job_id: &job_id,

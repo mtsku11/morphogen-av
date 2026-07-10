@@ -1433,16 +1433,18 @@ pub const FHN_SAFETY_BOX: f32 = 3.0;
 /// front.
 pub const FHN_INJECT_RANGE: (f32, f32) = (0.0, 8.0);
 
-/// Which of the two field models a `render-morphogenesis-sequence` render
-/// uses. `#[serde(default)]` (`GrayScott`) so every pre-A1 checkpoint/queue
-/// task (no `model` key at all) deserializes as Gray-Scott and stays
-/// resumable — continuity anchor FHN0.
+/// Which field model a `render-morphogenesis-sequence` render uses.
+/// `#[serde(default)]` (`GrayScott`) so every pre-A1 checkpoint/queue task
+/// (no `model` key at all) deserializes as Gray-Scott and stays resumable —
+/// continuity anchor FHN0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MorphogenesisModel {
     #[default]
     GrayScott,
     FitzhughNagumo,
+    /// Track A2 (`docs/MORPHOGENESIS_LENIA_MILESTONE.md`).
+    Lenia,
 }
 
 /// FitzHugh–Nagumo parameters + sim/seeding knobs, parallel in shape to
@@ -1792,6 +1794,369 @@ pub fn fhn_display_field(field: &MorphogenesisField) -> Result<MorphogenesisFiel
         .collect();
     let dummy_u = vec![1.0_f32; field.u.len()];
     MorphogenesisField::new(field.width, field.height, dummy_u, display_v)
+}
+
+// ─── Track A2: Lenia continuous cellular automata ──────────────────────────
+//
+// `docs/MORPHOGENESIS_LENIA_MILESTONE.md`: the third field model, selected by
+// `--model lenia`. A single scalar channel `A ∈ [0,1]` (stored in
+// [`MorphogenesisField`]'s `.v` — already the exact display/composite
+// contract `.v` has for Gray-Scott, so NO display adapter is needed, unlike
+// FHN's signed `u`) evolves under a ring-kernel convolution + a bell-shaped
+// growth mapping:
+//
+// ```text
+// A(t+dt) = clamp01( A + dt * G( (K * A)(x) ) )
+// K        = normalized gaussian-shell ring kernel, radius R
+// G(u)     = 2*exp(-(u-mu)^2 / (2*sigma^2)) - 1
+// ```
+//
+// `.u` is unused (dummy `1.0`, mirroring FHN's throwaway-channel convention)
+// — gather-only, deterministic, direct O(W*H*R^2) convolution (an FFT/
+// separable port is an optimization slice, not the MVP, per the handoff).
+
+/// Algorithm identifier for the Lenia model — distinct from both
+/// [`MORPHOGENESIS_ALGORITHM`] and [`MORPHOGENESIS_FHN_ALGORITHM`] so a
+/// `--model` change on an existing output directory can never be mistaken
+/// for a resumable checkpoint of either other model.
+pub const MORPHOGENESIS_LENIA_ALGORITHM: &str = "morphogenesis_lenia_cpu_v1";
+
+/// Lenia's frame-zero/speckle seeding stamps a filled disc (radius
+/// `settings.radius`) at every seed site rather than a single pixel (unlike
+/// Gray-Scott/FHN): a lone active pixel has essentially zero mass under the
+/// normalized ring kernel's convolution, so `G(K*A) = G(~0)` is strongly
+/// negative for every preset's `mu > 0` and the pixel dies before the next
+/// substep — there is no reaction term to spread it, unlike reaction-
+/// diffusion. A filled disc gives the kernel enough local density to read a
+/// meaningful `K*A` at the seed site. Because a full disc is stamped at
+/// every seeded site, the speckle density is deliberately much sparser than
+/// Gray-Scott/FHN's shared 0.2% (each hit here covers a whole neighbourhood,
+/// not one cell).
+const LENIA_SPECKLE_DENSITY: f32 = 0.0004;
+
+/// Lenia parameters + sim/seeding knobs, parallel in shape to
+/// [`FhnSettings`]. `inject`/`erode` are plain additive/multiplicative `A`
+/// perturbations (the SAME `[0,1]` meaning as Gray-Scott's, unlike FHN's
+/// stimulus-scaled kick) since `A` is already a `[0,1]` density like `V`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LeniaSettings {
+    /// Ring kernel radius, in sim cells.
+    pub radius: u32,
+    /// Growth mapping centre.
+    pub mu: f32,
+    /// Growth mapping width.
+    pub sigma: f32,
+    /// Per-substep integration step.
+    pub dt: f32,
+    /// Substeps run per output frame. `0` freezes the field (same anchor
+    /// shape as Gray-Scott's A2 / FHN's).
+    pub substeps: u32,
+    /// Sim resolution divisor relative to the carrier frame.
+    pub sim_scale: u32,
+    /// Frame-zero seed threshold: carrier luma `>=` this stamps a disc.
+    pub seed_threshold: f32,
+    /// Deterministic seed for the frame-zero speckle.
+    pub seed: u64,
+    /// Live coupling: `A += inject * w(x,y)`, clamped `[0,1]` — the SAME
+    /// equation as Gray-Scott's inject (see [`apply_lenia_inject_erode`]).
+    /// `0` = off.
+    pub inject: f32,
+    /// Live coupling: `A *= (1 - erode * (1 - w))`, same `w` as `inject`.
+    /// `0` = off.
+    pub erode: f32,
+    /// Which weight field `--inject`/`--erode` read (same [`InjectSource`]
+    /// as the other two models).
+    pub inject_source: InjectSource,
+}
+
+impl LeniaSettings {
+    /// `orbium`: settles a carrier-luma-seeded disc into a stable, bounded
+    /// "breathing membrane" blob — neither dying out nor unboundedly
+    /// expanding (empirically probed: `mu=0.2, sigma=0.1` plateaus within
+    /// ~1% mass drift over 400 frames on a 96x96 test grid; the literature
+    /// orbium atlas `mu≈0.15, sigma≈0.017` is tuned for an exact hand-crafted
+    /// glider photograph and collapses to zero within ~20 frames when seeded
+    /// from a plain disc/bump instead — this app seeds from carrier luma, not
+    /// an exact pattern, so the growth window needs to be far more forgiving;
+    /// see `docs/MORPHOGENESIS_LENIA_MILESTONE.md`).
+    pub fn orbium() -> Self {
+        Self {
+            radius: 13,
+            mu: 0.2,
+            sigma: 0.1,
+            dt: 0.05,
+            substeps: 2,
+            sim_scale: 2,
+            seed_threshold: 0.5,
+            seed: 71,
+            inject: 0.0,
+            erode: 0.0,
+            inject_source: InjectSource::Motion,
+        }
+    }
+
+    /// `geminium`: a larger-radius ring/membrane regime (also empirically
+    /// probed for a stable, non-collapsing equilibrium).
+    pub fn geminium() -> Self {
+        Self {
+            radius: 18,
+            mu: 0.24,
+            sigma: 0.09,
+            ..Self::orbium()
+        }
+    }
+
+    /// `soup`: a much lower seed threshold so most of the carrier's bright
+    /// structure stamps overlapping discs — dense, full-frame texture rather
+    /// than isolated creatures (the classic Lenia "primordial soup" look).
+    pub fn soup() -> Self {
+        Self {
+            seed_threshold: 0.15,
+            ..Self::orbium()
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), RenderError> {
+        if self.radius == 0 {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "radius must be >= 1".into(),
+            ));
+        }
+        if !self.mu.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "mu must be finite".into(),
+            ));
+        }
+        if !(self.sigma.is_finite() && self.sigma > 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "sigma must be finite and > 0".into(),
+            ));
+        }
+        if !(self.dt.is_finite() && self.dt > 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "dt must be finite and > 0".into(),
+            ));
+        }
+        if self.sim_scale == 0 {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "sim_scale must be >= 1".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.seed_threshold) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "seed_threshold must be in [0, 1]".into(),
+            ));
+        }
+        if !(self.inject.is_finite() && (0.0..=1.0).contains(&self.inject)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "inject must be finite and in [0, 1]".into(),
+            ));
+        }
+        if !(self.erode.is_finite() && (0.0..=1.0).contains(&self.erode)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "erode must be finite and in [0, 1]".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for LeniaSettings {
+    fn default() -> Self {
+        Self::orbium()
+    }
+}
+
+/// Named Lenia presets, parallel to [`MorphogenesisPreset`]/[`FhnPreset`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeniaPreset {
+    #[default]
+    Orbium,
+    Geminium,
+    Soup,
+}
+
+impl LeniaPreset {
+    pub fn settings(self) -> LeniaSettings {
+        match self {
+            Self::Orbium => LeniaSettings::orbium(),
+            Self::Geminium => LeniaSettings::geminium(),
+            Self::Soup => LeniaSettings::soup(),
+        }
+    }
+}
+
+/// One non-zero ring-kernel tap: `(dx, dy, weight)`, weights normalized to
+/// sum to `1.0` over the whole kernel. A single gaussian shell centred at
+/// `0.5 * radius` (width `0.15 * radius`) — the "one ring" Lenia kernel
+/// family (`orbium`/`geminium` are both single-ring species).
+fn lenia_kernel_taps(radius: u32) -> Vec<(i32, i32, f32)> {
+    let r = radius as f32;
+    let ir = radius as i32;
+    let shell_center = 0.5;
+    let shell_width = 0.15;
+    let mut taps = Vec::new();
+    let mut sum = 0.0_f32;
+    for dy in -ir..=ir {
+        for dx in -ir..=ir {
+            let dist = ((dx * dx + dy * dy) as f32).sqrt();
+            if dist > 0.0 && dist <= r {
+                let rn = dist / r;
+                let shell = (rn - shell_center) / shell_width;
+                let weight = (-0.5 * shell * shell).exp();
+                if weight > 1e-6 {
+                    taps.push((dx, dy, weight));
+                    sum += weight;
+                }
+            }
+        }
+    }
+    if sum > 0.0 {
+        for tap in taps.iter_mut() {
+            tap.2 /= sum;
+        }
+    }
+    taps
+}
+
+/// The bell-shaped growth mapping: `2*exp(-(u-mu)^2 / (2*sigma^2)) - 1`,
+/// ranging over `[-1, 1]` — positive (growth) near `u == mu`, negative
+/// (decay) away from it.
+fn lenia_growth(u: f32, mu: f32, sigma: f32) -> f32 {
+    let z = (u - mu) / sigma;
+    2.0 * (-0.5 * z * z).exp() - 1.0
+}
+
+/// Stamp a filled disc of `1.0` into `v` (clamped edges — out-of-bounds taps
+/// are simply skipped, not wrapped, matching the stencil convention used
+/// elsewhere in this module) — see the module-level comment for why Lenia
+/// seeds discs rather than single pixels.
+fn stamp_disc(v: &mut [f32], width: u32, height: u32, cx: u32, cy: u32, radius: i32) {
+    let w = width as usize;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if dx * dx + dy * dy > radius * radius {
+                continue;
+            }
+            let x = cx as i32 + dx;
+            let y = cy as i32 + dy;
+            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                continue;
+            }
+            let idx = (y as usize) * w + (x as usize);
+            v[idx] = 1.0;
+        }
+    }
+}
+
+/// Frame-zero seed: `A = 0` everywhere except a filled disc (radius
+/// `settings.radius`) stamped at every carrier-luma-thresholded cell plus the
+/// deterministic speckle ([`LENIA_SPECKLE_DENSITY`]). `.u` is unused (dummy
+/// `1.0`).
+pub fn seed_lenia_field(
+    carrier_frame_zero: &ImageBufferF32,
+    settings: &LeniaSettings,
+) -> Result<MorphogenesisField, RenderError> {
+    settings.validate()?;
+    let (width, height) = morphogenesis_field_dimensions(
+        carrier_frame_zero.width,
+        carrier_frame_zero.height,
+        settings.sim_scale,
+    );
+    let count = (width as usize) * (height as usize);
+    let mut v = vec![0.0_f32; count];
+    let u = vec![1.0_f32; count];
+    let disc_radius = settings.radius as i32;
+
+    for y in 0..height {
+        for x in 0..width {
+            let luma = carrier_luma_at_sim_cell(carrier_frame_zero, settings.sim_scale, x, y)?;
+            let luma_seeded = luma >= settings.seed_threshold;
+            let speckle_seeded = seed_hash_unit(settings.seed, x, y) < LENIA_SPECKLE_DENSITY;
+            if luma_seeded || speckle_seeded {
+                stamp_disc(&mut v, width, height, x, y, disc_radius);
+            }
+        }
+    }
+
+    MorphogenesisField::new(width, height, u, v)
+}
+
+/// One Lenia substep: `A` convolved with the normalized ring kernel
+/// ([`lenia_kernel_taps`]), passed through the growth mapping
+/// ([`lenia_growth`]), integrated with a forward-Euler step, clamped
+/// `[0,1]`. Clamped (not toroidal) edges: out-of-frame kernel taps are
+/// simply skipped rather than sampled, the same "footage has a frame"
+/// declaration as the other two models' Laplacian stencils. Gather-only from
+/// the previous buffer, so raster order never affects the result.
+pub fn lenia_substep(
+    field: &MorphogenesisField,
+    settings: &LeniaSettings,
+) -> Result<MorphogenesisField, RenderError> {
+    let width = field.width;
+    let height = field.height;
+    let w = width as usize;
+    let kernel = lenia_kernel_taps(settings.radius);
+    let mut new_v = vec![0.0_f32; field.v.len()];
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = (y as usize) * w + (x as usize);
+            let mut acc = 0.0_f32;
+            for &(dx, dy, weight) in &kernel {
+                let sx = x as i32 + dx;
+                let sy = y as i32 + dy;
+                if sx < 0 || sy < 0 || sx >= width as i32 || sy >= height as i32 {
+                    continue;
+                }
+                acc += weight * field.v[(sy as usize) * w + (sx as usize)];
+            }
+            let growth = lenia_growth(acc, settings.mu, settings.sigma);
+            new_v[idx] = (field.v[idx] + settings.dt * growth).clamp(0.0, 1.0);
+        }
+    }
+
+    MorphogenesisField::new(width, height, field.u.clone(), new_v)
+}
+
+/// Advance one output frame: `settings.substeps` Lenia substeps. `substeps
+/// == 0` leaves the field unchanged.
+pub fn advance_lenia_frame(
+    field: &MorphogenesisField,
+    settings: &LeniaSettings,
+) -> Result<MorphogenesisField, RenderError> {
+    let mut current = field.clone();
+    for _ in 0..settings.substeps {
+        current = lenia_substep(&current, settings)?;
+    }
+    Ok(current)
+}
+
+/// Live coupling: the SAME equations as Gray-Scott's
+/// [`apply_inject_erode`] (`A += inject * w`, then `A *= (1 - erode * (1 -
+/// w))`, both clamped `[0,1]`), applied to `A` (`field.v`) — declared
+/// reusable because Lenia's `A` shares Gray-Scott's `V`'s exact `[0,1]`
+/// density meaning (unlike FHN's signed `u`, which needed a differently-
+/// scaled discrete kick instead).
+pub fn apply_lenia_inject_erode(
+    field: &MorphogenesisField,
+    settings: &LeniaSettings,
+    w: &[f32],
+) -> Result<MorphogenesisField, RenderError> {
+    if w.len() != field.v.len() {
+        return Err(RenderError::InvalidMorphogenesisField(format!(
+            "Lenia inject/erode weight field expected {} samples, got {}",
+            field.v.len(),
+            w.len()
+        )));
+    }
+    let mut v = field.v.clone();
+    for (value, &w) in v.iter_mut().zip(w) {
+        *value = (*value + settings.inject * w).clamp(0.0, 1.0);
+        *value = (*value * (1.0 - settings.erode * (1.0 - w))).clamp(0.0, 1.0);
+    }
+    MorphogenesisField::new(field.width, field.height, field.u.clone(), v)
 }
 
 #[cfg(test)]
@@ -3161,6 +3526,200 @@ mod tests {
             injected.u.iter().all(|&u| u > fire_threshold),
             "FHN6: a full-strength inject must push u past the fire threshold everywhere \
              (a never-seeded region must be able to fire a new pulse from live footage)"
+        );
+    }
+
+    // ─── Track A2: Lenia ────────────────────────────────────────────────────
+
+    fn lenia_mass(field: &MorphogenesisField) -> f32 {
+        field.v.iter().sum()
+    }
+
+    /// LEN0 (continuity): all three algorithm ids are pairwise distinct, so a
+    /// `--model` change on an existing output directory can never be
+    /// mistaken for a resumable checkpoint of either other model.
+    #[test]
+    fn len0_algorithm_ids_are_pairwise_distinct() {
+        assert_ne!(MORPHOGENESIS_ALGORITHM, MORPHOGENESIS_LENIA_ALGORITHM);
+        assert_ne!(MORPHOGENESIS_FHN_ALGORITHM, MORPHOGENESIS_LENIA_ALGORITHM);
+    }
+
+    /// LEN1 (quiescence): an entirely empty field (`A = 0` everywhere, no
+    /// seed) stays at zero — `G(K*A) = G(0)` is strongly negative for every
+    /// preset's `mu > 0`, so there is no spontaneous generation, and `0` is
+    /// already the floor of the `[0,1]` clamp.
+    #[test]
+    fn len1_empty_field_stays_quiescent() {
+        for preset in [
+            LeniaPreset::Orbium,
+            LeniaPreset::Geminium,
+            LeniaPreset::Soup,
+        ] {
+            let settings = LeniaSettings {
+                sim_scale: 1,
+                ..preset.settings()
+            };
+            let count = 32 * 32;
+            let mut field =
+                MorphogenesisField::new(32, 32, vec![1.0; count], vec![0.0; count]).expect("build");
+            for _ in 0..60 {
+                field = advance_lenia_frame(&field, &settings).expect("advance");
+            }
+            assert!(
+                field.v.iter().all(|&a| a == 0.0),
+                "{preset:?}: an unseeded field must stay at exactly zero"
+            );
+        }
+    }
+
+    /// LEN2 (aliveness, falsifiable): a single carrier-luma-seeded disc
+    /// neither dies out nor unboundedly expands — the handoff's own
+    /// "mass stays in a band" criterion, adapted for a non-translating
+    /// stable blob (this app's disc/luma seeding, unlike a hand-crafted
+    /// glider photograph, settles to a static equilibrium rather than
+    /// gliding — see [`LeniaSettings::orbium`]'s doc comment). Checked by
+    /// comparing the mean mass of an EARLY window (after the initial
+    /// transient) against a LATE window: a dying preset's late mass would be
+    /// ~0, an exploding preset's late mass would keep climbing well past the
+    /// early window.
+    #[test]
+    fn len2_seeded_disc_settles_to_a_bounded_stable_mass() {
+        for preset in [LeniaPreset::Orbium, LeniaPreset::Geminium] {
+            let settings = LeniaSettings {
+                sim_scale: 1,
+                ..preset.settings()
+            };
+            let size = 64u32;
+            let count = (size * size) as usize;
+            let mut v = vec![0.0_f32; count];
+            stamp_disc(
+                &mut v,
+                size,
+                size,
+                size / 2,
+                size / 2,
+                settings.radius as i32,
+            );
+            let u = vec![1.0_f32; count];
+            let mut field = MorphogenesisField::new(size, size, u, v).expect("build field");
+
+            let mut masses = Vec::with_capacity(180);
+            for _ in 0..180 {
+                field = advance_lenia_frame(&field, &settings).expect("advance");
+                masses.push(lenia_mass(&field));
+            }
+            let early_mean: f32 = masses[60..100].iter().sum::<f32>() / 40.0;
+            let late_mean: f32 = masses[140..180].iter().sum::<f32>() / 40.0;
+
+            assert!(
+                early_mean > 50.0,
+                "{preset:?}: must not die out (early_mean={early_mean})"
+            );
+            assert!(
+                late_mean > early_mean * 0.5 && late_mean < early_mean * 1.5,
+                "{preset:?}: mass must stay in a bounded band, not die or explode \
+                 (early_mean={early_mean}, late_mean={late_mean})"
+            );
+        }
+    }
+
+    /// Anchor mirroring Gray-Scott's A2 / FHN's own frozen-field behaviour:
+    /// `substeps == 0` leaves the field byte-identical forever.
+    #[test]
+    fn len3_zero_substeps_freezes_the_field() {
+        let settings = LeniaSettings {
+            substeps: 0,
+            sim_scale: 1,
+            ..LeniaSettings::orbium()
+        };
+        let size = 32u32;
+        let count = (size * size) as usize;
+        let mut v = vec![0.0_f32; count];
+        stamp_disc(
+            &mut v,
+            size,
+            size,
+            size / 2,
+            size / 2,
+            settings.radius as i32,
+        );
+        let u = vec![1.0_f32; count];
+        let field = MorphogenesisField::new(size, size, u, v).expect("build field");
+
+        let advanced = advance_lenia_frame(&field, &settings).expect("advance");
+        assert_eq!(
+            advanced, field,
+            "substeps == 0 must leave the field unchanged"
+        );
+    }
+
+    /// LEN4 (checkpoint round-trip): resuming from the unquantized RGBA32F
+    /// state must be byte-identical to an uninterrupted run, mirroring
+    /// FHN4/Gray-Scott's A4 — proving the shared codec round-trips Lenia's
+    /// `A` (stored in `.v`) without loss.
+    #[test]
+    fn len4_resume_matches_uninterrupted_via_rgba32f_round_trip() {
+        let settings = LeniaSettings {
+            sim_scale: 1,
+            ..LeniaSettings::orbium()
+        };
+        let carrier = nucleus_carrier(24, 24);
+
+        let mut uninterrupted = seed_lenia_field(&carrier, &settings).expect("seed");
+        for _ in 0..5 {
+            uninterrupted = advance_lenia_frame(&uninterrupted, &settings).expect("advance");
+        }
+
+        let mut resumed = seed_lenia_field(&carrier, &settings).expect("seed");
+        for _ in 0..2 {
+            resumed = advance_lenia_frame(&resumed, &settings).expect("advance");
+        }
+        let packed = morphogenesis_field_to_rgba32f(&resumed).expect("pack");
+        let mut resumed = morphogenesis_field_from_rgba32f(&packed).expect("unpack");
+        for _ in 0..3 {
+            resumed = advance_lenia_frame(&resumed, &settings).expect("advance");
+        }
+
+        assert_eq!(
+            resumed, uninterrupted,
+            "LEN4: resuming from the unquantized RGBA32F state must be byte-identical to an uninterrupted run"
+        );
+    }
+
+    /// LEN5 (composite/field-view reuse, no adapter needed): Lenia's `A` is
+    /// stored directly in `.v` — already the exact `[0,1]` display contract
+    /// Gray-Scott's `V` has — so the two existing output-view functions
+    /// consume a raw Lenia field UNCHANGED, with no `fhn_display_field`-style
+    /// adapter at all. Proves the claim rather than asserting it.
+    #[test]
+    fn len5_field_feeds_the_existing_output_views_with_no_adapter() {
+        let settings = LeniaSettings {
+            sim_scale: 1,
+            ..LeniaSettings::orbium()
+        };
+        let carrier = nucleus_carrier(48, 48);
+        let mut field = seed_lenia_field(&carrier, &settings).expect("seed");
+        for _ in 0..30 {
+            field = advance_lenia_frame(&field, &settings).expect("advance");
+        }
+
+        let field_view = render_v_field_grayscale_upsampled(&field, carrier.width, carrier.height)
+            .expect("field view");
+        let first = field_view.pixels[0];
+        assert!(
+            field_view.pixels.iter().any(|p| p != &first),
+            "LEN5: the field view must be non-flat once the seed has grown"
+        );
+
+        let composite_settings = MorphogenesisCompositeSettings {
+            pattern_mix: 0.9,
+            ..MorphogenesisCompositeSettings::passthrough()
+        };
+        let composite = composite_morphogenesis_frame(&carrier, &field, &composite_settings)
+            .expect("composite");
+        assert!(
+            composite.pixels.iter().any(|p| p != &carrier.pixels[0]),
+            "LEN5: the composite view must diverge from the plain carrier once the seed has grown"
         );
     }
 }

@@ -5,9 +5,9 @@ use morphogen_render::{
     ChannelShiftSettings, CoagulationSettings, ConvolutionBlendSettings, DispersionSettings,
     FhnPreset, FhnSettings, FieldParticleSettings, FlowFeedbackSettings, FluidAdvectSettings,
     FluidAdvectTwoSourceSettings, FluidMosaicSettings, GeneratorSettings, GranularMosaicSettings,
-    MorphogenesisCompositeSettings, MorphogenesisModel, MorphogenesisPreset, MorphogenesisSettings,
-    PaletteQuantizeSettings, PixelSortSettings, RetroStaticSettings, RuttEtraSettings,
-    StructureMode, VideoVocoderSettings,
+    LeniaPreset, LeniaSettings, MorphogenesisCompositeSettings, MorphogenesisModel,
+    MorphogenesisPreset, MorphogenesisSettings, PaletteQuantizeSettings, PixelSortSettings,
+    RetroStaticSettings, RuttEtraSettings, StructureMode, VideoVocoderSettings,
 };
 
 mod args;
@@ -1842,6 +1842,10 @@ fn run() -> Result<(), CliError> {
             fhn_a,
             fhn_b,
             fhn_stimulus,
+            lenia_preset,
+            lenia_radius,
+            lenia_mu,
+            lenia_sigma,
             du,
             dv,
             feed,
@@ -1953,6 +1957,36 @@ fn run() -> Result<(), CliError> {
             fhn_settings.inject = inject;
             fhn_settings.inject_source = inject_source.into();
 
+            // Track A2: same shared-knob-name rule as FHN above.
+            let mut lenia_settings: LeniaSettings = LeniaPreset::from(lenia_preset).settings();
+            if let Some(lenia_radius) = lenia_radius {
+                lenia_settings.radius = lenia_radius;
+            }
+            if let Some(lenia_mu) = lenia_mu {
+                lenia_settings.mu = lenia_mu;
+            }
+            if let Some(lenia_sigma) = lenia_sigma {
+                lenia_settings.sigma = lenia_sigma;
+            }
+            if let Some(dt) = dt {
+                lenia_settings.dt = dt;
+            }
+            if let Some(substeps) = substeps {
+                lenia_settings.substeps = substeps;
+            }
+            if let Some(sim_scale) = sim_scale {
+                lenia_settings.sim_scale = sim_scale;
+            }
+            if let Some(seed_threshold) = seed_threshold {
+                lenia_settings.seed_threshold = seed_threshold;
+            }
+            if let Some(seed) = seed {
+                lenia_settings.seed = seed;
+            }
+            lenia_settings.inject = inject;
+            lenia_settings.erode = erode;
+            lenia_settings.inject_source = inject_source.into();
+
             let composite = MorphogenesisCompositeSettings {
                 pattern_mix,
                 displace,
@@ -1972,6 +2006,7 @@ fn run() -> Result<(), CliError> {
                 model,
                 settings,
                 fhn_settings,
+                lenia_settings,
                 composite,
                 output_view: output_view.into(),
                 job_id: "direct-morphogenesis-sequence",
@@ -2005,6 +2040,10 @@ fn run() -> Result<(), CliError> {
             fhn_a,
             fhn_b,
             fhn_stimulus,
+            lenia_preset,
+            lenia_radius,
+            lenia_mu,
+            lenia_sigma,
             du,
             dv,
             feed,
@@ -2043,6 +2082,8 @@ fn run() -> Result<(), CliError> {
             let model: MorphogenesisModel = model.into();
             let preset_label = morphogenesis_preset_label(MorphogenesisPreset::from(preset));
             let fhn_preset_label = morphogenesis_fhn_preset_label(FhnPreset::from(fhn_preset));
+            let lenia_preset_label =
+                morphogenesis_lenia_preset_label(LeniaPreset::from(lenia_preset));
             let mut settings: MorphogenesisSettings = MorphogenesisPreset::from(preset).settings();
             if let Some(du) = du {
                 settings.du = du;
@@ -2113,6 +2154,35 @@ fn run() -> Result<(), CliError> {
             fhn_settings.inject = inject;
             fhn_settings.inject_source = inject_source.into();
 
+            let mut lenia_settings: LeniaSettings = LeniaPreset::from(lenia_preset).settings();
+            if let Some(lenia_radius) = lenia_radius {
+                lenia_settings.radius = lenia_radius;
+            }
+            if let Some(lenia_mu) = lenia_mu {
+                lenia_settings.mu = lenia_mu;
+            }
+            if let Some(lenia_sigma) = lenia_sigma {
+                lenia_settings.sigma = lenia_sigma;
+            }
+            if let Some(dt) = dt {
+                lenia_settings.dt = dt;
+            }
+            if let Some(substeps) = substeps {
+                lenia_settings.substeps = substeps;
+            }
+            if let Some(sim_scale) = sim_scale {
+                lenia_settings.sim_scale = sim_scale;
+            }
+            if let Some(seed_threshold) = seed_threshold {
+                lenia_settings.seed_threshold = seed_threshold;
+            }
+            if let Some(seed) = seed {
+                lenia_settings.seed = seed;
+            }
+            lenia_settings.inject = inject;
+            lenia_settings.erode = erode;
+            lenia_settings.inject_source = inject_source.into();
+
             let composite = MorphogenesisCompositeSettings {
                 pattern_mix,
                 displace,
@@ -2134,8 +2204,10 @@ fn run() -> Result<(), CliError> {
                 model,
                 preset_label,
                 fhn_preset_label,
+                lenia_preset_label,
                 settings,
                 fhn_settings,
+                lenia_settings,
                 composite,
                 output_view: output_view.into(),
                 project_path: project_path.as_deref(),

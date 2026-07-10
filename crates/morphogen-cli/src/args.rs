@@ -14,9 +14,9 @@ use morphogen_core::{
     VideoAudioRouteFilterType, VideoAudioRouteMode, VideoAudioRouteSampling, VideoVocoderMode,
 };
 use morphogen_render::{
-    BlendMode, CoagulationFlowSource, FhnPreset, GeneratorPreset, InjectSource, MatteSource,
-    ModulationSampling, MorphogenesisModel, MorphogenesisPreset, OutputView, PatternColorMode,
-    ScanlineFilter, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
+    BlendMode, CoagulationFlowSource, FhnPreset, GeneratorPreset, InjectSource, LeniaPreset,
+    MatteSource, ModulationSampling, MorphogenesisModel, MorphogenesisPreset, OutputView,
+    PatternColorMode, ScanlineFilter, StructureMode, VectorRemixMode, CONVOLUTION_BLEND_ALGORITHM,
     CONVOLUTION_BLEND_COLOR_ALGORITHM, GRANULAR_MOSAIC_ALGORITHM, MULTIMODAL_GRAIN_ALGORITHM,
 };
 #[derive(Debug, Parser)]
@@ -2153,6 +2153,21 @@ pub(crate) enum Commands {
         /// pushed. Overrides the FHN preset when given.
         #[arg(long)]
         fhn_stimulus: Option<f32>,
+        /// Lenia named preset (only consulted when `--model lenia`).
+        #[arg(long, value_enum, default_value_t = CliLeniaPreset::Orbium)]
+        lenia_preset: CliLeniaPreset,
+        /// Lenia ring-kernel radius, in sim cells. Overrides the Lenia preset
+        /// when given.
+        #[arg(long)]
+        lenia_radius: Option<u32>,
+        /// Lenia growth-mapping centre `mu`. Overrides the Lenia preset when
+        /// given.
+        #[arg(long)]
+        lenia_mu: Option<f32>,
+        /// Lenia growth-mapping width `sigma`. Overrides the Lenia preset
+        /// when given.
+        #[arg(long)]
+        lenia_sigma: Option<f32>,
         /// `U` diffusion rate (Gray-Scott) / FHN's `Du`. Overrides the preset
         /// when given.
         #[arg(long)]
@@ -2166,15 +2181,15 @@ pub(crate) enum Commands {
         /// Kill rate. Overrides the preset when given.
         #[arg(long)]
         kill: Option<f32>,
-        /// Per-substep integration step (both models). Overrides the preset
+        /// Per-substep integration step (all models). Overrides the preset
         /// when given.
         #[arg(long)]
         dt: Option<f32>,
-        /// Substeps per output frame, both models. `0` freezes the field
+        /// Substeps per output frame, all models. `0` freezes the field
         /// (anchor A2). Overrides the preset when given.
         #[arg(long)]
         substeps: Option<u32>,
-        /// Sim resolution divisor relative to the carrier frame, both
+        /// Sim resolution divisor relative to the carrier frame, all
         /// models. Overrides the preset when given.
         #[arg(long)]
         sim_scale: Option<u32>,
@@ -3792,6 +3807,21 @@ pub(crate) enum Commands {
         /// pushed. Overrides the FHN preset when given.
         #[arg(long)]
         fhn_stimulus: Option<f32>,
+        /// Lenia named preset (only consulted when `--model lenia`).
+        #[arg(long, value_enum, default_value_t = CliLeniaPreset::Orbium)]
+        lenia_preset: CliLeniaPreset,
+        /// Lenia ring-kernel radius, in sim cells. Overrides the Lenia preset
+        /// when given.
+        #[arg(long)]
+        lenia_radius: Option<u32>,
+        /// Lenia growth-mapping centre `mu`. Overrides the Lenia preset when
+        /// given.
+        #[arg(long)]
+        lenia_mu: Option<f32>,
+        /// Lenia growth-mapping width `sigma`. Overrides the Lenia preset
+        /// when given.
+        #[arg(long)]
+        lenia_sigma: Option<f32>,
         /// `U` diffusion rate (Gray-Scott) / FHN's `Du`. Overrides the preset
         /// when given.
         #[arg(long)]
@@ -3805,15 +3835,15 @@ pub(crate) enum Commands {
         /// Kill rate. Overrides the preset when given.
         #[arg(long)]
         kill: Option<f32>,
-        /// Per-substep integration step (both models). Overrides the preset
+        /// Per-substep integration step (all models). Overrides the preset
         /// when given.
         #[arg(long)]
         dt: Option<f32>,
-        /// Substeps per output frame, both models. `0` freezes the field.
+        /// Substeps per output frame, all models. `0` freezes the field.
         /// Overrides the preset when given.
         #[arg(long)]
         substeps: Option<u32>,
-        /// Sim resolution divisor relative to the carrier frame, both
+        /// Sim resolution divisor relative to the carrier frame, all
         /// models. Overrides the preset when given.
         #[arg(long)]
         sim_scale: Option<u32>,
@@ -4069,12 +4099,13 @@ impl From<CliMorphogenesisPreset> for MorphogenesisPreset {
     }
 }
 
-/// Track A1 `--model` (see [`MorphogenesisModel`]).
+/// Track A1/A2 `--model` (see [`MorphogenesisModel`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub(crate) enum CliMorphogenesisModel {
     #[default]
     GrayScott,
     FitzhughNagumo,
+    Lenia,
 }
 
 impl From<CliMorphogenesisModel> for MorphogenesisModel {
@@ -4082,6 +4113,7 @@ impl From<CliMorphogenesisModel> for MorphogenesisModel {
         match value {
             CliMorphogenesisModel::GrayScott => Self::GrayScott,
             CliMorphogenesisModel::FitzhughNagumo => Self::FitzhughNagumo,
+            CliMorphogenesisModel::Lenia => Self::Lenia,
         }
     }
 }
@@ -4101,6 +4133,25 @@ impl From<CliFhnPreset> for FhnPreset {
             CliFhnPreset::Pulse => Self::Pulse,
             CliFhnPreset::Spiral => Self::Spiral,
             CliFhnPreset::Labyrinth => Self::Labyrinth,
+        }
+    }
+}
+
+/// Track A2 `--lenia-preset` (see [`LeniaPreset`]).
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum CliLeniaPreset {
+    #[default]
+    Orbium,
+    Geminium,
+    Soup,
+}
+
+impl From<CliLeniaPreset> for LeniaPreset {
+    fn from(value: CliLeniaPreset) -> Self {
+        match value {
+            CliLeniaPreset::Orbium => Self::Orbium,
+            CliLeniaPreset::Geminium => Self::Geminium,
+            CliLeniaPreset::Soup => Self::Soup,
         }
     }
 }

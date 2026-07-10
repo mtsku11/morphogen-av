@@ -232,6 +232,27 @@ fn default_fhn_stimulus() -> f32 {
     2.5
 }
 
+/// Lenia preset label; mirrors `morphogen_render::LeniaPreset`'s default
+/// (`Orbium`).
+fn default_lenia_preset() -> String {
+    "orbium".to_string()
+}
+
+/// Lenia default knobs; mirror `LeniaSettings::orbium()` so a pre-A2 job (no
+/// `lenia_radius`/`lenia_mu`/`lenia_sigma` keys) resolves to the exact same
+/// Lenia settings a fresh `--lenia-preset orbium` render would use.
+fn default_lenia_radius() -> u32 {
+    13
+}
+
+fn default_lenia_mu() -> f32 {
+    0.2
+}
+
+fn default_lenia_sigma() -> f32 {
+    0.1
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -1394,6 +1415,20 @@ pub enum RenderJobTask {
         /// pushed.
         #[serde(default = "default_fhn_stimulus")]
         stimulus: f32,
+        /// Lenia preset label (`orbium`/`geminium`/`soup`) — display only,
+        /// only consulted when `model == "lenia"`.
+        #[serde(default = "default_lenia_preset")]
+        lenia_preset: String,
+        /// Lenia ring-kernel radius, in sim cells. Only consulted when
+        /// `model == "lenia"`.
+        #[serde(default = "default_lenia_radius")]
+        lenia_radius: u32,
+        /// Lenia growth-mapping centre `mu`.
+        #[serde(default = "default_lenia_mu")]
+        lenia_mu: f32,
+        /// Lenia growth-mapping width `sigma`.
+        #[serde(default = "default_lenia_sigma")]
+        lenia_sigma: f32,
         /// `U` diffusion rate (Gray-Scott) / FHN's `Du` — a shared knob name,
         /// same convention as the direct CLI's `--du`.
         du: f32,
@@ -2349,10 +2384,11 @@ mod tests {
 
     #[test]
     fn morphogenesis_task_without_model_keys_defaults_to_gray_scott_and_fhn_pulse() {
-        // Track A1-S2: pre-A1 queue JSON (predating model/fhn_preset/epsilon/
-        // a/b/stimulus entirely) still parses, defaulting to Gray-Scott and
-        // FhnSettings::pulse()'s own values, so a resumed/re-run pre-A1 job
-        // resolves to the exact same render it always did.
+        // Track A1-S2/A2: pre-A1 queue JSON (predating model/fhn_preset/
+        // epsilon/a/b/stimulus/lenia_* entirely) still parses, defaulting to
+        // Gray-Scott and FhnSettings::pulse()/LeniaSettings::orbium()'s own
+        // values, so a resumed/re-run pre-A1 job resolves to the exact same
+        // render it always did.
         let json = r#"{
             "type": "render_morphogenesis_sequence",
             "carrier_frame_directory": "/tmp/car",
@@ -2383,6 +2419,10 @@ mod tests {
             a,
             b,
             stimulus,
+            lenia_preset,
+            lenia_radius,
+            lenia_mu,
+            lenia_sigma,
             ..
         } = task
         else {
@@ -2394,6 +2434,10 @@ mod tests {
         assert_eq!(a, 0.7);
         assert_eq!(b, 0.8);
         assert_eq!(stimulus, 2.5);
+        assert_eq!(lenia_preset, "orbium");
+        assert_eq!(lenia_radius, 13);
+        assert_eq!(lenia_mu, 0.2);
+        assert_eq!(lenia_sigma, 0.1);
     }
 
     #[test]
@@ -2412,6 +2456,12 @@ mod tests {
             a: 0.6,
             b: 0.75,
             stimulus: 3.0,
+            // Track A2: nonzero-from-default so the round-trip actually
+            // exercises the Lenia fields, not just their defaults.
+            lenia_preset: "geminium".to_string(),
+            lenia_radius: 18,
+            lenia_mu: 0.24,
+            lenia_sigma: 0.09,
             du: 0.16,
             dv: 0.08,
             feed: 0.0367,
