@@ -1,6 +1,15 @@
 # Morphogenesis Track A1 — FitzHugh–Nagumo excitable media (`--model`)
 
-Status: **IN PROGRESS.** Builds on
+Status: **MILESTONE COMPLETE.** A1-S1 (`2870d35`): core FHN engine + `--model`
+on the direct CLI, cargo 737/0 → 743/0. A1-S2 (`b147cfc`): `inject` joins the
+modulation registry (shared target, writes both models' settings), queue-add
++ SwiftUI ride-along, cargo → 744/0, swift 155/0 → 158/0. Clippy clean, zero
+new fmt diffs throughout. Verified end-to-end: `queue-add-morphogenesis-
+sequence --model fitzhugh-nagumo --modulate "inject=audio-rms"` → queue-run
+renders and records `algorithm: morphogenesis_fhn_cpu_v1` in the manifest.
+Flagship clip delivered (field view + shade, `inject=audio-rms` +
+`shade_azimuth=lfo(saw,0.1)`, cello fixture, audio-muxed) — reads as raised
+chrome rings expanding outward with a specular edge, never settling. Builds on
 [MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md](MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md)
 (`300fb73`) and the plan in
 [MORPHOGENESIS_EXPANSION_HANDOFF.md](MORPHOGENESIS_EXPANSION_HANDOFF.md)
