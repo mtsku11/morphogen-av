@@ -2267,6 +2267,82 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertEqual(arguments[coverageIndex + 1], "0.3")
   }
 
+  func testQueuedMorphogenesisSequenceDefaultShadeKeepsArgumentsByteIdentical() throws {
+    // Track B1: shade/shade-height/shade-azimuth/etc. default to the
+    // pre-shading knobs (RS1) — none of the six flags should ever appear
+    // unless the panel actually moves a knob (the
+    // testQueuedMorphogenesisSequenceArgumentsIncludeKnobs pin covers the
+    // exact no-shading array).
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: makeMorphogenesisRequest()
+    )
+    XCTAssertFalse(arguments.contains("--shade"))
+    XCTAssertFalse(arguments.contains("--shade-height"))
+    XCTAssertFalse(arguments.contains("--shade-azimuth"))
+    XCTAssertFalse(arguments.contains("--shade-elevation"))
+    XCTAssertFalse(arguments.contains("--shade-specular"))
+    XCTAssertFalse(arguments.contains("--shade-shininess"))
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsIncludeShadeKnobsWhenActive() throws {
+    var request = makeMorphogenesisRequest()
+    request.shade = 0.8
+    request.shadeHeight = 5.0
+    request.shadeAzimuth = 0.1
+    request.shadeElevation = 0.2
+    request.shadeSpecular = 0.5
+    request.shadeShininess = 32.0
+
+    let arguments = try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(
+      request: request
+    )
+
+    guard let shadeIndex = arguments.firstIndex(of: "--shade") else {
+      return XCTFail("expected a --shade flag")
+    }
+    XCTAssertEqual(arguments[shadeIndex + 1], "0.8")
+    guard let heightIndex = arguments.firstIndex(of: "--shade-height") else {
+      return XCTFail("expected a --shade-height flag")
+    }
+    XCTAssertEqual(arguments[heightIndex + 1], "5")
+    guard let azimuthIndex = arguments.firstIndex(of: "--shade-azimuth") else {
+      return XCTFail("expected a --shade-azimuth flag")
+    }
+    XCTAssertEqual(arguments[azimuthIndex + 1], "0.1")
+    guard let elevationIndex = arguments.firstIndex(of: "--shade-elevation") else {
+      return XCTFail("expected a --shade-elevation flag")
+    }
+    XCTAssertEqual(arguments[elevationIndex + 1], "0.2")
+    guard let specularIndex = arguments.firstIndex(of: "--shade-specular") else {
+      return XCTFail("expected a --shade-specular flag")
+    }
+    XCTAssertEqual(arguments[specularIndex + 1], "0.5")
+    guard let shininessIndex = arguments.firstIndex(of: "--shade-shininess") else {
+      return XCTFail("expected a --shade-shininess flag")
+    }
+    XCTAssertEqual(arguments[shininessIndex + 1], "32")
+  }
+
+  func testQueuedMorphogenesisSequenceArgumentsRejectOutOfRangeShadeKnobs() {
+    var invalidShade = makeMorphogenesisRequest()
+    invalidShade.shade = 1.5
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidShade)
+    )
+
+    var invalidSpecular = makeMorphogenesisRequest()
+    invalidSpecular.shadeSpecular = -0.1
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidSpecular)
+    )
+
+    var invalidShininess = makeMorphogenesisRequest()
+    invalidShininess.shadeShininess = 0.0
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddMorphogenesisSequenceArguments(request: invalidShininess)
+    )
+  }
+
   func testQueuedMorphogenesisSequenceArgumentsRejectOutOfRangeLiveCouplingKnobs() {
     var invalidInject = makeMorphogenesisRequest()
     invalidInject.inject = 1.5

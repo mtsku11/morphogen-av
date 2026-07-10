@@ -2440,6 +2440,24 @@ enum RustBridgePlaceholder {
     guard request.coverageTarget.isFinite && (0...1).contains(request.coverageTarget) else {
       throw RustBridgeError.invalidFrameSequenceRequest("coverage target must be finite and in [0, 1]")
     }
+    guard request.shade.isFinite && (0...1).contains(request.shade) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shade must be finite and in [0, 1]")
+    }
+    guard request.shadeHeight.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shade height must be finite")
+    }
+    guard request.shadeAzimuth.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shade azimuth must be finite")
+    }
+    guard request.shadeElevation.isFinite else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shade elevation must be finite")
+    }
+    guard request.shadeSpecular.isFinite && (0...1).contains(request.shadeSpecular) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shade specular must be finite and in [0, 1]")
+    }
+    guard request.shadeShininess.isFinite && request.shadeShininess > 0 else {
+      throw RustBridgeError.invalidFrameSequenceRequest("shade shininess must be finite and > 0")
+    }
 
     var arguments = [
       "cargo",
@@ -2504,6 +2522,32 @@ enum RustBridgePlaceholder {
     if request.coverageTarget > 0 {
       arguments.append("--coverage-target")
       arguments.append(cliNumber(request.coverageTarget))
+    }
+    // Track B1: only emitted when non-default, so an unmodified panel keeps
+    // the exact byte-identical unshaded argument array.
+    if request.shade > 0 {
+      arguments.append("--shade")
+      arguments.append(cliNumber(request.shade))
+    }
+    if request.shadeHeight != 3.0 {
+      arguments.append("--shade-height")
+      arguments.append(cliNumber(request.shadeHeight))
+    }
+    if request.shadeAzimuth != 0.0 {
+      arguments.append("--shade-azimuth")
+      arguments.append(cliNumber(request.shadeAzimuth))
+    }
+    if request.shadeElevation != 0.15 {
+      arguments.append("--shade-elevation")
+      arguments.append(cliNumber(request.shadeElevation))
+    }
+    if request.shadeSpecular > 0 {
+      arguments.append("--shade-specular")
+      arguments.append(cliNumber(request.shadeSpecular))
+    }
+    if request.shadeShininess != 16.0 {
+      arguments.append("--shade-shininess")
+      arguments.append(cliNumber(request.shadeShininess))
     }
     if let projectURL = request.projectURL {
       arguments.append("--project-path")
@@ -4259,6 +4303,16 @@ struct MorphogenesisSequenceRenderQueueCommandRequest {
   var erode: Double = 0.0
   var injectSource: MorphogenesisInjectSourceOption = .motion
   var coverageTarget: Double = 0.0
+  // Track B1 relief shading (docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md);
+  // defaulted off so call sites predating this slice keep their unshaded
+  // meaning (the flags are only emitted when non-default — see
+  // queueAddMorphogenesisSequenceArguments).
+  var shade: Double = 0.0
+  var shadeHeight: Double = 3.0
+  var shadeAzimuth: Double = 0.0
+  var shadeElevation: Double = 0.15
+  var shadeSpecular: Double = 0.0
+  var shadeShininess: Double = 16.0
   // Modulation-matrix routes; defaulted off so call sites predating this
   // slice keep their unmodulated meaning.
   var modulationRoutes: [ModulationRouteSpec] = []

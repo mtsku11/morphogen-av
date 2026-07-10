@@ -183,6 +183,22 @@ fn default_morphogenesis_output_view() -> String {
     "composite".to_string()
 }
 
+/// Track B1 relief shading (`docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`)
+/// default knobs; mirror `MorphogenesisCompositeSettings`'s own defaults so a
+/// pre-slice job (no `shade*` keys) resolves to the exact same composite a
+/// fresh unshaded render would use.
+fn default_morphogenesis_shade_height() -> f32 {
+    3.0
+}
+
+fn default_morphogenesis_shade_elevation() -> f32 {
+    0.15
+}
+
+fn default_morphogenesis_shade_shininess() -> f32 {
+    16.0
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RenderJobTask {
@@ -1342,6 +1358,26 @@ pub enum RenderJobTask {
         /// `hue` or `inherit`.
         #[serde(default = "default_morphogenesis_pattern_color_mode")]
         pattern_color_mode: String,
+        /// Track B1 relief shading blend strength, `[0,1]`. `0` = off
+        /// (continuity anchor RS1); `#[serde(default)]` so pre-slice jobs
+        /// resolve unshaded.
+        #[serde(default)]
+        shade: f32,
+        /// Relief-shading gradient→normal scale.
+        #[serde(default = "default_morphogenesis_shade_height")]
+        shade_height: f32,
+        /// Relief-shading light azimuth, turns (wraps).
+        #[serde(default)]
+        shade_azimuth: f32,
+        /// Relief-shading light elevation above the horizon, turns.
+        #[serde(default = "default_morphogenesis_shade_elevation")]
+        shade_elevation: f32,
+        /// Relief-shading specular highlight strength, `[0,1]`.
+        #[serde(default)]
+        shade_specular: f32,
+        /// Relief-shading specular exponent (Phong shininess).
+        #[serde(default = "default_morphogenesis_shade_shininess")]
+        shade_shininess: f32,
         /// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`):
         /// `"composite"` (default) or `"field"`, same display-label
         /// convention as `pattern_color_mode`/`inject_source`.
@@ -2204,6 +2240,55 @@ mod tests {
     }
 
     #[test]
+    fn morphogenesis_task_without_shade_keys_defaults_to_the_composite_settings_defaults() {
+        // Track B1: pre-slice queue JSON (predating shade* entirely) still
+        // parses, defaulting to the exact values `MorphogenesisCompositeSettings`'s
+        // own `Default` impl uses, so a resumed/re-run pre-slice job resolves
+        // to an unshaded composite.
+        let json = r#"{
+            "type": "render_morphogenesis_sequence",
+            "carrier_frame_directory": "/tmp/car",
+            "output_directory": "/tmp/out",
+            "frames": 4,
+            "frame_rate": 24.0,
+            "du": 0.16,
+            "dv": 0.08,
+            "feed": 0.037,
+            "kill": 0.06,
+            "dt": 1.0,
+            "substeps": 12,
+            "sim_scale": 2,
+            "seed_threshold": 0.5,
+            "seed": 71,
+            "param_map_strength": 1.0,
+            "pattern_mix": 0.85,
+            "displace": 0.0,
+            "pattern_hue": 0.02
+        }"#;
+
+        let task: RenderJobTask =
+            serde_json::from_str(json).expect("deserialize legacy-shaped task");
+        let RenderJobTask::RenderMorphogenesisSequence {
+            shade,
+            shade_height,
+            shade_azimuth,
+            shade_elevation,
+            shade_specular,
+            shade_shininess,
+            ..
+        } = task
+        else {
+            panic!("expected morphogenesis task");
+        };
+        assert_eq!(shade, 0.0);
+        assert_eq!(shade_height, 3.0);
+        assert_eq!(shade_azimuth, 0.0);
+        assert_eq!(shade_elevation, 0.15);
+        assert_eq!(shade_specular, 0.0);
+        assert_eq!(shade_shininess, 16.0);
+    }
+
+    #[test]
     fn morphogenesis_task_round_trips_with_modulation() {
         let task = RenderJobTask::RenderMorphogenesisSequence {
             carrier_frame_directory: "/tmp/car".to_string(),
@@ -2225,6 +2310,14 @@ mod tests {
             displace: 0.0,
             pattern_hue: 0.02,
             pattern_color_mode: "hue".to_string(),
+            // Track B1: nonzero-from-default so the round-trip actually
+            // exercises the shading fields, not just their defaults.
+            shade: 0.8,
+            shade_height: 5.0,
+            shade_azimuth: 0.25,
+            shade_elevation: 0.2,
+            shade_specular: 0.5,
+            shade_shininess: 32.0,
             // Field View milestone: nonzero-from-default so the round-trip
             // actually exercises the field, not just its default.
             output_view: "field".to_string(),

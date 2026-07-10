@@ -1,6 +1,41 @@
 # Morphogenesis Relief Shading (Track B1) — the 3D look
 
-Status: **IN PROGRESS.** Baseline at slice start: cargo 733/0, swift 152/0,
+Status: **MILESTONE COMPLETE.** Built inline by the orchestrator (Sonnet
+agent died on session limit before writing any code — zero disk changes to
+resume from). Baseline cargo 733/0, swift 152/0 → **cargo 737/0, swift
+155/0**, clippy clean, zero new `cargo fmt --check` diffs (still exactly the
+8 pre-existing files; confirmed content-identical modulo the renamed import
+token). Anchors: RS1 (`anchor_rs1_shade_zero_is_byte_identical_regardless_of_other_shade_knobs`),
+RS2 (`anchor_rs2_180_degree_azimuth_flip_mirrors_a_flipped_gradient`), the
+dark-footage mechanism proof
+(`shade_makes_growth_visible_on_a_black_carrier_where_luma_preserving_tint_cannot`),
+plus Swift token tests (`testQueuedMorphogenesisSequenceDefaultShadeKeepsArgumentsByteIdentical`,
+`...ArgumentsIncludeShadeKnobsWhenActive`, `...ArgumentsRejectOutOfRangeShadeKnobs`)
+and a render_job.rs legacy-JSON default test. RS3 re-rendered on the real
+cello fixture (coral preset, hue mode, pattern-hue 0.55, no displace — the
+exact settings that read as "just a hue change" in the earlier showcase
+session): unshaded frame 47 shows no visible structure on the dark stage;
+shaded (`--shade 1.0 --shade-height 6 --shade-specular 0.6`) shows clear
+glowing relief tendrils (frames Read side by side). RS4 cross-delta at that
+frame: 1.517/255 (frame 0, minimal growth) → 11.350/255 (frame 47, more
+growth to light) — scales with coverage, as expected. Hero readout rendered:
+field view, worms preset, inject 0.1/erode 0.03 motion, `shade_azimuth =
+lfo(saw,0.1)`, 144 frames/6s, audio-muxed — frames 60 vs 120 show the light
+visibly orbiting the pattern (different highlight geometry). Deliverable
+clip sent via SendUserFile.
+
+Design decision actually implemented (differs slightly from the two
+alternatives sketched in the contract): the gradient is bilinearly upsampled
+to carrier/output resolution FIRST, then lighting (diffuse+specular) is
+computed per output pixel — the "upsample then shade" option the contract
+flagged as the recommendation for smoothness. Composite-view target colour
+is NOT a multiply of the tinted carrier by a lit factor (which would keep
+black carrier pixels at zero) — it's a blend from the existing
+luma-preserving tint toward a colour whose VALUE channel comes directly from
+the lit scalar (`hsv_to_rgb(hue, 1.0, lit)`), which is what makes the
+relief visible on near-black footage regardless of `shade`'s blend strength.
+
+Baseline at slice start: cargo 733/0, swift 152/0,
 clippy clean, `cargo fmt --check` dirty on 8 pre-existing files (zero new
 diffs allowed). Builds on
 [MORPHOGENESIS_FIELD_VIEW_MILESTONE.md](MORPHOGENESIS_FIELD_VIEW_MILESTONE.md)

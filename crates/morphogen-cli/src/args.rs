@@ -2196,6 +2196,26 @@ pub(crate) enum Commands {
         /// `--pattern-hue`) or `inherit` (the sample's own hue, saturated).
         #[arg(long, value_enum, default_value_t = CliPatternColorMode::Hue)]
         pattern_color_mode: CliPatternColorMode,
+        /// Track B1 relief shading (`docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`):
+        /// blend strength, `[0,1]`. `0` = off (continuity anchor RS1).
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
+        /// Relief-shading gradient→normal scale.
+        #[arg(long, default_value_t = 3.0)]
+        shade_height: f32,
+        /// Relief-shading light azimuth, turns (`[0,1)`, wraps).
+        #[arg(long, default_value_t = 0.0)]
+        shade_azimuth: f32,
+        /// Relief-shading light elevation above the horizon, turns (nominally
+        /// `[0, 0.25]`).
+        #[arg(long, default_value_t = 0.15)]
+        shade_elevation: f32,
+        /// Relief-shading specular highlight strength, `[0,1]`.
+        #[arg(long, default_value_t = 0.0)]
+        shade_specular: f32,
+        /// Relief-shading specular exponent (Phong shininess).
+        #[arg(long, default_value_t = 16.0)]
+        shade_shininess: f32,
         /// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`):
         /// `composite` (default, the S2 pattern-mix/displace output) or
         /// `field` (the raw `V` field, greyscale, upsampled to carrier
@@ -2211,7 +2231,7 @@ pub(crate) enum Commands {
         frame_rate: f64,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: feed, kill, param_map_strength, pattern_mix, displace,
-        /// inject, erode, coverage_target.
+        /// inject, erode, coverage_target, shade, shade_azimuth, shade_height.
         /// Routes join the checkpoint contract, so a route or modulator
         /// change refuses to resume an existing output directory.
         #[arg(long = "modulate")]
@@ -3787,6 +3807,26 @@ pub(crate) enum Commands {
         /// `--pattern-hue`) or `inherit` (the sample's own hue, saturated).
         #[arg(long, value_enum, default_value_t = CliPatternColorMode::Hue)]
         pattern_color_mode: CliPatternColorMode,
+        /// Track B1 relief shading (`docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`):
+        /// blend strength, `[0,1]`. `0` = off (continuity anchor RS1).
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
+        /// Relief-shading gradient→normal scale.
+        #[arg(long, default_value_t = 3.0)]
+        shade_height: f32,
+        /// Relief-shading light azimuth, turns (`[0,1)`, wraps).
+        #[arg(long, default_value_t = 0.0)]
+        shade_azimuth: f32,
+        /// Relief-shading light elevation above the horizon, turns (nominally
+        /// `[0, 0.25]`).
+        #[arg(long, default_value_t = 0.15)]
+        shade_elevation: f32,
+        /// Relief-shading specular highlight strength, `[0,1]`.
+        #[arg(long, default_value_t = 0.0)]
+        shade_specular: f32,
+        /// Relief-shading specular exponent (Phong shininess).
+        #[arg(long, default_value_t = 16.0)]
+        shade_shininess: f32,
         /// Field View milestone (`docs/MORPHOGENESIS_FIELD_VIEW_MILESTONE.md`):
         /// `composite` (default) or `field` (the raw `V` field, upsampled to
         /// carrier resolution). Composite knobs stay legal but inert in field
@@ -3797,7 +3837,7 @@ pub(crate) enum Commands {
         project_path: Option<PathBuf>,
         /// Modulation route `<target>=<source>[:<scale>[,<offset>]][@hold|@smooth]` (repeatable).
         /// Targets: feed, kill, param_map_strength, pattern_mix, displace,
-        /// inject, erode, coverage_target.
+        /// inject, erode, coverage_target, shade, shade_azimuth, shade_height.
         /// Persisted on the job (they join the render's checkpoint contract);
         /// envelope times sample against the job's --frame-rate.
         #[arg(long = "modulate")]

@@ -583,6 +583,14 @@ final class AppState: ObservableObject {
   @Published var morphogenesisErode = 0.0
   @Published var morphogenesisInjectSource = MorphogenesisInjectSourceOption.motion
   @Published var morphogenesisCoverageTarget = 0.0
+  // Track B1 relief shading (docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md);
+  // all default off/pinned, matching a pre-slice render.
+  @Published var morphogenesisShade = 0.0
+  @Published var morphogenesisShadeHeight = 3.0
+  @Published var morphogenesisShadeAzimuth = 0.0
+  @Published var morphogenesisShadeElevation = 0.15
+  @Published var morphogenesisShadeSpecular = 0.0
+  @Published var morphogenesisShadeShininess = 16.0
   @Published var morphogenesisSummary = "No morphogenesis sequence rendered"
   @Published var morphogenesisModFeedSource = ModulationSourceOption.off
   @Published var morphogenesisModFeedScale = 0.014
@@ -658,6 +666,35 @@ final class AppState: ObservableObject {
   @Published var morphogenesisModCoverageTargetLfoRate = 1.0
   @Published var morphogenesisModCoverageTargetLfoPhase = 0.0
   @Published var morphogenesisModCoverageTargetMidiCc = 74
+  @Published var morphogenesisModShadeSource = ModulationSourceOption.off
+  @Published var morphogenesisModShadeScale = 1.0
+  @Published var morphogenesisModShadeOffset = 0.0
+  @Published var morphogenesisModShadeSamplingOverride = ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModShadeModulator = ""
+  @Published var morphogenesisModShadeLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModShadeLfoRate = 1.0
+  @Published var morphogenesisModShadeLfoPhase = 0.0
+  @Published var morphogenesisModShadeMidiCc = 74
+  @Published var morphogenesisModShadeAzimuthSource = ModulationSourceOption.off
+  @Published var morphogenesisModShadeAzimuthScale = 1.0
+  @Published var morphogenesisModShadeAzimuthOffset = 0.0
+  @Published var morphogenesisModShadeAzimuthSamplingOverride =
+    ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModShadeAzimuthModulator = ""
+  @Published var morphogenesisModShadeAzimuthLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModShadeAzimuthLfoRate = 1.0
+  @Published var morphogenesisModShadeAzimuthLfoPhase = 0.0
+  @Published var morphogenesisModShadeAzimuthMidiCc = 74
+  @Published var morphogenesisModShadeHeightSource = ModulationSourceOption.off
+  @Published var morphogenesisModShadeHeightScale = 1.0
+  @Published var morphogenesisModShadeHeightOffset = 0.0
+  @Published var morphogenesisModShadeHeightSamplingOverride =
+    ModulationSamplingOverrideOption.default
+  @Published var morphogenesisModShadeHeightModulator = ""
+  @Published var morphogenesisModShadeHeightLfoShape = LfoShapeOption.sine
+  @Published var morphogenesisModShadeHeightLfoRate = 1.0
+  @Published var morphogenesisModShadeHeightLfoPhase = 0.0
+  @Published var morphogenesisModShadeHeightMidiCc = 74
   @Published var morphogenesisModulatorAudioURL: URL?
   @Published var morphogenesisModulatorFramesURL: URL?
   @Published var morphogenesisModulatorMidiURL: URL?
@@ -3815,6 +3852,21 @@ final class AppState: ObservableObject {
           morphogenesisModCoverageTargetScale, morphogenesisModCoverageTargetOffset,
           morphogenesisModCoverageTargetSamplingOverride
         ),
+        (
+          "shade", morphogenesisModShadeSource,
+          morphogenesisModShadeScale, morphogenesisModShadeOffset,
+          morphogenesisModShadeSamplingOverride
+        ),
+        (
+          "shade_azimuth", morphogenesisModShadeAzimuthSource,
+          morphogenesisModShadeAzimuthScale, morphogenesisModShadeAzimuthOffset,
+          morphogenesisModShadeAzimuthSamplingOverride
+        ),
+        (
+          "shade_height", morphogenesisModShadeHeightSource,
+          morphogenesisModShadeHeightScale, morphogenesisModShadeHeightOffset,
+          morphogenesisModShadeHeightSamplingOverride
+        ),
       ],
       modulatorAudioURL: morphogenesisModulatorAudioURL,
       modulatorFramesURL: morphogenesisModulatorFramesURL,
@@ -3826,6 +3878,8 @@ final class AppState: ObservableObject {
         morphogenesisModDisplaceModulator,
         morphogenesisModInjectModulator, morphogenesisModErodeModulator,
         morphogenesisModCoverageTargetModulator,
+        morphogenesisModShadeModulator, morphogenesisModShadeAzimuthModulator,
+        morphogenesisModShadeHeightModulator,
       ],
       slotLfos: [
         (morphogenesisModFeedLfoShape, morphogenesisModFeedLfoRate, morphogenesisModFeedLfoPhase),
@@ -3854,6 +3908,18 @@ final class AppState: ObservableObject {
           morphogenesisModCoverageTargetLfoShape, morphogenesisModCoverageTargetLfoRate,
           morphogenesisModCoverageTargetLfoPhase
         ),
+        (
+          morphogenesisModShadeLfoShape, morphogenesisModShadeLfoRate,
+          morphogenesisModShadeLfoPhase
+        ),
+        (
+          morphogenesisModShadeAzimuthLfoShape, morphogenesisModShadeAzimuthLfoRate,
+          morphogenesisModShadeAzimuthLfoPhase
+        ),
+        (
+          morphogenesisModShadeHeightLfoShape, morphogenesisModShadeHeightLfoRate,
+          morphogenesisModShadeHeightLfoPhase
+        ),
       ],
       slotMidiCcNumbers: [
         morphogenesisModFeedMidiCc, morphogenesisModKillMidiCc,
@@ -3861,6 +3927,8 @@ final class AppState: ObservableObject {
         morphogenesisModDisplaceMidiCc,
         morphogenesisModInjectMidiCc, morphogenesisModErodeMidiCc,
         morphogenesisModCoverageTargetMidiCc,
+        morphogenesisModShadeMidiCc, morphogenesisModShadeAzimuthMidiCc,
+        morphogenesisModShadeHeightMidiCc,
       ],
       effectLabel: "morphogenesis"
     ) else { return }
@@ -3886,6 +3954,12 @@ final class AppState: ObservableObject {
       erode: morphogenesisErode,
       injectSource: morphogenesisInjectSource,
       coverageTarget: morphogenesisCoverageTarget,
+      shade: morphogenesisShade,
+      shadeHeight: morphogenesisShadeHeight,
+      shadeAzimuth: morphogenesisShadeAzimuth,
+      shadeElevation: morphogenesisShadeElevation,
+      shadeSpecular: morphogenesisShadeSpecular,
+      shadeShininess: morphogenesisShadeShininess,
       modulationRoutes: routes,
       modulatorAudioURL: morphogenesisModulatorAudioURL,
       modulatorFramesURL: morphogenesisModulatorFramesURL,

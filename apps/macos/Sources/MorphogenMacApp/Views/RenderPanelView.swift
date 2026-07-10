@@ -1407,6 +1407,46 @@ struct RenderPanelView: View {
             .help("Homeostat target for mean(V); 0 = off (no coverage feedback).")
           }
 
+          HStack(spacing: 16) {
+            Stepper(value: $state.morphogenesisShade, in: 0...1, step: 0.05) {
+              Text("Shade \(state.morphogenesisShade, specifier: "%.2f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Relief-shading blend strength; 0 = off (the pre-shading tint/field look).")
+
+            Stepper(value: $state.morphogenesisShadeHeight, in: 0...32, step: 0.5) {
+              Text("Shade Height \(state.morphogenesisShadeHeight, specifier: "%.1f")")
+            }
+            .frame(width: 180, alignment: .leading)
+            .help("Gradient→normal scale for the relief-shading surface.")
+
+            Stepper(value: $state.morphogenesisShadeAzimuth, in: 0...1, step: 0.02) {
+              Text("Shade Azimuth \(state.morphogenesisShadeAzimuth, specifier: "%.2f")")
+            }
+            .frame(width: 190, alignment: .leading)
+            .help("Light azimuth, turns (wraps).")
+          }
+
+          HStack(spacing: 16) {
+            Stepper(value: $state.morphogenesisShadeElevation, in: 0...0.25, step: 0.01) {
+              Text("Shade Elevation \(state.morphogenesisShadeElevation, specifier: "%.2f")")
+            }
+            .frame(width: 200, alignment: .leading)
+            .help("Light elevation above the horizon, turns.")
+
+            Stepper(value: $state.morphogenesisShadeSpecular, in: 0...1, step: 0.05) {
+              Text("Shade Specular \(state.morphogenesisShadeSpecular, specifier: "%.2f")")
+            }
+            .frame(width: 190, alignment: .leading)
+            .help("Specular highlight strength; 0 = purely diffuse.")
+
+            Stepper(value: $state.morphogenesisShadeShininess, in: 1...128, step: 1) {
+              Text("Shininess \(state.morphogenesisShadeShininess, specifier: "%.0f")")
+            }
+            .frame(width: 150, alignment: .leading)
+            .help("Specular exponent (Phong shininess).")
+          }
+
           ModulationSlotRow(
             label: "Feed",
             source: $state.morphogenesisModFeedSource,
@@ -1530,6 +1570,53 @@ struct RenderPanelView: View {
             midiCcNumber: $state.morphogenesisModCoverageTargetMidiCc
           )
 
+          ModulationSlotRow(
+            label: "Shade",
+            source: $state.morphogenesisModShadeSource,
+            scale: $state.morphogenesisModShadeScale,
+            offset: $state.morphogenesisModShadeOffset,
+            samplingOverride: $state.morphogenesisModShadeSamplingOverride,
+            modulator: $state.morphogenesisModShadeModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModShadeLfoShape,
+            lfoRate: $state.morphogenesisModShadeLfoRate,
+            lfoPhase: $state.morphogenesisModShadeLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModShadeMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Shade Azimuth",
+            source: $state.morphogenesisModShadeAzimuthSource,
+            scale: $state.morphogenesisModShadeAzimuthScale,
+            offset: $state.morphogenesisModShadeAzimuthOffset,
+            samplingOverride: $state.morphogenesisModShadeAzimuthSamplingOverride,
+            scaleRange: 0...1, scaleStep: 0.05, offsetRange: 0...1, offsetStep: 0.05,
+            modulator: $state.morphogenesisModShadeAzimuthModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModShadeAzimuthLfoShape,
+            lfoRate: $state.morphogenesisModShadeAzimuthLfoRate,
+            lfoPhase: $state.morphogenesisModShadeAzimuthLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModShadeAzimuthMidiCc
+          )
+
+          ModulationSlotRow(
+            label: "Shade Height",
+            source: $state.morphogenesisModShadeHeightSource,
+            scale: $state.morphogenesisModShadeHeightScale,
+            offset: $state.morphogenesisModShadeHeightOffset,
+            samplingOverride: $state.morphogenesisModShadeHeightSamplingOverride,
+            scaleRange: 0...64, scaleStep: 0.5, offsetRange: 0...64, offsetStep: 0.5,
+            modulator: $state.morphogenesisModShadeHeightModulator,
+            modulatorNames: state.morphogenesisDeclaredModulatorNames,
+            lfoShape: $state.morphogenesisModShadeHeightLfoShape,
+            lfoRate: $state.morphogenesisModShadeHeightLfoRate,
+            lfoPhase: $state.morphogenesisModShadeHeightLfoPhase,
+            midiAvailable: true,
+            midiCcNumber: $state.morphogenesisModShadeHeightMidiCc
+          )
+
           ModulationMediaRow(
             sources: [
               state.morphogenesisModFeedSource, state.morphogenesisModKillSource,
@@ -1537,6 +1624,8 @@ struct RenderPanelView: View {
               state.morphogenesisModDisplaceSource,
               state.morphogenesisModInjectSource, state.morphogenesisModErodeSource,
               state.morphogenesisModCoverageTargetSource,
+              state.morphogenesisModShadeSource, state.morphogenesisModShadeAzimuthSource,
+              state.morphogenesisModShadeHeightSource,
             ],
             audioURL: state.morphogenesisModulatorAudioURL,
             framesURL: state.morphogenesisModulatorFramesURL,

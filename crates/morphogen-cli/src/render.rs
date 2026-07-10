@@ -75,7 +75,7 @@ use morphogen_render::{
     apply_coverage_homeostat, apply_inject_erode, composite_morphogenesis_frame,
     injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
     morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f,
-    render_v_field_grayscale, render_v_field_grayscale_upsampled,
+    render_v_field_grayscale, render_v_field_grayscale_upsampled_with_shading,
     sample_carrier_luma_at_sim_resolution, seed_morphogenesis_field, InjectSource,
     MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisSettings, OutputView,
     MORPHOGENESIS_ALGORITHM,
@@ -7839,9 +7839,12 @@ pub(crate) fn render_morphogenesis_sequence(
             OutputView::Composite => {
                 composite_morphogenesis_frame(&carrier, &field, &frame_composite)?
             }
-            OutputView::Field => {
-                render_v_field_grayscale_upsampled(&field, carrier.width, carrier.height)?
-            }
+            OutputView::Field => render_v_field_grayscale_upsampled_with_shading(
+                &field,
+                carrier.width,
+                carrier.height,
+                &frame_composite,
+            )?,
         };
         save_png(&output, &frame_dir.join(format!("frame_{index:06}.png")))?;
 

@@ -890,6 +890,18 @@ pub enum PatternColorMode {
     Inherit,
 }
 
+fn default_shade_height() -> f32 {
+    3.0
+}
+
+fn default_shade_elevation() -> f32 {
+    0.15
+}
+
+fn default_shade_shininess() -> f32 {
+    16.0
+}
+
 /// Composite (S2) knobs. See the module section above for why these are
 /// separate from [`MorphogenesisSettings`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -905,6 +917,33 @@ pub struct MorphogenesisCompositeSettings {
     pub pattern_hue: f32,
     /// Which colour the pattern-mix tint targets.
     pub pattern_color_mode: PatternColorMode,
+    /// Track B1 (`docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`): relief-
+    /// shading blend strength, `[0,1]`. `0` = off — the pre-slice tint/field
+    /// output exactly (continuity anchor RS1). `#[serde(default)]` (`0.0`)
+    /// so pre-slice checkpoints deserialize with shading off and stay
+    /// resumable.
+    #[serde(default)]
+    pub shade: f32,
+    /// Gradient→normal scale: how strongly `∇V` tilts the lit surface's
+    /// normal away from `(0,0,1)`. `#[serde(default = "default_shade_height")]`
+    /// so pre-slice checkpoints (no key) get the same value a fresh
+    /// unshaded-by-default render would use.
+    #[serde(default = "default_shade_height")]
+    pub shade_height: f32,
+    /// Light azimuth, turns (`[0,1)`, wraps). `#[serde(default)]` (`0.0`).
+    #[serde(default)]
+    pub shade_azimuth: f32,
+    /// Light elevation above the horizon, turns (nominally `[0, 0.25]`).
+    /// `#[serde(default = "default_shade_elevation")]`.
+    #[serde(default = "default_shade_elevation")]
+    pub shade_elevation: f32,
+    /// Specular highlight strength, `[0,1]`. `#[serde(default)]` (`0.0`).
+    #[serde(default)]
+    pub shade_specular: f32,
+    /// Specular exponent (Phong shininess). `#[serde(default =
+    /// "default_shade_shininess")]`.
+    #[serde(default = "default_shade_shininess")]
+    pub shade_shininess: f32,
 }
 
 impl MorphogenesisCompositeSettings {
@@ -916,6 +955,12 @@ impl MorphogenesisCompositeSettings {
             displace: 0.0,
             pattern_hue: 0.0,
             pattern_color_mode: PatternColorMode::Hue,
+            shade: 0.0,
+            shade_height: default_shade_height(),
+            shade_azimuth: 0.0,
+            shade_elevation: default_shade_elevation(),
+            shade_specular: 0.0,
+            shade_shininess: default_shade_shininess(),
         }
     }
 
@@ -935,6 +980,36 @@ impl MorphogenesisCompositeSettings {
                 "pattern_hue must be finite".into(),
             ));
         }
+        if !(self.shade.is_finite() && (0.0..=1.0).contains(&self.shade)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "shade must be finite and in [0, 1]".into(),
+            ));
+        }
+        if !self.shade_height.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "shade_height must be finite".into(),
+            ));
+        }
+        if !self.shade_azimuth.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "shade_azimuth must be finite".into(),
+            ));
+        }
+        if !self.shade_elevation.is_finite() {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "shade_elevation must be finite".into(),
+            ));
+        }
+        if !(self.shade_specular.is_finite() && (0.0..=1.0).contains(&self.shade_specular)) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "shade_specular must be finite and in [0, 1]".into(),
+            ));
+        }
+        if !(self.shade_shininess.is_finite() && self.shade_shininess > 0.0) {
+            return Err(RenderError::InvalidMorphogenesisSettings(
+                "shade_shininess must be finite and > 0".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -949,6 +1024,12 @@ impl Default for MorphogenesisCompositeSettings {
             displace: 0.0,
             pattern_hue: 0.02,
             pattern_color_mode: PatternColorMode::Hue,
+            shade: 0.0,
+            shade_height: default_shade_height(),
+            shade_azimuth: 0.0,
+            shade_elevation: default_shade_elevation(),
+            shade_specular: 0.0,
+            shade_shininess: default_shade_shininess(),
         }
     }
 }
@@ -1013,6 +1094,86 @@ fn colorize_luma_preserving(color: [f32; 4], hue: f32) -> [f32; 4] {
         (r * scale).clamp(0.0, 1.0),
         (g * scale).clamp(0.0, 1.0),
         (b * scale).clamp(0.0, 1.0),
+        color[3],
+    ]
+}
+
+// ─── Track B1: gradient-lit relief shading ─────────────────────────────────
+//
+// `docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`: treat `V` as a height
+// field and light it with a directional lamp. `colorize_luma_preserving`
+// (above) ties the tint's brightness to the CARRIER's own luma, which is
+// exactly why growth is invisible on near-black footage (tinting black stays
+// black). Relief shading's target colour instead gets its brightness from
+// the LIGHT hitting the surface — independent of how dark the carrier is —
+// which is what closes that gap (RS3).
+
+/// Fixed ambient term for the relief-shading model — not user-exposed. Keeps
+/// fully-shadowed regions faintly present while leaving clear diffuse/
+/// specular contrast toward the lit side.
+const SHADE_AMBIENT: f32 = 0.35;
+
+/// The Phong-style relief lighting value at one cell, given its `V`-gradient
+/// (`grad_x`, `grad_y` — the SAME gradient the displace pass computes, see
+/// [`morphogenesis_v_gradient`]). `n` is the surface normal built by tilting
+/// `(0,0,1)` by the (scaled) gradient; `l` is the light direction from
+/// `shade_azimuth`/`shade_elevation` (both turns). Returns `ambient +
+/// (1-ambient)*diffuse + shade_specular*specular`, UNCLAMPED (may exceed `1`
+/// under a strong specular highlight) — callers blend/clamp when they mix it
+/// into a pixel.
+fn morphogenesis_shading_value(
+    grad_x: f32,
+    grad_y: f32,
+    composite: &MorphogenesisCompositeSettings,
+) -> f32 {
+    let nx = -grad_x * composite.shade_height;
+    let ny = -grad_y * composite.shade_height;
+    let nz = 1.0_f32;
+    let n_len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
+    let (nx, ny, nz) = (nx / n_len, ny / n_len, nz / n_len);
+
+    let az = composite.shade_azimuth * std::f32::consts::TAU;
+    let el = composite.shade_elevation * std::f32::consts::TAU;
+    let lx = el.cos() * az.cos();
+    let ly = el.cos() * az.sin();
+    let lz = el.sin();
+
+    let n_dot_l = nx * lx + ny * ly + nz * lz;
+    let diffuse = n_dot_l.max(0.0);
+
+    // reflect(-l, n) with GLSL's reflect(I, N) = I - 2*dot(N,I)*N, I = -l:
+    // reflect(-l, n) = -l + 2*(n.l)*n. Its dot with the view dir (0,0,1) is
+    // just its z component.
+    let reflect_z = -lz + 2.0 * n_dot_l * nz;
+    let specular = reflect_z.max(0.0).powf(composite.shade_shininess.max(1.0));
+
+    SHADE_AMBIENT + (1.0 - SHADE_AMBIENT) * diffuse + composite.shade_specular * specular
+}
+
+/// The pattern-mix target colour, relief-shaded (Track B1). `shade <= 0`
+/// delegates to [`colorize_luma_preserving`] verbatim — byte-identical
+/// (anchor RS1). Otherwise linearly blends from that (carrier-luma-tied)
+/// tint toward a colour whose brightness comes from
+/// [`morphogenesis_shading_value`] instead — at `shade == 1` the target is
+/// fully light-driven, independent of the carrier's own luma, which is what
+/// makes growth visible on near-black footage (RS3).
+fn colorize_relief(
+    color: [f32; 4],
+    hue: f32,
+    grad_x: f32,
+    grad_y: f32,
+    composite: &MorphogenesisCompositeSettings,
+) -> [f32; 4] {
+    let preserved = colorize_luma_preserving(color, hue);
+    if composite.shade <= 0.0 {
+        return preserved;
+    }
+    let lit = morphogenesis_shading_value(grad_x, grad_y, composite);
+    let (r, g, b) = hsv_to_rgb(hue.rem_euclid(1.0), 1.0, lit.max(0.0));
+    [
+        (preserved[0] + (r - preserved[0]) * composite.shade).clamp(0.0, 1.0),
+        (preserved[1] + (g - preserved[1]) * composite.shade).clamp(0.0, 1.0),
+        (preserved[2] + (b - preserved[2]) * composite.shade).clamp(0.0, 1.0),
         color[3],
     ]
 }
@@ -1107,33 +1268,44 @@ pub fn composite_morphogenesis_frame(
         let px = x as f32;
         let py = y as f32;
 
-        let sample_x;
-        let sample_y;
-        if settings.displace == 0.0 {
-            sample_x = px;
-            sample_y = py;
+        // Track B1: shading also needs ∇V at this pixel, so the gradient is
+        // sampled whenever EITHER displace or shade is active (same
+        // condition as the pre-slice displace-only gate when shade == 0,
+        // preserving RS1 byte-identity exactly).
+        let need_gradient = settings.displace != 0.0 || settings.shade > 0.0;
+        let (grad_x, grad_y) = if need_gradient {
+            (
+                sample_scalar_grid(
+                    field.width,
+                    field.height,
+                    &gx,
+                    carrier.width,
+                    carrier.height,
+                    px,
+                    py,
+                ),
+                sample_scalar_grid(
+                    field.width,
+                    field.height,
+                    &gy,
+                    carrier.width,
+                    carrier.height,
+                    px,
+                    py,
+                ),
+            )
         } else {
-            let grad_x = sample_scalar_grid(
-                field.width,
-                field.height,
-                &gx,
-                carrier.width,
-                carrier.height,
-                px,
-                py,
-            );
-            let grad_y = sample_scalar_grid(
-                field.width,
-                field.height,
-                &gy,
-                carrier.width,
-                carrier.height,
-                px,
-                py,
-            );
-            sample_x = px - settings.displace * grad_x;
-            sample_y = py - settings.displace * grad_y;
-        }
+            (0.0, 0.0)
+        };
+
+        let (sample_x, sample_y) = if settings.displace == 0.0 {
+            (px, py)
+        } else {
+            (
+                px - settings.displace * grad_x,
+                py - settings.displace * grad_y,
+            )
+        };
         let color = sample_bilinear_clamped(carrier, sample_x, sample_y);
 
         if settings.pattern_mix <= 0.0 {
@@ -1154,10 +1326,12 @@ pub fn composite_morphogenesis_frame(
             return color;
         }
         let target = match settings.pattern_color_mode {
-            PatternColorMode::Hue => colorize_luma_preserving(color, settings.pattern_hue),
+            PatternColorMode::Hue => {
+                colorize_relief(color, settings.pattern_hue, grad_x, grad_y, settings)
+            }
             PatternColorMode::Inherit => {
                 let (h, _s, _v) = rgb_to_hsv(color[0], color[1], color[2]);
-                colorize_luma_preserving(color, h)
+                colorize_relief(color, h, grad_x, grad_y, settings)
             }
         };
         [
@@ -1165,6 +1339,63 @@ pub fn composite_morphogenesis_frame(
             color[1] + (target[1] - color[1]) * strength,
             color[2] + (target[2] - color[2]) * strength,
             color[3],
+        ]
+    })
+}
+
+/// Track B1 field-view variant of [`render_v_field_grayscale_upsampled`]:
+/// `shade <= 0` delegates verbatim (byte-identical, RS1). Otherwise blends
+/// the plain greyscale `V` toward a relief-shaded version — `V *
+/// morphogenesis_shading_value(...)` — by `composite.shade`, so the B/W
+/// field becomes an embossed membrane rather than a flat readout.
+pub fn render_v_field_grayscale_upsampled_with_shading(
+    field: &MorphogenesisField,
+    carrier_width: u32,
+    carrier_height: u32,
+    composite: &MorphogenesisCompositeSettings,
+) -> Result<ImageBufferF32, RenderError> {
+    if composite.shade <= 0.0 {
+        return render_v_field_grayscale_upsampled(field, carrier_width, carrier_height);
+    }
+    let (gx, gy) = morphogenesis_v_gradient(field);
+    ImageBufferF32::from_fn(carrier_width, carrier_height, |x, y| {
+        let px = x as f32;
+        let py = y as f32;
+        let v = sample_scalar_grid(
+            field.width,
+            field.height,
+            &field.v,
+            carrier_width,
+            carrier_height,
+            px,
+            py,
+        );
+        let grad_x = sample_scalar_grid(
+            field.width,
+            field.height,
+            &gx,
+            carrier_width,
+            carrier_height,
+            px,
+            py,
+        );
+        let grad_y = sample_scalar_grid(
+            field.width,
+            field.height,
+            &gy,
+            carrier_width,
+            carrier_height,
+            px,
+            py,
+        );
+        let lit = morphogenesis_shading_value(grad_x, grad_y, composite);
+        let flat = v_to_grayscale_pixel(v);
+        let shaded_value = (v * lit).clamp(0.0, 1.0);
+        [
+            (flat[0] + (shaded_value - flat[0]) * composite.shade).clamp(0.0, 1.0),
+            (flat[1] + (shaded_value - flat[1]) * composite.shade).clamp(0.0, 1.0),
+            (flat[2] + (shaded_value - flat[2]) * composite.shade).clamp(0.0, 1.0),
+            1.0,
         ]
     })
 }
@@ -1479,6 +1710,7 @@ mod tests {
             displace: 3.0,
             pattern_hue: 0.5,
             pattern_color_mode: PatternColorMode::Hue,
+            ..MorphogenesisCompositeSettings::passthrough()
         };
         let output = composite_morphogenesis_frame(&carrier, &field, &settings).expect("composite");
 
@@ -1525,6 +1757,7 @@ mod tests {
             displace: 0.0,
             pattern_hue: 0.35,
             pattern_color_mode: PatternColorMode::Hue,
+            ..MorphogenesisCompositeSettings::passthrough()
         };
         let output = composite_morphogenesis_frame(&carrier, &field, &settings).expect("composite");
 
@@ -1562,6 +1795,7 @@ mod tests {
             displace: 0.0,
             pattern_hue: 0.55,
             pattern_color_mode: PatternColorMode::Hue,
+            ..MorphogenesisCompositeSettings::passthrough()
         };
         let output = composite_morphogenesis_frame(&carrier, &field, &settings).expect("composite");
 
@@ -1590,6 +1824,7 @@ mod tests {
             displace: 0.0,
             pattern_hue: 0.55, // far from the carrier's own (reddish) hue
             pattern_color_mode: PatternColorMode::Hue,
+            ..MorphogenesisCompositeSettings::passthrough()
         };
         let inherit_settings = MorphogenesisCompositeSettings {
             pattern_color_mode: PatternColorMode::Inherit,
@@ -1629,6 +1864,7 @@ mod tests {
             displace: 4.0,
             pattern_hue: 0.1,
             pattern_color_mode: PatternColorMode::Inherit,
+            ..MorphogenesisCompositeSettings::passthrough()
         };
         let a = composite_morphogenesis_frame(&carrier, &field, &settings).expect("first");
         let b = composite_morphogenesis_frame(&carrier, &field, &settings).expect("second");
@@ -1642,6 +1878,121 @@ mod tests {
             ..MorphogenesisCompositeSettings::passthrough()
         };
         assert!(settings.validate().is_err());
+    }
+
+    // ─── Track B1: relief shading tests ────────────────────────────────────
+
+    #[test]
+    fn anchor_rs1_shade_zero_is_byte_identical_regardless_of_other_shade_knobs() {
+        let carrier = varied_carrier(10, 8);
+        let field = varied_field(10, 8);
+        let base = MorphogenesisCompositeSettings {
+            pattern_mix: 0.9,
+            displace: 2.0,
+            pattern_hue: 0.4,
+            pattern_color_mode: PatternColorMode::Hue,
+            ..MorphogenesisCompositeSettings::passthrough()
+        };
+        // shade == 0 must reproduce the pre-slice output even with the OTHER
+        // shade knobs set to unusual (nonzero) values — the blend strength,
+        // not the sub-knobs, is what gates the effect.
+        let shade_off_but_dialed_in = MorphogenesisCompositeSettings {
+            shade: 0.0,
+            shade_height: 40.0,
+            shade_azimuth: 0.33,
+            shade_elevation: 0.2,
+            shade_specular: 0.9,
+            shade_shininess: 64.0,
+            ..base
+        };
+        let plain = composite_morphogenesis_frame(&carrier, &field, &base).expect("plain");
+        let dialed = composite_morphogenesis_frame(&carrier, &field, &shade_off_but_dialed_in)
+            .expect("dialed");
+        assert_eq!(
+            plain, dialed,
+            "RS1: shade == 0 must be byte-identical regardless of the other shade knobs"
+        );
+    }
+
+    #[test]
+    fn anchor_rs2_180_degree_azimuth_flip_mirrors_a_flipped_gradient() {
+        let composite_az0 = MorphogenesisCompositeSettings {
+            shade: 1.0,
+            shade_height: 1.0,
+            shade_azimuth: 0.0,
+            shade_elevation: 0.15,
+            shade_specular: 0.0,
+            ..MorphogenesisCompositeSettings::passthrough()
+        };
+        let composite_az_flip = MorphogenesisCompositeSettings {
+            shade_azimuth: 0.5,
+            ..composite_az0
+        };
+
+        let lit_gx_positive = morphogenesis_shading_value(1.0, 0.0, &composite_az0);
+        let lit_gx_negative = morphogenesis_shading_value(-1.0, 0.0, &composite_az0);
+        let lit_flipped_light = morphogenesis_shading_value(1.0, 0.0, &composite_az_flip);
+
+        assert!(
+            (lit_gx_negative - lit_flipped_light).abs() < 1e-5,
+            "flipping the gradient sign must match flipping the light 180 degrees instead: \
+             {lit_gx_negative} vs {lit_flipped_light}"
+        );
+        assert!(
+            (lit_gx_positive - lit_flipped_light).abs() > 1e-3,
+            "the azimuth flip must actually change the lit value (not a degenerate no-op)"
+        );
+    }
+
+    #[test]
+    fn shade_makes_growth_visible_on_a_black_carrier_where_luma_preserving_tint_cannot() {
+        // The exact mechanism behind RS3 (the dark-footage gap): a
+        // luma-preserving tint of BLACK stays black regardless of pattern_mix
+        // or hue, but a fully shade-blended target derives its brightness
+        // from the light, not the carrier.
+        let carrier = solid_carrier(6, 6, 0.0);
+        let field = structured_carrier(6, 6);
+        let field = seed_morphogenesis_field(
+            &field,
+            &MorphogenesisSettings {
+                sim_scale: 1,
+                ..MorphogenesisSettings::coral()
+            },
+        )
+        .expect("seed");
+
+        let unshaded = MorphogenesisCompositeSettings {
+            pattern_mix: 1.0,
+            displace: 0.0,
+            pattern_hue: 0.5,
+            pattern_color_mode: PatternColorMode::Hue,
+            ..MorphogenesisCompositeSettings::passthrough()
+        };
+        let shaded = MorphogenesisCompositeSettings {
+            shade: 1.0,
+            shade_height: 5.0,
+            shade_specular: 0.5,
+            ..unshaded
+        };
+
+        let unshaded_out =
+            composite_morphogenesis_frame(&carrier, &field, &unshaded).expect("unshaded");
+        let shaded_out = composite_morphogenesis_frame(&carrier, &field, &shaded).expect("shaded");
+
+        assert!(
+            unshaded_out
+                .pixels
+                .iter()
+                .all(|p| p == &[0.0, 0.0, 0.0, 1.0]),
+            "luma-preserving tint of a black carrier must stay black (the known bug)"
+        );
+        assert!(
+            shaded_out
+                .pixels
+                .iter()
+                .any(|p| p[0] > 1e-3 || p[1] > 1e-3 || p[2] > 1e-3),
+            "shade == 1 must show visible relief structure on a black carrier"
+        );
     }
 
     // ─── S3 param-map tests ────────────────────────────────────────────────

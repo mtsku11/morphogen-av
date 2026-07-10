@@ -159,11 +159,11 @@ pub use morphogenesis::{
     injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
     morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f, morphogenesis_substep,
     morphogenesis_substep_with_param_map, render_v_field_grayscale,
-    render_v_field_grayscale_upsampled, sample_carrier_luma_at_sim_resolution,
-    seed_morphogenesis_field, InjectSource, MorphogenesisCompositeSettings, MorphogenesisField,
-    MorphogenesisPreset, MorphogenesisSettings, OutputView, PatternColorMode, COVERAGE_GAIN,
-    MORPHOGENESIS_ALGORITHM, PARAM_MAP_SEGMENT_DELTA_FEED, PARAM_MAP_SEGMENT_DELTA_KILL,
-    PARAM_MAP_STRENGTH_DEFAULT,
+    render_v_field_grayscale_upsampled, render_v_field_grayscale_upsampled_with_shading,
+    sample_carrier_luma_at_sim_resolution, seed_morphogenesis_field, InjectSource,
+    MorphogenesisCompositeSettings, MorphogenesisField, MorphogenesisPreset, MorphogenesisSettings,
+    OutputView, PatternColorMode, COVERAGE_GAIN, MORPHOGENESIS_ALGORITHM,
+    PARAM_MAP_SEGMENT_DELTA_FEED, PARAM_MAP_SEGMENT_DELTA_KILL, PARAM_MAP_STRENGTH_DEFAULT,
 };
 pub use optical_flow::{
     lucas_kanade_flow_cpu, pyramidal_lucas_kanade_flow_cpu,

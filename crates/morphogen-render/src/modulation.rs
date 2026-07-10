@@ -994,17 +994,21 @@ pub const DISPERSION_MODULATION_TARGETS: &[&str] =
     &["coagulation_strength", "bias", "scatter_amount", "damping"];
 
 /// Morphogenesis (Tier "Morphogenesis" S3, `docs/MORPHOGENESIS_MILESTONE.md`;
-/// Live Coupling L-S2, `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`) —
+/// Live Coupling L-S2, `docs/MORPHOGENESIS_LIVE_COUPLING_MILESTONE.md`;
+/// Relief Shading B1, `docs/MORPHOGENESIS_RELIEF_SHADING_MILESTONE.md`) —
 /// three chemistry knobs (`feed`, `kill`, `param_map_strength`, all on
-/// [`MorphogenesisSettings`]), two composite knobs (`pattern_mix`,
-/// `displace`, on [`MorphogenesisCompositeSettings`]), and three Live
-/// Coupling knobs (`inject`, `erode`, `coverage_target`, all on
-/// [`MorphogenesisSettings`]); a single apply function threads both structs
-/// since the routes span them. Structural knobs (`du`, `dv`, `dt`,
-/// `substeps`, `sim_scale`, `seed_threshold`, `seed`, `inject_source`,
-/// `pattern_hue`, `pattern_color_mode`) restructure the field/seed or select
-/// a mode and are excluded. Stateful with a checkpoint path → routes join
-/// the sequence contract like flow-feedback.
+/// [`MorphogenesisSettings`]), five composite knobs (`pattern_mix`,
+/// `displace`, `shade`, `shade_azimuth`, `shade_height`, on
+/// [`MorphogenesisCompositeSettings`]), and three Live Coupling knobs
+/// (`inject`, `erode`, `coverage_target`, all on [`MorphogenesisSettings`]);
+/// a single apply function threads both structs since the routes span them.
+/// Structural knobs (`du`, `dv`, `dt`, `substeps`, `sim_scale`,
+/// `seed_threshold`, `seed`, `inject_source`, `pattern_hue`,
+/// `pattern_color_mode`, `shade_elevation`, `shade_specular`,
+/// `shade_shininess`) restructure the field/seed, select a mode, or are
+/// left as static per-render tuning (not part of the "live" surface) and
+/// are excluded. Stateful with a checkpoint path → routes join the sequence
+/// contract like flow-feedback.
 pub const MORPHOGENESIS_MODULATION_TARGETS: &[&str] = &[
     "feed",
     "kill",
@@ -1014,6 +1018,9 @@ pub const MORPHOGENESIS_MODULATION_TARGETS: &[&str] = &[
     "inject",
     "erode",
     "coverage_target",
+    "shade",
+    "shade_azimuth",
+    "shade_height",
 ];
 
 /// Fluid mosaic — the look-driving continuous knobs.
@@ -1041,6 +1048,12 @@ const LINE_THICKNESS_RANGE: (f32, f32) = (1.0, 64.0);
 /// just keeps a routed envelope inside the explored, visually-alive
 /// territory rather than off in flatly-dead or degenerate space.
 const MORPHOGENESIS_FEED_KILL_RANGE: (f32, f32) = (0.0, 0.12);
+
+/// Relief-shading `shade_height` clamp (Track B1): a gradient→normal scale,
+/// not a physically bounded quantity — keeps a routed envelope inside the
+/// explored, visually-legible range rather than off in either a flat (near
+/// `0`) or degenerate, aliasing-heavy (very large) tilt.
+const MORPHOGENESIS_SHADE_HEIGHT_RANGE: (f32, f32) = (0.0, 64.0);
 
 // Enum-target variant orders (contract: milestone doc table). Unimplemented
 // variants are excluded — an envelope must not select an erroring variant
@@ -1463,6 +1476,14 @@ pub fn apply_morphogenesis_modulation(
         "inject" => settings.inject = value.clamp(0.0, 1.0),
         "erode" => settings.erode = value.clamp(0.0, 1.0),
         "coverage_target" => settings.coverage_target = value.clamp(0.0, 1.0),
+        "shade" => composite.shade = value.clamp(0.0, 1.0),
+        "shade_azimuth" => composite.shade_azimuth = value.rem_euclid(1.0),
+        "shade_height" => {
+            composite.shade_height = value.clamp(
+                MORPHOGENESIS_SHADE_HEIGHT_RANGE.0,
+                MORPHOGENESIS_SHADE_HEIGHT_RANGE.1,
+            )
+        }
         _ => {
             return Err(unknown_target(
                 "morphogenesis",
@@ -1931,6 +1952,30 @@ mod tests {
             .unwrap();
         assert_eq!(settings.coverage_target, 0.0);
 
+        // Track B1: shade/shade_specular-adjacent clamp [0,1], shade_azimuth
+        // wraps (turns), shade_height clamps to the declared range.
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade", 1.5).unwrap();
+        assert_eq!(composite.shade, 1.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade", -0.5).unwrap();
+        assert_eq!(composite.shade, 0.0);
+
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_azimuth", 1.25)
+            .unwrap();
+        assert_eq!(
+            composite.shade_azimuth, 0.25,
+            "shade_azimuth wraps, not clamps"
+        );
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_azimuth", -0.25)
+            .unwrap();
+        assert_eq!(composite.shade_azimuth, 0.75);
+
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_height", 99999.0)
+            .unwrap();
+        assert_eq!(composite.shade_height, 64.0);
+        apply_morphogenesis_modulation(&mut settings, &mut composite, "shade_height", -5.0)
+            .unwrap();
+        assert_eq!(composite.shade_height, 0.0);
+
         // Every clamped combination stays legal for the render.
         settings.validate().unwrap();
         composite.validate().unwrap();
@@ -1947,6 +1992,9 @@ mod tests {
             "inject_source",
             "pattern_hue",
             "pattern_color_mode",
+            "shade_elevation",
+            "shade_specular",
+            "shade_shininess",
         ] {
             assert!(
                 apply_morphogenesis_modulation(&mut settings, &mut composite, excluded, 1.0)
