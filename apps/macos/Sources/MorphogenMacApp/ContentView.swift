@@ -2,61 +2,57 @@ import SwiftUI
 
 struct ContentView: View {
   @StateObject private var state = AppState()
+  @State private var selection: EffectListing?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
+    VStack(spacing: 0) {
       header
+        .padding(16)
 
-      ScrollView(.vertical) {
-        VStack(alignment: .leading, spacing: 16) {
-          HStack(alignment: .top, spacing: 16) {
-            SourceSlotView(
-              title: "Source A",
-              role: .modulator,
-              path: $state.sourceAPath,
-              probeSummary: state.sourceAProbeSummary,
-              previewSummary: state.sourceAPreviewSummary,
-              previewImage: state.sourceAPreviewImage,
-              onChoose: { chooseSource(.modulator) }
-            )
+      Divider()
 
-            SourceSlotView(
-              title: "Source B",
-              role: .carrier,
-              path: $state.sourceBPath,
-              probeSummary: state.sourceBProbeSummary,
-              previewSummary: state.sourceBPreviewSummary,
-              previewImage: state.sourceBPreviewImage,
-              onChoose: { chooseSource(.carrier) }
-            )
-          }
-
-          WorkflowPanelView(state: state)
-
-          DisclosureGroup {
-            VStack(alignment: .leading, spacing: 16) {
-              NodeGraphPlaceholderView()
-              AnalysisPanelView()
-              CompositionPanelView(state: state)
-              CoagulatedBlendPanelView(state: state)
-              DispersionBlendPanelView(state: state)
-              FluidMosaicPanelView(state: state)
-              RenderPanelView(state: state)
-            }
-            .padding(.top, 8)
-          } label: {
-            Label("Advanced render queue, diagnostics, and experimental controls", systemImage: "slider.horizontal.3")
-              .font(.headline)
-          }
+      NavigationSplitView {
+        EffectSidebarView(selection: $selection)
+      } detail: {
+        if let selection {
+          EffectDetailView(state: state, selection: selection)
+        } else {
+          EffectDetailPlaceholderView()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 8)
       }
+      .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
     }
-    .padding(20)
   }
 
   private var header: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      title
+
+      HStack(alignment: .top, spacing: 16) {
+        SourceSlotView(
+          title: "Source A",
+          role: .modulator,
+          path: $state.sourceAPath,
+          probeSummary: state.sourceAProbeSummary,
+          previewSummary: state.sourceAPreviewSummary,
+          previewImage: state.sourceAPreviewImage,
+          onChoose: { chooseSource(.modulator) }
+        )
+
+        SourceSlotView(
+          title: "Source B",
+          role: .carrier,
+          path: $state.sourceBPath,
+          probeSummary: state.sourceBProbeSummary,
+          previewSummary: state.sourceBPreviewSummary,
+          previewImage: state.sourceBPreviewImage,
+          onChoose: { chooseSource(.carrier) }
+        )
+      }
+    }
+  }
+
+  private var title: some View {
     VStack(alignment: .leading, spacing: 4) {
       Text("Morphogen AV")
         .font(.system(size: 28, weight: .semibold, design: .rounded))
