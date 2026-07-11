@@ -74,7 +74,7 @@ use morphogen_render::{
     advance_fhn_frame, advance_morphogenesis_frame, advance_morphogenesis_frame_with_param_map,
     advance_lenia_frame, apply_coverage_homeostat, apply_fhn_inject, apply_inject_erode,
     apply_lenia_inject_erode, composite_morphogenesis_frame, fhn_display_field,
-    injection_weight_luma, injection_weight_motion, morphogenesis_field_dimensions,
+    injection_weight_luma, injection_weight_motion, lenia_breathing_mu, morphogenesis_field_dimensions,
     morphogenesis_field_from_rgba32f, morphogenesis_field_to_rgba32f, render_v_field_grayscale,
     render_v_field_grayscale_upsampled_with_shading, sample_carrier_luma_at_sim_resolution,
     seed_fhn_field, seed_lenia_field, seed_morphogenesis_field, FhnSettings, InjectSource,
@@ -7849,7 +7849,15 @@ pub(crate) fn render_morphogenesis_sequence(
         // (deferred to A2-S2, mirroring FHN's own S1/S2 split) — this copy
         // stays unmodulated for now, kept per-frame for shape-consistency
         // with the other two models and so wiring it up later is additive.
-        let frame_lenia_settings = lenia_settings;
+        // `mu` is overwritten every frame by `lenia_breathing_mu` — a base
+        // model characteristic (not gated by a knob), keeping the growth
+        // window's target perpetually moving so the field never fully
+        // settles into a hard fixed point (see that function's doc comment
+        // for why a static-equilibrium Lenia reads as "frozen background +
+        // a moving inject overlay" instead of one continuously-alive
+        // system, unlike Gray-Scott's own open, driven dynamics).
+        let mut frame_lenia_settings = lenia_settings;
+        frame_lenia_settings.mu = lenia_breathing_mu(&lenia_settings, index as u32);
         let mut frame_composite = composite;
         if let Some(plan) = &modulation_plan {
             for (target, value) in plan.frame_values(index) {

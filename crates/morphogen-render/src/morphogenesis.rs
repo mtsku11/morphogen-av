@@ -2133,6 +2133,52 @@ pub fn advance_lenia_frame(
     Ok(current)
 }
 
+/// Post-injection-fix finding (diagnosed with a `model: "fable"` agent,
+/// confirmed via cross-model self-delta measurement on the real cello
+/// fixture): unlike Gray-Scott's reaction-diffusion PDE — an OPEN, driven
+/// two-field system (`feed*(1-U)` sources U, `(feed+kill)*V` sinks V, so
+/// coral/mitosis/worms never truly stop reorganizing, self-delta floors
+/// around 0.3-0.9/255 indefinitely) — Lenia's single-field convolution +
+/// growth-map relaxation genuinely CONVERGES to a hard fixed point once
+/// every live cell's neighbourhood density reads `mu` (`G→0` there, so
+/// updates stop): self-delta measured decaying to ~0.05/255 by frame 100,
+/// 5-10x lower than Gray-Scott's floor, and still falling. The result reads
+/// as "static background + a moving inject overlay" rather than one
+/// continuously-alive system.
+///
+/// Fix: a slow sinusoidal drift in `mu` itself ([`LENIA_BREATHE_AMPLITUDE`]/
+/// [`LENIA_BREATHE_PERIOD_FRAMES`]) keeps the growth window's target density
+/// perpetually moving, so the field is always chasing a shifting target
+/// instead of settling — existing structure grows when the drifting `mu`
+/// favours more density, recedes when it favours less. Declared as a
+/// per-OUTPUT-FRAME shift (constant across that frame's own substeps),
+/// mirroring Gray-Scott's `apply_coverage_homeostat`'s own "one shifted-
+/// settings snapshot per frame" shape — callers build a per-frame settings
+/// copy with `mu` replaced by this function's result, then use it for BOTH
+/// the substep advance and any live injection that frame (so injected
+/// regions breathe in sync with the ambient field, not against it).
+///
+/// This is a base characteristic of the model, not a `0 = off` optional
+/// knob like `inject`/`erode` — Lenia's own literature calls this class of
+/// behaviour "breathing membranes" (see `docs/MORPHOGENESIS_EXPANSION_HANDOFF.md`),
+/// which this app's original tuning had not actually delivered until now.
+pub const LENIA_BREATHE_AMPLITUDE: f32 = 0.03;
+/// Full breathing cycle length, in OUTPUT frames — slow enough to read as
+/// organic growth/recession rather than a flicker (at 24fps, a 96-frame
+/// period is a 4-second cycle).
+pub const LENIA_BREATHE_PERIOD_FRAMES: f32 = 96.0;
+
+/// The effective `mu` for `frame_index` — `settings.mu` at `frame_index ==
+/// 0` (so frame zero's seed still fires against the exact same target the
+/// presets were tuned around), drifting sinusoidally by
+/// [`LENIA_BREATHE_AMPLITUDE`] with period [`LENIA_BREATHE_PERIOD_FRAMES`]
+/// thereafter. See [`advance_lenia_frame`]'s neighbouring doc comment for
+/// why this exists.
+pub fn lenia_breathing_mu(settings: &LeniaSettings, frame_index: u32) -> f32 {
+    let phase = (frame_index as f32 / LENIA_BREATHE_PERIOD_FRAMES) * std::f32::consts::TAU;
+    settings.mu + LENIA_BREATHE_AMPLITUDE * phase.sin()
+}
+
 /// Spreads each nonzero `w` sample onto every cell within `radius` of it,
 /// taking the max where discs overlap. Mirrors [`stamp_disc`]'s max-fill
 /// shape but keeps the source's continuous weight instead of forcing `1.0`.
@@ -3823,5 +3869,35 @@ mod tests {
             "LEN6: a thin motion-edge injection must persist into a non-trivial mass \
              after 20 frames, not decay away (mass={mass})"
         );
+    }
+
+    /// LEN7 (breathing): [`lenia_breathing_mu`] returns exactly `settings.mu`
+    /// at frame 0 (so the seed still fires against the tuned target), stays
+    /// within `[mu - amplitude, mu + amplitude]` always, and is periodic
+    /// with period [`LENIA_BREATHE_PERIOD_FRAMES`] (frame N and frame N +
+    /// period must match).
+    #[test]
+    fn len7_breathing_mu_is_bounded_periodic_and_exact_at_frame_zero() {
+        let settings = LeniaSettings::orbium();
+        assert_eq!(lenia_breathing_mu(&settings, 0), settings.mu);
+
+        for frame in 0..300 {
+            let mu = lenia_breathing_mu(&settings, frame);
+            assert!(
+                (settings.mu - LENIA_BREATHE_AMPLITUDE..=settings.mu + LENIA_BREATHE_AMPLITUDE)
+                    .contains(&mu),
+                "frame {frame}: breathing mu {mu} escaped the declared amplitude band"
+            );
+        }
+
+        let period = LENIA_BREATHE_PERIOD_FRAMES as u32;
+        for frame in 0..period {
+            let a = lenia_breathing_mu(&settings, frame);
+            let b = lenia_breathing_mu(&settings, frame + period);
+            assert!(
+                (a - b).abs() < 1e-4,
+                "frame {frame}: breathing mu must repeat every {period} frames (a={a}, b={b})"
+            );
+        }
     }
 }
