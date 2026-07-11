@@ -36,6 +36,10 @@ struct EffectDetailView: View {
           CascadeCollageDetailView(state: state)
         case .trailCascade:
           TrailCascadeDetailView(state: state)
+        case .morphogenesis:
+          MorphogenesisDetailView(state: state)
+        case .granularMosaic:
+          GranularMosaicDetailView(state: state)
         default:
           placeholder
         }
