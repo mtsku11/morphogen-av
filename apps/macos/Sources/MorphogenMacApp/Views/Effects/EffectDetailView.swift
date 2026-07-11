@@ -20,6 +20,14 @@ struct EffectDetailView: View {
           RuttEtraDetailView(state: state)
         case .fluidAdvection:
           FluidAdvectionDetailView(state: state)
+        case .convBlend:
+          ConvBlendDetailView(state: state)
+        case .coagulatedBlend:
+          CoagulatedBlendPanelView(state: state)
+        case .dispersionBlend:
+          DispersionBlendPanelView(state: state)
+        case .fluidMosaic:
+          FluidMosaicPanelView(state: state)
         default:
           placeholder
         }
