@@ -4430,15 +4430,23 @@ final class AppState: ObservableObject {
   }
 
   func runBitstreamDatamoshRender() {
-    guard let inputURL = bitstreamInputVideoURL else {
-      statusMessage = "Select an input video before rendering the bitstream datamosh."
+    // Bitstream datamosh needs the raw video FILE (real container/codec
+    // surgery), not a frame-sequence directory, so it can't reuse
+    // `effectiveModulatorURL()`/`effectiveCarrierURL()` like the frame-based
+    // effects do. Fall back to the global Source A/B video files chosen at
+    // the top of the app when this effect's own pickers haven't been used —
+    // otherwise picking Source A alone (with no local override) always fails
+    // here even though every other effect treats that as sufficient.
+    guard let inputURL = bitstreamInputVideoURL ?? sourceAURL else {
+      statusMessage = "Select an input video (Source A) before rendering the bitstream datamosh."
       return
     }
     guard let outputURL = effectiveOutputRoot(bitstreamOutputURL) else {
       statusMessage = "Choose an output directory before rendering the bitstream datamosh."
       return
     }
-    if bitstreamOperation == .motionTransfer && bitstreamCarrierVideoURL == nil {
+    let carrierURL = bitstreamCarrierVideoURL ?? sourceBURL
+    if bitstreamOperation == .motionTransfer && carrierURL == nil {
       statusMessage = "Motion transfer requires a carrier video (Source B)."
       return
     }
@@ -4451,7 +4459,7 @@ final class AppState: ObservableObject {
       operation: bitstreamOperation,
       pFrameIndex: bitstreamPFrameIndex,
       duplicateCount: bitstreamDuplicateCount,
-      carrierVideoURL: bitstreamCarrierVideoURL,
+      carrierVideoURL: carrierURL,
       carrierKeyframes: bitstreamCarrierKeyframes,
       preset: bitstreamPreset,
       projectURL: projectURL
