@@ -49,6 +49,8 @@ struct ContentView: View {
           onChoose: { chooseSource(.carrier) }
         )
       }
+
+      GlobalRenderSettingsView(state: state)
     }
   }
 
