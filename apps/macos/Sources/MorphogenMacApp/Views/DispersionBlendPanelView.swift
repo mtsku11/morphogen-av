@@ -131,6 +131,10 @@ struct DispersionBlendPanelView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .textSelection(.enabled)
+
+      QuickPreviewBand(state: state, requiresModulator: true) {
+        state.runDispersionBlendRender()
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }

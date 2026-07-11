@@ -59,6 +59,14 @@ struct VideoVocoderDetailView: View {
       Text(state.vocoderSummary)
         .font(.caption)
         .foregroundStyle(.secondary)
+
+      // Not in the milestone doc's Include/Exclude tables (an apparent gap,
+      // not a wrong claim) — added because runVideoVocoderSequenceRender
+      // unconditionally reads effectiveModulatorURL()/effectiveCarrierURL(),
+      // matching the same static-true pattern as Flow Displace etc.
+      QuickPreviewBand(state: state, requiresModulator: true) {
+        state.runVideoVocoderSequenceRender()
+      }
     }
   }
 }

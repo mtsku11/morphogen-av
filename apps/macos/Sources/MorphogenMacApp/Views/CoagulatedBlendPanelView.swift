@@ -133,6 +133,10 @@ struct CoagulatedBlendPanelView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .textSelection(.enabled)
+
+      QuickPreviewBand(state: state, requiresModulator: true) {
+        state.runCoagulatedBlendSequenceRender()
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }

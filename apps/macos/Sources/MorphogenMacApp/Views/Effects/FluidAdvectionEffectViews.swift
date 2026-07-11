@@ -250,6 +250,10 @@ struct FluidAdvectionDetailView: View {
       Text(state.fluidAdvectionSummary)
         .font(.caption)
         .foregroundStyle(.secondary)
+
+      QuickPreviewBand(state: state, requiresModulator: mode == .twoSource) {
+        runSelectedMode()
+      }
     }
   }
 

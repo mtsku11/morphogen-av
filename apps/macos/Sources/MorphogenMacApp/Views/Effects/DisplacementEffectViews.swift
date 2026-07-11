@@ -40,6 +40,10 @@ struct FlowDisplaceDetailView: View {
       Text(state.frameSequenceSummary)
         .font(.caption)
         .foregroundStyle(.secondary)
+
+      QuickPreviewBand(state: state, requiresModulator: true) {
+        state.runTwoSourceFrameSequenceRender()
+      }
     }
   }
 }
@@ -223,6 +227,10 @@ struct FlowFeedbackDetailView: View {
       Text(state.feedbackSummary)
         .font(.caption)
         .foregroundStyle(.secondary)
+
+      QuickPreviewBand(state: state, requiresModulator: true) {
+        state.runFlowFeedbackSequenceRender()
+      }
     }
   }
 }
@@ -369,6 +377,10 @@ struct RuttEtraDetailView: View {
       Text(state.ruttEtraSummary)
         .font(.caption)
         .foregroundStyle(.secondary)
+
+      QuickPreviewBand(state: state, requiresModulator: state.ruttEtraUseTwoSource) {
+        state.runRuttEtraSequenceRender()
+      }
     }
   }
 }
