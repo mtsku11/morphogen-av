@@ -48,6 +48,16 @@ struct EffectDetailView: View {
           PaletteQuantizeDetailView(state: state)
         case .pixelSort:
           PixelSortDetailView(state: state)
+        case .videoVocoder:
+          VideoVocoderDetailView(state: state)
+        case .spectralCrossSynth:
+          SpectralCrossSynthDetailView(state: state)
+        case .audioImpulseConvolution:
+          AudioImpulseConvolutionDetailView(state: state)
+        case .audioVideoRoute:
+          AudioVideoRouteDetailView(state: state)
+        case .videoAudioRoute:
+          VideoAudioRouteDetailView(state: state)
         default:
           placeholder
         }
