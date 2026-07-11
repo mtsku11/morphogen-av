@@ -11,7 +11,7 @@ struct CompositionPanelView: View {
   @ObservedObject var state: AppState
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       Text("Composition Timeline")
         .font(.headline)
       Text("Arrange scenes (each a chain over its own source) into a piece — cuts, crossfades, and a master audio clock. Author the spec JSON in an editor, then render or queue it here.")

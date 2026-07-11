@@ -47,7 +47,7 @@ struct RetroStaticDetailView: View {
           .frame(width: 170, alignment: .leading)
         }
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Strength",
             source: $state.retroStaticModStrengthSource,
@@ -168,7 +168,7 @@ struct ChannelShiftDetailView: View {
         .frame(width: 220)
         .help("Metal covers constant offsets and is parity-gated. Flow-driven mode (Flow Gain ≠ 0) is CPU-only.")
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "R X",
             source: $state.channelShiftModRXSource,
@@ -316,7 +316,7 @@ struct PaletteQuantizeDetailView: View {
         .frame(width: 220)
         .help("Metal covers both modes and is parity-gated against the CPU reference per frame.")
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Levels",
             source: $state.paletteQuantizeModLevelsSource,
@@ -478,7 +478,7 @@ struct PixelSortDetailView: View {
         .frame(width: 200)
         .help("Metal is self-mask only and gated per-frame against CPU. Cross-synth modes are CPU-only.")
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Low",
             source: $state.pixelSortModLowSource,

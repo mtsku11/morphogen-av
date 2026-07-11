@@ -119,7 +119,7 @@ struct DatamoshDetailView: View {
         .frame(width: 200)
         .help("Metal is gated per-frame against the CPU reference.")
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Amount",
             source: $state.datamoshModAmountSource,
@@ -358,7 +358,7 @@ struct CascadeCollageDetailView: View {
           .frame(width: 195, alignment: .leading)
         }
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Cc Scrib",
             source: $state.collageModScribSource,
@@ -465,7 +465,7 @@ struct TrailCascadeDetailView: View {
       }
 
       MoreKnobs {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           // Row 1: always-visible knobs
           HStack(spacing: EffectDetailLayout.controlRowSpacing) {
             if state.cascadeFieldType == .vortex {
@@ -564,7 +564,7 @@ struct TrailCascadeDetailView: View {
         }
 
         // Cascade trails mod slots
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Tr Advect",
             source: $state.trailsModAdvectSource,

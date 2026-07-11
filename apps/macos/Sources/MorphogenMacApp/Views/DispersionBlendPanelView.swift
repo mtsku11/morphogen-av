@@ -9,7 +9,7 @@ struct DispersionBlendPanelView: View {
   var modulatorNames: [String] { state.disperseDeclaredModulatorNames }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       Text("Dispersion Blend")
         .font(.headline)
       Text("Two-source: tiles are claimed by descriptor coagulation then scatter/drift. Uses shared Source A/B slots. Modulate coagulation_strength / bias / scatter_amount / damping.")

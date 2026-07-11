@@ -123,7 +123,7 @@ struct FlowFeedbackDetailView: View {
           .frame(width: 165, alignment: .leading)
         }
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Carrier",
             source: $state.feedbackModCarrierAmountSource,
@@ -274,7 +274,7 @@ struct RuttEtraDetailView: View {
         .frame(width: 130)
         .help("Metal runs the gather kernel and is parity-gated per-frame against the CPU reference.")
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Depth",
             source: $state.ruttEtraModDepthSource,

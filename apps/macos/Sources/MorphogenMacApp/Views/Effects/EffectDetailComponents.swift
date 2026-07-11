@@ -8,6 +8,9 @@ enum EffectDetailLayout {
   static let sectionSpacing: CGFloat = 16
   static let controlRowSpacing: CGFloat = 16
   static let knobWidth: CGFloat = 160
+  /// Tighter spacing for a dense vertical run of modulation-slot rows inside
+  /// "More knobs" — distinct from the looser top-level `sectionSpacing`.
+  static let modGroupSpacing: CGFloat = 10
 }
 
 /// Effect title, shown at the top of every detail view.

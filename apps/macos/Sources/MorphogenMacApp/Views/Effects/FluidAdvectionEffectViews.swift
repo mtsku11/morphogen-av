@@ -104,7 +104,7 @@ struct FluidAdvectionDetailView: View {
           .frame(width: 200, alignment: .leading)
         }
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Prt Advect",
             source: $state.particleModAdvectSource,

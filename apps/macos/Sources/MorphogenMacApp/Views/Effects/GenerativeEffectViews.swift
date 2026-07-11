@@ -216,7 +216,7 @@ struct MorphogenesisDetailView: View {
           .help("How far above resting u a seeded/injected cell is pushed.")
         }
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
             label: "Feed",
             source: $state.morphogenesisModFeedSource,

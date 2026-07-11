@@ -9,7 +9,7 @@ struct FluidMosaicPanelView: View {
   var modulatorNames: [String] { state.mosaicDeclaredModulatorNames() }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       Text("Fluid Colour-Sort Mosaic")
         .font(.headline)
       Text("Two-source: tiles sort into colour groups and flow under a curl field. Uses shared Source A/B slots. Modulate cohesion / repulsion / fluid_strength / turbulence.")

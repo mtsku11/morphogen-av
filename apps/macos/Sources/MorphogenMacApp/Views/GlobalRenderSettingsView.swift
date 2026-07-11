@@ -13,7 +13,7 @@ struct GlobalRenderSettingsView: View {
   @State private var showsProxyTools = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
       HStack(spacing: EffectDetailLayout.controlRowSpacing) {
         Picker("Quality", selection: $state.renderQuality) {
           ForEach(RenderQualityOption.allCases) { option in
@@ -55,7 +55,7 @@ struct GlobalRenderSettingsView: View {
       }
 
       DisclosureGroup("Sources & Proxies", isExpanded: $showsProxyTools) {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           HStack(spacing: EffectDetailLayout.controlRowSpacing) {
             Button {
               state.probeSelectedSources()

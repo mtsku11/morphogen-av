@@ -11,7 +11,7 @@ struct CoagulatedBlendPanelView: View {
   var modulatorNames: [String] { state.coagNamedModulators.map { $0.name } }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       Text("Coagulated Flow Blend")
         .font(.headline)
       Text("Two-source: Source A intrudes into Source B in coagulated patches. Uses the shared Source A/B frame slots. Modulate coagulation_strength / edge_hardness / bias.")
