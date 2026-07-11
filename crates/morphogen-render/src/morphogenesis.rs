@@ -2175,18 +2175,22 @@ fn dilate_weight_field(w: &[f32], width: u32, height: u32, radius: i32) -> Vec<f
     out
 }
 
-/// Live coupling: the SAME equations as Gray-Scott's
-/// [`apply_inject_erode`] (`A += inject * w`, then `A *= (1 - erode * (1 -
-/// w))`, both clamped `[0,1]`), applied to `A` (`field.v`) — declared
-/// reusable because Lenia's `A` shares Gray-Scott's `V`'s exact `[0,1]`
-/// density meaning (unlike FHN's signed `u`, which needed a differently-
-/// scaled discrete kick instead). Unlike Gray-Scott, `w` is first dilated by
+/// Live coupling: unlike Gray-Scott's [`apply_inject_erode`] (a raw additive
+/// `A += inject * w`), Lenia's `inject` LERPS each cell toward `settings.mu`
+/// — `A = A*(1-m) + mu*m`, `m = clamp01(inject * w)` — before the erode
+/// multiply. A raw additive push (tried first; see the "Track A2" section
+/// comment) can land density well outside the growth window
+/// (`mu ± ~3*sigma`): [`lenia_growth`] is strongly NEGATIVE out there, so a
+/// strong/bright motion injection was paradoxically the fastest to decay —
+/// confirmed on real footage (a bright motion edge visibly died faster than
+/// a faint one). Lerping toward `mu` instead GUARANTEES every injection
+/// lands exactly where the growth mapping is most positive, so it reliably
+/// grows/spreads under the model's own dynamics afterward rather than
+/// occasionally overshooting into decay. `w` is first dilated by
 /// [`dilate_weight_field`] to a disc of `settings.radius` — the SAME "needs
 /// blob mass, not point mass" requirement [`seed_lenia_field`] already
-/// declares, applied to live injection too (see that function's doc
-/// comment): without it, a thin motion-edge weight field visibly decays
-/// within a handful of frames instead of persisting/growing like a real
-/// injected creature.
+/// declares: a thin motion-edge weight field has no local width for the
+/// ring kernel to read, lerp target or not.
 pub fn apply_lenia_inject_erode(
     field: &MorphogenesisField,
     settings: &LeniaSettings,
@@ -2202,7 +2206,8 @@ pub fn apply_lenia_inject_erode(
     let w = dilate_weight_field(w, field.width, field.height, settings.radius as i32);
     let mut v = field.v.clone();
     for (value, &w) in v.iter_mut().zip(&w) {
-        *value = (*value + settings.inject * w).clamp(0.0, 1.0);
+        let m = (settings.inject * w).clamp(0.0, 1.0);
+        *value = (*value * (1.0 - m) + settings.mu * m).clamp(0.0, 1.0);
         *value = (*value * (1.0 - settings.erode * (1.0 - w))).clamp(0.0, 1.0);
     }
     MorphogenesisField::new(field.width, field.height, field.u.clone(), v)
