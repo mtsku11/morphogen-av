@@ -2133,12 +2133,60 @@ pub fn advance_lenia_frame(
     Ok(current)
 }
 
+/// Spreads each nonzero `w` sample onto every cell within `radius` of it,
+/// taking the max where discs overlap. Mirrors [`stamp_disc`]'s max-fill
+/// shape but keeps the source's continuous weight instead of forcing `1.0`.
+/// Needed by [`apply_lenia_inject_erode`]: [`InjectSource::Motion`]'s weight
+/// field is a thin, edge-like mask (`|luma(N) - luma(N-1)|` is only nonzero
+/// where footage actually moved, typically a handful of cells wide), and —
+/// exactly like [`seed_lenia_field`]'s single-pixel-seed problem — a
+/// pointwise injection into `A` has ~zero local mass under the ring kernel,
+/// so `G(K*A)` reads far from `mu` and the injected value decays away over
+/// the next few substeps instead of igniting a persisting structure.
+fn dilate_weight_field(w: &[f32], width: u32, height: u32, radius: i32) -> Vec<f32> {
+    let width_i = width as i32;
+    let height_i = height as i32;
+    let stride = width as usize;
+    let mut out = vec![0.0_f32; w.len()];
+    for y in 0..height_i {
+        for x in 0..width_i {
+            let value = w[(y as usize) * stride + (x as usize)];
+            if value <= 0.0 {
+                continue;
+            }
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    if dx * dx + dy * dy > radius * radius {
+                        continue;
+                    }
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx < 0 || ny < 0 || nx >= width_i || ny >= height_i {
+                        continue;
+                    }
+                    let nidx = (ny as usize) * stride + (nx as usize);
+                    if value > out[nidx] {
+                        out[nidx] = value;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Live coupling: the SAME equations as Gray-Scott's
 /// [`apply_inject_erode`] (`A += inject * w`, then `A *= (1 - erode * (1 -
 /// w))`, both clamped `[0,1]`), applied to `A` (`field.v`) — declared
 /// reusable because Lenia's `A` shares Gray-Scott's `V`'s exact `[0,1]`
 /// density meaning (unlike FHN's signed `u`, which needed a differently-
-/// scaled discrete kick instead).
+/// scaled discrete kick instead). Unlike Gray-Scott, `w` is first dilated by
+/// [`dilate_weight_field`] to a disc of `settings.radius` — the SAME "needs
+/// blob mass, not point mass" requirement [`seed_lenia_field`] already
+/// declares, applied to live injection too (see that function's doc
+/// comment): without it, a thin motion-edge weight field visibly decays
+/// within a handful of frames instead of persisting/growing like a real
+/// injected creature.
 pub fn apply_lenia_inject_erode(
     field: &MorphogenesisField,
     settings: &LeniaSettings,
@@ -2151,8 +2199,9 @@ pub fn apply_lenia_inject_erode(
             w.len()
         )));
     }
+    let w = dilate_weight_field(w, field.width, field.height, settings.radius as i32);
     let mut v = field.v.clone();
-    for (value, &w) in v.iter_mut().zip(w) {
+    for (value, &w) in v.iter_mut().zip(&w) {
         *value = (*value + settings.inject * w).clamp(0.0, 1.0);
         *value = (*value * (1.0 - settings.erode * (1.0 - w))).clamp(0.0, 1.0);
     }
@@ -3720,6 +3769,54 @@ mod tests {
         assert!(
             composite.pixels.iter().any(|p| p != &carrier.pixels[0]),
             "LEN5: the composite view must diverge from the plain carrier once the seed has grown"
+        );
+    }
+
+    /// LEN6 (live-coupling regression): injecting through a THIN, edge-like
+    /// weight field (a single-cell-wide row, exactly the shape
+    /// `injection_weight_motion` produces at a footage motion boundary) must
+    /// leave a persisting, non-trivial mass after several frames — not
+    /// decay away. This is the regression test for the bug this fixed:
+    /// before `apply_lenia_inject_erode` dilated `w` to a disc of
+    /// `settings.radius`, a pointwise injection had ~zero local mass under
+    /// the ring kernel (the same "single pixel can't fire Lenia" problem
+    /// [`seed_lenia_field`] already had to solve for seeding), so real
+    /// motion-triggered injections visibly decayed to a faint trail within
+    /// a few dozen frames instead of persisting/growing like a real
+    /// injected creature (confirmed by rendering the cello fixture: the
+    /// injected structure was a bright, well-defined blob at frame 60 but a
+    /// thin, nearly-vanished trail by frame 100 before this fix).
+    #[test]
+    fn len6_dilated_inject_persists_from_a_thin_motion_edge() {
+        let settings = LeniaSettings {
+            sim_scale: 1,
+            inject: 1.0,
+            ..LeniaSettings::orbium()
+        };
+        let size = 96u32;
+        let count = (size * size) as usize;
+        let v = vec![0.0_f32; count];
+        let u = vec![1.0_f32; count];
+        let mut field = MorphogenesisField::new(size, size, u, v).expect("build field");
+
+        // A single-row-thick weight field crossing the middle of the field —
+        // the same shape a motion edge produces, not a filled disc.
+        let mut w = vec![0.0_f32; count];
+        let mid_row = (size / 2) as usize;
+        for x in 0..size as usize {
+            w[mid_row * size as usize + x] = 1.0;
+        }
+
+        field = apply_lenia_inject_erode(&field, &settings, &w).expect("inject");
+        for _ in 0..20 {
+            field = advance_lenia_frame(&field, &settings).expect("advance");
+        }
+
+        let mass = lenia_mass(&field);
+        assert!(
+            mass > 200.0,
+            "LEN6: a thin motion-edge injection must persist into a non-trivial mass \
+             after 20 frames, not decay away (mass={mass})"
         );
     }
 }
