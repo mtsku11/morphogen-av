@@ -40,6 +40,14 @@ struct EffectDetailView: View {
           MorphogenesisDetailView(state: state)
         case .granularMosaic:
           GranularMosaicDetailView(state: state)
+        case .retroStatic:
+          RetroStaticDetailView(state: state)
+        case .channelShift:
+          ChannelShiftDetailView(state: state)
+        case .paletteQuantize:
+          PaletteQuantizeDetailView(state: state)
+        case .pixelSort:
+          PixelSortDetailView(state: state)
         default:
           placeholder
         }
