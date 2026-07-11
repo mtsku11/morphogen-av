@@ -12,6 +12,12 @@ struct EffectDetailView: View {
     ScrollView(.vertical) {
       Group {
         switch selection {
+        case .flowDisplace:
+          FlowDisplaceDetailView(state: state)
+        case .flowFeedback:
+          FlowFeedbackDetailView(state: state)
+        case .ruttEtra:
+          RuttEtraDetailView(state: state)
         default:
           placeholder
         }

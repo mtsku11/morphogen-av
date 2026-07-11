@@ -2796,7 +2796,7 @@ struct ModulationSlotRow: View {
 /// variant pickers — envelope 0 selects **From**, envelope 1 selects **To**
 /// (`enumModulationMapping` emits the equivalent affine route). From == To is
 /// legal and holds the knob at that variant (the continuity identity).
-private struct EnumModulationSlotRow<Option>: View
+struct EnumModulationSlotRow<Option>: View
 where
   Option: CaseIterable & Identifiable & Hashable & RawRepresentable,
   Option.RawValue == String,
@@ -2971,7 +2971,7 @@ struct ModulationMediaRow: View {
 /// pickers per row, and an Add button. A mod slot's Modulator picker binds to
 /// one of these by name; the panel's default `ModulationMediaRow` still covers
 /// unnamed slots.
-private struct NamedModulatorsSection: View {
+struct NamedModulatorsSection: View {
   @Binding var modulators: [NamedModulatorEntry]
   let onAdd: () -> Void
   let onRemove: (UUID) -> Void
