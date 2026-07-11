@@ -28,6 +28,14 @@ struct EffectDetailView: View {
           DispersionBlendPanelView(state: state)
         case .fluidMosaic:
           FluidMosaicPanelView(state: state)
+        case .datamosh:
+          DatamoshDetailView(state: state)
+        case .bitstreamDatamosh:
+          BitstreamDatamoshDetailView(state: state)
+        case .cascadeCollage:
+          CascadeCollageDetailView(state: state)
+        case .trailCascade:
+          TrailCascadeDetailView(state: state)
         default:
           placeholder
         }
