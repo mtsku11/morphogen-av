@@ -18,6 +18,8 @@ struct EffectDetailView: View {
           FlowFeedbackDetailView(state: state)
         case .ruttEtra:
           RuttEtraDetailView(state: state)
+        case .fluidAdvection:
+          FluidAdvectionDetailView(state: state)
         default:
           placeholder
         }
