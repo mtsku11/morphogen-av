@@ -194,3 +194,28 @@ part of the point of the redesign.
   files).
 - Checkpoint (local commit, no push) per the project's standing
   `/checkpoint` convention.
+
+## Addendum (2026-07-12): centralized band + widened eligibility
+
+Superseded in part by the header/preview redesign:
+
+- The 16 per-effect `QuickPreviewBand` instantiations were replaced by ONE
+  band pinned at the top of `EffectDetailView`, driven by
+  `AppState.previewConfiguration(for:)` — the per-effect
+  `(requiresModulator, run)` lookup that replaces the tables above as the
+  source of truth. The band gained a persistent video canvas (placeholder
+  before the first render), lost the filmstrip, and gained a Cancel button
+  (`cancelEffectPreview()`).
+- The "Exclude" list shrank: Conv-Blend, Pixel Sort, and Audio→Video Route
+  now fall back from their dedicated pickers to
+  `effectiveModulatorURL()`/`effectiveCarrierURL()`/`effectiveOutputRoot`
+  (the documented datamosh pattern) and report completion via
+  `lastFrameSequenceOutputURL`, so the preview override reaches them when
+  their dedicated pickers are unset. Still excluded (genuinely
+  un-previewable as video): Bitstream Datamosh, Spectral Cross-Synthesis,
+  Audio Impulse Convolution, Video→Audio Route, Composition, Analysis,
+  Node Graph.
+- Stranded-session fixes: `modulationRoutes` nil-returns, the granular RMS
+  guard, and Fluid Mosaic's output guard (now `effectiveOutputRoot`) all
+  tear down an armed preview session instead of leaving the preview button
+  disabled forever.

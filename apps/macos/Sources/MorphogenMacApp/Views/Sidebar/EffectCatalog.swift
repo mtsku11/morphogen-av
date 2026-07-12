@@ -112,12 +112,11 @@ enum EffectListing: String, CaseIterable, Identifiable, Hashable {
     switch self {
     case .flowDisplace, .flowFeedback, .ruttEtra, .fluidAdvection, .convBlend,
          .coagulatedBlend, .dispersionBlend, .fluidMosaic, .datamosh, .granularMosaic,
-         .videoVocoder, .spectralCrossSynth, .audioImpulseConvolution,
-         .audioVideoRoute, .videoAudioRoute:
+         .channelShift, .pixelSort, .videoVocoder, .spectralCrossSynth,
+         .audioImpulseConvolution, .audioVideoRoute, .videoAudioRoute:
       return true
     case .bitstreamDatamosh, .cascadeCollage, .trailCascade, .morphogenesis,
-         .retroStatic, .channelShift, .paletteQuantize, .pixelSort,
-         .composition, .analysis, .nodeGraph:
+         .retroStatic, .paletteQuantize, .composition, .analysis, .nodeGraph:
       return false
     }
   }

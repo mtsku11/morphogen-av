@@ -37,6 +37,13 @@ struct QuickPreviewBand: View {
         if state.isRenderingPreview {
           ProgressView()
             .controlSize(.small)
+          // Escape hatch: disarm the session so the preview button can never
+          // stay stuck disabled (a render already in flight still finishes,
+          // it just no longer loads into the canvas).
+          Button("Cancel") {
+            state.cancelEffectPreview()
+          }
+          .controlSize(.small)
         }
         Spacer()
         // The two preview knobs: downscale factor and seconds of motion.
@@ -55,31 +62,50 @@ struct QuickPreviewBand: View {
           .disabled(state.isRenderingPreview)
       }
 
-      Button {
-        runQuickPreview()
-      } label: {
-        Label("Quick Preview", systemImage: "eye")
+      let frames = state.previewFrames
+      let shownIndex = frames.isEmpty ? 0 : min(previewPlayer.currentIndex, frames.count - 1)
+
+      // The video canvas is always present — a dark stage before any preview
+      // renders, the looping frame once one has — so the preview area reads
+      // as a player, not a band of text that grows a picture later.
+      ZStack {
+        RoundedRectangle(cornerRadius: 8)
+          .fill(.black.opacity(0.85))
+
+        if frames.isEmpty {
+          VStack(spacing: 8) {
+            Image(systemName: state.isRenderingPreview ? "hourglass" : "play.rectangle")
+              .font(.system(size: 34))
+              .foregroundStyle(.secondary)
+            Text(state.isRenderingPreview
+              ? state.previewSummary
+              : "Quick Preview renders ~\(state.previewSeconds)s of this effect on your loaded sources at reduced resolution.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .multilineTextAlignment(.center)
+              .frame(maxWidth: 420)
+          }
+          .padding(12)
+        } else {
+          Image(nsImage: frames[shownIndex])
+            .resizable()
+            .scaledToFit()
+            .padding(4)
+        }
       }
-      .buttonStyle(.bordered)
-      .disabled(state.isRenderingPreview || state.isExtractingProxies)
+      .frame(maxWidth: .infinity, minHeight: 300, maxHeight: 460)
+      .clipShape(RoundedRectangle(cornerRadius: 8))
 
-      if state.previewFrames.isEmpty {
-        Text(state.isRenderingPreview
-          ? state.previewSummary
-          : "Quick Preview renders ~\(state.previewSeconds)s of this effect on your loaded sources at reduced resolution — a fast look before committing to the full clip.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      } else {
-        let frames = state.previewFrames
-        let shownIndex = min(previewPlayer.currentIndex, frames.count - 1)
+      HStack(spacing: 10) {
+        Button {
+          runQuickPreview()
+        } label: {
+          Label("Quick Preview", systemImage: "eye")
+        }
+        .buttonStyle(.bordered)
+        .disabled(state.isRenderingPreview || state.isExtractingProxies)
 
-        Image(nsImage: frames[shownIndex])
-          .resizable()
-          .scaledToFit()
-          .frame(maxWidth: .infinity, maxHeight: 440)
-          .clipShape(RoundedRectangle(cornerRadius: 8))
-
-        HStack(spacing: 10) {
+        if !frames.isEmpty {
           Button {
             previewPlayer.togglePlayPause()
           } label: {
@@ -90,8 +116,11 @@ struct QuickPreviewBand: View {
             .font(.caption)
             .monospacedDigit()
             .foregroundStyle(.secondary)
-          Spacer()
         }
+        Spacer()
+      }
+
+      if !frames.isEmpty {
 
         // Performance capture (docs/PERFORMANCE_CAPTURE_MILESTONE.md):
         // record a [0,1] gesture against the looping preview; the take
@@ -147,31 +176,6 @@ struct QuickPreviewBand: View {
               state.captureTargetSelection = state.ruttEtraArmedCaptureTargets.first ?? ""
             }
           }
-        }
-
-        ScrollView(.horizontal, showsIndicators: true) {
-          HStack(spacing: 8) {
-            ForEach(Array(frames.enumerated()), id: \.offset) { index, image in
-              VStack(spacing: 4) {
-                Image(nsImage: image)
-                  .resizable()
-                  .scaledToFit()
-                  .frame(height: 64)
-                  .clipShape(RoundedRectangle(cornerRadius: 6))
-                  .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                      .stroke(
-                        index == shownIndex ? Color.accentColor : .clear,
-                        lineWidth: 2
-                      )
-                  )
-                Text("frame \(index)")
-                  .font(.caption2)
-                  .foregroundStyle(.secondary)
-              }
-            }
-          }
-          .padding(.vertical, 2)
         }
 
         Text(state.previewSummary)

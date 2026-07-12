@@ -11,47 +11,54 @@ struct GlobalRenderSettingsView: View {
   @ObservedObject var state: AppState
 
   @State private var showsProxyTools = false
+  @State private var showsQualityTools = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Quality", selection: $state.renderQuality) {
-          ForEach(RenderQualityOption.allCases) { option in
-            Text(option.rawValue).tag(option)
+      // Collapsed by default, like Sources & Proxies — the quality/export
+      // settings are set-and-forget, not something the header needs to spend
+      // a full row on.
+      DisclosureGroup("Quality & Export", isExpanded: $showsQualityTools) {
+        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+          Picker("Quality", selection: $state.renderQuality) {
+            ForEach(RenderQualityOption.allCases) { option in
+              Text(option.rawValue).tag(option)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 360)
+
+          Picker("Format", selection: $state.exportFormat) {
+            ForEach(ExportFormatOption.allCases) { option in
+              Text(option.rawValue).tag(option)
+            }
+          }
+          .pickerStyle(.menu)
+          .frame(width: 160)
+
+          Picker("ProRes FPS", selection: $state.proResFrameRate) {
+            ForEach(ProResFrameRateOption.allCases) { option in
+              Text(option.rawValue).tag(option)
+            }
+          }
+          .pickerStyle(.menu)
+          .frame(width: 130)
+
+          Picker("ProRes Profile", selection: $state.proResProfile) {
+            ForEach(ProResExportProfile.allCases) { profile in
+              Text(profile.displayName).tag(profile)
+            }
+          }
+          .pickerStyle(.menu)
+          .frame(width: 220)
+
+          Button {
+            state.exportLastFrameSequenceProResMovie()
+          } label: {
+            Label("Export ProRes", systemImage: "film.badge.plus")
           }
         }
-        .pickerStyle(.segmented)
-        .frame(width: 360)
-
-        Picker("Format", selection: $state.exportFormat) {
-          ForEach(ExportFormatOption.allCases) { option in
-            Text(option.rawValue).tag(option)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(width: 160)
-
-        Picker("ProRes FPS", selection: $state.proResFrameRate) {
-          ForEach(ProResFrameRateOption.allCases) { option in
-            Text(option.rawValue).tag(option)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(width: 130)
-
-        Picker("ProRes Profile", selection: $state.proResProfile) {
-          ForEach(ProResExportProfile.allCases) { profile in
-            Text(profile.displayName).tag(profile)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(width: 220)
-
-        Button {
-          state.exportLastFrameSequenceProResMovie()
-        } label: {
-          Label("Export ProRes", systemImage: "film.badge.plus")
-        }
+        .padding(.top, 8)
       }
 
       DisclosureGroup("Sources & Proxies", isExpanded: $showsProxyTools) {

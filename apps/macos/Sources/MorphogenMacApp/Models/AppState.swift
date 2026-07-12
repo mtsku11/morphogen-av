@@ -1168,6 +1168,18 @@ final class AppState: ObservableObject {
     previewSummary = "Preview failed: \(message)"
   }
 
+  /// User-facing escape hatch (the band's Cancel button): disarm a pending
+  /// preview session so the Quick Preview button never stays disabled — a
+  /// render already in flight still finishes, but its output no longer loads
+  /// into the preview strip.
+  func cancelEffectPreview() {
+    guard previewSession != nil || isRenderingPreview else { return }
+    previewSession = nil
+    isRenderingPreview = false
+    previewSummary = "Preview cancelled."
+    statusMessage = "Preview cancelled."
+  }
+
   private static func loadPreviewFrames(from frameDirectory: URL, limit: Int) -> [NSImage] {
     guard let urls = try? ProResImageSequenceExporter.collectPNGFrameURLs(in: frameDirectory) else {
       return []
@@ -2381,9 +2393,18 @@ final class AppState: ObservableObject {
       return (false, { [self] in runPaletteQuantizeSequenceRender() })
     case .videoVocoder:
       return (true, { [self] in runVideoVocoderSequenceRender() })
-    case .convBlend, .bitstreamDatamosh, .pixelSort, .spectralCrossSynth,
-         .audioImpulseConvolution, .audioVideoRoute, .videoAudioRoute,
-         .composition, .analysis, .nodeGraph:
+    case .convBlend:
+      return (true, { [self] in runConvolutionalBlendRender() })
+    case .pixelSort:
+      return (true, { [self] in runPixelSortRender() })
+    case .audioVideoRoute:
+      // The modulator is a WAV via the effect's own picker (the proxy
+      // pipeline is frames-only); only the carrier gets the downscale.
+      return (false, { [self] in runAudioVideoRouteRender() })
+    case .bitstreamDatamosh, .spectralCrossSynth, .audioImpulseConvolution,
+         .videoAudioRoute, .composition, .analysis, .nodeGraph:
+      // No video preview possible: audio-only outputs, raw-video bitstream
+      // surgery, spec-file composition, or static tool panels.
       return nil
     }
   }
@@ -2549,14 +2570,23 @@ final class AppState: ObservableObject {
     slotMidiCcNumbers: [Int] = [],
     effectLabel: String
   ) -> [ModulationRouteSpec]? {
+    // Route-parse failure: surface the message AND tear down any armed Quick
+    // Preview session. The band arms the session (beginEffectPreview) before
+    // runEffect(); a nil return here would otherwise strand it with
+    // isRenderingPreview stuck true and the preview button disabled forever.
+    func failRoutes(_ message: String) -> [ModulationRouteSpec]? {
+      statusMessage = message
+      failPreviewIfNeeded(message: message)
+      return nil
+    }
     var routes: [ModulationRouteSpec] = []
     for (index, slot) in slots.enumerated() {
       if slot.source == .captured {
         // No media, no modulator name — the knots live in the source clause.
         guard let spec = index < slotCaptures.count ? slotCaptures[index] : nil else {
-          statusMessage =
+          return failRoutes(
             "Record a capture take for the \(effectLabel) \(slot.target) slot in the Preview band."
-          return nil
+          )
         }
         routes.append(
           ModulationRouteSpec(
@@ -2570,13 +2600,12 @@ final class AppState: ObservableObject {
       if slot.source == .lfo {
         // No media, no modulator name — the params live in the source clause.
         guard let lfo = index < slotLfos.count ? slotLfos[index] : nil else {
-          statusMessage = "LFO is not available on the \(effectLabel) \(slot.target) slot."
-          return nil
+          return failRoutes("LFO is not available on the \(effectLabel) \(slot.target) slot.")
         }
         guard let source = lfoSourceSpec(shape: lfo.shape, rate: lfo.rate, phase: lfo.phase) else {
-          statusMessage =
+          return failRoutes(
             "LFO rate must be finite and greater than 0 (and phase finite) on the \(effectLabel) \(slot.target) slot."
-          return nil
+          )
         }
         routes.append(
           ModulationRouteSpec(
@@ -2591,9 +2620,9 @@ final class AppState: ObservableObject {
       if slot.source == .midiCc {
         let controller = index < slotMidiCcNumbers.count ? slotMidiCcNumbers[index] : 74
         guard let spec = midiCcSourceSpec(controller: controller) else {
-          statusMessage =
+          return failRoutes(
             "MIDI CC number must be 0–127 on the \(effectLabel) \(slot.target) slot."
-          return nil
+          )
         }
         source = spec
       } else if let cli = slot.source.cliValue {
@@ -2613,9 +2642,9 @@ final class AppState: ObservableObject {
         midiURL = modulatorMidiURL
       } else {
         guard let entry = namedModulators.first(where: { $0.name == modulator }) else {
-          statusMessage =
+          return failRoutes(
             "Declare a modulator named \"\(modulator)\" before rendering \(effectLabel)."
-          return nil
+          )
         }
         audioURL = entry.audioURL
         framesURL = entry.framesURL
@@ -2623,18 +2652,19 @@ final class AppState: ObservableObject {
       }
       let mediaLabel = modulator.isEmpty ? effectLabel : "modulator \"\(modulator)\""
       if slot.source.needsAudio && audioURL == nil {
-        statusMessage = "Pick a modulator WAV for \(mediaLabel) before rendering with an audio source."
-        return nil
+        return failRoutes(
+          "Pick a modulator WAV for \(mediaLabel) before rendering with an audio source."
+        )
       }
       if slot.source.needsFrames && framesURL == nil {
-        statusMessage =
+        return failRoutes(
           "Pick a modulator frame directory for \(mediaLabel) before rendering with a luma/flow source."
-        return nil
+        )
       }
       if slot.source.needsMidi && midiURL == nil {
-        statusMessage =
+        return failRoutes(
           "Pick a modulator MIDI file for \(mediaLabel) before rendering with a MIDI source."
-        return nil
+        )
       }
       routes.append(
         ModulationRouteSpec(
@@ -3363,7 +3393,11 @@ final class AppState: ObservableObject {
       statusMessage = "Select Source B frame directory before rendering fluid mosaic."
       return
     }
-    guard let outputURL = mosaicOutputURL else {
+    // effectiveOutputRoot (not the raw picker) so a Quick Preview session's
+    // output root wins and an unset picker falls back to the durable default —
+    // previously this was the one preview-eligible effect whose preview could
+    // dead-end on "choose an output directory".
+    guard let outputURL = effectiveOutputRoot(mosaicOutputURL) else {
       statusMessage = "Choose a fluid-mosaic output directory before rendering."
       return
     }
@@ -3395,7 +3429,7 @@ final class AppState: ObservableObject {
       settleIterations: mosaicSettleIterations,
       jitter: Float(mosaicJitter),
       turbulence: Float(mosaicTurbulence),
-      frames: mosaicFrames,
+      frames: effectiveMaxFrames(mosaicFrames),
       modulationRoutes: routes,
       modulatorAudioURL: mosaicModulatorAudioURL,
       modulatorFramesURL: mosaicModulatorFramesURL,
@@ -4195,6 +4229,7 @@ final class AppState: ObservableObject {
     let carrierRMSCacheURL = audioWeighted ? sourceBRMSCacheURL : nil
     if audioWeighted && (modulatorRMSCacheURL == nil || carrierRMSCacheURL == nil) {
       statusMessage = "Extract source proxies first to generate the RMS caches audio matching needs, or turn off Audio-Weighted."
+      failPreviewIfNeeded(message: statusMessage)
       return
     }
 
@@ -4418,15 +4453,19 @@ final class AppState: ObservableObject {
   }
 
   func runAudioVideoRouteRender() {
+    // The modulator is a WAV (its own picker — the proxy pipeline is frames-
+    // only), but the carrier and output fall back to the shared pipeline so a
+    // Quick Preview session's downscaled carrier override reaches this effect.
     guard let modulatorURL = audioRouteModulatorURL else {
       statusMessage = "Select a Source A WAV before rendering the audio→video route."
+      failPreviewIfNeeded(message: statusMessage)
       return
     }
-    guard let carrierURL = audioRouteCarrierURL else {
+    guard let carrierURL = audioRouteCarrierURL ?? effectiveCarrierURL() else {
       statusMessage = "Select a Source B frame directory before rendering the audio→video route."
       return
     }
-    guard let outputURL = audioRouteOutputURL else {
+    guard let outputURL = effectiveOutputRoot(audioRouteOutputURL) else {
       statusMessage = "Choose an output directory before rendering the audio→video route."
       return
     }
@@ -4442,7 +4481,7 @@ final class AppState: ObservableObject {
       rmsWindow: audioRouteRmsWindow,
       rmsHop: audioRouteRmsHop,
       frameRate: audioRouteFrameRate,
-      maxFrames: nil,
+      maxFrames: effectiveOptionalMaxFrames(nil),
       backend: audioRouteBackend,
       projectURL: projectURL
     )
@@ -4454,12 +4493,15 @@ final class AppState: ObservableObject {
         let result = try RustBridgePlaceholder.runQueuedAudioVideoRouteSequenceRender(
           request: request
         )
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
         DispatchQueue.main.async {
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
           self.audioRouteSummary = "Audio→video route bundle at \(result.bundleURL.path)"
           self.statusMessage = "Audio→video route render complete: \(result.bundleURL.path)"
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.audioRouteSummary = "Audio→video route render failed: \(error.localizedDescription)"
           self.statusMessage = "Audio→video route render failed: \(error.localizedDescription)"
         }
@@ -4709,15 +4751,18 @@ final class AppState: ObservableObject {
   }
 
   func runConvolutionalBlendRender() {
-    guard let modulatorURL = convBlendModulatorURL else {
+    // Dedicated pickers win; otherwise fall back to the shared proxy pipeline
+    // (the datamosh pattern) — that's what lets a Quick Preview session's
+    // downscaled input override reach this effect.
+    guard let modulatorURL = convBlendModulatorURL ?? effectiveModulatorURL() else {
       statusMessage = "Select a Source A frame directory before rendering the convolution blend."
       return
     }
-    guard let carrierURL = convBlendCarrierURL else {
+    guard let carrierURL = convBlendCarrierURL ?? effectiveCarrierURL() else {
       statusMessage = "Select a Source B frame directory before rendering the convolution blend."
       return
     }
-    guard let outputURL = convBlendOutputURL else {
+    guard let outputURL = effectiveOutputRoot(convBlendOutputURL) else {
       statusMessage = "Choose an output directory before rendering the convolution blend."
       return
     }
@@ -4730,7 +4775,7 @@ final class AppState: ObservableObject {
       kernelSize: convBlendKernelSize,
       amount: convBlendAmount,
       useColorKernels: convBlendColorMode,
-      maxFrames: nil,
+      maxFrames: effectiveOptionalMaxFrames(nil),
       backend: convBlendBackend,
       projectURL: projectURL
     )
@@ -4742,12 +4787,15 @@ final class AppState: ObservableObject {
         let result = try RustBridgePlaceholder.runQueuedConvolutionalBlendSequenceRender(
           request: request
         )
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
         DispatchQueue.main.async {
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
           self.convBlendSummary = "Convolution blend bundle at \(result.bundleURL.path)"
           self.statusMessage = "Convolution blend render complete: \(result.bundleURL.path)"
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.convBlendSummary = "Convolution blend render failed: \(error.localizedDescription)"
           self.statusMessage = "Convolution blend render failed: \(error.localizedDescription)"
         }
@@ -4789,15 +4837,20 @@ final class AppState: ObservableObject {
   }
 
   func runPixelSortRender() {
-    guard let modulatorURL = pixelSortModulatorURL else {
+    // Dedicated pickers win; otherwise fall back to the shared proxy pipeline
+    // (the datamosh pattern) so a Quick Preview session's downscaled input
+    // override reaches this effect. The request has no frame cap, so the
+    // preview's length cap comes from the frame-capped downscaled copies
+    // (i.e. every preview scale except Full).
+    guard let modulatorURL = pixelSortModulatorURL ?? effectiveModulatorURL() else {
       statusMessage = "Select a Source A frame directory before rendering pixel sort."
       return
     }
-    guard let carrierURL = pixelSortCarrierURL else {
+    guard let carrierURL = pixelSortCarrierURL ?? effectiveCarrierURL() else {
       statusMessage = "Select a Source B frame directory before rendering pixel sort."
       return
     }
-    guard let outputURL = pixelSortOutputURL else {
+    guard let outputURL = effectiveOutputRoot(pixelSortOutputURL) else {
       statusMessage = "Choose an output directory before rendering pixel sort."
       return
     }
@@ -4863,12 +4916,15 @@ final class AppState: ObservableObject {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
         let result = try RustBridgePlaceholder.runQueuedPixelSortSequenceRender(request: request)
+        let bundle = try RenderQueueOutputBundleResolver.inspect(bundleURL: result.bundleURL)
         DispatchQueue.main.async {
+          self.lastFrameSequenceOutputURL = bundle.frameDirectory
           self.pixelSortSummary = "Pixel sort bundle at \(result.bundleURL.path)"
           self.statusMessage = "Pixel sort render complete: \(result.bundleURL.path)"
         }
       } catch {
         DispatchQueue.main.async {
+          self.failPreviewIfNeeded(message: error.localizedDescription)
           self.pixelSortSummary = "Pixel sort render failed: \(error.localizedDescription)"
           self.statusMessage = "Pixel sort render failed: \(error.localizedDescription)"
         }
