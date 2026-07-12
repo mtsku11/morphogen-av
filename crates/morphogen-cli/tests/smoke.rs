@@ -263,6 +263,37 @@ fn render_channel_shift_sequence_output_bit_depth_off_case_pin_and_16_bit_on_cas
     );
 }
 
+/// Regression: an existing-but-EMPTY Source A directory with a non-zero flow
+/// gain must be a clean CLI error, not an index-out-of-bounds panic (the B
+/// directory was emptiness-checked; A was not — audit find, 2026-07-12).
+#[test]
+fn render_channel_shift_sequence_rejects_empty_source_a_with_flow_gain() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let source_b_dir = temp_dir.path().join("source-b");
+    write_solid_frames(&source_b_dir, 2, [200, 100, 50, 255]);
+    let empty_a_dir = temp_dir.path().join("empty-a");
+    std::fs::create_dir_all(&empty_a_dir).expect("create empty source A dir");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args([
+            "render-channel-shift-sequence",
+            source_b_dir.to_string_lossy().as_ref(),
+            temp_dir.path().join("out").to_string_lossy().as_ref(),
+            "--source-a-dir",
+            empty_a_dir.to_string_lossy().as_ref(),
+            "--flow-gain",
+            "2.0",
+            "--frames",
+            "2",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "channel shift flow gain requires at least one PNG frame in the source A directory",
+        ));
+}
+
 /// Tier 5.6 S2 representative shape #3: an effect (pixel-sort) that writes NO
 /// manifest at all (stdout-only convention) — just the flag, no new manifest.
 #[test]

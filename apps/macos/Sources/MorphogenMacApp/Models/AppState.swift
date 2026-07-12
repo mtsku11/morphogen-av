@@ -1009,12 +1009,15 @@ final class AppState: ObservableObject {
     // helpers): a still-active previous session must never chain-downscale its
     // own copies, but the header's source direction must still map A/B onto
     // modulator/carrier before the downscale so the preview matches the render.
+    // Name the physical slot the current relationship actually reads, so
+    // "B modifies A" doesn't ask for Source B when the missing carrier is A.
+    let swapped = directionAppliesToActiveEffect && sourceRelationship == .bModifiesA
     guard let carrierURL = resolvedCarrierProxyURL else {
-      statusMessage = "Select Source B frames before previewing."
+      statusMessage = "Select \(swapped ? "Source A" : "Source B") frames before previewing."
       return false
     }
     if requiresModulator && resolvedModulatorProxyURL == nil {
-      statusMessage = "Select Source A frames before previewing."
+      statusMessage = "Select \(swapped ? "Source B" : "Source A") frames before previewing."
       return false
     }
 

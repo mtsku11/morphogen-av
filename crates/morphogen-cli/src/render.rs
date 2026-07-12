@@ -6409,6 +6409,18 @@ pub(crate) fn render_channel_shift_sequence(
 
     let source_a_frames: Option<Vec<_>> =
         request.source_a_dir.map(collect_image_frames).transpose()?;
+    // Mirror the B-side emptiness check: an existing-but-empty A directory
+    // would otherwise index into an empty Vec inside the frame loop.
+    if flow_active {
+        if let Some(frames) = source_a_frames.as_ref() {
+            if frames.is_empty() {
+                return Err(CliError::Message(
+                    "channel shift flow gain requires at least one PNG frame in the source A directory"
+                        .to_string(),
+                ));
+            }
+        }
+    }
 
     let frame_count = (request.frames as usize).min(source_b_frames.len());
     fs::create_dir_all(request.output_dir)?;
@@ -6445,7 +6457,13 @@ pub(crate) fn render_channel_shift_sequence(
         let source_b = load_image_f32(frame_path)?;
 
         let per_row_shifts: Vec<f32> = if flow_active {
-            let a_frames = source_a_frames.as_ref().unwrap();
+            let Some(a_frames) = source_a_frames.as_ref() else {
+                // Unreachable: flow_active requires --source-a-dir (guarded at
+                // entry), but return an error rather than panic if that drifts.
+                return Err(CliError::Message(
+                    "channel shift flow gain requires --source-a-dir".to_string(),
+                ));
+            };
             let a_idx = index.min(a_frames.len().saturating_sub(1));
             let source_a = load_image_f32(&a_frames[a_idx])?;
             let shifts = if let Some(ref previous_a) = prev_a {
