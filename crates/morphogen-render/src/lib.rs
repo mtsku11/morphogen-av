@@ -99,8 +99,9 @@ pub use flow_cache::{
     FlowCacheManifest, FLOW_VECTOR_CONVENTION,
 };
 pub use fluid_advect::{
-    fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, FluidAdvectSettings,
-    FluidAdvectTwoSourceSettings, FLUID_ADVECT_ALGORITHM, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
+    fluid_advect_frame_cpu, fluid_advect_two_source_frame_cpu, relief_shade_cpu,
+    FluidAdvectSettings, FluidAdvectTwoSourceSettings, FLUID_ADVECT_ALGORITHM,
+    FLUID_ADVECT_MAX_SUBSTEPS, FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
 };
 pub use fluid_mosaic::{
     advance_fluid_mosaic, initialize_fluid_mosaic, refresh_fluid_mosaic_colors,
@@ -199,7 +200,9 @@ pub use video_vocoder::{
     luma_specification_tone_map, video_vocoder_cpu, video_vocoder_from_modulator_cpu,
     LumaBandEnvelope, VideoVocoderSettings, TONE_MAP_LEVELS, VIDEO_VOCODER_ALGORITHM,
 };
-pub use vortex_field::steady_vortex_velocity;
+pub use vortex_field::{
+    reinjection_blotch_mask, steady_vortex_velocity, steady_vortex_velocity_warped,
+};
 
 #[cfg(test)]
 mod tests {

@@ -6905,7 +6905,7 @@ fn fluid_advect_queue_jobs_match_direct_and_record_manifests() {
     assert_eq!(fluid_manifest["task"], "frame_sequence_fluid_advect");
     assert_eq!(
         fluid_manifest["fluid_advect"]["algorithm"],
-        "fluid_advect_curl_noise_cpu_v2"
+        "fluid_advect_curl_noise_cpu_v3"
     );
     assert_eq!(fluid_manifest["fluid_advect"]["backend"], "CPU");
     assert_eq!(fluid_manifest["timing"]["frame_rate"], 12.0);

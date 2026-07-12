@@ -280,6 +280,7 @@ pub(crate) struct QueueAddFluidAdvectSequenceRequest<'a> {
     pub(crate) source_dir: &'a Path,
     pub(crate) output_root_dir: &'a Path,
     pub(crate) settings: FluidAdvectSettings,
+    pub(crate) shade: f32,
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
     pub(crate) backend: RenderBackend,
@@ -302,6 +303,7 @@ pub(crate) fn queue_add_fluid_advect_sequence(
         source_dir,
         output_root_dir,
         settings,
+        shade,
         frames,
         frame_rate,
         backend,
@@ -350,6 +352,11 @@ pub(crate) fn queue_add_fluid_advect_sequence(
             detail: settings.detail,
             reinject: settings.reinject,
             seed: settings.seed,
+            substeps: settings.substeps,
+            reinject_blotch: settings.reinject_blotch,
+            warp: settings.warp,
+            diffuse: settings.diffuse,
+            shade,
             backend,
             modulation_routes: modulation.routes,
             modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
@@ -2103,6 +2110,11 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
         detail,
         reinject,
         seed,
+        substeps,
+        reinject_blotch,
+        warp,
+        diffuse,
+        shade,
         backend,
         modulation_routes,
         modulator_audio_path,
@@ -2129,6 +2141,10 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
         detail,
         reinject,
         seed,
+        substeps,
+        reinject_blotch,
+        warp,
+        diffuse,
     };
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
@@ -2139,6 +2155,7 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
             source_dir: Path::new(&source_frame_directory),
             output_dir: &output_dir.join("frames"),
             settings,
+            shade,
             frames: frames as usize,
             backend,
             modulation: ModulationCliArgs {
@@ -2160,6 +2177,7 @@ pub(crate) fn queue_run_fluid_advect_sequence(queue_path: &Path) -> Result<(), C
         let mut effect = serde_json::json!({
             "algorithm": FLUID_ADVECT_ALGORITHM,
             "settings": settings,
+            "shade": shade,
             "backend": render_backend_label(backend)
         });
         if let Some(modulation) = modulation_manifest_json(

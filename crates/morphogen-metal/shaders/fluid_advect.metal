@@ -2,9 +2,15 @@
 using namespace metal;
 
 // Faux-fluid dye advection — the GPU port of `morphogen_render::fluid_advect`.
-// Per output pixel: evaluate the steady curl-noise vortex velocity, backward-sample
-// the previous dye buffer upstream (manual bilinear, matching the CPU
-// `sample_bilinear_clamped`), then bleed in a fraction of the current source frame.
+// This kernel is ONE integration substep (the CPU reference's `advect_substep`): the
+// dispatch loops it `effective_substeps()` times per frame, ping-ponging dye textures,
+// with `advect` = the per-substep step, `reinject` = the per-substep compound rate and
+// `time` = that substep's field time. Per output pixel: evaluate the (optionally
+// domain-warped) curl-noise vortex velocity, backward-sample the previous dye buffer
+// upstream (manual bilinear, matching the CPU `sample_bilinear_clamped`, optionally
+// mixed with a 3x3 binomial blur — the `diffuse` faux viscosity), then bleed in the
+// reinjection fraction of the current source frame, optionally gated by the animated
+// blotch mask (`reinject_blotch`).
 // The velocity field reproduces `morphogen_render::vortex_field` bit-for-bit: the
 // same splitmix64 lattice hash, 3D gradient (Perlin) noise, quintic fade and curl.
 // Compiled with fast-math disabled by the dispatch so the float math (and the integer
@@ -16,6 +22,10 @@ struct FluidAdvectParams {
   float detail;
   float reinject;
   float time;
+  float warp;
+  float reinject_blotch;
+  float diffuse;
+  float blotch_scale;
   uint width;
   uint height;
   uint seed_lo;
@@ -27,6 +37,11 @@ constant ulong TURBULENCE_SALT_0 = 0x7E12B0FF5EEDC0A1UL;
 constant ulong TURBULENCE_SALT_1 = 0x9A3C44D71F0BE215UL;
 constant float VORTEX_DRIFT = 0.25;
 constant float BIG_VORTEX_PLANE = 0.5;
+constant ulong BLOTCH_SALT_0 = 0x51F09A2B7D3EC815UL;
+constant ulong BLOTCH_SALT_1 = 0xC4A71E8633B95DF2UL;
+constant float BLOTCH_EXPONENT = 5.5;
+constant float WARP_FREQUENCY = 2.5;
+constant float WARP_TIME_RATE = 2.0;
 
 // splitmix64 finalizer — identical to the Rust hash_u64. Integer ops wrap by default.
 static inline ulong hash_u64(ulong x) {
@@ -122,30 +137,55 @@ static inline float gradient_noise3(ulong seed, float x, float y, float z) {
 }
 
 // The streamfunction psi: a steady low-frequency octave (the persistent large vortices)
-// plus a detail-weighted octave at 2x frequency drifting slowly with time.
+// plus a detail-weighted octave at 2x frequency drifting slowly with time, optionally
+// domain-warped by an animated sinusoidal shear (the Quake-style fold) — mirrors the
+// Rust `streamfunction` including the warp branch.
 static inline float streamfunction(
-  ulong seed, float x, float y, float time, float scale, float detail
+  ulong seed, float x, float y, float time, float scale, float detail, float warp
 ) {
   float s = scale;
   float big = gradient_noise3(seed ^ TURBULENCE_SALT_0, x * s, y * s, BIG_VORTEX_PLANE);
   float drift = time * VORTEX_DRIFT;
-  float small = gradient_noise3(seed ^ TURBULENCE_SALT_1, x * 2.0 * s + drift, y * 2.0 * s, time);
+  float u = x * 2.0 * s + drift;
+  float v = y * 2.0 * s;
+  if (warp != 0.0) {
+    float u0 = u;
+    float phase = time * WARP_TIME_RATE;
+    u += warp * sin(phase + v * WARP_FREQUENCY);
+    v += warp * sin(phase + u0 * WARP_FREQUENCY);
+  }
+  float small = gradient_noise3(seed ^ TURBULENCE_SALT_1, u, v, time);
   return big + detail * small;
 }
 
 // The steady-vortex curl velocity (dpsi/dy, -dpsi/dx), normalized by scale.
 static inline float2 steady_vortex_velocity(
-  ulong seed, float x, float y, float time, float scale, float detail
+  ulong seed, float x, float y, float time, float scale, float detail, float warp
 ) {
   const float E = 1.0;
-  float psi_yp = streamfunction(seed, x, y + E, time, scale, detail);
-  float psi_ym = streamfunction(seed, x, y - E, time, scale, detail);
-  float psi_xp = streamfunction(seed, x + E, y, time, scale, detail);
-  float psi_xm = streamfunction(seed, x - E, y, time, scale, detail);
+  float psi_yp = streamfunction(seed, x, y + E, time, scale, detail, warp);
+  float psi_ym = streamfunction(seed, x, y - E, time, scale, detail, warp);
+  float psi_xp = streamfunction(seed, x + E, y, time, scale, detail, warp);
+  float psi_xm = streamfunction(seed, x - E, y, time, scale, detail, warp);
   float dpsi_dy = (psi_yp - psi_ym) / (2.0 * E);
   float dpsi_dx = (psi_xp - psi_xm) / (2.0 * E);
   float inv = scale != 0.0 ? 1.0 / scale : 0.0;
   return float2(dpsi_dy * inv, -dpsi_dx * inv);
+}
+
+// Animated blotch mask for patchy reinjection — mirrors the Rust
+// `reinjection_blotch_mask`: two gradient-noise layers scrolling in different
+// directions, each sharpened by pow(., 5.5), combined with max.
+static inline float reinjection_blotch_mask(
+  ulong seed, float x, float y, float time, float scale
+) {
+  float coarse = gradient_noise3(
+    seed ^ BLOTCH_SALT_0, x * scale + time * 0.35, y * scale + time * 0.5, 0.0);
+  float fine = gradient_noise3(
+    seed ^ BLOTCH_SALT_1, x * scale * 2.0 - time * 0.7, y * scale * 2.0 - time * 0.55, 0.0);
+  float sharp_coarse = pow(clamp(0.5 + 0.5 * coarse, 0.0, 1.0), BLOTCH_EXPONENT);
+  float sharp_fine = pow(clamp(0.5 + 0.5 * fine, 0.0, 1.0), BLOTCH_EXPONENT);
+  return max(sharp_coarse, sharp_fine);
 }
 
 // Bilinear sample with border clamping that matches the CPU `sample_bilinear_clamped`
@@ -187,18 +227,41 @@ kernel void fluid_advect(
 
   ulong seed = ((ulong)params.seed_hi << 32) | (ulong)params.seed_lo;
   float2 dimensions = float2(params.width, params.height);
+  float xf = float(gid.x);
+  float yf = float(gid.y);
 
   float2 velocity = steady_vortex_velocity(
-    seed, float(gid.x), float(gid.y), params.time, params.turbulence_scale, params.detail);
+    seed, xf, yf, params.time, params.turbulence_scale, params.detail, params.warp);
 
   // Semi-Lagrangian: read the dye that was upstream so colour flows downstream.
-  float sx = float(gid.x) - velocity.x * params.advect;
-  float sy = float(gid.y) - velocity.y * params.advect;
+  float sx = xf - velocity.x * params.advect;
+  float sy = yf - velocity.y * params.advect;
   float4 advected = sampleBilinearClamped(previous, float2(sx, sy), dimensions);
+  if (params.diffuse > 0.0) {
+    // 3x3 binomial (1-2-1)^2/16 blur of the bilinear samples — the faux viscosity.
+    // Taps and accumulation order match the CPU `binomial_blur_sample`.
+    float4 sum = float4(0.0);
+    sum += sampleBilinearClamped(previous, float2(sx - 1.0, sy - 1.0), dimensions) * 1.0;
+    sum += sampleBilinearClamped(previous, float2(sx, sy - 1.0), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx + 1.0, sy - 1.0), dimensions) * 1.0;
+    sum += sampleBilinearClamped(previous, float2(sx - 1.0, sy), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx, sy), dimensions) * 4.0;
+    sum += sampleBilinearClamped(previous, float2(sx + 1.0, sy), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx - 1.0, sy + 1.0), dimensions) * 1.0;
+    sum += sampleBilinearClamped(previous, float2(sx, sy + 1.0), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx + 1.0, sy + 1.0), dimensions) * 1.0;
+    float4 blurred = sum / 16.0;
+    advected += (blurred - advected) * params.diffuse;
+  }
 
-  // Source reinjection (the "frame refresh"): bleed in a fraction of the live frame.
+  // Source reinjection (the "frame refresh"): bleed in a fraction of the live frame,
+  // optionally gated by the animated blotch mask (mix(1, mask, blotch)).
   float4 src = source.read(gid);
   float r = params.reinject;
+  if (params.reinject_blotch > 0.0) {
+    float mask = reinjection_blotch_mask(seed, xf, yf, params.time, params.blotch_scale);
+    r *= 1.0 + (mask - 1.0) * params.reinject_blotch;
+  }
   float4 result = advected + (src - advected) * r;
 
   output.write(result, gid);

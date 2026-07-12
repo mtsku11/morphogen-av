@@ -595,6 +595,33 @@ pub(crate) enum Commands {
         reinject: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Integration substeps per frame. 0 (default) = auto: enough that each substep
+        /// moves at most ~1.5 px (capped at 16), which fuses the per-frame reinjection
+        /// layers instead of stacking them into concentric "echo rings". 1 = the legacy
+        /// single-step behaviour (and its ring artifact); max 64.
+        #[arg(long, default_value_t = 0)]
+        substeps: u32,
+        /// Blend in [0, 1] from uniform reinjection (0, default) to reinjection through
+        /// an animated sparse blotch mask (1) — the reference shader's patchy "source
+        /// bleeds back in islands". The mask is mostly near zero, so raise --reinject to
+        /// compensate at high blotch values.
+        #[arg(long, default_value_t = 0.0)]
+        reinject_blotch: f32,
+        /// Amplitude of the animated sinusoidal domain warp on the fine-detail octave
+        /// (the shader's Quake-style fold; material creases instead of only winding).
+        /// 0 = off. Only visible when --detail is non-zero; try 1-3 with --detail 0.3+.
+        #[arg(long, default_value_t = 0.0)]
+        warp: f32,
+        /// Faux-viscosity in [0, 1]: mixes a 3x3 blur into the dye each substep. 0 = off.
+        /// ~0.1-0.3 suppresses moire/comb artifacts when the source has scanlines or
+        /// hard block edges (Rutt-Etra, datamosh output).
+        #[arg(long, default_value_t = 0.0)]
+        diffuse: f32,
+        /// Display-only relief lighting in [0, 1] (the reference shader's Image pass):
+        /// lights the dye like ridged paint from a fixed (1,1,1) light. Applied to the
+        /// saved frames only — the advected dye state stays unlit.
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
@@ -2418,6 +2445,21 @@ pub(crate) enum Commands {
         reinject: f32,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Integration substeps per frame (0 = auto, matching render-fluid-advect-sequence).
+        #[arg(long, default_value_t = 0)]
+        substeps: u32,
+        /// Blotch-masked reinjection blend in [0, 1] (0 = uniform).
+        #[arg(long, default_value_t = 0.0)]
+        reinject_blotch: f32,
+        /// Detail-octave domain-warp amplitude (0 = off; needs non-zero --detail).
+        #[arg(long, default_value_t = 0.0)]
+        warp: f32,
+        /// Faux-viscosity blur weight in [0, 1] (0 = off).
+        #[arg(long, default_value_t = 0.0)]
+        diffuse: f32,
+        /// Display-only relief lighting in [0, 1] applied to saved frames.
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]

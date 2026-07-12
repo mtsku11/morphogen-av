@@ -329,6 +329,19 @@ pub enum RenderJobTask {
         detail: f32,
         reinject: f32,
         seed: u64,
+        /// v3 knobs (substep integration, patchy reinjection, domain warp, faux
+        /// viscosity, display-only relief shade). Pre-v3 jobs deserialize to the
+        /// defaults: auto substeps, all looks off.
+        #[serde(default)]
+        substeps: u32,
+        #[serde(default)]
+        reinject_blotch: f32,
+        #[serde(default)]
+        warp: f32,
+        #[serde(default)]
+        diffuse: f32,
+        #[serde(default)]
+        shade: f32,
         #[serde(default)]
         backend: RenderBackend,
         /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
@@ -2594,6 +2607,11 @@ mod tests {
             detail: 0.1,
             reinject: 0.05,
             seed: 42,
+            substeps: 4,
+            reinject_blotch: 0.5,
+            warp: 1.5,
+            diffuse: 0.25,
+            shade: 0.75,
             backend: RenderBackend::Metal,
             modulation_routes: Vec::new(),
             modulator_audio_path: None,
@@ -2609,6 +2627,42 @@ mod tests {
         let decoded: RenderJobTask = serde_json::from_str(&json).expect("deserialize fluid task");
 
         assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn fluid_advect_task_without_v3_knobs_defaults_them_off() {
+        // Pre-v3 persisted jobs carry none of the new fields; they must deserialize to
+        // auto substeps (0) with every new look off.
+        let json = r#"{
+            "type": "frame_sequence_fluid_advect",
+            "source_frame_directory": "/tmp/source",
+            "output_directory": "/tmp/out",
+            "frames": 48,
+            "frame_rate": 24.0,
+            "advect": 12.0,
+            "turbulence_scale": 0.008,
+            "turbulence_speed": 0.06,
+            "detail": 0.1,
+            "reinject": 0.05,
+            "seed": 42
+        }"#;
+        let decoded: RenderJobTask = serde_json::from_str(json).expect("deserialize");
+        let RenderJobTask::FrameSequenceFluidAdvect {
+            substeps,
+            reinject_blotch,
+            warp,
+            diffuse,
+            shade,
+            ..
+        } = decoded
+        else {
+            panic!("expected fluid advect task");
+        };
+        assert_eq!(substeps, 0);
+        assert_eq!(reinject_blotch, 0.0);
+        assert_eq!(warp, 0.0);
+        assert_eq!(diffuse, 0.0);
+        assert_eq!(shade, 0.0);
     }
 
     #[test]

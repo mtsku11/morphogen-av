@@ -15,6 +15,12 @@
 
 const TURBULENCE_SALT_0: u64 = 0x7E12_B0FF_5EED_C0A1;
 const TURBULENCE_SALT_1: u64 = 0x9A3C_44D7_1F0B_E215;
+/// Angular frequency (radians per detail-lattice cell) of the sinusoidal domain warp —
+/// the analog of the reference shader's `QuakeLavaUV` shear.
+const WARP_FREQUENCY: f32 = 2.5;
+/// Temporal rate of the domain warp relative to the field's `time` axis (the shader
+/// warps at `speed 2.0`).
+const WARP_TIME_RATE: f32 = 2.0;
 /// Slow horizontal drift of the fine detail octave per unit time (lattice cells) — a
 /// little life in the texture without unanchoring the steady large vortices.
 const VORTEX_DRIFT: f32 = 0.25;
@@ -35,11 +41,29 @@ pub fn steady_vortex_velocity(
     scale: f32,
     detail: f32,
 ) -> (f32, f32) {
+    steady_vortex_velocity_warped(seed, x, y, time, scale, detail, 0.0)
+}
+
+/// [`steady_vortex_velocity`] with a sinusoidal domain warp of amplitude `warp` (detail
+/// lattice cells) applied to the **detail octave only** — the analog of the reference
+/// shader's animated `QuakeLavaUV` shear, which makes advected material *fold* instead of
+/// winding forever around fixed centres. The big octave stays steady (an evolving big
+/// octave only wobbles in place — see the module docs), so `warp` is invisible when
+/// `detail == 0`. `warp == 0.0` is bit-identical to the unwarped field.
+pub fn steady_vortex_velocity_warped(
+    seed: u64,
+    x: f32,
+    y: f32,
+    time: f32,
+    scale: f32,
+    detail: f32,
+    warp: f32,
+) -> (f32, f32) {
     const E: f32 = 1.0;
-    let psi_yp = streamfunction(seed, x, y + E, time, scale, detail);
-    let psi_ym = streamfunction(seed, x, y - E, time, scale, detail);
-    let psi_xp = streamfunction(seed, x + E, y, time, scale, detail);
-    let psi_xm = streamfunction(seed, x - E, y, time, scale, detail);
+    let psi_yp = streamfunction(seed, x, y + E, time, scale, detail, warp);
+    let psi_ym = streamfunction(seed, x, y - E, time, scale, detail, warp);
+    let psi_xp = streamfunction(seed, x + E, y, time, scale, detail, warp);
+    let psi_xm = streamfunction(seed, x - E, y, time, scale, detail, warp);
     let dpsi_dy = (psi_yp - psi_ym) / (2.0 * E);
     let dpsi_dx = (psi_xp - psi_xm) / (2.0 * E);
     let inv = if scale != 0.0 { 1.0 / scale } else { 0.0 };
@@ -47,20 +71,63 @@ pub fn steady_vortex_velocity(
 }
 
 /// The streamfunction `ψ`: a steady low-frequency octave (the persistent large vortices)
-/// plus a `detail`-weighted octave at 2× frequency drifting slowly with `time`.
-fn streamfunction(seed: u64, x: f32, y: f32, time: f32, scale: f32, detail: f32) -> f32 {
+/// plus a `detail`-weighted octave at 2× frequency drifting slowly with `time`, optionally
+/// domain-warped by an animated sinusoidal shear of amplitude `warp` (lattice cells).
+fn streamfunction(
+    seed: u64,
+    x: f32,
+    y: f32,
+    time: f32,
+    scale: f32,
+    detail: f32,
+    warp: f32,
+) -> f32 {
     let s = scale;
     // Big, low-frequency, STEADY octave — the persistent large vortices.
     let big = gradient_noise3(seed ^ TURBULENCE_SALT_0, x * s, y * s, BIG_VORTEX_PLANE);
     // Fine octave at 2× frequency, low weight, drifting slowly so the texture has some life.
     let drift = time * VORTEX_DRIFT;
-    let small = gradient_noise3(
-        seed ^ TURBULENCE_SALT_1,
-        x * 2.0 * s + drift,
-        y * 2.0 * s,
-        time,
-    );
+    let mut u = x * 2.0 * s + drift;
+    let mut v = y * 2.0 * s;
+    if warp != 0.0 {
+        // Quake-style shear: each axis offset by a sinusoid of the *other* (pre-warp)
+        // axis, animated with time — the fold that keeps layers from staying parallel.
+        let u0 = u;
+        let phase = time * WARP_TIME_RATE;
+        u += warp * (phase + v * WARP_FREQUENCY).sin();
+        v += warp * (phase + u0 * WARP_FREQUENCY).sin();
+    }
+    let small = gradient_noise3(seed ^ TURBULENCE_SALT_1, u, v, time);
     big + detail * small
+}
+
+const BLOTCH_SALT_0: u64 = 0x51F0_9A2B_7D3E_C815;
+const BLOTCH_SALT_1: u64 = 0xC4A7_1E86_33B9_5DF2;
+/// Sharpening exponent for the reinjection blotch mask — the reference shader's
+/// `pow(texture, 5.5)`, which turns smooth noise into sparse soft patches.
+const BLOTCH_EXPONENT: f32 = 5.5;
+
+/// Animated blotch mask in `[0, 1]` for patchy source reinjection — the analog of the
+/// reference shader's `max(pow(maskA, 5.5), pow(maskB, 5.5))`: two gradient-noise layers
+/// (one at `scale`, one at 2×) scrolling in different directions with `time`, each
+/// sharpened to sparse soft patches, combined with `max`. Mostly near 0 with soft islands
+/// near 1, so reinjection driven by it repaints the source in moving patches instead of
+/// as a coherent full-frame layer.
+pub fn reinjection_blotch_mask(seed: u64, x: f32, y: f32, time: f32, scale: f32) -> f32 {
+    let coarse = gradient_noise3(
+        seed ^ BLOTCH_SALT_0,
+        x * scale + time * 0.35,
+        y * scale + time * 0.5,
+        0.0,
+    );
+    let fine = gradient_noise3(
+        seed ^ BLOTCH_SALT_1,
+        x * scale * 2.0 - time * 0.7,
+        y * scale * 2.0 - time * 0.55,
+        0.0,
+    );
+    let sharpen = |n: f32| ((0.5 + 0.5 * n).clamp(0.0, 1.0)).powf(BLOTCH_EXPONENT);
+    sharpen(coarse).max(sharpen(fine))
 }
 
 /// 3D gradient (Perlin) noise on the splitmix lattice: hash the eight integer cell corners

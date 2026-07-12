@@ -24,7 +24,7 @@ use morphogen_render::{
     datamosh_codec_engrave_frame_cpu, datamosh_residual_flow, datamosh_scanline_smear_frame_cpu,
     disperse_composite_cpu, downsample_flow_to_cells, feedback_state_path, flow_displace_cpu,
     flow_feedback_frame_cpu, flow_temporal_supersample_cpu, fluid_advect_frame_cpu,
-    fluid_advect_two_source_frame_cpu, granular_mosaic_with_pool_selection_cpu,
+    fluid_advect_two_source_frame_cpu, granular_mosaic_with_pool_selection_cpu, relief_shade_cpu,
     granular_mosaic_with_selection_cpu, initialize_cascade_trails, initialize_field_particles,
     initialize_fluid_mosaic, is_datamosh_keyframe, luma_specification_tone_map,
     luminance_gradient_flow_cpu, pyramidal_lucas_kanade_flow_cpu, quantize_flow_to_blocks,
@@ -2035,6 +2035,9 @@ pub(crate) struct FluidAdvectSequenceRequest<'a> {
     pub(crate) source_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FluidAdvectSettings,
+    /// Display-only relief lighting strength in [0, 1] applied to the saved frames —
+    /// the dye state carried between frames stays unlit.
+    pub(crate) shade: f32,
     pub(crate) frames: usize,
     pub(crate) backend: RenderBackend,
     pub(crate) modulation: ModulationCliArgs<'a>,
@@ -2093,10 +2096,20 @@ pub(crate) fn render_fluid_advect_sequence(
             frame_settings,
             request.backend,
         )?;
-        save_png(
-            &rendered,
-            &request.output_dir.join(format!("frame_{index:06}.png")),
-        )?;
+        // Shade is a display adapter on the saved frame only; the carried dye state
+        // stays unlit or the lighting would compound frame over frame.
+        if request.shade > 0.0 {
+            let shaded = relief_shade_cpu(&rendered, request.shade)?;
+            save_png(
+                &shaded,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
+        } else {
+            save_png(
+                &rendered,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
+        }
         previous_output = Some(rendered);
     }
 

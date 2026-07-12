@@ -206,6 +206,16 @@ loop. Use **small** `--feedback-amount` with optical flow (real pixel motion).
 Velocity field must be **steady** for coherent swirls; match vortex scale to
 canvas size (see [[faux-fluid-advect]] memory).
 
+`render-fluid-advect-sequence` shader-look knobs (all default off/auto):
+`--substeps` (0 = auto; keeps each integration step ≤ ~1.5 px so reinjection
+layers fuse instead of stacking into concentric "echo rings" — `--substeps 1`
+is the legacy single-step behaviour), `--reinject-blotch` (patchy animated
+source refresh; the mask is sparse, so raise `--reinject` to compensate),
+`--warp` (folds the fine-detail octave; needs non-zero `--detail`),
+`--diffuse` (faux viscosity; suppresses moiré from scanline/blocky sources),
+`--shade` (display-only relief lighting on saved frames; dye state stays
+unlit).
+
 ### Blend / Mosaic (mutual A×B)
 
 | Effect | Direct command | Sources | Off-case | Metal |
