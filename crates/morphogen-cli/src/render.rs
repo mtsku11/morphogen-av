@@ -2134,6 +2134,9 @@ pub(crate) struct FluidAdvectTwoSourceSequenceRequest<'a> {
     pub(crate) source_b_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FluidAdvectTwoSourceSettings,
+    /// Display-only relief lighting strength in [0, 1] applied to the saved frames —
+    /// the dye state carried between frames stays unlit.
+    pub(crate) shade: f32,
     pub(crate) frames: usize,
     pub(crate) backend: RenderBackend,
     pub(crate) modulation: ModulationCliArgs<'a>,
@@ -2214,10 +2217,20 @@ pub(crate) fn render_fluid_advect_two_source_sequence(
             _ => carrier_b.clone(),
         };
 
-        save_png(
-            &rendered,
-            &request.output_dir.join(format!("frame_{index:06}.png")),
-        )?;
+        // Shade is a display adapter on the saved frame only; the carried dye state
+        // stays unlit or the lighting would compound frame over frame.
+        if request.shade > 0.0 {
+            let shaded = relief_shade_cpu(&rendered, request.shade)?;
+            save_png(
+                &shaded,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
+        } else {
+            save_png(
+                &rendered,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
+        }
         previous_output = Some(rendered);
         previous_a = Some(modulator_a);
     }
@@ -2298,6 +2311,9 @@ pub(crate) struct OpticalFlowAdvectSequenceRequest<'a> {
     pub(crate) source_dir: &'a Path,
     pub(crate) output_dir: &'a Path,
     pub(crate) settings: FluidAdvectTwoSourceSettings,
+    /// Display-only relief lighting strength in [0, 1] applied to the saved frames —
+    /// the dye state carried between frames stays unlit.
+    pub(crate) shade: f32,
     pub(crate) frames: usize,
     pub(crate) backend: RenderBackend,
     pub(crate) modulation: ModulationCliArgs<'a>,
@@ -2375,10 +2391,20 @@ pub(crate) fn render_optical_flow_advect_sequence(
             _ => source.clone(),
         };
 
-        save_png(
-            &rendered,
-            &request.output_dir.join(format!("frame_{index:06}.png")),
-        )?;
+        // Shade is a display adapter on the saved frame only; the carried dye state
+        // stays unlit or the lighting would compound frame over frame.
+        if request.shade > 0.0 {
+            let shaded = relief_shade_cpu(&rendered, request.shade)?;
+            save_png(
+                &shaded,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
+        } else {
+            save_png(
+                &rendered,
+                &request.output_dir.join(format!("frame_{index:06}.png")),
+            )?;
+        }
         previous_output = Some(rendered);
         previous_source = Some(source);
     }

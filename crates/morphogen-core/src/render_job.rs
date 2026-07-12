@@ -374,6 +374,14 @@ pub enum RenderJobTask {
         frame_rate: f64,
         advect: f32,
         reinject: f32,
+        /// v2 knobs (defaults keep pre-v2 jobs meaning "off"/auto).
+        #[serde(default)]
+        substeps: u32,
+        #[serde(default)]
+        diffuse: f32,
+        /// Display-only relief lighting on saved frames (not part of the dye state).
+        #[serde(default)]
+        shade: f32,
         #[serde(default)]
         backend: RenderBackend,
         /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
@@ -407,6 +415,14 @@ pub enum RenderJobTask {
         frame_rate: f64,
         advect: f32,
         reinject: f32,
+        /// v2 knobs (defaults keep pre-v2 jobs meaning "off"/auto).
+        #[serde(default)]
+        substeps: u32,
+        #[serde(default)]
+        diffuse: f32,
+        /// Display-only relief lighting on saved frames (not part of the dye state).
+        #[serde(default)]
+        shade: f32,
         #[serde(default)]
         backend: RenderBackend,
         /// Persisted modulation routes (empty = unmodulated; pre-slice jobs
@@ -2661,6 +2677,58 @@ mod tests {
         assert_eq!(substeps, 0);
         assert_eq!(reinject_blotch, 0.0);
         assert_eq!(warp, 0.0);
+        assert_eq!(diffuse, 0.0);
+        assert_eq!(shade, 0.0);
+    }
+
+    #[test]
+    fn fluid_advect_two_source_task_without_v2_knobs_defaults_them_off() {
+        // Pre-v2 persisted jobs carry none of the new fields; they must deserialize to
+        // auto substeps (0) with diffuse and shade off.
+        let json = r#"{
+            "type": "frame_sequence_fluid_advect_two_source",
+            "modulator_frame_directory": "/tmp/a",
+            "carrier_frame_directory": "/tmp/b",
+            "output_directory": "/tmp/out",
+            "frames": 48,
+            "frame_rate": 24.0,
+            "advect": 1.0,
+            "reinject": 0.08
+        }"#;
+        let decoded: RenderJobTask = serde_json::from_str(json).expect("deserialize");
+        let RenderJobTask::FrameSequenceFluidAdvectTwoSource {
+            substeps,
+            diffuse,
+            shade,
+            ..
+        } = decoded
+        else {
+            panic!("expected two-source fluid advect task");
+        };
+        assert_eq!(substeps, 0);
+        assert_eq!(diffuse, 0.0);
+        assert_eq!(shade, 0.0);
+
+        let json = r#"{
+            "type": "frame_sequence_optical_flow_advect",
+            "source_frame_directory": "/tmp/source",
+            "output_directory": "/tmp/out",
+            "frames": 48,
+            "frame_rate": 24.0,
+            "advect": 1.0,
+            "reinject": 0.08
+        }"#;
+        let decoded: RenderJobTask = serde_json::from_str(json).expect("deserialize");
+        let RenderJobTask::FrameSequenceOpticalFlowAdvect {
+            substeps,
+            diffuse,
+            shade,
+            ..
+        } = decoded
+        else {
+            panic!("expected optical-flow advect task");
+        };
+        assert_eq!(substeps, 0);
         assert_eq!(diffuse, 0.0);
         assert_eq!(shade, 0.0);
     }

@@ -104,6 +104,7 @@ struct FluidAdvectParams {
 struct FluidAdvectTwoSourceParams {
     advect: f32,
     reinject: f32,
+    diffuse: f32,
     width: u32,
     height: u32,
 }
@@ -875,10 +876,14 @@ pub fn fluid_advect_metal(
 
 /// Two-source faux-fluid advection on the GPU — the Metal port of
 /// `morphogen_render::fluid_advect_two_source_frame_cpu`. Source A's flow advects the
-/// `previous` dye (the parity-gated displace) and a fraction of the current B frame is
-/// reinjected, in one pass. Frame zero (B verbatim) is handled by the caller, so `previous`
-/// is always present here. Compiled with fast-math disabled so the float math matches the CPU
-/// reference; the CLI gates this output against the CPU per frame.
+/// `previous` dye and a fraction of the current B frame is reinjected. The frame is
+/// advanced in `effective_substeps(flow)` kernel passes within one command buffer,
+/// ping-ponging between two dye textures exactly as the CPU reference loops
+/// `two_source_substep` (per-substep step and compound reinjection rate come from the
+/// shared `FluidAdvectTwoSourceSettings` helpers). Frame zero (B verbatim) is handled by
+/// the caller, so `previous` is always present here. Compiled with fast-math disabled so
+/// the float math matches the CPU reference; the CLI gates this output against the CPU
+/// per frame.
 pub fn fluid_advect_two_source_metal(
     carrier_b: &ImageBufferF32,
     previous: &ImageBufferF32,
@@ -902,6 +907,15 @@ pub fn fluid_advect_two_source_metal(
         )));
     }
 
+    // Mirror the CPU reference's byte-exact off case (see fluid_advect_two_source_frame_cpu).
+    if settings.reinject >= 1.0 {
+        return Ok(carrier_b.clone());
+    }
+
+    let substeps = settings.effective_substeps(flow);
+    let step = settings.advect / substeps as f32;
+    let reinject = settings.per_substep_reinject(substeps);
+
     let plan = FlowDisplaceDispatchPlan::new(carrier_b.width, carrier_b.height, settings.advect)?;
     let device = Device::system_default().ok_or(MetalDispatchError::DeviceUnavailable)?;
     let compile_options = CompileOptions::new();
@@ -923,13 +937,6 @@ pub fn fluid_advect_two_source_metal(
         MTLPixelFormat::RGBA32Float,
         MTLTextureUsage::ShaderRead,
     );
-    let previous_texture = new_texture(
-        &device,
-        plan.width,
-        plan.height,
-        MTLPixelFormat::RGBA32Float,
-        MTLTextureUsage::ShaderRead,
-    );
     let flow_texture = new_texture(
         &device,
         plan.width,
@@ -937,49 +944,63 @@ pub fn fluid_advect_two_source_metal(
         MTLPixelFormat::RG32Float,
         MTLTextureUsage::ShaderRead,
     );
-    let output_texture = new_texture(
-        &device,
-        plan.width,
-        plan.height,
-        MTLPixelFormat::RGBA32Float,
-        MTLTextureUsage::ShaderWrite,
-    );
+    // Ping-pong dye textures: each substep reads one and writes the other.
+    let dye_textures = [
+        new_texture(
+            &device,
+            plan.width,
+            plan.height,
+            MTLPixelFormat::RGBA32Float,
+            MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
+        ),
+        new_texture(
+            &device,
+            plan.width,
+            plan.height,
+            MTLPixelFormat::RGBA32Float,
+            MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
+        ),
+    ];
     upload_rgba_f32_texture(&carrier_texture, carrier_b)?;
-    upload_rgba_f32_texture(&previous_texture, previous)?;
     upload_rg_f32_texture(&flow_texture, flow)?;
+    upload_rgba_f32_texture(&dye_textures[0], previous)?;
 
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
-    let encoder = command_buffer.new_compute_command_encoder();
-    encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_texture(0, Some(&carrier_texture));
-    encoder.set_texture(1, Some(&previous_texture));
-    encoder.set_texture(2, Some(&flow_texture));
-    encoder.set_texture(3, Some(&output_texture));
-    let params = FluidAdvectTwoSourceParams {
-        advect: settings.advect,
-        reinject: settings.reinject,
-        width: plan.width,
-        height: plan.height,
-    };
-    encoder.set_bytes(
-        0,
-        std::mem::size_of::<FluidAdvectTwoSourceParams>() as u64,
-        (&params as *const FluidAdvectTwoSourceParams).cast(),
-    );
-    encoder.dispatch_thread_groups(
-        MTLSize::new(
-            plan.threadgroups_per_grid.width as u64,
-            plan.threadgroups_per_grid.height as u64,
-            plan.threadgroups_per_grid.depth as u64,
-        ),
-        MTLSize::new(
-            plan.threads_per_threadgroup.width as u64,
-            plan.threads_per_threadgroup.height as u64,
-            plan.threads_per_threadgroup.depth as u64,
-        ),
-    );
-    encoder.end_encoding();
+    for substep in 0..substeps {
+        let read_index = (substep % 2) as usize;
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_texture(0, Some(&carrier_texture));
+        encoder.set_texture(1, Some(&dye_textures[read_index]));
+        encoder.set_texture(2, Some(&flow_texture));
+        encoder.set_texture(3, Some(&dye_textures[1 - read_index]));
+        let params = FluidAdvectTwoSourceParams {
+            advect: step,
+            reinject,
+            diffuse: settings.diffuse,
+            width: plan.width,
+            height: plan.height,
+        };
+        encoder.set_bytes(
+            0,
+            std::mem::size_of::<FluidAdvectTwoSourceParams>() as u64,
+            (&params as *const FluidAdvectTwoSourceParams).cast(),
+        );
+        encoder.dispatch_thread_groups(
+            MTLSize::new(
+                plan.threadgroups_per_grid.width as u64,
+                plan.threadgroups_per_grid.height as u64,
+                plan.threadgroups_per_grid.depth as u64,
+            ),
+            MTLSize::new(
+                plan.threads_per_threadgroup.width as u64,
+                plan.threads_per_threadgroup.height as u64,
+                plan.threads_per_threadgroup.depth as u64,
+            ),
+        );
+        encoder.end_encoding();
+    }
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -990,7 +1011,8 @@ pub fn fluid_advect_two_source_metal(
         )));
     }
 
-    read_rgba_f32_texture(&output_texture, plan.width, plan.height)
+    let final_index = (substeps % 2) as usize;
+    read_rgba_f32_texture(&dye_textures[final_index], plan.width, plan.height)
 }
 
 /// Discrete-carrier particle splat on the GPU — the Metal port of
@@ -3400,6 +3422,7 @@ mod tests {
         let settings = FluidAdvectTwoSourceSettings {
             advect: 1.5,
             reinject: 0.2,
+            ..FluidAdvectTwoSourceSettings::default()
         };
 
         let cpu = fluid_advect_two_source_frame_cpu(&carrier_b, Some(&previous), &flow, settings)
@@ -3416,6 +3439,54 @@ mod tests {
         };
 
         assert_image_near(&gpu, &cpu, 1.0 / 255.0);
+    }
+
+    #[test]
+    fn metal_fluid_advect_two_source_substeps_and_diffuse_match_cpu_reference() {
+        // The v2 knobs: a flow strong enough that auto-sizing would engage, an explicit
+        // substep count exercising the ping-pong loop (odd, so the final read comes from
+        // the second texture), and diffuse exercising the 9-tap blur. The blur compounds
+        // sample counts across substeps, so parity is asserted at 1e-4 (well inside the
+        // 1/255 project gate).
+        let carrier_b = ImageBufferF32::from_fn(24, 20, |x, y| {
+            let v = if (x / 2 + y / 2) % 2 == 0 { 0.9 } else { 0.1 };
+            [v, 1.0 - v, v * 0.75, 1.0]
+        })
+        .expect("carrier");
+        let previous = ImageBufferF32::from_fn(24, 20, |x, y| {
+            [
+                (x as f32 * 0.09).fract(),
+                (y as f32 * 0.07).fract(),
+                0.55,
+                1.0,
+            ]
+        })
+        .expect("previous");
+        let flow = FlowField::from_fn(24, 20, |x, y| {
+            [(y as f32 * 0.4).sin() * 4.0, (x as f32 * 0.3).cos() * 3.0]
+        })
+        .expect("flow");
+        let settings = FluidAdvectTwoSourceSettings {
+            advect: 2.0,
+            reinject: 0.3,
+            substeps: 5,
+            diffuse: 0.25,
+        };
+
+        let cpu = fluid_advect_two_source_frame_cpu(&carrier_b, Some(&previous), &flow, settings)
+            .expect("cpu render");
+        let gpu = match fluid_advect_two_source_metal(&carrier_b, &previous, &flow, settings) {
+            Ok(image) => image,
+            Err(MetalDispatchError::DeviceUnavailable) => {
+                eprintln!(
+                    "skipping Metal two-source fluid advect substep parity assertion because no Metal device is available"
+                );
+                return;
+            }
+            Err(error) => panic!("metal two-source fluid advect substep render failed: {error}"),
+        };
+
+        assert_image_near(&gpu, &cpu, 1e-4);
     }
 
     #[test]

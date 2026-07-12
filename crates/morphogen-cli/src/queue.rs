@@ -390,6 +390,8 @@ pub(crate) struct QueueAddFluidAdvectTwoSourceSequenceRequest<'a> {
     pub(crate) source_b_dir: &'a Path,
     pub(crate) output_root_dir: &'a Path,
     pub(crate) settings: FluidAdvectTwoSourceSettings,
+    /// Display-only relief lighting strength on saved frames.
+    pub(crate) shade: f32,
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
     pub(crate) backend: RenderBackend,
@@ -413,6 +415,7 @@ pub(crate) fn queue_add_fluid_advect_two_source_sequence(
         source_b_dir,
         output_root_dir,
         settings,
+        shade,
         frames,
         frame_rate,
         backend,
@@ -459,6 +462,9 @@ pub(crate) fn queue_add_fluid_advect_two_source_sequence(
             frame_rate,
             advect: settings.advect,
             reinject: settings.reinject,
+            substeps: settings.substeps,
+            diffuse: settings.diffuse,
+            shade,
             backend,
             modulation_routes: modulation.routes,
             modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
@@ -756,6 +762,8 @@ pub(crate) struct QueueAddOpticalFlowAdvectSequenceRequest<'a> {
     pub(crate) source_dir: &'a Path,
     pub(crate) output_root_dir: &'a Path,
     pub(crate) settings: FluidAdvectTwoSourceSettings,
+    /// Display-only relief lighting strength on saved frames.
+    pub(crate) shade: f32,
     pub(crate) frames: u32,
     pub(crate) frame_rate: f64,
     pub(crate) backend: RenderBackend,
@@ -778,6 +786,7 @@ pub(crate) fn queue_add_optical_flow_advect_sequence(
         source_dir,
         output_root_dir,
         settings,
+        shade,
         frames,
         frame_rate,
         backend,
@@ -823,6 +832,9 @@ pub(crate) fn queue_add_optical_flow_advect_sequence(
             frame_rate,
             advect: settings.advect,
             reinject: settings.reinject,
+            substeps: settings.substeps,
+            diffuse: settings.diffuse,
+            shade,
             backend,
             modulation_routes: modulation.routes,
             modulator_audio_path: modulator_audio.map(|p| p.to_string_lossy().to_string()),
@@ -2244,6 +2256,9 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
         frame_rate,
         advect,
         reinject,
+        substeps,
+        diffuse,
+        shade,
         backend,
         modulation_routes,
         modulator_audio_path,
@@ -2263,7 +2278,12 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
 
-    let settings = FluidAdvectTwoSourceSettings { advect, reinject };
+    let settings = FluidAdvectTwoSourceSettings {
+        advect,
+        reinject,
+        substeps,
+        diffuse,
+    };
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
@@ -2275,6 +2295,7 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
                 source_b_dir: Path::new(&carrier_frame_directory),
                 output_dir: &output_dir.join("frames"),
                 settings,
+                shade,
                 frames: frames as usize,
                 backend,
                 modulation: ModulationCliArgs {
@@ -2295,6 +2316,7 @@ pub(crate) fn queue_run_fluid_advect_two_source_sequence(
         let mut effect = serde_json::json!({
             "algorithm": FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
             "settings": settings,
+            "shade": shade,
             "backend": render_backend_label(backend)
         });
         if let Some(modulation) = modulation_manifest_json(
@@ -2977,6 +2999,9 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
         frame_rate,
         advect,
         reinject,
+        substeps,
+        diffuse,
+        shade,
         backend,
         modulation_routes,
         modulator_audio_path,
@@ -2996,7 +3021,12 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
     queue.jobs[job_index].status = RenderJobStatus::Running;
     queue.save_json(queue_path)?;
 
-    let settings = FluidAdvectTwoSourceSettings { advect, reinject };
+    let settings = FluidAdvectTwoSourceSettings {
+        advect,
+        reinject,
+        substeps,
+        diffuse,
+    };
     let modulation_specs = modulation_specs_from_routes(&modulation_routes);
     let named_modulator_audio_specs = named_modulator_specs_from_media(&named_modulator_audio);
     let named_modulator_frames_specs = named_modulator_specs_from_media(&named_modulator_frames);
@@ -3007,6 +3037,7 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
                 source_dir: Path::new(&source_frame_directory),
                 output_dir: &output_dir.join("frames"),
                 settings,
+                shade,
                 frames: frames as usize,
                 backend,
                 modulation: ModulationCliArgs {
@@ -3027,6 +3058,7 @@ pub(crate) fn queue_run_optical_flow_advect_sequence(queue_path: &Path) -> Resul
         let mut effect = serde_json::json!({
             "algorithm": FLUID_ADVECT_TWO_SOURCE_ALGORITHM,
             "settings": settings,
+            "shade": shade,
             "flow_source": "self_optical_flow",
             "backend": render_backend_label(backend)
         });

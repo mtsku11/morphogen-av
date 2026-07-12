@@ -7135,7 +7135,7 @@ fn optical_flow_advect_queue_jobs_match_direct_and_record_manifests() {
     );
     assert_eq!(
         two_source_manifest["fluid_advect_two_source"]["algorithm"],
-        "fluid_advect_two_source_cpu_v1"
+        "fluid_advect_two_source_cpu_v2"
     );
     assert_eq!(
         two_source_manifest["provenance"]["sources"][0]["role"],

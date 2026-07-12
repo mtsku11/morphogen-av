@@ -51,7 +51,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cpu_reference::flow_displace_cpu;
 use crate::sampler::sample_bilinear_clamped;
 use crate::vortex_field::{reinjection_blotch_mask, steady_vortex_velocity_warped};
 use crate::{FlowField, ImageBufferF32, RenderError};
@@ -416,7 +415,9 @@ pub fn relief_shade_cpu(
 
 /// Algorithm identifier for the two-source CPU reference. Bump when the advection scheme
 /// or the reinjection changes so stale caches/checkpoints invalidate.
-pub const FLUID_ADVECT_TWO_SOURCE_ALGORITHM: &str = "fluid_advect_two_source_cpu_v1";
+/// v2: substep integration (the echo-ring fix, auto-sized from the frame's peak flow
+/// magnitude) and optional diffusion.
+pub const FLUID_ADVECT_TWO_SOURCE_ALGORITHM: &str = "fluid_advect_two_source_cpu_v2";
 
 /// Settings for [`fluid_advect_two_source_frame_cpu`] — the mutual two-source variant where
 /// Source A's optical-flow motion drives the field that advects Source B's colour.
@@ -431,6 +432,18 @@ pub struct FluidAdvectTwoSourceSettings {
     /// fresh content; `1` shows B verbatim (no fluid). Small values (~0.05–0.15) keep B
     /// present while A's motion reshapes it.
     pub reinject: f32,
+    /// Integration substeps per frame. `0` (the default) sizes automatically per frame so
+    /// each substep displaces at most ~1.5 px at the frame's *peak* flow magnitude (capped
+    /// at 16 — deterministic, since the flow itself is); an explicit `1..=64` forces a
+    /// count. `1` reproduces the v1 single-step behaviour — and its echo-ring artifact
+    /// under large amplified motion.
+    #[serde(default)]
+    pub substeps: u32,
+    /// Faux-viscosity weight in `[0, 1]`: mixes a 3×3 binomial blur into the displaced
+    /// dye sample each substep. `0` (default) = sharp; small values (~0.1–0.3) suppress
+    /// moiré when B carries near-Nyquist detail (scanlines, hard blocks).
+    #[serde(default)]
+    pub diffuse: f32,
 }
 
 impl Default for FluidAdvectTwoSourceSettings {
@@ -438,6 +451,8 @@ impl Default for FluidAdvectTwoSourceSettings {
         Self {
             advect: 1.0,
             reinject: 0.08,
+            substeps: 0,
+            diffuse: 0.0,
         }
     }
 }
@@ -454,7 +469,46 @@ impl FluidAdvectTwoSourceSettings {
                 "reinject must be in [0, 1]".to_string(),
             ));
         }
+        if !self.diffuse.is_finite() || !(0.0..=1.0).contains(&self.diffuse) {
+            return Err(RenderError::InvalidCoagulationSettings(
+                "diffuse must be in [0, 1]".to_string(),
+            ));
+        }
+        if self.substeps > FLUID_ADVECT_MAX_SUBSTEPS {
+            return Err(RenderError::InvalidCoagulationSettings(format!(
+                "substeps must be at most {FLUID_ADVECT_MAX_SUBSTEPS}"
+            )));
+        }
         Ok(())
+    }
+
+    /// The substep count actually run for this frame: the explicit `substeps` when
+    /// non-zero, otherwise sized so the frame's *largest* displacement
+    /// (`max |flow| · |advect|`) is split into steps of at most ~1.5 px, capped at 16.
+    /// Data-dependent but deterministic — the flow field is derived deterministically
+    /// from the sources.
+    pub fn effective_substeps(&self, flow: &FlowField) -> u32 {
+        if self.substeps > 0 {
+            return self.substeps;
+        }
+        let max_magnitude_sq = flow
+            .vectors
+            .iter()
+            .map(|v| v[0] * v[0] + v[1] * v[1])
+            .fold(0.0f32, f32::max);
+        let peak_px = max_magnitude_sq.sqrt() * self.advect.abs();
+        let auto = (peak_px / AUTO_SUBSTEP_TARGET_PX).ceil() as u32;
+        auto.clamp(1, AUTO_SUBSTEP_CAP)
+    }
+
+    /// Per-substep reinjection rate: `substeps` applications compound to exactly
+    /// `reinject` (`1 − (1 − r_sub)^N = r`). Exactly `reinject` when `substeps <= 1`.
+    pub fn per_substep_reinject(&self, substeps: u32) -> f32 {
+        if substeps <= 1 {
+            self.reinject
+        } else {
+            1.0 - (1.0 - self.reinject).powf(1.0 / substeps as f32)
+        }
     }
 }
 
@@ -462,13 +516,19 @@ impl FluidAdvectTwoSourceSettings {
 /// flows; `flow_a` is Source A's optical flow (the modulator's motion), already sized to B's
 /// dimensions and in B's pixel units. `previous` is the dye buffer carried from the prior
 /// frame; `None` (frame zero) returns B verbatim (there is no prior A frame to derive motion
-/// from). The dye is advected along A's flow via the parity-gated [`flow_displace_cpu`], then
-/// a fraction of the current B frame is bled back in (the "frame refresh").
+/// from). The dye is advected along A's flow in N substeps of `advect/N` (v2 — the same
+/// echo-ring fix as the single-source v3: one big step per frame stacks each reinjected B
+/// copy a full displacement apart and the stack reads as striations; substeps land the
+/// copies where bilinear filtering fuses them). Each substep displaces via the
+/// [`flow_displace_cpu`](crate::cpu_reference::flow_displace_cpu) convention
+/// (`p + flow · step`), optionally diffuses the sample,
+/// then bleeds in `1 − (1 − reinject)^(1/N)` of the current B frame so the frame compounds
+/// to exactly `reinject`.
 ///
-/// Continuity identities (the off cases for an off-vs-on readout):
+/// Continuity identities (the off cases for an off-vs-on readout), at any substep count:
 /// - `reinject == 1.0` ⇒ output is B verbatim every frame (no fluid at all).
-/// - `advect == 0.0` with `reinject == 0.0` ⇒ output is the previous dye unchanged (A's
-///   motion never displaces anything) — a pure hold of frame zero.
+/// - `advect == 0.0` with `reinject == 0.0` and `diffuse == 0.0` ⇒ output is the previous
+///   dye unchanged (A's motion never displaces anything) — a pure hold of frame zero.
 pub fn fluid_advect_two_source_frame_cpu(
     carrier_b: &ImageBufferF32,
     previous: Option<&ImageBufferF32>,
@@ -495,19 +555,53 @@ pub fn fluid_advect_two_source_frame_cpu(
         )));
     }
 
-    // Advect the dye along Source A's motion (the same parity-gated displace the rest of the
-    // graph uses; a future Metal port is flow_displace_metal + the reinject composite).
-    let advected = flow_displace_cpu(previous, flow_a, settings.advect)?;
+    // The documented off-case: full reinjection is B verbatim. Made explicit so the
+    // identity is byte-exact at any substep count (the per-substep lerp is only
+    // ULP-close), and mirrored by the Metal wrapper.
+    if settings.reinject >= 1.0 {
+        return Ok(carrier_b.clone());
+    }
 
-    let r = settings.reinject;
+    let substeps = settings.effective_substeps(flow_a);
+    let step = settings.advect / substeps as f32;
+    let reinject = settings.per_substep_reinject(substeps);
+
+    let mut dye = two_source_substep(previous, carrier_b, flow_a, step, reinject, settings)?;
+    for _ in 1..substeps {
+        dye = two_source_substep(&dye, carrier_b, flow_a, step, reinject, settings)?;
+    }
+    Ok(dye)
+}
+
+/// One two-source integration substep: displace the dye along A's flow by `step` (the
+/// [`flow_displace_cpu`](crate::cpu_reference::flow_displace_cpu) gather convention,
+/// `p + flow(p) · step`), optionally diffuse the
+/// sample, then bleed in `reinject` of the current B frame.
+fn two_source_substep(
+    previous: &ImageBufferF32,
+    carrier_b: &ImageBufferF32,
+    flow_a: &FlowField,
+    step: f32,
+    reinject: f32,
+    settings: FluidAdvectTwoSourceSettings,
+) -> Result<ImageBufferF32, RenderError> {
     ImageBufferF32::from_fn(carrier_b.width, carrier_b.height, |x, y| {
-        let a = advected.pixel(x, y).unwrap_or([0.0; 4]);
+        let vector = flow_a.vector(x, y).unwrap_or([0.0, 0.0]);
+        let sx = x as f32 + vector[0] * step;
+        let sy = y as f32 + vector[1] * step;
+        let mut advected = sample_bilinear_clamped(previous, sx, sy);
+        if settings.diffuse > 0.0 {
+            let blurred = binomial_blur_sample(previous, sx, sy);
+            for channel in 0..4 {
+                advected[channel] += (blurred[channel] - advected[channel]) * settings.diffuse;
+            }
+        }
         let b = carrier_b.pixel(x, y).unwrap_or([0.0; 4]);
         [
-            a[0] + (b[0] - a[0]) * r,
-            a[1] + (b[1] - a[1]) * r,
-            a[2] + (b[2] - a[2]) * r,
-            a[3] + (b[3] - a[3]) * r,
+            advected[0] + (b[0] - advected[0]) * reinject,
+            advected[1] + (b[1] - advected[1]) * reinject,
+            advected[2] + (b[2] - advected[2]) * reinject,
+            advected[3] + (b[3] - advected[3]) * reinject,
         ]
     })
 }
@@ -825,6 +919,8 @@ mod tests {
         let flow = uniform_flow(16, 16, [3.0, -2.0]);
         let settings = FluidAdvectTwoSourceSettings {
             reinject: 1.0,
+            // Forced substeps prove the identity is the short-circuit, not lerp luck.
+            substeps: 8,
             ..FluidAdvectTwoSourceSettings::default()
         };
         let out = fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("on");
@@ -848,6 +944,7 @@ mod tests {
         let settings = FluidAdvectTwoSourceSettings {
             advect: 0.0,
             reinject: 0.0,
+            ..FluidAdvectTwoSourceSettings::default()
         };
         let out =
             fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("hold");
@@ -863,6 +960,7 @@ mod tests {
         let settings = FluidAdvectTwoSourceSettings {
             advect: 1.0,
             reinject: 0.0,
+            ..FluidAdvectTwoSourceSettings::default()
         };
         let out =
             fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("flow");
@@ -884,5 +982,150 @@ mod tests {
             FluidAdvectTwoSourceSettings::default(),
         );
         assert!(result.is_err(), "mismatched flow dimensions should error");
+    }
+
+    #[test]
+    fn two_source_auto_substeps_track_peak_flow_magnitude() {
+        // Peak displacement = max |flow| · |advect|; split into ~1.5 px steps, capped.
+        let settings = FluidAdvectTwoSourceSettings {
+            advect: 1.5,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        // 3-4-5 triangle: |(6, 8)| = 10, peak 15 px ⇒ ceil(15 / 1.5) = 10 substeps.
+        assert_eq!(settings.effective_substeps(&uniform_flow(4, 4, [6.0, 8.0])), 10);
+        // Still flow ⇒ a single step suffices.
+        assert_eq!(settings.effective_substeps(&zero_flow(4, 4)), 1);
+        // Huge motion hits the auto cap.
+        assert_eq!(
+            settings.effective_substeps(&uniform_flow(4, 4, [200.0, 0.0])),
+            AUTO_SUBSTEP_CAP
+        );
+        // Negative advect amplifies reversed motion but sizes by magnitude.
+        let reversed = FluidAdvectTwoSourceSettings {
+            advect: -1.5,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        assert_eq!(reversed.effective_substeps(&uniform_flow(4, 4, [6.0, 8.0])), 10);
+        // An explicit count always wins.
+        let forced = FluidAdvectTwoSourceSettings {
+            substeps: 3,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        assert_eq!(forced.effective_substeps(&uniform_flow(4, 4, [200.0, 0.0])), 3);
+    }
+
+    #[test]
+    fn two_source_substeps_compound_reinject_to_the_frame_rate() {
+        // With zero flow the dye never moves, so N substeps must bleed in exactly the
+        // frame-level reinject fraction of B (within float tolerance of the compounding).
+        let b = ramp(16, 16);
+        let prev = ImageBufferF32::from_fn(16, 16, |_, _| [0.1, 0.9, 0.4, 1.0]).expect("prev");
+        let flow = zero_flow(16, 16);
+        let single = FluidAdvectTwoSourceSettings {
+            reinject: 0.3,
+            substeps: 1,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        let stepped = FluidAdvectTwoSourceSettings {
+            substeps: 6,
+            ..single
+        };
+        let one = fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, single).expect("1");
+        let six = fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, stepped).expect("6");
+        for (p1, p6) in one.pixels.iter().zip(six.pixels.iter()) {
+            for channel in 0..4 {
+                assert!(
+                    (p1[channel] - p6[channel]).abs() < 1e-5,
+                    "compounded reinject drifted: {} vs {}",
+                    p1[channel],
+                    p6[channel]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn two_source_single_substep_matches_the_v1_composite() {
+        // substeps 1 + diffuse 0 is exactly the v1 pipeline: flow_displace then lerp.
+        use crate::cpu_reference::flow_displace_cpu;
+        let b = ramp(32, 32);
+        let prev = ImageBufferF32::from_fn(32, 32, |x, y| {
+            [(x as f32 * 0.07).fract(), (y as f32 * 0.11).fract(), 0.6, 1.0]
+        })
+        .expect("prev");
+        let flow = uniform_flow(32, 32, [2.5, -1.5]);
+        let settings = FluidAdvectTwoSourceSettings {
+            advect: 1.25,
+            reinject: 0.25,
+            substeps: 1,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        let out = fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("v2");
+        let displaced = flow_displace_cpu(&prev, &flow, settings.advect).expect("displace");
+        let reference = ImageBufferF32::from_fn(32, 32, |x, y| {
+            let a = displaced.pixel(x, y).unwrap_or([0.0; 4]);
+            let s = b.pixel(x, y).unwrap_or([0.0; 4]);
+            [
+                a[0] + (s[0] - a[0]) * settings.reinject,
+                a[1] + (s[1] - a[1]) * settings.reinject,
+                a[2] + (s[2] - a[2]) * settings.reinject,
+                a[3] + (s[3] - a[3]) * settings.reinject,
+            ]
+        })
+        .expect("reference");
+        assert_eq!(out.pixels, reference.pixels);
+    }
+
+    #[test]
+    fn two_source_diffuse_softens_the_dye() {
+        // Diffusion alone (no motion, no refresh) must blur the held dye.
+        let b = ramp(16, 16);
+        let prev = ImageBufferF32::from_fn(16, 16, |x, _| {
+            if x % 2 == 0 {
+                [1.0, 1.0, 1.0, 1.0]
+            } else {
+                [0.0, 0.0, 0.0, 1.0]
+            }
+        })
+        .expect("stripes");
+        let flow = zero_flow(16, 16);
+        let settings = FluidAdvectTwoSourceSettings {
+            advect: 0.0,
+            reinject: 0.0,
+            diffuse: 0.5,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        let out =
+            fluid_advect_two_source_frame_cpu(&b, Some(&prev), &flow, settings).expect("diffuse");
+        assert_ne!(out.pixels, prev.pixels, "diffuse should blur the stripes");
+        let mid = out.pixel(8, 8).expect("mid");
+        assert!(
+            mid[0] > 0.0 && mid[0] < 1.0,
+            "a stripe pixel should move toward the neighbourhood mean, got {}",
+            mid[0]
+        );
+    }
+
+    #[test]
+    fn two_source_settings_validation_bounds() {
+        let too_many = FluidAdvectTwoSourceSettings {
+            substeps: FLUID_ADVECT_MAX_SUBSTEPS + 1,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        assert!(too_many.validate().is_err());
+        let bad_diffuse = FluidAdvectTwoSourceSettings {
+            diffuse: 1.5,
+            ..FluidAdvectTwoSourceSettings::default()
+        };
+        assert!(bad_diffuse.validate().is_err());
+    }
+
+    #[test]
+    fn two_source_settings_deserialize_without_v2_knobs() {
+        // Pre-v2 persisted settings (queue tasks, checkpoints) must default the new knobs off.
+        let parsed: FluidAdvectTwoSourceSettings =
+            serde_json::from_str(r#"{"advect": 1.5, "reinject": 0.25}"#).expect("legacy json");
+        assert_eq!(parsed.substeps, 0);
+        assert_eq!(parsed.diffuse, 0.0);
     }
 }

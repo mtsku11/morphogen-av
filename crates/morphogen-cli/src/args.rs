@@ -685,6 +685,19 @@ pub(crate) enum Commands {
         /// B smears further along A's motion; 0 = pure smear, 1 = B verbatim. ~0.08 marbles.
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
+        /// Integration substeps per frame. 0 (default) sizes automatically per frame so the
+        /// peak displacement (max |flow| x advect) is split into ~1.5 px steps (capped at 16;
+        /// the echo-ring fix); 1..=64 forces a count. 1 = legacy single-step behaviour.
+        #[arg(long, default_value_t = 0)]
+        substeps: u32,
+        /// Faux viscosity in [0, 1]: mixes a 3x3 blur into the dye sample each substep.
+        /// ~0.1-0.3 suppresses moire when B carries scanline/near-Nyquist detail. 0 = sharp.
+        #[arg(long, default_value_t = 0.0)]
+        diffuse: f32,
+        /// Display-only relief lighting strength in [0, 1] applied to the SAVED frames
+        /// (the reference shader's Image pass). The dye state stays unlit. 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
@@ -747,6 +760,19 @@ pub(crate) enum Commands {
         /// the dye smears further along the motion; 0 = pure smear, 1 = source verbatim.
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
+        /// Integration substeps per frame. 0 (default) sizes automatically per frame so the
+        /// peak displacement (max |flow| x advect) is split into ~1.5 px steps (capped at 16;
+        /// the echo-ring fix); 1..=64 forces a count. 1 = legacy single-step behaviour.
+        #[arg(long, default_value_t = 0)]
+        substeps: u32,
+        /// Faux viscosity in [0, 1]: mixes a 3x3 blur into the dye sample each substep.
+        /// ~0.1-0.3 suppresses moire on scanline/near-Nyquist detail. 0 = sharp.
+        #[arg(long, default_value_t = 0.0)]
+        diffuse: f32,
+        /// Display-only relief lighting strength in [0, 1] applied to the SAVED frames
+        /// (the reference shader's Image pass). The dye state stays unlit. 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
         /// Render backend. `metal` is gated against the CPU reference per frame.
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
@@ -2506,6 +2532,15 @@ pub(crate) enum Commands {
         advect: f32,
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
+        /// Integration substeps per frame (0 = auto-size from the frame's peak displacement).
+        #[arg(long, default_value_t = 0)]
+        substeps: u32,
+        /// Faux viscosity in [0, 1] (3x3 blur mixed into the dye each substep).
+        #[arg(long, default_value_t = 0.0)]
+        diffuse: f32,
+        /// Display-only relief lighting strength in [0, 1] on the saved frames.
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]
@@ -2550,6 +2585,15 @@ pub(crate) enum Commands {
         advect: f32,
         #[arg(long, default_value_t = 0.08)]
         reinject: f32,
+        /// Integration substeps per frame (0 = auto-size from the frame's peak displacement).
+        #[arg(long, default_value_t = 0)]
+        substeps: u32,
+        /// Faux viscosity in [0, 1] (3x3 blur mixed into the dye each substep).
+        #[arg(long, default_value_t = 0.0)]
+        diffuse: f32,
+        /// Display-only relief lighting strength in [0, 1] on the saved frames.
+        #[arg(long, default_value_t = 0.0)]
+        shade: f32,
         #[arg(long, value_enum, default_value_t = CliRenderBackend::Cpu)]
         backend: CliRenderBackend,
         #[arg(long)]

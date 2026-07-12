@@ -216,6 +216,12 @@ source refresh; the mask is sparse, so raise `--reinject` to compensate),
 `--shade` (display-only relief lighting on saved frames; dye state stays
 unlit).
 
+The two-source and self-flow variants (v2) share the substep fix and take
+`--substeps`/`--diffuse`/`--shade` too (no blotch/warp — those belong to the
+procedural turbulence field). Their auto substep count is sized per frame from
+the peak measured displacement (`max |flow| × advect`), so amplified motion
+(`--advect` well above 1) no longer fragments moving edges into echo copies.
+
 ### Blend / Mosaic (mutual A×B)
 
 | Effect | Direct command | Sources | Off-case | Metal |

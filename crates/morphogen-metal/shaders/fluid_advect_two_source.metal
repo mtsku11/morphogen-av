@@ -3,16 +3,20 @@ using namespace metal;
 
 // Two-source faux-fluid advection — the GPU port of
 // `morphogen_render::fluid_advect_two_source_frame_cpu`. Source A's optical flow advects
-// Source B's dye, then a fraction of the current B frame is reinjected. This is
-// `flow_displace` (the parity-gated displace) plus the reinject composite in one pass:
+// Source B's dye (optionally mixed with a 3x3 binomial blur — the `diffuse` faux
+// viscosity), then a fraction of the current B frame is reinjected:
 //   advected = sampleBilinearClamped(previous, pixel + flow * advect)
 //   result   = advected + (carrierB - advected) * reinject
+// This kernel computes ONE integration substep; the Rust dispatch loops it (ping-ponging
+// two dye textures in a single command buffer) with `advect` set to the per-substep step
+// and `reinject` to the per-substep rate, exactly like the CPU substep loop.
 // Compiled with fast-math disabled so the float math matches the CPU reference; the CLI
 // gates this output against `fluid_advect_two_source_frame_cpu` per frame.
 
 struct FluidAdvectTwoSourceParams {
   float advect;
   float reinject;
+  float diffuse;
   uint width;
   uint height;
 };
@@ -60,8 +64,25 @@ kernel void fluid_advect_two_source(
   float2 velocity = flow.read(gid).xy;
 
   // flow_displace convention: read the dye at pixel + flow * advect.
-  float2 position = float2(gid) + velocity * params.advect;
-  float4 advected = sampleBilinearClamped(previous, position, dimensions);
+  float sx = float(gid.x) + velocity.x * params.advect;
+  float sy = float(gid.y) + velocity.y * params.advect;
+  float4 advected = sampleBilinearClamped(previous, float2(sx, sy), dimensions);
+  if (params.diffuse > 0.0) {
+    // 3x3 binomial (1-2-1)^2/16 blur of the bilinear samples — the faux viscosity.
+    // Taps and accumulation order match the CPU `binomial_blur_sample`.
+    float4 sum = float4(0.0);
+    sum += sampleBilinearClamped(previous, float2(sx - 1.0, sy - 1.0), dimensions) * 1.0;
+    sum += sampleBilinearClamped(previous, float2(sx, sy - 1.0), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx + 1.0, sy - 1.0), dimensions) * 1.0;
+    sum += sampleBilinearClamped(previous, float2(sx - 1.0, sy), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx, sy), dimensions) * 4.0;
+    sum += sampleBilinearClamped(previous, float2(sx + 1.0, sy), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx - 1.0, sy + 1.0), dimensions) * 1.0;
+    sum += sampleBilinearClamped(previous, float2(sx, sy + 1.0), dimensions) * 2.0;
+    sum += sampleBilinearClamped(previous, float2(sx + 1.0, sy + 1.0), dimensions) * 1.0;
+    float4 blurred = sum / 16.0;
+    advected += (blurred - advected) * params.diffuse;
+  }
 
   // Source reinjection (the "frame refresh"): bleed in a fraction of the current B frame.
   float4 b = carrierB.read(gid);
