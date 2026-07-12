@@ -7,7 +7,9 @@ import SwiftUI
 /// the single Run button calls; the knob set is RenderPanelView's fuller one
 /// (seed, turbulence speed/detail, particle spacing/size, modulation slots).
 
-private enum FluidAdvectionMode: String, CaseIterable, Identifiable {
+/// The four Fluid Advection variants. Lives on `AppState.fluidMode` (not a
+/// view-local `@State`) so the centralized preview can read the mode.
+enum FluidAdvectionMode: String, CaseIterable, Identifiable {
   case twoSource = "A to B"
   case selfFlow = "Self-Flow"
   case procedural = "Field"
@@ -19,15 +21,13 @@ private enum FluidAdvectionMode: String, CaseIterable, Identifiable {
 struct FluidAdvectionDetailView: View {
   @ObservedObject var state: AppState
 
-  @State private var mode: FluidAdvectionMode = .twoSource
-
   var body: some View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .fluidAdvection)
 
-      Picker("Mode", selection: $mode) {
-        ForEach(FluidAdvectionMode.allCases) { mode in
-          Text(mode.rawValue).tag(mode)
+      Picker("Mode", selection: $state.fluidMode) {
+        ForEach(FluidAdvectionMode.allCases) { option in
+          Text(option.rawValue).tag(option)
         }
       }
       .pickerStyle(.segmented)
@@ -51,7 +51,7 @@ struct FluidAdvectionDetailView: View {
 
         Toggle("Live particle colour", isOn: $state.fieldParticleLiveColour)
           .toggleStyle(.checkbox)
-          .disabled(mode != .particles)
+          .disabled(state.fluidMode != .particles)
       }
 
       MoreKnobs {
@@ -105,7 +105,7 @@ struct FluidAdvectionDetailView: View {
           }
           .frame(width: 140, alignment: .leading)
         }
-        .disabled(mode == .particles)
+        .disabled(state.fluidMode == .particles)
 
         // Procedural-field-only looks: patchy reinjection and detail-octave warp
         // (the flow-driven modes have no turbulence field to gate or fold).
@@ -120,7 +120,7 @@ struct FluidAdvectionDetailView: View {
           }
           .frame(width: 130, alignment: .leading)
         }
-        .disabled(mode != .procedural)
+        .disabled(state.fluidMode != .procedural)
 
         HStack(spacing: EffectDetailLayout.controlRowSpacing) {
           Stepper(value: $state.fieldParticleSpacing, in: 1...64, step: 1) {
@@ -276,32 +276,15 @@ struct FluidAdvectionDetailView: View {
       }
 
       Button {
-        runSelectedMode()
+        state.runSelectedFluidMode()
       } label: {
-        Label("Run \(mode.rawValue) Fluid", systemImage: EffectListing.fluidAdvection.systemImage)
+        Label("Run \(state.fluidMode.rawValue) Fluid", systemImage: EffectListing.fluidAdvection.systemImage)
       }
       .buttonStyle(.borderedProminent)
 
       Text(state.fluidAdvectionSummary)
         .font(.caption)
         .foregroundStyle(.secondary)
-
-      QuickPreviewBand(state: state, requiresModulator: mode == .twoSource) {
-        runSelectedMode()
-      }
-    }
-  }
-
-  private func runSelectedMode() {
-    switch mode {
-    case .twoSource:
-      state.runTwoSourceFluidAdvectSequenceRender()
-    case .selfFlow:
-      state.runOpticalFlowAdvectSequenceRender()
-    case .procedural:
-      state.runProceduralFluidAdvectSequenceRender()
-    case .particles:
-      state.runFieldParticlesSequenceRender()
     }
   }
 }

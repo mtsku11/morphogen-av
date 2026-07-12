@@ -98,9 +98,6 @@ struct RetroStaticDetailView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
 
-      QuickPreviewBand(state: state, requiresModulator: false) {
-        state.runRetroStaticSequenceRender()
-      }
     }
   }
 }
@@ -281,9 +278,6 @@ struct ChannelShiftDetailView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
 
-      QuickPreviewBand(state: state, requiresModulator: state.channelShiftFlowGain != 0) {
-        state.runChannelShiftSequenceRender()
-      }
     }
   }
 }
@@ -384,9 +378,6 @@ struct PaletteQuantizeDetailView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
 
-      QuickPreviewBand(state: state, requiresModulator: false) {
-        state.runPaletteQuantizeSequenceRender()
-      }
     }
   }
 }

@@ -1,81 +1,68 @@
 import SwiftUI
 import AppKit
 
-struct SourceSlotView: View {
+/// Compact header source control: a single "Choose Source" button per slot,
+/// showing a small thumbnail and the loaded file name. Replaces the former
+/// full-height `SourceSlotView` cards (probe/preview summaries now live in the
+/// per-effect detail flow, not the always-visible header).
+struct CompactSourceButton: View {
   let title: String
   let role: SourceRole
-  @Binding var path: String
-  let probeSummary: String
-  let previewSummary: String
+  let path: String
   let previewImage: NSImage?
   let onChoose: () -> Void
 
+  /// The trailing path component of a loaded source, or nil when the stored
+  /// `path` is still one of the "No … selected" / "Preview not run" placeholders.
+  private var loadedName: String? {
+    guard path.contains("/") else { return nil }
+    return (path as NSString).lastPathComponent
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
+    Button(action: onChoose) {
+      HStack(spacing: 10) {
+        thumbnail
+
         VStack(alignment: .leading, spacing: 2) {
           Text(title)
-            .font(.headline)
-          Text(role.rawValue)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .font(.subheadline.weight(.semibold))
+          Text(loadedName ?? "Choose source…")
+            .font(.caption)
+            .foregroundStyle(loadedName == nil ? Color.secondary : .primary)
+            .lineLimit(1)
+            .truncationMode(.middle)
         }
 
-        Spacer()
+        Image(systemName: "folder")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      .frame(width: 240, alignment: .leading)
+      .padding(.vertical, 6)
+      .padding(.horizontal, 10)
+    }
+    .buttonStyle(.bordered)
+    .help(loadedName.map { "\(title): \($0). Click to choose a different source." }
+      ?? "Choose \(title) (\(role.description.lowercased())).")
+  }
 
+  private var thumbnail: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 4)
+        .fill(.quaternary.opacity(0.6))
+
+      if let previewImage {
+        Image(nsImage: previewImage)
+          .resizable()
+          .scaledToFill()
+      } else {
         Image(systemName: role == .modulator ? "waveform.path.ecg" : "film")
-          .font(.title3)
+          .font(.callout)
           .foregroundStyle(.tint)
       }
-
-      Text(role.description)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
-      ZStack {
-        RoundedRectangle(cornerRadius: 6)
-          .fill(.black.opacity(0.08))
-
-        if let previewImage {
-          Image(nsImage: previewImage)
-            .resizable()
-            .scaledToFit()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-          Image(systemName: "rectangle.dashed")
-            .font(.title2)
-            .foregroundStyle(.secondary)
-        }
-      }
-      .frame(height: 104)
-      .clipShape(RoundedRectangle(cornerRadius: 6))
-
-      Text(path)
-        .font(.system(.caption, design: .monospaced))
-        .lineLimit(2)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-      Text(probeSummary)
-        .font(.caption)
-        .lineLimit(3)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-      Text(previewSummary)
-        .font(.caption)
-        .lineLimit(3)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-      Button {
-        onChoose()
-      } label: {
-        Label("Choose Source", systemImage: "folder")
-      }
     }
-    .padding(12)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+    .frame(width: 34, height: 34)
+    .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 }

@@ -9,9 +9,26 @@ struct EffectDetailView: View {
   let selection: EffectListing
 
   var body: some View {
-    ScrollView(.vertical) {
-      Group {
-        switch selection {
+    VStack(spacing: 0) {
+      // The centralized preview, pinned at the top of the detail pane and
+      // shared by every eligible effect (replaces the former per-effect bands
+      // that sat at the bottom of each view). Effects with no preview
+      // (`previewConfiguration == nil`) show only their controls below.
+      if let config = state.previewConfiguration(for: selection) {
+        QuickPreviewBand(
+          state: state,
+          requiresModulator: config.requiresModulator,
+          runEffect: config.run
+        )
+        .padding([.horizontal, .top], 20)
+        .padding(.bottom, 12)
+
+        Divider()
+      }
+
+      ScrollView(.vertical) {
+        Group {
+          switch selection {
         case .flowDisplace:
           FlowDisplaceDetailView(state: state)
         case .flowFeedback:
@@ -65,9 +82,10 @@ struct EffectDetailView: View {
         case .nodeGraph:
           NodeGraphPlaceholderView()
         }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(20)
     }
   }
 }

@@ -76,7 +76,7 @@ struct QuickPreviewBand: View {
         Image(nsImage: frames[shownIndex])
           .resizable()
           .scaledToFit()
-          .frame(maxWidth: .infinity, maxHeight: 260)
+          .frame(maxWidth: .infinity, maxHeight: 440)
           .clipShape(RoundedRectangle(cornerRadius: 8))
 
         HStack(spacing: 10) {

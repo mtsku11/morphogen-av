@@ -132,9 +132,6 @@ struct FluidMosaicPanelView: View {
         .foregroundStyle(.secondary)
         .textSelection(.enabled)
 
-      QuickPreviewBand(state: state, requiresModulator: true) {
-        state.runFluidMosaicRender()
-      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }

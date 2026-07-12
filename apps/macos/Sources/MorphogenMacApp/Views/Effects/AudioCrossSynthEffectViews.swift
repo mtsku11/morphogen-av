@@ -64,9 +64,6 @@ struct VideoVocoderDetailView: View {
       // not a wrong claim) — added because runVideoVocoderSequenceRender
       // unconditionally reads effectiveModulatorURL()/effectiveCarrierURL(),
       // matching the same static-true pattern as Flow Displace etc.
-      QuickPreviewBand(state: state, requiresModulator: true) {
-        state.runVideoVocoderSequenceRender()
-      }
     }
   }
 }

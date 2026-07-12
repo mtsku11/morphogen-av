@@ -23,6 +23,22 @@ final class AppState: ObservableObject {
 
   @Published var sourceAPath = "No modulator selected"
   @Published var sourceBPath = "No carrier selected"
+
+  /// The sidebar's current effect selection, mirrored here so the source-
+  /// direction wiring can tell whether the active effect honours the header's
+  /// `SourceRelationship` (two-source) or ignores it (single-source). Bound
+  /// from `ContentView`'s `NavigationSplitView`.
+  @Published var selectedEffect: EffectListing?
+
+  /// Global header control mapping the two loaded clips onto modulator/carrier
+  /// roles for two-source effects (`aModifiesB` default, `bModifiesA` swaps,
+  /// `selfModify` feeds Source B to both). Persisted across launches.
+  @Published var sourceRelationship: SourceRelationship =
+    SourceRelationship(rawValue: UserDefaults.standard.string(forKey: "sourceRelationship") ?? "")
+      ?? .aModifiesB
+  {
+    didSet { UserDefaults.standard.set(sourceRelationship.rawValue, forKey: "sourceRelationship") }
+  }
   @Published var sourceAProbeSummary = "Probe not run"
   @Published var sourceBProbeSummary = "Probe not run"
   @Published var sourceAPreviewSummary = "Preview not run"
@@ -157,6 +173,10 @@ final class AppState: ObservableObject {
   @Published var feedbackModulatorFramesURL: URL?
   @Published var feedbackModSampling = ModulationSamplingOption.hold
   @Published var feedbackNamedModulators: [NamedModulatorEntry] = []
+  /// Which Fluid Advection variant the single Run button / preview drives.
+  /// Lifted out of the detail view so the centralized top-of-pane preview can
+  /// read it (its `requiresModulator` is true only in `.twoSource`).
+  @Published var fluidMode: FluidAdvectionMode = .twoSource
   @Published var fluidProceduralAdvect = 12.0
   @Published var fluidMotionAdvect = 1.0
   @Published var fluidReinject = 0.08
@@ -985,13 +1005,15 @@ final class AppState: ObservableObject {
   /// (and reports why) when the required sources are not loaded yet or the
   /// downscale fails.
   func beginEffectPreview(requiresModulator: Bool) -> Bool {
-    // Read the RAW stored proxy dirs here (not the effective helpers): a
-    // still-active previous session must never chain-downscale its own copies.
-    guard let carrierURL = frameSequenceCarrierURL else {
+    // Read the direction-resolved RAW proxy dirs here (not the effective
+    // helpers): a still-active previous session must never chain-downscale its
+    // own copies, but the header's source direction must still map A/B onto
+    // modulator/carrier before the downscale so the preview matches the render.
+    guard let carrierURL = resolvedCarrierProxyURL else {
       statusMessage = "Select Source B frames before previewing."
       return false
     }
-    if requiresModulator && frameSequenceModulatorURL == nil {
+    if requiresModulator && resolvedModulatorProxyURL == nil {
       statusMessage = "Select Source A frames before previewing."
       return false
     }
@@ -1023,7 +1045,7 @@ final class AppState: ObservableObject {
           maxFrames: cap
         )
       }
-      if let modulatorOverride, let modulatorURL = frameSequenceModulatorURL {
+      if let modulatorOverride, let modulatorURL = resolvedModulatorProxyURL {
         try? FileManager.default.removeItem(at: modulatorOverride)
         _ = try RustBridgePlaceholder.runDownscaleFrames(
           inputDirectoryURL: modulatorURL,
@@ -1076,17 +1098,46 @@ final class AppState: ObservableObject {
     previewSession?.maxFrames ?? chosen
   }
 
+  /// Whether the active effect honours the header's `SourceRelationship`. A
+  /// single-source effect ignores it (always Source B as carrier) even if a
+  /// non-default relationship is left over from a two-source effect.
+  private var directionAppliesToActiveEffect: Bool {
+    selectedEffect?.supportsSourceDirection ?? false
+  }
+
+  /// The raw modulator proxy directory after applying the header's source
+  /// direction (before any preview-session downscale override). The single
+  /// point that maps physical A/B onto the modulator role.
+  private var resolvedModulatorProxyURL: URL? {
+    guard directionAppliesToActiveEffect else { return frameSequenceModulatorURL }
+    switch sourceRelationship {
+    case .aModifiesB: return frameSequenceModulatorURL
+    case .bModifiesA: return frameSequenceCarrierURL
+    case .selfModify: return frameSequenceCarrierURL
+    }
+  }
+
+  /// Carrier counterpart of `resolvedModulatorProxyURL`.
+  private var resolvedCarrierProxyURL: URL? {
+    guard directionAppliesToActiveEffect else { return frameSequenceCarrierURL }
+    switch sourceRelationship {
+    case .aModifiesB: return frameSequenceCarrierURL
+    case .bModifiesA: return frameSequenceModulatorURL
+    case .selfModify: return frameSequenceCarrierURL
+    }
+  }
+
   /// Carrier input directory a render should read: the preview session's
   /// downscaled copy while a preview is active (the same-engine invariant —
-  /// only the input paths change), else the stored proxy directory.
+  /// only the input paths change), else the direction-resolved proxy directory.
   /// Mirrors `effectiveOutputRoot`. Nil override (scale 1) = original dir.
   private func effectiveCarrierURL() -> URL? {
-    previewSession?.carrierInputOverrideURL ?? frameSequenceCarrierURL
+    previewSession?.carrierInputOverrideURL ?? resolvedCarrierProxyURL
   }
 
   /// Modulator counterpart of `effectiveCarrierURL()`.
   private func effectiveModulatorURL() -> URL? {
-    previewSession?.modulatorInputOverrideURL ?? frameSequenceModulatorURL
+    previewSession?.modulatorInputOverrideURL ?? resolvedModulatorProxyURL
   }
 
   private func finishPreviewIfNeeded(frameDirectory: URL) {
@@ -2269,6 +2320,71 @@ final class AppState: ObservableObject {
       requestDescription: "Queueing field particles through morphogen-cli..."
     ) {
       try RustBridgePlaceholder.runQueuedFieldParticlesSequenceRender(request: request)
+    }
+  }
+
+  /// Dispatch the Fluid Advection Run/preview to the command for the selected
+  /// `fluidMode`. Formerly `runSelectedMode()` inside the detail view; hoisted
+  /// so the centralized preview can invoke it without owning the mode state.
+  func runSelectedFluidMode() {
+    switch fluidMode {
+    case .twoSource:
+      runTwoSourceFluidAdvectSequenceRender()
+    case .selfFlow:
+      runOpticalFlowAdvectSequenceRender()
+    case .procedural:
+      runProceduralFluidAdvectSequenceRender()
+    case .particles:
+      runFieldParticlesSequenceRender()
+    }
+  }
+
+  /// The centralized preview's per-effect configuration: whether a modulator
+  /// (Source A) is required for this effect's current settings, and the render
+  /// entry point the Quick Preview button invokes. `nil` for effects with no
+  /// preview (audio-only synthesis, composition, tools) — the detail pane then
+  /// shows no preview band. This replaces the 16 per-effect `QuickPreviewBand`
+  /// instantiations with one lookup keyed by the sidebar selection.
+  func previewConfiguration(
+    for listing: EffectListing
+  ) -> (requiresModulator: Bool, run: () -> Void)? {
+    switch listing {
+    case .flowDisplace:
+      return (true, { [self] in runTwoSourceFrameSequenceRender() })
+    case .flowFeedback:
+      return (true, { [self] in runFlowFeedbackSequenceRender() })
+    case .ruttEtra:
+      return (ruttEtraUseTwoSource, { [self] in runRuttEtraSequenceRender() })
+    case .fluidAdvection:
+      return (fluidMode == .twoSource, { [self] in runSelectedFluidMode() })
+    case .coagulatedBlend:
+      return (true, { [self] in runCoagulatedBlendSequenceRender() })
+    case .dispersionBlend:
+      return (true, { [self] in runDispersionBlendRender() })
+    case .fluidMosaic:
+      return (true, { [self] in runFluidMosaicRender() })
+    case .datamosh:
+      return (true, { [self] in runDatamoshRender() })
+    case .cascadeCollage:
+      return (false, { [self] in runCascadeCollageSequenceRender() })
+    case .trailCascade:
+      return (false, { [self] in runTrailCascadeSequenceRender() })
+    case .morphogenesis:
+      return (false, { [self] in runMorphogenesisSequenceRender() })
+    case .granularMosaic:
+      return (true, { [self] in runGranularMosaicPoolSequenceRender() })
+    case .retroStatic:
+      return (false, { [self] in runRetroStaticSequenceRender() })
+    case .channelShift:
+      return (channelShiftFlowGain != 0, { [self] in runChannelShiftSequenceRender() })
+    case .paletteQuantize:
+      return (false, { [self] in runPaletteQuantizeSequenceRender() })
+    case .videoVocoder:
+      return (true, { [self] in runVideoVocoderSequenceRender() })
+    case .convBlend, .bitstreamDatamosh, .pixelSort, .spectralCrossSynth,
+         .audioImpulseConvolution, .audioVideoRoute, .videoAudioRoute,
+         .composition, .analysis, .nodeGraph:
+      return nil
     }
   }
 

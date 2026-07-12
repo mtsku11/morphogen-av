@@ -103,6 +103,25 @@ enum EffectListing: String, CaseIterable, Identifiable, Hashable {
     }
   }
 
+  /// Whether the global header source-direction control (`SourceRelationship`)
+  /// applies to this effect. True for the genuinely two-source effects, where
+  /// swapping which loaded clip is the modulator vs carrier — or feeding one
+  /// clip to both (self) — is meaningful. Single-source effects and generators
+  /// ignore it and always read Source B as their carrier.
+  var supportsSourceDirection: Bool {
+    switch self {
+    case .flowDisplace, .flowFeedback, .ruttEtra, .fluidAdvection, .convBlend,
+         .coagulatedBlend, .dispersionBlend, .fluidMosaic, .datamosh, .granularMosaic,
+         .videoVocoder, .spectralCrossSynth, .audioImpulseConvolution,
+         .audioVideoRoute, .videoAudioRoute:
+      return true
+    case .bitstreamDatamosh, .cascadeCollage, .trailCascade, .morphogenesis,
+         .retroStatic, .channelShift, .paletteQuantize, .pixelSort,
+         .composition, .analysis, .nodeGraph:
+      return false
+    }
+  }
+
   var systemImage: String {
     switch self {
     case .flowDisplace: return "arrow.up.left.and.arrow.down.right"

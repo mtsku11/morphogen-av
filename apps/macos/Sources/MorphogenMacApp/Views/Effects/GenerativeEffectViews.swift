@@ -428,9 +428,6 @@ struct MorphogenesisDetailView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
 
-      QuickPreviewBand(state: state, requiresModulator: false) {
-        state.runMorphogenesisSequenceRender()
-      }
     }
   }
 }
@@ -546,9 +543,6 @@ struct GranularMosaicDetailView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
 
-      QuickPreviewBand(state: state, requiresModulator: true) {
-        state.runGranularMosaicPoolSequenceRender()
-      }
     }
   }
 }

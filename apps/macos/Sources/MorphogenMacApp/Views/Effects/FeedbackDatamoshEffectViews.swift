@@ -194,9 +194,6 @@ struct DatamoshDetailView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
 
-      QuickPreviewBand(state: state, requiresModulator: true) {
-        state.runDatamoshRender()
-      }
     }
   }
 }
@@ -431,9 +428,6 @@ struct CascadeCollageDetailView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
 
-      QuickPreviewBand(state: state, requiresModulator: false) {
-        state.runCascadeCollageSequenceRender()
-      }
     }
   }
 }
@@ -637,9 +631,6 @@ struct TrailCascadeDetailView: View {
       }
       .buttonStyle(.borderedProminent)
 
-      QuickPreviewBand(state: state, requiresModulator: false) {
-        state.runTrailCascadeSequenceRender()
-      }
     }
   }
 }
