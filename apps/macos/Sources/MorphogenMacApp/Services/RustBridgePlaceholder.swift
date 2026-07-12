@@ -839,8 +839,13 @@ enum RustBridgePlaceholder {
       ("turbulence scale", request.turbulenceScale),
       ("turbulence speed", request.turbulenceSpeed),
       ("detail", request.detail),
-      ("reinject", request.reinject)
+      ("reinject", request.reinject),
+      ("reinject blotch", request.reinjectBlotch),
+      ("warp", request.warp),
+      ("diffuse", request.diffuse),
+      ("shade", request.shade)
     ])
+    try validateFluidSubsteps(request.substeps)
 
     var arguments = [
       "cargo",
@@ -868,6 +873,16 @@ enum RustBridgePlaceholder {
       cliNumber(request.detail),
       "--reinject",
       cliNumber(request.reinject),
+      "--substeps",
+      String(request.substeps),
+      "--reinject-blotch",
+      cliNumber(request.reinjectBlotch),
+      "--warp",
+      cliNumber(request.warp),
+      "--diffuse",
+      cliNumber(request.diffuse),
+      "--shade",
+      cliNumber(request.shade),
       "--seed",
       String(request.seed),
       "--backend",
@@ -896,8 +911,11 @@ enum RustBridgePlaceholder {
     try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
     try validateFluidNumbers([
       ("advect", request.advect),
-      ("reinject", request.reinject)
+      ("reinject", request.reinject),
+      ("diffuse", request.diffuse),
+      ("shade", request.shade)
     ])
+    try validateFluidSubsteps(request.substeps)
 
     var arguments = [
       "cargo",
@@ -920,6 +938,12 @@ enum RustBridgePlaceholder {
       cliNumber(request.advect),
       "--reinject",
       cliNumber(request.reinject),
+      "--substeps",
+      String(request.substeps),
+      "--diffuse",
+      cliNumber(request.diffuse),
+      "--shade",
+      cliNumber(request.shade),
       "--backend",
       request.backend.cliValue
     ]
@@ -946,8 +970,11 @@ enum RustBridgePlaceholder {
     try validateFluidSequenceFrames(request.frames, frameRate: request.frameRate)
     try validateFluidNumbers([
       ("advect", request.advect),
-      ("reinject", request.reinject)
+      ("reinject", request.reinject),
+      ("diffuse", request.diffuse),
+      ("shade", request.shade)
     ])
+    try validateFluidSubsteps(request.substeps)
 
     var arguments = [
       "cargo",
@@ -969,6 +996,12 @@ enum RustBridgePlaceholder {
       cliNumber(request.advect),
       "--reinject",
       cliNumber(request.reinject),
+      "--substeps",
+      String(request.substeps),
+      "--diffuse",
+      cliNumber(request.diffuse),
+      "--shade",
+      cliNumber(request.shade),
       "--backend",
       request.backend.cliValue
     ]
@@ -3668,6 +3701,13 @@ enum RustBridgePlaceholder {
     }
   }
 
+  // Mirrors the CLI bound (0 = auto, explicit counts up to FLUID_ADVECT_MAX_SUBSTEPS).
+  private static func validateFluidSubsteps(_ substeps: Int) throws {
+    guard (0...64).contains(substeps) else {
+      throw RustBridgeError.invalidFrameSequenceRequest("substeps must be between 0 and 64")
+    }
+  }
+
   private static func runCommand(
     arguments: [String],
     currentDirectoryURL: URL
@@ -3802,6 +3842,13 @@ struct FluidAdvectSequenceRenderQueueCommandRequest {
   let seed: UInt64
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  // v3 shader-look knobs; defaulted off/auto so call sites predating them
+  // keep their meaning.
+  var substeps = 0
+  var reinjectBlotch = 0.0
+  var warp = 0.0
+  var diffuse = 0.0
+  var shade = 0.0
   // Modulation-matrix routes; defaulted off so call sites predating the
   // stateful exposure keep their unmodulated meaning.
   var modulationRoutes: [ModulationRouteSpec] = []
@@ -3822,6 +3869,10 @@ struct FluidAdvectTwoSourceSequenceRenderQueueCommandRequest {
   let reinject: Double
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  // v2 knobs; defaulted off/auto so call sites predating them keep their meaning.
+  var substeps = 0
+  var diffuse = 0.0
+  var shade = 0.0
   var modulationRoutes: [ModulationRouteSpec] = []
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil
@@ -3839,6 +3890,10 @@ struct OpticalFlowAdvectSequenceRenderQueueCommandRequest {
   let reinject: Double
   let backend: FeedbackRenderBackendOption
   let projectURL: URL?
+  // v2 knobs; defaulted off/auto so call sites predating them keep their meaning.
+  var substeps = 0
+  var diffuse = 0.0
+  var shade = 0.0
   var modulationRoutes: [ModulationRouteSpec] = []
   var modulatorAudioURL: URL? = nil
   var modulatorFramesURL: URL? = nil

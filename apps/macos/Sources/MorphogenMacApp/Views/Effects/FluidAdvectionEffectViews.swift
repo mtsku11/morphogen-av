@@ -87,6 +87,41 @@ struct FluidAdvectionDetailView: View {
           .frame(width: 140, alignment: .leading)
         }
 
+        // v3/v2 shader-look knobs. Substeps 0 = auto (the echo-ring fix);
+        // diffuse and shade apply to every dye mode. Not used by Particles.
+        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+          Stepper(value: $state.fluidSubsteps, in: 0...64, step: 1) {
+            Text(state.fluidSubsteps == 0 ? "Substeps auto" : "Substeps \(state.fluidSubsteps)")
+          }
+          .frame(width: 160, alignment: .leading)
+
+          Stepper(value: $state.fluidDiffuse, in: 0...1, step: 0.05) {
+            Text("Diffuse \(state.fluidDiffuse, specifier: "%.2f")")
+          }
+          .frame(width: 150, alignment: .leading)
+
+          Stepper(value: $state.fluidShade, in: 0...1, step: 0.05) {
+            Text("Shade \(state.fluidShade, specifier: "%.2f")")
+          }
+          .frame(width: 140, alignment: .leading)
+        }
+        .disabled(mode == .particles)
+
+        // Procedural-field-only looks: patchy reinjection and detail-octave warp
+        // (the flow-driven modes have no turbulence field to gate or fold).
+        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+          Stepper(value: $state.fluidReinjectBlotch, in: 0...1, step: 0.05) {
+            Text("Blotch \(state.fluidReinjectBlotch, specifier: "%.2f")")
+          }
+          .frame(width: 145, alignment: .leading)
+
+          Stepper(value: $state.fluidWarp, in: 0...3, step: 0.1) {
+            Text("Warp \(state.fluidWarp, specifier: "%.1f")")
+          }
+          .frame(width: 130, alignment: .leading)
+        }
+        .disabled(mode != .procedural)
+
         HStack(spacing: EffectDetailLayout.controlRowSpacing) {
           Stepper(value: $state.fieldParticleSpacing, in: 1...64, step: 1) {
             Text("Spacing \(state.fieldParticleSpacing)")

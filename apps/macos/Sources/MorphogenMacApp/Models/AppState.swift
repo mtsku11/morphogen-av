@@ -164,6 +164,14 @@ final class AppState: ObservableObject {
   @Published var fluidTurbulenceSpeed = 0.06
   @Published var fluidDetail = 0.1
   @Published var fluidSeed = 0
+  // v3/v2 shader-look knobs. Substeps/diffuse/shade apply to all fluid modes;
+  // blotch and warp are procedural-field-only (the flow-driven modes have no
+  // turbulence field to warp or blotch against).
+  @Published var fluidSubsteps = 0
+  @Published var fluidReinjectBlotch = 0.0
+  @Published var fluidWarp = 0.0
+  @Published var fluidDiffuse = 0.0
+  @Published var fluidShade = 0.0
   @Published var fieldParticleSpacing = 8
   @Published var fieldParticleSize = 8
   @Published var fieldParticleAdvect = 6.0
@@ -2063,6 +2071,11 @@ final class AppState: ObservableObject {
       seed: UInt64(max(0, fluidSeed)),
       backend: fluidBackend,
       projectURL: projectURL,
+      substeps: fluidSubsteps,
+      reinjectBlotch: fluidReinjectBlotch,
+      warp: fluidWarp,
+      diffuse: fluidDiffuse,
+      shade: fluidShade,
       modulationRoutes: routes,
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
@@ -2122,6 +2135,9 @@ final class AppState: ObservableObject {
       reinject: fluidReinject,
       backend: fluidBackend,
       projectURL: projectURL,
+      substeps: fluidSubsteps,
+      diffuse: fluidDiffuse,
+      shade: fluidShade,
       modulationRoutes: routes,
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,
@@ -2176,6 +2192,9 @@ final class AppState: ObservableObject {
       reinject: fluidReinject,
       backend: fluidBackend,
       projectURL: projectURL,
+      substeps: fluidSubsteps,
+      diffuse: fluidDiffuse,
+      shade: fluidShade,
       modulationRoutes: routes,
       modulatorAudioURL: fluidModulatorAudioURL,
       modulatorFramesURL: fluidModulatorFramesURL,

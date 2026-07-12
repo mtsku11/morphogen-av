@@ -1030,6 +1030,74 @@ final class RustBridgePlaceholderTests: XCTestCase {
     XCTAssertTrue(motionArguments.contains("--modulator-frames"))
   }
 
+  func testQueuedFluidAdvectArgumentsCarryShaderLookKnobs() throws {
+    // Procedural: all five v3 knobs are emitted (0 = auto substeps still emits).
+    var proceduralRequest = FluidAdvectSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-queue.json"),
+      sourceDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/fluid", isDirectory: true),
+      frames: 24,
+      frameRate: 24.0,
+      advect: 12.0,
+      turbulenceScale: 0.008,
+      turbulenceSpeed: 0.06,
+      detail: 0.1,
+      reinject: 0.05,
+      seed: 0,
+      backend: .cpu,
+      projectURL: nil
+    )
+    proceduralRequest.substeps = 4
+    proceduralRequest.reinjectBlotch = 0.75
+    proceduralRequest.warp = 1.5
+    proceduralRequest.diffuse = 0.25
+    proceduralRequest.shade = 0.5
+    let proceduralArguments =
+      try RustBridgePlaceholder.queueAddFluidAdvectSequenceArguments(request: proceduralRequest)
+    XCTAssertTrue(proceduralArguments.contains("--substeps"))
+    XCTAssertTrue(proceduralArguments.contains("4"))
+    XCTAssertTrue(proceduralArguments.contains("--reinject-blotch"))
+    XCTAssertTrue(proceduralArguments.contains("0.75"))
+    XCTAssertTrue(proceduralArguments.contains("--warp"))
+    XCTAssertTrue(proceduralArguments.contains("1.5"))
+    XCTAssertTrue(proceduralArguments.contains("--diffuse"))
+    XCTAssertTrue(proceduralArguments.contains("0.25"))
+    XCTAssertTrue(proceduralArguments.contains("--shade"))
+    XCTAssertTrue(proceduralArguments.contains("0.5"))
+
+    // Two-source (and the self-flow sibling) carry the v2 subset.
+    var twoSourceRequest = FluidAdvectTwoSourceSequenceRenderQueueCommandRequest(
+      queueURL: URL(fileURLWithPath: "/tmp/fluid-two-source-queue.json"),
+      modulatorDirectoryURL: URL(fileURLWithPath: "/tmp/source-a-frames", isDirectory: true),
+      carrierDirectoryURL: URL(fileURLWithPath: "/tmp/source-b-frames", isDirectory: true),
+      outputRootDirectoryURL: URL(fileURLWithPath: "/tmp/output-root/fluid-ab", isDirectory: true),
+      frames: 24,
+      frameRate: 24.0,
+      advect: 1.5,
+      reinject: 0.08,
+      backend: .cpu,
+      projectURL: nil
+    )
+    twoSourceRequest.substeps = 6
+    twoSourceRequest.diffuse = 0.25
+    twoSourceRequest.shade = 0.5
+    let twoSourceArguments = try RustBridgePlaceholder.queueAddFluidAdvectTwoSourceSequenceArguments(
+      request: twoSourceRequest
+    )
+    XCTAssertTrue(twoSourceArguments.contains("--substeps"))
+    XCTAssertTrue(twoSourceArguments.contains("6"))
+    XCTAssertTrue(twoSourceArguments.contains("--diffuse"))
+    XCTAssertTrue(twoSourceArguments.contains("0.25"))
+    XCTAssertTrue(twoSourceArguments.contains("--shade"))
+    XCTAssertTrue(twoSourceArguments.contains("0.5"))
+
+    // Out-of-range substeps are rejected before any process is spawned.
+    twoSourceRequest.substeps = 65
+    XCTAssertThrowsError(
+      try RustBridgePlaceholder.queueAddFluidAdvectTwoSourceSequenceArguments(request: twoSourceRequest)
+    )
+  }
+
   func testQueuedPixelSortSequenceArgumentsCarryModulationRoutesAndRequireMedia() throws {
     var request = PixelSortSequenceRenderQueueCommandRequest(
       queueURL: URL(fileURLWithPath: "/tmp/pixel-sort-queue.json"),
