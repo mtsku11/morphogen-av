@@ -3684,6 +3684,7 @@ final class AppState: ObservableObject {
       && channelShiftSourceADirectoryURL == nil {
       statusMessage =
         "Select matte frames (or a Source A directory) before rendering a matted channel shift."
+      failPreviewIfNeeded(message: statusMessage)
       return
     }
     guard let routes = modulationRoutes(
@@ -3788,6 +3789,7 @@ final class AppState: ObservableObject {
     // be chosen explicitly.
     if paletteQuantizeMatteSource != .off && paletteQuantizeMatteFramesURL == nil {
       statusMessage = "Select matte frames before rendering a matted palette quantize."
+      failPreviewIfNeeded(message: statusMessage)
       return
     }
     let modeMapping = enumModulationMapping(
@@ -3886,6 +3888,7 @@ final class AppState: ObservableObject {
     if ruttEtraMatteSource != .off && ruttEtraMatteFramesURL == nil && sourceADirectoryURL == nil {
       statusMessage =
         "Select matte frames (or turn on Two-Source) before rendering a matted rutt-etra."
+      failPreviewIfNeeded(message: statusMessage)
       return
     }
     guard let routes = modulationRoutes(
@@ -4241,6 +4244,7 @@ final class AppState: ObservableObject {
     let carrierCentroidCacheURL = centroidEnabled ? sourceBSTFTCacheURL : nil
     if centroidEnabled && (modulatorCentroidCacheURL == nil || carrierCentroidCacheURL == nil) {
       statusMessage = "Extract source proxies first to generate the STFT caches spectral-centroid matching needs, or turn off Spectral Centroid."
+      failPreviewIfNeeded(message: statusMessage)
       return
     }
 
