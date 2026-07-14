@@ -523,6 +523,76 @@ pub fn count_p_frames(bytes: &[u8]) -> Result<u32, MediaError> {
     Ok(layout.chunks.len().saturating_sub(1) as u32)
 }
 
+/// Run every video chunk's payload through `edit` and rebuild the AVI around the
+/// results. `edit` receives `(video_frame_index, is_keyframe, payload)` and returns
+/// `None` to keep the original payload or `Some(new_payload)` to replace it (sizes
+/// may differ — the movi list, idx1 index, and frame-count headers are rebuilt).
+/// This is the container half of the MPEG-4 motion-vector surgery in [`crate::mpeg4`].
+pub(crate) fn edit_video_chunks<F>(bytes: &[u8], mut edit: F) -> Result<Vec<u8>, MediaError>
+where
+    F: FnMut(usize, bool, &[u8]) -> Result<Option<Vec<u8>>, MediaError>,
+{
+    let layout = parse(bytes)?;
+
+    let mut out_chunks: Vec<OutChunk> = Vec::with_capacity(layout.chunks.len());
+    let mut movi_data: Vec<u8> = Vec::new();
+
+    for (index, chunk) in layout.chunks.iter().enumerate() {
+        let data_start = chunk.start + 8;
+        let payload = bytes
+            .get(data_start..data_start + chunk.data_size as usize)
+            .ok_or_else(|| {
+                MediaError::MalformedAvi(format!("video chunk {index} runs past end of file"))
+            })?;
+        match edit(index, chunk.keyframe, payload)? {
+            Some(new_payload) => {
+                movi_data.extend_from_slice(&chunk.fourcc);
+                movi_data.extend_from_slice(&(new_payload.len() as u32).to_le_bytes());
+                movi_data.extend_from_slice(&new_payload);
+                if new_payload.len() % 2 == 1 {
+                    movi_data.push(0);
+                }
+                out_chunks.push(OutChunk {
+                    fourcc: chunk.fourcc,
+                    data_size: new_payload.len() as u32,
+                    total_len: 8 + padded_len(new_payload.len()),
+                    keyframe: chunk.keyframe,
+                });
+            }
+            None => {
+                movi_data.extend_from_slice(&bytes[chunk.start..chunk.start + chunk.total_len]);
+                out_chunks.push(OutChunk {
+                    fourcc: chunk.fourcc,
+                    data_size: chunk.data_size,
+                    total_len: chunk.total_len,
+                    keyframe: chunk.keyframe,
+                });
+            }
+        }
+    }
+
+    rebuild_avi(bytes, &layout, &out_chunks, &movi_data)
+}
+
+/// Borrow every video chunk payload (in movi order) without copying. Used by the
+/// MPEG-4 layer to locate the VOL header in the first chunk before editing.
+pub(crate) fn video_chunk_payloads(bytes: &[u8]) -> Result<Vec<&[u8]>, MediaError> {
+    let layout = parse(bytes)?;
+    layout
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let data_start = chunk.start + 8;
+            bytes
+                .get(data_start..data_start + chunk.data_size as usize)
+                .ok_or_else(|| {
+                    MediaError::MalformedAvi(format!("video chunk {index} runs past end of file"))
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

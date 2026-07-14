@@ -506,12 +506,61 @@ guards this with an `avi_dimensions` equality check).
   carrier transcode's 3.94 — A's motion is more energetic than B's gentle zoom).
   Read-confirmed: B's appearance, A's motion.
 
+## Real bitstream MV remix — pure-Rust MPEG-4 MV editing (IN FLIGHT)
+
+The previously-deferred "true codec artifact" tier, green-lit 2026-07-13 after the
+user asked for ffglitch-core's effects. FFglitch itself is a **GPL fork of FFmpeg**,
+so extracting its code violates the no-vendored-FFmpeg / no-GPL invariant; instead
+we implement the same signature effects with a **pure-Rust MPEG-4 Part 2 P-VOP
+parser** that decodes, edits, and re-encodes the macroblock layer's motion vectors,
+extending the existing `datamosh-bitstream` carve-out CLI.
+
+**Scope.** Exactly the substrate the tier already standardizes on: FFmpeg's LGPL
+`mpeg4` encoder output (`-c:v mpeg4 -bf 0 -g 999999 -sc_threshold 0 -an`, AVI).
+That means MPEG-4 Simple Profile, rectangular VOL, progressive, no B-VOPs, single
+video packet per VOP. The parser must **reject with a clear error** any syntax it
+does not support: quarter-pel, GMC/sprite, data partitioning, reversible VLC,
+interlace, resync markers mid-VOP, scalability, complexity estimation, short
+header. Intra macroblocks inside P-VOPs (the encoder emits them when inter
+prediction is poor) **must** be supported, including intra DC/AC coding and
+`ac_pred_flag`. 1MV and 4MV (`+mv4`) inter macroblocks both supported.
+
+**Module.** `crates/morphogen-media/src/mpeg4/` — bit reader/writer, VLC tables
+(P/I-MCBPC, CBPY, MV, inter+intra TCOEF, DC size; values are ISO/IEC 14496-2
+interoperability constants, independently implemented in Rust), VOL/VOP header
+parse, full P-VOP macroblock-layer parse to structured MBs + re-emit. No
+`unwrap()`; `thiserror` via `MediaError`.
+
+**Operations** (new `datamosh-bitstream --operation` variants, each editing every
+P-VOP's motion vectors then re-encoding differentials against recomputed median
+predictors, clamped to the VOP's `fcode` range):
+- `mv-zero` — all MVs → 0 (freeze/ghost drift; residuals keep painting).
+- `mv-pan --mv-pan-x N --mv-pan-y N` — constant half-pel offset (the classic pan).
+- `mv-scale --mv-scale F` — amplify (>1), dampen (<1), or invert (<0) motion.
+- `mv-sink` — replace each MV with the running average of all MVs seen so far
+  (ffglitch's "average motion" melt).
+- `mv-sine --mv-sine-amp A --mv-sine-period P` — position-dependent sinusoidal
+  warp across the macroblock grid.
+
+**Acceptance criteria.**
+1. **Bit-exact round-trip**: parse → re-emit with no edits reproduces every video
+   chunk of a real FFmpeg-encoded fixture **byte-identical** (the ground-truth
+   gate for the VLC tables and syntax coverage; runs in `cargo test` when the
+   fixture can be generated, with pure-Rust synthetic tests alongside).
+2. **Off-vs-on decode**: for each operation, decode off (identity re-emit) vs on
+   with ffmpeg, Read frames, report the `frame-delta.py` numbers.
+3. Identity parameters (pan 0/0, scale 1.0) are the exact off case.
+4. Same carve-out as the rest of the tier: the **surgery is deterministic and
+   unit-tested**; the decoded look depends on the external codec
+   (`deterministic: false` sidecar, no queue-graph/SwiftUI/parity obligations —
+   queue add/run wrappers follow the existing bitstream pattern only).
+
 ## Deferred
 
-- **Real bitstream MV remix (the *true* codec artifact)**: sort/shuffle/fluid applied
-  to the actual MPEG-4 motion vectors (not the optical-flow approximation the
-  deterministic vector-remix tier delivers) genuinely needs FFglitch-class
-  packet/vector tooling or a pure-Rust MPEG-4 MV codec — deliberately not pursued
-  (see the vector-remix user decision + `/memory/datamosh-real-vs-simulated.md`).
+- **DCT-coefficient glitching** (ffglitch's rainbow-block noise): the same parser
+  already walks TCOEF blocks, so a later slice can expose coefficient edits;
+  deliberately out of scope for the MV milestone.
+- **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
+  always fresh, no melt); a second mode if a use case shows it mattering.
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.

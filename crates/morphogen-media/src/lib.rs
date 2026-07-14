@@ -5,11 +5,13 @@ pub mod avi;
 pub mod error;
 pub mod extract;
 pub mod ffmpeg;
+pub mod mpeg4;
 pub mod probe;
 
 pub use avi::{
     avi_dimensions, count_p_frames, duplicate_p_frame, remove_leading_keyframe, transfer_motion,
 };
+pub use mpeg4::{remix_motion_vectors, verify_roundtrip, MvEditStats, MvOperation};
 pub use error::MediaError;
 pub use extract::{
     decode_avi_frames, encode_datamosh_avi, encode_datamosh_avi_scaled, extract_audio_wav,

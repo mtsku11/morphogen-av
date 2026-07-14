@@ -16,6 +16,8 @@ pub enum MediaError {
     Json(#[from] serde_json::Error),
     #[error("malformed AVI bitstream: {0}")]
     MalformedAvi(String),
+    #[error("malformed or unsupported MPEG-4 bitstream: {0}")]
+    MalformedMpeg4(String),
     #[error("invalid datamosh request: {0}")]
     InvalidRequest(String),
 }
