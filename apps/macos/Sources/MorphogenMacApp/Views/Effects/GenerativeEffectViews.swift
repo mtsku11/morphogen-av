@@ -16,25 +16,15 @@ struct MorphogenesisDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .morphogenesis)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Preset", selection: $state.morphogenesisPreset) {
-          ForEach(MorphogenesisPresetOption.allCases) { preset in
-            Text(preset.rawValue).tag(preset)
-          }
-        }
-        .frame(width: 160)
-        .help("Named (feed, kill) atlas points — most of that space is dead (uniform grey).")
+      ControlFlow {
+        OptionKnob("Preset", selection: $state.morphogenesisPreset)
+          .help("Named (feed, kill) atlas points — most of that space is dead (uniform grey).")
 
-        Picker("Output", selection: $state.morphogenesisOutputView) {
-          ForEach(MorphogenesisOutputViewOption.allCases) { view in
-            Text(view.rawValue).tag(view)
-          }
-        }
-        .frame(width: 160)
-        .help(
-          "Composite: the pattern-mix/displace look. Field: the raw V field, greyscale — "
-            + "the composite knobs below stay legal but inert in this view."
-        )
+        OptionKnob("Output", selection: $state.morphogenesisOutputView)
+          .help(
+            "Composite: the pattern-mix/displace look. Field: the raw V field, greyscale — "
+              + "the composite knobs below stay legal but inert in this view."
+          )
 
         Stepper(value: $state.morphogenesisPatternMix, in: 0...1, step: 0.05) {
           Text("Pattern Mix \(state.morphogenesisPatternMix, specifier: "%.2f")")
@@ -47,33 +37,21 @@ struct MorphogenesisDetailView: View {
         }
         .frame(width: 150, alignment: .leading)
         .help("Pixel displacement pushing the carrier sample along the growth gradient.")
-      }
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Model", selection: $state.morphogenesisModel) {
-          ForEach(MorphogenesisModelOption.allCases) { model in
-            Text(model.rawValue).tag(model)
-          }
-        }
-        .frame(width: 190)
-        .help(
-          "Gray-Scott: patterns that grow and settle. FitzHugh-Nagumo: an excitable medium — "
-            + "travelling pulse waves, never settles. FHN knobs below stay legal but inert "
-            + "in Gray-Scott."
-        )
+        OptionKnob("Model", selection: $state.morphogenesisModel)
+          .help(
+            "Gray-Scott: patterns that grow and settle. FitzHugh-Nagumo: an excitable medium — "
+              + "travelling pulse waves, never settles. FHN knobs below stay legal but inert "
+              + "in Gray-Scott."
+          )
 
-        Picker("FHN Preset", selection: $state.morphogenesisFhnPreset) {
-          ForEach(FhnPresetOption.allCases) { preset in
-            Text(preset.rawValue).tag(preset)
-          }
-        }
-        .frame(width: 170)
-        .disabled(state.morphogenesisModel != .fitzhughNagumo)
-        .help("Pulse: fires and dies out. Spiral: self-sustaining rotors. Labyrinth: standing structure.")
+        OptionKnob("FHN Preset", selection: $state.morphogenesisFhnPreset)
+          .disabled(state.morphogenesisModel != .fitzhughNagumo)
+          .help("Pulse: fires and dies out. Spiral: self-sustaining rotors. Labyrinth: standing structure.")
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Stepper(value: $state.morphogenesisPatternHue, in: 0...1, step: 0.02) {
             Text("Hue \(state.morphogenesisPatternHue, specifier: "%.2f")")
           }
@@ -81,22 +59,16 @@ struct MorphogenesisDetailView: View {
           .disabled(state.morphogenesisPatternColorMode == .inherit)
           .help("Fixed tint hue (turns); ignored in Inherit mode.")
 
-          Picker("Colour", selection: $state.morphogenesisPatternColorMode) {
-            ForEach(MorphogenesisColorModeOption.allCases) { mode in
-              Text(mode.rawValue).tag(mode)
-            }
-          }
-          .frame(width: 160)
-          .help("Hue tints toward a fixed colour; Inherit tints toward the sample's own hue.")
+          OptionKnob("Colour", selection: $state.morphogenesisPatternColorMode)
+            .help("Hue tints toward a fixed colour; Inherit tints toward the sample's own hue.")
 
           Stepper(value: $state.morphogenesisParamMapStrength, in: 0...4, step: 0.1) {
             Text("Param Map \(state.morphogenesisParamMapStrength, specifier: "%.2f")")
           }
           .frame(width: 170, alignment: .leading)
           .help("Strength of the carrier-luma-driven (feed, kill) shift; 0 = uniform chemistry.")
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Stepper(value: $state.morphogenesisSeedThreshold, in: 0...1, step: 0.05) {
             Text("Seed Threshold \(state.morphogenesisSeedThreshold, specifier: "%.2f")")
           }
@@ -114,9 +86,8 @@ struct MorphogenesisDetailView: View {
           }
           .frame(width: 150, alignment: .leading)
           .help("Gray-Scott substeps per output frame; 0 freezes the field at its seed.")
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Stepper(value: $state.morphogenesisInject, in: 0...1, step: 0.01) {
             Text("Inject \(state.morphogenesisInject, specifier: "%.2f")")
           }
@@ -130,13 +101,8 @@ struct MorphogenesisDetailView: View {
           .help("Per-frame V sink strength (the same weight field as Inject); 0 = off.")
 
           if state.morphogenesisInject > 0 {
-            Picker("Inject Source", selection: $state.morphogenesisInjectSource) {
-              ForEach(MorphogenesisInjectSourceOption.allCases) { source in
-                Text(source.rawValue).tag(source)
-              }
-            }
-            .frame(width: 190)
-            .help("Which weight field Inject/Erode read: bright regions (Luma) or motion.")
+            OptionKnob("Inject Source", selection: $state.morphogenesisInjectSource)
+              .help("Which weight field Inject/Erode read: bright regions (Luma) or motion.")
           }
 
           Stepper(value: $state.morphogenesisCoverageTarget, in: 0...1, step: 0.05) {
@@ -144,9 +110,8 @@ struct MorphogenesisDetailView: View {
           }
           .frame(width: 200, alignment: .leading)
           .help("Homeostat target for mean(V); 0 = off (no coverage feedback).")
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Stepper(value: $state.morphogenesisShade, in: 0...1, step: 0.05) {
             Text("Shade \(state.morphogenesisShade, specifier: "%.2f")")
           }
@@ -164,9 +129,8 @@ struct MorphogenesisDetailView: View {
           }
           .frame(width: 190, alignment: .leading)
           .help("Light azimuth, turns (wraps).")
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Stepper(value: $state.morphogenesisShadeElevation, in: 0...0.25, step: 0.01) {
             Text("Shade Elevation \(state.morphogenesisShadeElevation, specifier: "%.2f")")
           }
@@ -184,9 +148,8 @@ struct MorphogenesisDetailView: View {
           }
           .frame(width: 150, alignment: .leading)
           .help("Specular exponent (Phong shininess).")
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Stepper(value: $state.morphogenesisFhnEpsilon, in: 0.01...0.5, step: 0.01) {
             Text("Epsilon \(state.morphogenesisFhnEpsilon, specifier: "%.2f")")
           }
@@ -439,7 +402,7 @@ struct GranularMosaicDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .granularMosaic)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.granularPoolGrainSize, in: 4...256, step: 4) {
           Text("Grain \(state.granularPoolGrainSize)px")
         }
@@ -455,7 +418,7 @@ struct GranularMosaicDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Stepper(value: $state.granularPoolVariation, in: 0...1, step: 0.05) {
             Text("Variation \(state.granularPoolVariation, specifier: "%.2f")")
           }
@@ -488,7 +451,7 @@ struct GranularMosaicDetailView: View {
         }
         .frame(width: 230, alignment: .leading)
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Stepper(value: $state.granularPoolAntiRepeatWeight, in: 0...8, step: 0.1) {
             Text("Anti-Repeat \(state.granularPoolAntiRepeatWeight, specifier: "%.1f")")
           }
@@ -499,9 +462,8 @@ struct GranularMosaicDetailView: View {
           }
           .frame(width: 170, alignment: .leading)
           .disabled(state.granularPoolAntiRepeatWeight <= 0)
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Stepper(value: $state.granularPoolCoherenceWeight, in: 0...8, step: 0.1) {
             Text("Coherence \(state.granularPoolCoherenceWeight, specifier: "%.1f")")
           }

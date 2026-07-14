@@ -11,7 +11,7 @@ struct RetroStaticDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .retroStatic)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Picker("Filter", selection: $state.retroStaticFilter) {
           ForEach(RetroStaticFilterOption.allCases) { filter in
             Text(filter.rawValue).tag(filter)
@@ -27,7 +27,7 @@ struct RetroStaticDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Picker("Backend", selection: $state.retroStaticBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
               Text(backend.rawValue).tag(backend)
@@ -109,7 +109,7 @@ struct ChannelShiftDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .channelShift)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.channelShiftRX, in: -64...64, step: 1) {
           Text("R X \(state.channelShiftRX, specifier: "%.0f")px")
         }
@@ -124,9 +124,8 @@ struct ChannelShiftDetailView: View {
           Text("B X \(state.channelShiftBX, specifier: "%.0f")px")
         }
         .frame(width: 150, alignment: .leading)
-      }
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
         Stepper(value: $state.channelShiftRY, in: -64...64, step: 1) {
           Text("R Y \(state.channelShiftRY, specifier: "%.0f")px")
         }
@@ -141,9 +140,8 @@ struct ChannelShiftDetailView: View {
           Text("B Y \(state.channelShiftBY, specifier: "%.0f")px")
         }
         .frame(width: 150, alignment: .leading)
-      }
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
         Stepper(value: $state.channelShiftFlowGain, in: -16...16, step: 0.5) {
           Text("Flow Gain \(state.channelShiftFlowGain, specifier: "%.1f")")
         }
@@ -289,7 +287,7 @@ struct PaletteQuantizeDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .paletteQuantize)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Picker("Mode", selection: $state.paletteQuantizeMode) {
           ForEach(PaletteQuantizeModeOption.allCases) { mode in
             Text(mode.rawValue).tag(mode)
@@ -390,32 +388,15 @@ struct PixelSortDetailView: View {
       EffectTitleView(listing: .pixelSort)
         .help("Threshold-bounded pixel sorting. A drives the sortability mask in cross-synth modes; B provides the sorted content.")
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Axis", selection: $state.pixelSortAxis) {
-          ForEach(PixelSortAxisOption.allCases) { opt in
-            Text(opt.rawValue).tag(opt)
-          }
-        }
-        .frame(width: 130)
-        .help("Row = horizontal streaks, Col = vertical.")
+      ControlFlow {
+        OptionKnob("Axis", selection: $state.pixelSortAxis)
+          .help("Row = horizontal streaks, Col = vertical.")
 
-        Picker("Key", selection: $state.pixelSortKey) {
-          ForEach(PixelSortKeyOption.allCases) { opt in
-            Text(opt.rawValue).tag(opt)
-          }
-        }
-        .frame(width: 130)
-        .help("Sort key used to order pixels within each span.")
+        OptionKnob("Key", selection: $state.pixelSortKey)
+          .help("Sort key used to order pixels within each span.")
 
-        Picker("Dir", selection: $state.pixelSortDirection) {
-          ForEach(PixelSortDirectionOption.allCases) { opt in
-            Text(opt.rawValue).tag(opt)
-          }
-        }
-        .frame(width: 100)
-      }
+        OptionKnob("Dir", selection: $state.pixelSortDirection)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
         Stepper(value: $state.pixelSortThresholdLow, in: 0...1, step: 0.05) {
           Text("Low \(state.pixelSortThresholdLow, specifier: "%.2f")")
         }
@@ -430,7 +411,7 @@ struct PixelSortDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Button {
             state.choosePixelSortModulatorDirectory()
           } label: {

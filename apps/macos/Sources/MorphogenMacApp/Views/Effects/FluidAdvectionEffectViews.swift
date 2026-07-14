@@ -33,7 +33,7 @@ struct FluidAdvectionDetailView: View {
       .pickerStyle(.segmented)
       .frame(width: 420)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.fluidReinject, in: 0...1, step: 0.01) {
           Text("Reinject \(state.fluidReinject, specifier: "%.2f")")
         }
@@ -55,7 +55,7 @@ struct FluidAdvectionDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Picker("Backend", selection: $state.fluidBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
               Text(backend.rawValue).tag(backend)
@@ -68,9 +68,8 @@ struct FluidAdvectionDetailView: View {
             Text("Seed \(state.fluidSeed)")
           }
           .frame(width: 130, alignment: .leading)
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Stepper(value: $state.fluidTurbulenceScale, in: 0...0.05, step: 0.001) {
             Text("Turb Scale \(state.fluidTurbulenceScale, specifier: "%.3f")")
           }
@@ -89,7 +88,7 @@ struct FluidAdvectionDetailView: View {
 
         // v3/v2 shader-look knobs. Substeps 0 = auto (the echo-ring fix);
         // diffuse and shade apply to every dye mode. Not used by Particles.
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Stepper(value: $state.fluidSubsteps, in: 0...64, step: 1) {
             Text(state.fluidSubsteps == 0 ? "Substeps auto" : "Substeps \(state.fluidSubsteps)")
           }
@@ -109,7 +108,7 @@ struct FluidAdvectionDetailView: View {
 
         // Procedural-field-only looks: patchy reinjection and detail-octave warp
         // (the flow-driven modes have no turbulence field to gate or fold).
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Stepper(value: $state.fluidReinjectBlotch, in: 0...1, step: 0.05) {
             Text("Blotch \(state.fluidReinjectBlotch, specifier: "%.2f")")
           }
@@ -122,7 +121,7 @@ struct FluidAdvectionDetailView: View {
         }
         .disabled(state.fluidMode != .procedural)
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Stepper(value: $state.fieldParticleSpacing, in: 1...64, step: 1) {
             Text("Spacing \(state.fieldParticleSpacing)")
           }

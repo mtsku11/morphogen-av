@@ -43,18 +43,16 @@ struct ModulationSlotRow: View {
   var midiCcNumber: Binding<Int>? = nil
 
   var body: some View {
-    HStack(spacing: 16) {
-      Picker("Mod \(label)", selection: $source) {
-        ForEach(
-          ModulationSourceOption.allCases.filter {
-            ($0 != .lfo || lfoShape != nil) && ($0 != .captured || captureAvailable)
-              && (!$0.isMidi || midiAvailable)
-          }
-        ) { option in
-          Text(option.rawValue).tag(option)
-        }
-      }
-      .frame(width: 280)
+    ControlFlow {
+      OptionKnob(
+        label: "Mod \(label)",
+        selection: $source,
+        options: ModulationSourceOption.allCases.filter {
+          ($0 != .lfo || lfoShape != nil) && ($0 != .captured || captureAvailable)
+            && (!$0.isMidi || midiAvailable)
+        },
+        optionLabel: { $0.rawValue }
+      )
       .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
 
       if source != .off {
@@ -73,13 +71,8 @@ struct ModulationSlotRow: View {
           .help("MIDI controller number this slot reads (route: midi-cc(<n>)).")
         }
         if source == .lfo, let lfoShape, let lfoRate, let lfoPhase {
-          Picker("Shape", selection: lfoShape) {
-            ForEach(LfoShapeOption.allCases) { option in
-              Text(option.rawValue).tag(option)
-            }
-          }
-          .frame(width: 160)
-          .help("LFO waveform; every shape spans [0, 1] and starts at 0.")
+          OptionKnob("Shape", selection: lfoShape)
+            .help("LFO waveform; every shape spans [0, 1] and starts at 0.")
 
           Stepper(value: lfoRate, in: 0.05...60, step: 0.05) {
             Text("Rate \(lfoRate.wrappedValue, specifier: "%.2f") Hz")
@@ -93,13 +86,12 @@ struct ModulationSlotRow: View {
           .frame(width: 150, alignment: .leading)
           .help("Phase offset in cycles (0.25 = a quarter cycle).")
         } else if source != .captured, let modulator, !modulatorNames.isEmpty {
-          Picker("Modulator", selection: modulator) {
-            Text("Default").tag("")
-            ForEach(modulatorNames, id: \.self) { name in
-              Text(name).tag(name)
-            }
-          }
-          .frame(width: 180)
+          OptionKnob(
+            label: "Modulator",
+            selection: modulator,
+            options: [""] + modulatorNames,
+            optionLabel: { $0.isEmpty ? "Default" : $0 }
+          )
           .help("Which modulator media this route reads; Default uses the panel's Modulator WAV/Frames.")
         }
 
@@ -114,13 +106,8 @@ struct ModulationSlotRow: View {
         }
         .frame(width: 160, alignment: .leading)
 
-        Picker("Sampling", selection: $samplingOverride) {
-          ForEach(ModulationSamplingOverrideOption.allCases) { option in
-            Text(option.rawValue).tag(option)
-          }
-        }
-        .frame(width: 180)
-        .help("Overrides this route's sampling; Default inherits the panel Sampling picker.")
+        OptionKnob("Sampling", selection: $samplingOverride)
+          .help("Overrides this route's sampling; Default inherits the panel Sampling picker.")
       }
     }
   }
@@ -147,56 +134,40 @@ where
   var modulatorNames: [String] = []
 
   var body: some View {
-    HStack(spacing: 16) {
+    ControlFlow {
       // Enum slots don't opt in to LFO, capture, or MIDI (this slice) — filter all out.
-      Picker("Mod \(label)", selection: $source) {
-        ForEach(
-          ModulationSourceOption.allCases.filter { $0 != .lfo && $0 != .captured && !$0.isMidi }
-        ) { option in
-          Text(option.rawValue).tag(option)
-        }
-      }
-      .frame(width: 280)
+      OptionKnob(
+        label: "Mod \(label)",
+        selection: $source,
+        options: ModulationSourceOption.allCases.filter {
+          $0 != .lfo && $0 != .captured && !$0.isMidi
+        },
+        optionLabel: { $0.rawValue }
+      )
       .help("Analysis envelope routed onto this knob; Off keeps the knob constant.")
 
       if source != .off {
         if let modulator, !modulatorNames.isEmpty {
-          Picker("Modulator", selection: modulator) {
-            Text("Default").tag("")
-            ForEach(modulatorNames, id: \.self) { name in
-              Text(name).tag(name)
-            }
-          }
-          .frame(width: 180)
+          OptionKnob(
+            label: "Modulator",
+            selection: modulator,
+            options: [""] + modulatorNames,
+            optionLabel: { $0.isEmpty ? "Default" : $0 }
+          )
           .help("Which modulator media this route reads; Default uses the panel's Modulator WAV/Frames.")
         }
 
-        Picker("From", selection: $from) {
-          ForEach(Option.allCases) { option in
-            Text(option.rawValue).tag(option)
-          }
-        }
-        .frame(width: 170)
-        .help("Variant selected when the envelope is at 0.")
+        OptionKnob("From", selection: $from)
+          .help("Variant selected when the envelope is at 0.")
 
         Text("→")
           .foregroundStyle(.secondary)
 
-        Picker("To", selection: $to) {
-          ForEach(Option.allCases) { option in
-            Text(option.rawValue).tag(option)
-          }
-        }
-        .frame(width: 150)
-        .help("Variant selected when the envelope is at 1; in between, the envelope steps through the variants From→To.")
+        OptionKnob("To", selection: $to)
+          .help("Variant selected when the envelope is at 1; in between, the envelope steps through the variants From→To.")
 
-        Picker("Sampling", selection: $samplingOverride) {
-          ForEach(ModulationSamplingOverrideOption.allCases) { option in
-            Text(option.rawValue).tag(option)
-          }
-        }
-        .frame(width: 180)
-        .help("Overrides this route's sampling; Default inherits the panel Sampling picker.")
+        OptionKnob("Sampling", selection: $samplingOverride)
+          .help("Overrides this route's sampling; Default inherits the panel Sampling picker.")
       }
     }
   }

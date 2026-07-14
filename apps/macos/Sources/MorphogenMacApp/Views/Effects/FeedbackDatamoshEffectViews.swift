@@ -21,29 +21,17 @@ struct DatamoshDetailView: View {
       EffectTitleView(listing: .datamosh)
         .help("Source A's per-frame optical flow repeatedly advects Source B's previous output — the \"bloom/melt\" look. Keyframes snap back to Source B.")
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Preset", selection: $state.datamoshPreset) {
-          ForEach(DatamoshPresetOption.allCases) { preset in
-            Text(preset.rawValue).tag(preset)
-          }
-        }
-        .frame(width: 220)
-        .help("Curated destructive recipes override the detailed datamosh knobs at render time. Custom uses the controls below.")
+      ControlFlow {
+        OptionKnob("Preset", selection: $state.datamoshPreset)
+          .help("Curated destructive recipes override the detailed datamosh knobs at render time. Custom uses the controls below.")
 
-        Picker("Vector Remix", selection: $state.datamoshVectorRemix) {
-          ForEach(DatamoshVectorRemixOption.allCases) { mode in
-            Text(mode.rawValue).tag(mode)
-          }
-        }
-        .frame(width: 260)
-        .help("FFglitch-style motion-vector remix on the block-MV grid (needs Macroblock Size >= 2). Sort pools motion by magnitude; Shuffle permutes it by the seed. None = off.")
+        OptionKnob("Vector Remix", selection: $state.datamoshVectorRemix)
+          .help("FFglitch-style motion-vector remix on the block-MV grid (needs Macroblock Size >= 2). Sort pools motion by magnitude; Shuffle permutes it by the seed. None = off.")
 
         Toggle("Reuse flow cache", isOn: $state.datamoshReuseFlowCache)
           .toggleStyle(.checkbox)
           .help("Cache Source A's optical flow and reuse it across renders. Changing datamosh knobs (block, amount, preset) then skips recomputing the flow — the slowest per-frame step. Turn off if Source A's content changes without re-extracting.")
-      }
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
         Stepper(value: $state.datamoshKeyframeInterval, in: 0...120, step: 1) {
           Text("Keyframe Interval \(state.datamoshKeyframeInterval)")
         }
@@ -58,7 +46,7 @@ struct DatamoshDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Button {
             state.chooseDatamoshModulatorDirectory()
           } label: {
@@ -74,15 +62,13 @@ struct DatamoshDetailView: View {
           } label: {
             Label("Output Dir", systemImage: "folder")
           }
-        }
 
-        Stepper(value: $state.datamoshBlockSize, in: 1...64, step: 1) {
-          Text("Macroblock Size \(state.datamoshBlockSize)")
-        }
-        .frame(width: 230, alignment: .leading)
-        .help("1 = smooth per-pixel bloom; N >= 2 quantizes A's flow to NxN blocks so whole macroblocks slide (the chunky codec-simulated look).")
+          Stepper(value: $state.datamoshBlockSize, in: 1...64, step: 1) {
+            Text("Macroblock Size \(state.datamoshBlockSize)")
+          }
+          .frame(width: 230, alignment: .leading)
+          .help("1 = smooth per-pixel bloom; N >= 2 quantizes A's flow to NxN blocks so whole macroblocks slide (the chunky codec-simulated look).")
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
           Stepper(value: $state.datamoshResidualGain, in: 0...4, step: 0.1) {
             Text("Residual Gain \(state.datamoshResidualGain, specifier: "%.2f")")
           }
@@ -94,30 +80,30 @@ struct DatamoshDetailView: View {
           }
           .frame(width: 230, alignment: .leading)
           .help("How long discarded motion lingers in the accumulator: 0 = one-frame kick, ->1 = long-lived drift.")
-        }
 
-        Stepper(value: $state.datamoshBlockRefreshThreshold, in: 0...8, step: 0.25) {
-          Text("Block Refresh \(state.datamoshBlockRefreshThreshold, specifier: "%.2f")")
-        }
-        .frame(width: 230, alignment: .leading)
-        .help("Per-block keep/drop: macroblocks whose mean motion is below this snap back to the carrier (intra-block refresh) while busier blocks rot. 0 = no per-block refresh; needs Macroblock Size >= 2.")
-
-        if state.datamoshVectorRemix == .shuffle {
-          Stepper(value: $state.datamoshRemixSeed, in: 0...9999, step: 1) {
-            Text("Remix Seed \(state.datamoshRemixSeed)")
+          Stepper(value: $state.datamoshBlockRefreshThreshold, in: 0...8, step: 0.25) {
+            Text("Block Refresh \(state.datamoshBlockRefreshThreshold, specifier: "%.2f")")
           }
-          .frame(width: 180, alignment: .leading)
-          .help("Deterministic permutation seed for Shuffle.")
-        }
+          .frame(width: 230, alignment: .leading)
+          .help("Per-block keep/drop: macroblocks whose mean motion is below this snap back to the carrier (intra-block refresh) while busier blocks rot. 0 = no per-block refresh; needs Macroblock Size >= 2.")
 
-        Picker("Backend", selection: $state.datamoshBackend) {
-          ForEach(FeedbackRenderBackendOption.allCases) { backend in
-            Text(backend.rawValue).tag(backend)
+          if state.datamoshVectorRemix == .shuffle {
+            Stepper(value: $state.datamoshRemixSeed, in: 0...9999, step: 1) {
+              Text("Remix Seed \(state.datamoshRemixSeed)")
+            }
+            .frame(width: 180, alignment: .leading)
+            .help("Deterministic permutation seed for Shuffle.")
           }
+
+          Picker("Backend", selection: $state.datamoshBackend) {
+            ForEach(FeedbackRenderBackendOption.allCases) { backend in
+              Text(backend.rawValue).tag(backend)
+            }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 200)
+          .help("Metal is gated per-frame against the CPU reference.")
         }
-        .pickerStyle(.segmented)
-        .frame(width: 200)
-        .help("Metal is gated per-frame against the CPU reference.")
 
         VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(
@@ -206,25 +192,13 @@ struct BitstreamDatamoshDetailView: View {
       EffectTitleView(listing: .bitstreamDatamosh)
         .help("Real AVI bitstream surgery: P-frame duplication, keyframe removal, motion transfer, or ffglitch-style motion-vector and DCT-coefficient editing. Non-deterministic by design.")
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Operation", selection: $state.bitstreamOperation) {
-          ForEach(BitstreamOperationOption.allCases) { op in
-            Text(op.rawValue).tag(op)
-          }
-        }
-        .frame(width: 220)
-        .help("P-Frame Bloom duplicates a P-frame. Void Mosh removes the keyframe. Motion Transfer splices modulator motion onto carrier content. The MV operations rewrite each P-frame's motion vectors in pure Rust: Freeze zeroes them, Pan drifts them, Scale amplifies/inverts, Sink melts toward the average motion, Sine Warp waves them across the frame.")
+      ControlFlow {
+        OptionKnob("Operation", selection: $state.bitstreamOperation)
+          .help("P-Frame Bloom duplicates a P-frame. Void Mosh removes the keyframe. Motion Transfer splices modulator motion onto carrier content. The MV operations rewrite each P-frame's motion vectors in pure Rust: Freeze zeroes them, Pan drifts them, Scale amplifies/inverts, Sink melts toward the average motion, Sine Warp waves them across the frame.")
 
-        Picker("Preset", selection: $state.bitstreamPreset) {
-          ForEach(BitstreamPresetOption.allCases) { preset in
-            Text(preset.rawValue).tag(preset)
-          }
-        }
-        .frame(width: 200)
-        .help("Named presets override the operation and knobs. Custom uses the explicit controls.")
-      }
+        OptionKnob("Preset", selection: $state.bitstreamPreset)
+          .help("Named presets override the operation and knobs. Custom uses the explicit controls.")
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
         Stepper(value: $state.bitstreamFps, in: 1...120, step: 1) {
           Text("FPS \(state.bitstreamFps, specifier: "%.0f")")
         }
@@ -322,7 +296,7 @@ struct BitstreamDatamoshDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Button {
             state.chooseBitstreamInputVideo()
           } label: {
@@ -367,7 +341,7 @@ struct CascadeCollageDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .cascadeCollage)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.cascadeCollageTileScale, in: 0.3...2.0, step: 0.05) {
           Text("Tile Scale \(state.cascadeCollageTileScale, specifier: "%.2f")")
         }
@@ -390,7 +364,7 @@ struct CascadeCollageDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Stepper(value: $state.cascadeCollageScribAmpScale, in: 0...2, step: 0.05) {
             Text("Scribble \(state.cascadeCollageScribAmpScale, specifier: "%.2f")")
           }
@@ -410,9 +384,8 @@ struct CascadeCollageDetailView: View {
             Text("Edge Detect \(state.cascadeCollageEdgeDetect, specifier: "%.2f")")
           }
           .frame(width: 175, alignment: .leading)
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Picker("Block Blend", selection: $state.cascadeCollageBlockBlend) {
             ForEach(CascadeCollageBlendOption.allCases) { mode in
               Text(mode.rawValue).tag(mode)
@@ -507,14 +480,8 @@ struct TrailCascadeDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .trailCascade)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Field", selection: $state.cascadeFieldType) {
-          ForEach(CascadeFieldOption.allCases) { f in
-            Text(f.rawValue).tag(f)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(width: 130)
+      ControlFlow {
+        OptionKnob("Field", selection: $state.cascadeFieldType)
 
         Stepper(value: $state.cascadeTileSize, in: 4...256, step: 4) {
           Text("Tile \(state.cascadeTileSize)px")
@@ -535,9 +502,9 @@ struct TrailCascadeDetailView: View {
       }
 
       MoreKnobs {
-        VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
-          // Row 1: always-visible knobs
-          HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
+          // Always-visible knobs first, then the field-specific ones.
+          Group {
             if state.cascadeFieldType == .vortex {
               Stepper(value: $state.cascadeTurbulenceScale, in: 0.002...0.05, step: 0.001) {
                 Text("Vortex \(state.cascadeTurbulenceScale, specifier: "%.3f")")
@@ -575,7 +542,7 @@ struct TrailCascadeDetailView: View {
 
           // Row 2: field-specific knobs
           if state.cascadeFieldType == .river || state.cascadeFieldType == .riverRoot {
-            HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+            ControlFlow {
               Stepper(value: $state.cascadeRiverDirection, in: 0...360, step: 15) {
                 Text("Dir \(state.cascadeRiverDirection, specifier: "%.0f")°")
               }
@@ -597,7 +564,7 @@ struct TrailCascadeDetailView: View {
           }
 
           if state.cascadeFieldType == .centerSplit {
-            HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+            ControlFlow {
               Stepper(value: $state.cascadeRiverSpeed, in: 0...20, step: 0.5) {
                 Text("Speed \(state.cascadeRiverSpeed, specifier: "%.1f")")
               }
@@ -613,7 +580,7 @@ struct TrailCascadeDetailView: View {
           }
 
           if state.cascadeFieldType == .oscillate {
-            HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+            ControlFlow {
               Stepper(value: $state.cascadeRiverTurbulence, in: 0...200, step: 2) {
                 Text("Amplitude \(state.cascadeRiverTurbulence, specifier: "%.0f")px")
               }
@@ -623,7 +590,7 @@ struct TrailCascadeDetailView: View {
           }
 
           if state.cascadeFieldType == .squarePop {
-            HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+            ControlFlow {
               Stepper(value: $state.cascadeRiverTurbulence, in: 0...500, step: 10) {
                 Text("Scatter \(state.cascadeRiverTurbulence, specifier: "%.0f")px")
               }

@@ -13,7 +13,7 @@ struct FlowDisplaceDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .flowDisplace)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.frameSequenceAmount, in: 0...64, step: 1) {
           Text("Displacement \(state.frameSequenceAmount, specifier: "%.0f")")
         }
@@ -52,14 +52,8 @@ struct FlowFeedbackDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .flowFeedback)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-        Picker("Preset", selection: $state.feedbackPreset) {
-          ForEach(FeedbackPresetOption.allCases) { preset in
-            Text(preset.rawValue).tag(preset)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(width: 210)
+      ControlFlow {
+        OptionKnob("Preset", selection: $state.feedbackPreset)
 
         Stepper(value: $state.feedbackAmount, in: 0...12, step: 0.25) {
           Text("Feedback \(state.feedbackAmount, specifier: "%.2f")")
@@ -73,14 +67,8 @@ struct FlowFeedbackDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
-          Picker("Flow Source", selection: $state.feedbackFlowSource) {
-            ForEach(FeedbackFlowSourceOption.allCases) { source in
-              Text(source.rawValue).tag(source)
-            }
-          }
-          .pickerStyle(.menu)
-          .frame(width: 190)
+        ControlFlow {
+          OptionKnob("Flow Source", selection: $state.feedbackFlowSource)
 
           Picker("Backend", selection: $state.feedbackBackend) {
             ForEach(FeedbackRenderBackendOption.allCases) { backend in
@@ -90,13 +78,7 @@ struct FlowFeedbackDetailView: View {
           .pickerStyle(.segmented)
           .frame(width: 220)
 
-          Picker("Output", selection: $state.feedbackOutputBitDepth) {
-            ForEach(FeedbackOutputBitDepthOption.allCases) { bitDepth in
-              Text(bitDepth.rawValue).tag(bitDepth)
-            }
-          }
-          .pickerStyle(.menu)
-          .frame(width: 130)
+          OptionKnob("Output", selection: $state.feedbackOutputBitDepth)
 
           Picker("Temporal Samples", selection: $state.feedbackTemporalSupersampling) {
             Text("1x").tag(1)
@@ -105,9 +87,7 @@ struct FlowFeedbackDetailView: View {
           }
           .pickerStyle(.segmented)
           .frame(width: 170)
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
           Stepper(value: $state.feedbackCarrierAmount, in: 0...8, step: 0.25) {
             Text("Carrier \(state.feedbackCarrierAmount, specifier: "%.2f")")
           }
@@ -199,7 +179,7 @@ struct FlowFeedbackDetailView: View {
           )
         }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Toggle("Write Flow Cache", isOn: $state.feedbackWritesFlowCache)
             .toggleStyle(.checkbox)
 
@@ -236,7 +216,7 @@ struct RuttEtraDetailView: View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .ruttEtra)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.ruttEtraLinePitch, in: 1...256, step: 1) {
           Text("Pitch \(state.ruttEtraLinePitch)px")
         }
@@ -268,13 +248,8 @@ struct RuttEtraDetailView: View {
           + "shared modulator frame directory.")
 
       MoreKnobs {
-        Picker("Backend", selection: $state.ruttEtraBackend) {
-          ForEach(FeedbackRenderBackendOption.allCases) { backend in
-            Text(backend.rawValue).tag(backend)
-          }
-        }
-        .frame(width: 130)
-        .help("Metal runs the gather kernel and is parity-gated per-frame against the CPU reference.")
+        OptionKnob("Backend", selection: $state.ruttEtraBackend)
+          .help("Metal runs the gather kernel and is parity-gated per-frame against the CPU reference.")
 
         VStack(alignment: .leading, spacing: EffectDetailLayout.modGroupSpacing) {
           ModulationSlotRow(

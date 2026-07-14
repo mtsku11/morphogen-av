@@ -22,7 +22,7 @@ struct VideoVocoderDetailView: View {
       .pickerStyle(.segmented)
       .frame(width: 360)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.vocoderBands, in: 1...64, step: 1) {
           Text("Bands \(state.vocoderBands)")
         }
@@ -84,7 +84,7 @@ struct SpectralCrossSynthDetailView: View {
       .pickerStyle(.segmented)
       .frame(width: 560)
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.crossSynthAmount, in: 0...1, step: 0.05) {
           Text("Amount \(state.crossSynthAmount, specifier: "%.2f")")
         }
@@ -111,7 +111,7 @@ struct SpectralCrossSynthDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Button {
             state.chooseCrossSynthModulatorWAV()
           } label: {
@@ -152,7 +152,7 @@ struct AudioImpulseConvolutionDetailView: View {
       EffectTitleView(listing: .audioImpulseConvolution)
         .help("Convolve Source B (carrier) with Source A's L1-normalized impulse response. amount 0 = passthrough; the wet tail extends the output.")
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.impulseConvAmount, in: 0...1, step: 0.05) {
           Text("Amount \(state.impulseConvAmount, specifier: "%.2f")")
         }
@@ -167,7 +167,7 @@ struct AudioImpulseConvolutionDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Button {
             state.chooseImpulseConvModulatorWAV()
           } label: {
@@ -183,9 +183,8 @@ struct AudioImpulseConvolutionDetailView: View {
           } label: {
             Label("Output Dir", systemImage: "folder")
           }
-        }
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
           Toggle("FFT method (HQ)", isOn: $state.impulseConvUseFFT)
             .help("Frequency-domain convolution for long IRs; gated against the direct path.")
 
@@ -219,7 +218,7 @@ struct AudioVideoRouteDetailView: View {
       EffectTitleView(listing: .audioVideoRoute)
         .help("Source A's RMS envelope drives the per-frame displacement amount applied to Source B's frames.")
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.audioRouteAmount, in: 0...4, step: 0.1) {
           Text("Amount \(state.audioRouteAmount, specifier: "%.2f")")
         }
@@ -238,7 +237,7 @@ struct AudioVideoRouteDetailView: View {
       }
 
       MoreKnobs {
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Button {
             state.chooseAudioRouteModulatorWAV()
           } label: {
@@ -317,7 +316,7 @@ struct VideoAudioRouteDetailView: View {
         .help("Lowpass: a strong descriptor opens the cutoff toward Nyquist. Highpass: a strong descriptor lifts the high-pass corner.")
       }
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Stepper(value: $state.videoAudioRouteAmount, in: 0...1, step: 0.05) {
           Text("Amount \(state.videoAudioRouteAmount, specifier: "%.2f")")
         }
@@ -341,7 +340,7 @@ struct VideoAudioRouteDetailView: View {
         .frame(width: 360)
         .help("Hold: the descriptor steps at each frame. Smooth: it linearly interpolates between frames (a continuous curve, no zipper stepping).")
 
-        HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+        ControlFlow {
           Button {
             state.chooseVideoAudioRouteModulatorDirectory()
           } label: {

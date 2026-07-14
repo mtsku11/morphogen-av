@@ -149,12 +149,12 @@ struct QuickPreviewBand: View {
               ? "Stop the take (it also auto-stops after one loop)"
               : "Record a gesture on the armed slot from frame 0")
 
-            Picker("Capture", selection: $state.captureTargetSelection) {
-              ForEach(state.ruttEtraArmedCaptureTargets, id: \.self) { target in
-                Text(target).tag(target)
-              }
-            }
-            .frame(width: 260)
+            OptionKnob(
+              label: "Capture",
+              selection: $state.captureTargetSelection,
+              options: state.ruttEtraArmedCaptureTargets,
+              optionLabel: { $0 }
+            )
             .disabled(state.isCapturing)
             .help("Which armed Rutt-Etra slot this take records onto.")
 

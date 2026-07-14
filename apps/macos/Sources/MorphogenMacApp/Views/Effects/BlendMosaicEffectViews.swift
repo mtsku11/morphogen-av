@@ -14,7 +14,7 @@ struct ConvBlendDetailView: View {
       EffectTitleView(listing: .convBlend)
         .help("Each Source A frame supplies a normalized KxK luma kernel that Source B's frame is convolved with.")
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+      ControlFlow {
         Button {
           state.chooseConvBlendModulatorDirectory()
         } label: {
@@ -30,9 +30,8 @@ struct ConvBlendDetailView: View {
         } label: {
           Label("Output Dir", systemImage: "folder")
         }
-      }
 
-      HStack(spacing: EffectDetailLayout.controlRowSpacing) {
+
         Stepper(value: $state.convBlendKernelSize, in: 1...15, step: 2) {
           Text("Kernel \(state.convBlendKernelSize)×\(state.convBlendKernelSize)")
         }
