@@ -11,7 +11,10 @@ pub mod probe;
 pub use avi::{
     avi_dimensions, count_p_frames, duplicate_p_frame, remove_leading_keyframe, transfer_motion,
 };
-pub use mpeg4::{remix_motion_vectors, verify_roundtrip, MvEditStats, MvOperation};
+pub use mpeg4::{
+    remix_dct_coefficients, remix_motion_vectors, verify_roundtrip, verify_roundtrip_dct,
+    DctEditStats, DctOperation, MvEditStats, MvOperation,
+};
 pub use error::MediaError;
 pub use extract::{
     decode_avi_frames, encode_datamosh_avi, encode_datamosh_avi_scaled, extract_audio_wav,

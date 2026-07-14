@@ -69,6 +69,14 @@ fn default_mv_sine_period() -> f64 {
     6.0
 }
 
+fn default_dct_factor() -> f64 {
+    1.0
+}
+
+fn default_dct_keep() -> u32 {
+    64
+}
+
 fn default_block_collage_tile_size() -> u32 {
     96
 }
@@ -1315,6 +1323,18 @@ pub enum RenderJobTask {
         /// in P-frames).
         #[serde(default = "default_mv_sine_period")]
         mv_sine_period: f64,
+        /// dct-amp only: quantized-level multiplier (1.0 = off).
+        #[serde(default = "default_dct_factor")]
+        dct_factor: f64,
+        /// dct-lopass only: coefficients kept per block (64 = off).
+        #[serde(default = "default_dct_keep")]
+        dct_keep: u32,
+        /// dct-hipass only: leading coefficients zeroed per block (0 = off).
+        #[serde(default)]
+        dct_drop: u32,
+        /// dct-noise only: deterministic level-noise amplitude (0 = off).
+        #[serde(default)]
+        dct_noise_amount: u32,
         /// Named bitstream preset. Custom keeps the explicit knobs above.
         #[serde(default)]
         preset: DatamoshBitstreamPreset,
@@ -2096,6 +2116,14 @@ pub enum DatamoshBitstreamOperation {
     MvSink,
     /// Position-dependent sinusoidal motion-vector warp.
     MvSine,
+    /// Multiply every inter-block DCT level (rainbow overdrive).
+    DctAmp,
+    /// Keep only the first N DCT coefficients per block (blocky mosaic).
+    DctLopass,
+    /// Zero the first N DCT coefficients per block (edge ghosts).
+    DctHipass,
+    /// Deterministic pseudo-random DCT level noise.
+    DctNoise,
 }
 
 /// Named bitstream datamosh presets — resolve to an operation + knob set at queue time.
@@ -3295,6 +3323,10 @@ mod tests {
             mv_scale: 1.0,
             mv_sine_amp: 8.0,
             mv_sine_period: 6.0,
+            dct_factor: 1.0,
+            dct_keep: 64,
+            dct_drop: 0,
+            dct_noise_amount: 0,
             preset: DatamoshBitstreamPreset::Bloom,
         };
         let json = serde_json::to_string(&task).expect("serialize");
@@ -3321,6 +3353,10 @@ mod tests {
             mv_scale,
             mv_sine_amp,
             mv_sine_period,
+            dct_factor,
+            dct_keep,
+            dct_drop,
+            dct_noise_amount,
             preset,
             ..
         } = from_minimal
@@ -3337,6 +3373,10 @@ mod tests {
         assert_eq!(mv_scale, 1.0);
         assert_eq!(mv_sine_amp, 8.0);
         assert_eq!(mv_sine_period, 6.0);
+        assert_eq!(dct_factor, 1.0);
+        assert_eq!(dct_keep, 64);
+        assert_eq!(dct_drop, 0);
+        assert_eq!(dct_noise_amount, 0);
         assert_eq!(preset, DatamoshBitstreamPreset::Custom);
     }
 
@@ -3348,6 +3388,10 @@ mod tests {
             (DatamoshBitstreamOperation::MvScale, "\"mv_scale\""),
             (DatamoshBitstreamOperation::MvSink, "\"mv_sink\""),
             (DatamoshBitstreamOperation::MvSine, "\"mv_sine\""),
+            (DatamoshBitstreamOperation::DctAmp, "\"dct_amp\""),
+            (DatamoshBitstreamOperation::DctLopass, "\"dct_lopass\""),
+            (DatamoshBitstreamOperation::DctHipass, "\"dct_hipass\""),
+            (DatamoshBitstreamOperation::DctNoise, "\"dct_noise\""),
         ] {
             let json = serde_json::to_string(&op).expect("serialize");
             assert_eq!(json, expected);

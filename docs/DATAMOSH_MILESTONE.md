@@ -566,11 +566,27 @@ predictors, clamped to the VOP's `fcode` range):
    (`deterministic: false` sidecar with an `mv_edit` params/counters block);
    queue add/run persists the knobs with serde defaults.
 
+## Real bitstream DCT remix — pure-Rust coefficient editing — LANDED 2026-07-14
+
+The follow-up slice to the MV tier: every coded **inter** block's TCOEF events
+are decoded to quantized `(run, level)` values, edited, and re-encoded with the
+reference encoder's canonical escape selection (direct VLC → escape 1 → escape
+2 → escape 3, same tie-breaking), so the force-reencode gate
+`mpeg4::verify_roundtrip_dct` reproduces real FFmpeg output **byte-identical**.
+Intra macroblocks (different DC path, rare in P-frames) are span-copied
+untouched, and CBP is frozen in the copied MB header, so edits never empty a
+block — a fully-zeroed block keeps its final coefficient at magnitude 1.
+
+**Operations** (`datamosh-bitstream --operation ...`, each with an exact off
+case): `dct-amp --dct-factor F` (level multiply, clamp ±2047; 1.0 = off),
+`dct-lopass --dct-keep N` (first N events per block; 64 = off), `dct-hipass
+--dct-drop N` (zero leading events, positions preserved; 0 = off), `dct-noise
+--dct-noise-amount A` (splitmix64 hash of frame/MB/block/index — deterministic
+surgery; 0 = off). Sidecar `dct_edit` block; queue + SwiftUI wired like the MV
+tier.
+
 ## Deferred
 
-- **DCT-coefficient glitching** (ffglitch's rainbow-block noise): the same parser
-  already walks TCOEF blocks, so a later slice can expose coefficient edits;
-  deliberately out of scope for the MV milestone.
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content
   always fresh, no melt); a second mode if a use case shows it mattering.
 - **Stateless motion-transfer mode** — `out[i] = warp(B[i], flowA[i])` (content

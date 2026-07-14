@@ -5899,6 +5899,10 @@ pub(crate) struct QueueAddDatamoshBitstreamRequest<'a> {
     pub(crate) mv_scale: f64,
     pub(crate) mv_sine_amp: f64,
     pub(crate) mv_sine_period: f64,
+    pub(crate) dct_factor: f64,
+    pub(crate) dct_keep: u32,
+    pub(crate) dct_drop: u32,
+    pub(crate) dct_noise_amount: u32,
     pub(crate) preset: DatamoshBitstreamPreset,
     pub(crate) project_path: Option<&'a Path>,
 }
@@ -5956,6 +5960,10 @@ fn cli_bitstream_operation(op: DatamoshBitstreamOperation) -> CliDatamoshBitstre
         DatamoshBitstreamOperation::MvScale => CliDatamoshBitstreamOperation::MvScale,
         DatamoshBitstreamOperation::MvSink => CliDatamoshBitstreamOperation::MvSink,
         DatamoshBitstreamOperation::MvSine => CliDatamoshBitstreamOperation::MvSine,
+        DatamoshBitstreamOperation::DctAmp => CliDatamoshBitstreamOperation::DctAmp,
+        DatamoshBitstreamOperation::DctLopass => CliDatamoshBitstreamOperation::DctLopass,
+        DatamoshBitstreamOperation::DctHipass => CliDatamoshBitstreamOperation::DctHipass,
+        DatamoshBitstreamOperation::DctNoise => CliDatamoshBitstreamOperation::DctNoise,
     }
 }
 
@@ -5977,6 +5985,10 @@ pub(crate) fn queue_add_datamosh_bitstream(
         mv_scale,
         mv_sine_amp,
         mv_sine_period,
+        dct_factor,
+        dct_keep,
+        dct_drop,
+        dct_noise_amount,
         preset,
         project_path,
     } = request;
@@ -6069,6 +6081,10 @@ pub(crate) fn queue_add_datamosh_bitstream(
             mv_scale,
             mv_sine_amp,
             mv_sine_period,
+            dct_factor,
+            dct_keep,
+            dct_drop,
+            dct_noise_amount,
             preset,
         },
         provenance: Some(provenance),
@@ -6119,6 +6135,10 @@ pub(crate) fn queue_run_datamosh_bitstream(queue_path: &Path) -> Result<(), CliE
         mv_scale,
         mv_sine_amp,
         mv_sine_period,
+        dct_factor,
+        dct_keep,
+        dct_drop,
+        dct_noise_amount,
         preset,
     } = queue.jobs[job_index].task.clone()
     else {
@@ -6148,6 +6168,10 @@ pub(crate) fn queue_run_datamosh_bitstream(queue_path: &Path) -> Result<(), CliE
             mv_scale,
             mv_sine_amp,
             mv_sine_period,
+            dct_factor,
+            dct_keep,
+            dct_drop,
+            dct_noise_amount,
         })?;
 
         // Count output frames written by the bitstream handler.

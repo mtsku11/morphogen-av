@@ -80,6 +80,22 @@ fn datamosh_bitstream_help_lists_mv_editing_operations_and_knobs() {
 }
 
 #[test]
+fn datamosh_bitstream_help_lists_dct_editing_operations_and_knobs() {
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["datamosh-bitstream", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dct-amp"))
+        .stdout(predicate::str::contains("dct-lopass"))
+        .stdout(predicate::str::contains("dct-hipass"))
+        .stdout(predicate::str::contains("dct-noise"))
+        .stdout(predicate::str::contains("--dct-factor"))
+        .stdout(predicate::str::contains("--dct-keep"))
+        .stdout(predicate::str::contains("--dct-noise-amount"));
+}
+
+#[test]
 fn queue_add_datamosh_bitstream_persists_mv_knobs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let queue_path = temp_dir.path().join("queue.json");
@@ -104,6 +120,14 @@ fn queue_add_datamosh_bitstream_persists_mv_knobs() {
             "--mv-pan-y=-3",
             "--mv-scale",
             "2.5",
+            "--dct-factor",
+            "3.5",
+            "--dct-keep",
+            "5",
+            "--dct-drop",
+            "2",
+            "--dct-noise-amount",
+            "9",
         ])
         .assert()
         .success();
@@ -117,6 +141,10 @@ fn queue_add_datamosh_bitstream_persists_mv_knobs() {
     assert_eq!(task["mv_pan_x"], 6);
     assert_eq!(task["mv_pan_y"], -3);
     assert_eq!(task["mv_scale"], 2.5);
+    assert_eq!(task["dct_factor"], 3.5);
+    assert_eq!(task["dct_keep"], 5);
+    assert_eq!(task["dct_drop"], 2);
+    assert_eq!(task["dct_noise_amount"], 9);
 }
 
 #[test]

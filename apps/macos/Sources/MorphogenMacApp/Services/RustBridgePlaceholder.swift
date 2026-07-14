@@ -1916,6 +1916,13 @@ enum RustBridgePlaceholder {
       "--mv-scale=\(cliNumber(request.mvScale))",
       "--mv-sine-amp=\(cliNumber(request.mvSineAmp))",
       "--mv-sine-period=\(cliNumber(request.mvSinePeriod))",
+      "--dct-factor=\(cliNumber(request.dctFactor))",
+      "--dct-keep",
+      String(request.dctKeep),
+      "--dct-drop",
+      String(request.dctDrop),
+      "--dct-noise-amount",
+      String(request.dctNoiseAmount),
       "--preset",
       request.preset.cliValue
     ]
@@ -4235,6 +4242,10 @@ struct BitstreamDatamoshRenderQueueCommandRequest {
   let mvScale: Double
   let mvSineAmp: Double
   let mvSinePeriod: Double
+  let dctFactor: Double
+  let dctKeep: Int
+  let dctDrop: Int
+  let dctNoiseAmount: Int
   let preset: BitstreamPresetOption
   let projectURL: URL?
 }

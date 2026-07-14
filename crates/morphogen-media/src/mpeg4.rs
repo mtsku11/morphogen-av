@@ -543,6 +543,160 @@ const INTRA_TCOEF_CODES: [(u16, u8); 103] = [
     (0x3, 7),
 ];
 
+/// Run values per inter RL index (ISO/IEC 14496-2 Table B-14 order, matching
+/// [`INTER_TCOEF_CODES`]).
+const INTER_TCOEF_RUN: [u8; 102] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5,
+    6, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+    25, 26, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+];
+
+/// Level magnitudes per inter RL index (same order).
+const INTER_TCOEF_LEVEL: [u8; 102] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 1, 2,
+    3, 1, 2, 3, 1, 2, 1, 2, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3,
+    1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+];
+
+/// One decoded inter TCOEF event. `run` zeros precede a coefficient of signed
+/// quantized `level`; the block's final event is implicitly `last = 1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TcoefEvent {
+    run: u8,
+    level: i16,
+}
+
+/// Canonical inter-TCOEF encoder state, mirroring the reference encoder's
+/// `init_uni_mpeg4_rl_tab`: for every `(last, run, level ∈ [-64, 63])` the
+/// shortest of {direct VLC, escape 1, escape 2, escape 3} with the reference
+/// tie-breaking, so re-encoding unedited events is byte-identical. Levels
+/// outside the table range always use the 30-bit escape 3. `lmax`/`rmax` feed
+/// escape decoding.
+struct InterRlCodec {
+    uni_bits: Vec<u32>,
+    uni_len: Vec<u8>,
+    lmax: [[u8; 64]; 2],
+    rmax: [[u8; 64]; 2],
+}
+
+const ESC3_LEN: u8 = 30;
+
+impl InterRlCodec {
+    fn uni_index(last: usize, run: usize, level: i32) -> usize {
+        (last * 64 + run) * 128 + (level + 64) as usize
+    }
+
+    fn build() -> Self {
+        let mut uni_bits = vec![0u32; 2 * 64 * 128];
+        let mut uni_len = vec![0u8; 2 * 64 * 128];
+
+        // Default: every representable (run, level) slot holds its escape-3
+        // encoding (the reference table's memset(30) + type-3 prefill).
+        for run in 0..64usize {
+            for level in -64i32..64 {
+                if level == 0 {
+                    continue;
+                }
+                let code = (3u32 << 23)
+                    | (3 << 21)
+                    | ((run as u32) << 14)
+                    | (1 << 13)
+                    | (((level & 0xfff) as u32) << 1)
+                    | 1;
+                for last in 0..2usize {
+                    let idx = Self::uni_index(last, run, level);
+                    uni_bits[idx] = code | ((last as u32) << 20);
+                    uni_len[idx] = ESC3_LEN;
+                }
+            }
+        }
+
+        let mut lmax = [[0u8; 64]; 2];
+        let mut rmax = [[0u8; 64]; 2];
+        for i in 0..102usize {
+            let last = usize::from(i >= INTER_TCOEF_LAST_SPLIT as usize);
+            let run = INTER_TCOEF_RUN[i] as usize;
+            let level = INTER_TCOEF_LEVEL[i] as usize;
+            lmax[last][run] = lmax[last][run].max(level as u8);
+            rmax[last][level] = rmax[last][level].max(run as u8);
+        }
+
+        // Downward traversal exactly like the reference: direct VLC, then the
+        // escape-2 slot if shorter, then the escape-1 slot unconditionally.
+        let mut max_run = [[0u8; 64]; 2];
+        let mut max_level = 0i32;
+        let mut cur_run = usize::MAX;
+        for i in (0..102usize).rev() {
+            let last = usize::from(i >= INTER_TCOEF_LAST_SPLIT as usize);
+            let run = INTER_TCOEF_RUN[i] as usize;
+            let level = INTER_TCOEF_LEVEL[i] as i32;
+            let (vlc_code, vlc_bits) = INTER_TCOEF_CODES[i];
+            let code = (vlc_code as u32) << 1;
+            let len = vlc_bits + 1;
+
+            for (value, sign) in [(level, 0u32), (-level, 1u32)] {
+                let idx = Self::uni_index(last, run, value);
+                uni_bits[idx] = code | sign;
+                uni_len[idx] = len;
+            }
+
+            if max_run[last][level as usize] == 0 {
+                max_run[last][level as usize] = run as u8 + 1;
+            }
+            let run3 = run + max_run[last][level as usize] as usize;
+            let len3 = len + 7 + 2;
+            if run3 < 64 && len3 < uni_len[Self::uni_index(last, run3, level)] {
+                let code3 = code | (0b1110u32 << len);
+                for (value, sign) in [(level, 0u32), (-level, 1u32)] {
+                    let idx = Self::uni_index(last, run3, value);
+                    uni_bits[idx] = code3 | sign;
+                    uni_len[idx] = len3;
+                }
+            }
+
+            if run != cur_run {
+                max_level = level;
+                cur_run = run;
+            }
+            let esc1_code = code | (0x3u32 << (len + 1));
+            let esc1_len = len + 7 + 1;
+            let esc1_level = level + max_level;
+            for (value, sign) in [(esc1_level, 0u32), (-esc1_level, 1u32)] {
+                let idx = Self::uni_index(last, run, value);
+                uni_bits[idx] = esc1_code | sign;
+                uni_len[idx] = esc1_len;
+            }
+        }
+
+        Self {
+            uni_bits,
+            uni_len,
+            lmax,
+            rmax,
+        }
+    }
+
+    fn encode_event(&self, writer: &mut BitWriter, last: bool, run: u8, level: i16) {
+        debug_assert!(level != 0 && run < 64);
+        let level = level as i32;
+        if (-64..64).contains(&level) {
+            let idx = Self::uni_index(usize::from(last), run as usize, level);
+            writer.put_bits(self.uni_len[idx] as u32, self.uni_bits[idx]);
+        } else {
+            let code = (3u32 << 23)
+                | (3 << 21)
+                | (u32::from(last) << 20)
+                | ((run as u32) << 14)
+                | (1 << 13)
+                | (((level & 0xfff) as u32) << 1)
+                | 1;
+            writer.put_bits(ESC3_LEN as u32, code);
+        }
+    }
+}
+
 struct Tables {
     inter_mcbpc: Vlc,
     cbpy: Vlc,
@@ -551,6 +705,7 @@ struct Tables {
     dc_chrom: Vlc,
     tcoef_inter: Vlc,
     tcoef_intra: Vlc,
+    inter_rl: InterRlCodec,
 }
 
 fn tables() -> &'static Tables {
@@ -573,6 +728,7 @@ fn tables() -> &'static Tables {
             dc_chrom: Vlc::build(DC_CHROM_ENTRIES),
             tcoef_inter: rl(&INTER_TCOEF_CODES),
             tcoef_intra: rl(&INTRA_TCOEF_CODES),
+            inter_rl: InterRlCodec::build(),
         }
     })
 }
@@ -959,6 +1115,15 @@ struct MbRecord {
     kind: MbKind,
 }
 
+/// One of an inter MB's six 8×8 blocks in DCT-edit mode: the original bit span
+/// plus decoded coefficient events (`None` = not coded per CBP). `dirty` marks
+/// blocks whose events changed and must be re-encoded instead of span-copied.
+struct InterBlock {
+    span: BitSpan,
+    events: Option<Vec<TcoefEvent>>,
+    dirty: bool,
+}
+
 enum MbKind {
     /// Skipped (`not_coded == 1`) or intra macroblock — copied bit-for-bit; its
     /// four predictor-grid entries stay zero, exactly like the decoder.
@@ -970,6 +1135,9 @@ enum MbKind {
         /// Decoded absolute motion vectors in half-pel units. Index 0 is the
         /// 16×16 vector for one-MV macroblocks; all four are populated for 4MV.
         mvs: [[i32; 2]; 4],
+        /// Per-block detail, populated only in DCT-edit mode (empty otherwise —
+        /// the plain MV path copies `body` wholesale).
+        blocks: Vec<InterBlock>,
     },
 }
 
@@ -992,6 +1160,8 @@ struct PvopParser<'a> {
     time_increment_bits: u32,
     mb_total: usize,
     state: SliceState,
+    /// Decode inter-block TCOEF events into [`InterBlock`] records (DCT-edit mode).
+    collect_dct: bool,
 }
 
 impl<'a> PvopParser<'a> {
@@ -1088,6 +1258,7 @@ impl<'a> PvopParser<'a> {
         coded: bool,
         use_dc_vlc: bool,
         chroma: bool,
+        mut collect: Option<&mut Vec<TcoefEvent>>,
     ) -> Result<(), MediaError> {
         let t = tables();
         if intra && use_dc_vlc {
@@ -1111,59 +1282,98 @@ impl<'a> PvopParser<'a> {
         } else {
             (&t.tcoef_inter, INTER_TCOEF_LAST_SPLIT)
         };
+        debug_assert!(collect.is_none() || !intra, "events are inter-only");
         loop {
-            let symbol = table.decode(&mut self.reader, "TCOEF")?;
-            if symbol != TCOEF_ESCAPE {
-                self.reader.read_bit()?; // sign
-                if symbol >= last_split {
-                    return Ok(());
+            // Decode one (last, run, level) event; `collect` (inter blocks in
+            // DCT-edit mode) records the semantic values.
+            let (last, run, level) = {
+                let symbol = table.decode(&mut self.reader, "TCOEF")?;
+                if symbol != TCOEF_ESCAPE {
+                    let sign = self.reader.read_bit()?;
+                    let last = symbol >= last_split;
+                    let (run, level) = if collect.is_some() {
+                        let level = INTER_TCOEF_LEVEL[symbol as usize] as i16;
+                        (
+                            INTER_TCOEF_RUN[symbol as usize],
+                            if sign == 1 { -level } else { level },
+                        )
+                    } else {
+                        (0, 1)
+                    };
+                    (last, run, level)
+                } else if self.reader.read_bit()? == 0 {
+                    // Escape 1: level offset by LMAX of the inner code.
+                    let inner = table.decode(&mut self.reader, "TCOEF (escape 1)")?;
+                    if inner == TCOEF_ESCAPE {
+                        return Err(MediaError::MalformedMpeg4(format!(
+                            "double TCOEF escape at bit {}",
+                            self.reader.pos
+                        )));
+                    }
+                    let sign = self.reader.read_bit()?;
+                    let last = inner >= last_split;
+                    let (run, level) = if collect.is_some() {
+                        let run = INTER_TCOEF_RUN[inner as usize];
+                        let level = INTER_TCOEF_LEVEL[inner as usize] as i16
+                            + t.inter_rl.lmax[usize::from(last)][run as usize] as i16;
+                        (run, if sign == 1 { -level } else { level })
+                    } else {
+                        (0, 1)
+                    };
+                    (last, run, level)
+                } else if self.reader.read_bit()? == 0 {
+                    // Escape 2: run offset by RMAX of the inner code, plus one.
+                    let inner = table.decode(&mut self.reader, "TCOEF (escape 2)")?;
+                    if inner == TCOEF_ESCAPE {
+                        return Err(MediaError::MalformedMpeg4(format!(
+                            "double TCOEF escape at bit {}",
+                            self.reader.pos
+                        )));
+                    }
+                    let sign = self.reader.read_bit()?;
+                    let last = inner >= last_split;
+                    let (run, level) = if collect.is_some() {
+                        let level = INTER_TCOEF_LEVEL[inner as usize];
+                        let run = INTER_TCOEF_RUN[inner as usize]
+                            + t.inter_rl.rmax[usize::from(last)][level as usize]
+                            + 1;
+                        let level = level as i16;
+                        (run, if sign == 1 { -level } else { level })
+                    } else {
+                        (0, 1)
+                    };
+                    (last, run, level)
+                } else {
+                    // Escape 3: fixed-length last/run/level.
+                    let last = self.reader.read_bit()? == 1;
+                    let run = self.reader.read_bits(6)? as u8;
+                    if self.reader.read_bit()? != 1 {
+                        return Err(MediaError::MalformedMpeg4(format!(
+                            "missing marker before escape-3 level at bit {}",
+                            self.reader.pos
+                        )));
+                    }
+                    let level = sign_extend(self.reader.read_bits(12)? as i32, 12) as i16;
+                    if self.reader.read_bit()? != 1 {
+                        return Err(MediaError::MalformedMpeg4(format!(
+                            "missing marker after escape-3 level at bit {}",
+                            self.reader.pos
+                        )));
+                    }
+                    if level == 0 && collect.is_some() {
+                        return Err(MediaError::MalformedMpeg4(format!(
+                            "zero escape-3 level at bit {}",
+                            self.reader.pos
+                        )));
+                    }
+                    (last, run, level)
                 }
-                continue;
+            };
+            if let Some(events) = collect.as_deref_mut() {
+                events.push(TcoefEvent { run, level });
             }
-            // Escape forms: `0` = level offset, `10` = run offset, `11` = FLC.
-            if self.reader.read_bit()? == 0 {
-                let inner = table.decode(&mut self.reader, "TCOEF (escape 1)")?;
-                if inner == TCOEF_ESCAPE {
-                    return Err(MediaError::MalformedMpeg4(format!(
-                        "double TCOEF escape at bit {}",
-                        self.reader.pos
-                    )));
-                }
-                self.reader.read_bit()?; // sign
-                if inner >= last_split {
-                    return Ok(());
-                }
-            } else if self.reader.read_bit()? == 0 {
-                let inner = table.decode(&mut self.reader, "TCOEF (escape 2)")?;
-                if inner == TCOEF_ESCAPE {
-                    return Err(MediaError::MalformedMpeg4(format!(
-                        "double TCOEF escape at bit {}",
-                        self.reader.pos
-                    )));
-                }
-                self.reader.read_bit()?; // sign
-                if inner >= last_split {
-                    return Ok(());
-                }
-            } else {
-                let last = self.reader.read_bit()?;
-                self.reader.read_bits(6)?; // run
-                if self.reader.read_bit()? != 1 {
-                    return Err(MediaError::MalformedMpeg4(format!(
-                        "missing marker before escape-3 level at bit {}",
-                        self.reader.pos
-                    )));
-                }
-                self.reader.read_bits(12)?; // signed level FLC
-                if self.reader.read_bit()? != 1 {
-                    return Err(MediaError::MalformedMpeg4(format!(
-                        "missing marker after escape-3 level at bit {}",
-                        self.reader.pos
-                    )));
-                }
-                if last == 1 {
-                    return Ok(());
-                }
+            if last {
+                return Ok(());
             }
         }
     }
@@ -1214,7 +1424,7 @@ impl<'a> PvopParser<'a> {
                 self.apply_dquant(code);
             }
             for block in 0..6 {
-                self.parse_block(true, cbp & (32 >> block) != 0, use_dc_vlc, block >= 4)?;
+                self.parse_block(true, cbp & (32 >> block) != 0, use_dc_vlc, block >= 4, None)?;
             }
             return Ok(MbKind::Copied(BitSpan {
                 start,
@@ -1251,8 +1461,24 @@ impl<'a> PvopParser<'a> {
         }
 
         let body_start = self.reader.pos;
+        let mut blocks = Vec::new();
         for block in 0..6 {
-            self.parse_block(false, cbp & (32 >> block) != 0, false, block >= 4)?;
+            let coded = cbp & (32 >> block) != 0;
+            if self.collect_dct {
+                let block_start = self.reader.pos;
+                let mut events = Vec::new();
+                self.parse_block(false, coded, false, block >= 4, Some(&mut events))?;
+                blocks.push(InterBlock {
+                    span: BitSpan {
+                        start: block_start,
+                        len: self.reader.pos - block_start,
+                    },
+                    events: coded.then_some(events),
+                    dirty: false,
+                });
+            } else {
+                self.parse_block(false, coded, false, block >= 4, None)?;
+            }
         }
 
         Ok(MbKind::Inter {
@@ -1263,6 +1489,7 @@ impl<'a> PvopParser<'a> {
             },
             four_mv,
             mvs,
+            blocks,
         })
     }
 }
@@ -1270,7 +1497,11 @@ impl<'a> PvopParser<'a> {
 /// Parse an editable P-VOP out of one video chunk. Returns `Ok(None)` for
 /// chunks that are not coded P-VOPs (I-VOPs, `vop_coded == 0`, no VOP start
 /// code) — those are passed through verbatim by the editor.
-fn parse_pvop(chunk: &[u8], cfg: &VolConfig) -> Result<Option<PvopParse>, MediaError> {
+fn parse_pvop(
+    chunk: &[u8],
+    cfg: &VolConfig,
+    collect_dct: bool,
+) -> Result<Option<PvopParse>, MediaError> {
     let Some(vop_pos) = find_start_code(chunk, 0, |code| code == 0xb6) else {
         return Ok(None);
     };
@@ -1331,6 +1562,7 @@ fn parse_pvop(chunk: &[u8], cfg: &VolConfig) -> Result<Option<PvopParse>, MediaE
         time_increment_bits: cfg.time_increment_bits,
         mb_total: mb_w * mb_h,
         state: SliceState::frame_start(),
+        collect_dct,
     };
 
     let mut mbs = Vec::with_capacity(mb_w * mb_h);
@@ -1400,6 +1632,7 @@ fn emit_pvop(
                 body,
                 four_mv,
                 mvs,
+                blocks,
             } => {
                 w.copy_span(chunk, *head)?;
                 if *four_mv {
@@ -1419,7 +1652,26 @@ fn emit_pvop(
                     encode_motion(&mut w, my - py, parse.fcode);
                     grid.set_mb(mb_x, mb_y, (mx, my));
                 }
-                w.copy_span(chunk, *body)?;
+                if blocks.is_empty() {
+                    w.copy_span(chunk, *body)?;
+                } else {
+                    let rl = &tables().inter_rl;
+                    for block in blocks {
+                        match (&block.events, block.dirty) {
+                            (Some(events), true) => {
+                                for (index, event) in events.iter().enumerate() {
+                                    rl.encode_event(
+                                        &mut w,
+                                        index + 1 == events.len(),
+                                        event.run,
+                                        event.level,
+                                    );
+                                }
+                            }
+                            _ => w.copy_span(chunk, block.span)?,
+                        }
+                    }
+                }
             }
         }
     }
@@ -1548,7 +1800,7 @@ pub fn remix_motion_vectors(
         if keyframe {
             return Ok(None);
         }
-        let Some(mut parse) = parse_pvop(payload, &cfg)? else {
+        let Some(mut parse) = parse_pvop(payload, &cfg, false)? else {
             return Ok(None);
         };
         let frame = p_frame_ordinal;
@@ -1607,11 +1859,254 @@ pub fn remix_motion_vectors(
     Ok((edited, stats))
 }
 
+/// A DCT-coefficient edit applied to every coded inter block of every P-VOP
+/// (intra macroblocks are left untouched; their DC path is coded differently
+/// and they are rare inside P-frames). CBP is frozen in the copied MB header,
+/// so a block never becomes empty — edits that would zero everything keep the
+/// final coefficient at magnitude 1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DctOperation {
+    /// Multiply every quantized level (clamped to ±2047). `1.0` is the exact
+    /// off case; large factors overdrive into the classic rainbow ringing.
+    Amp { factor: f64 },
+    /// Keep only the first `keep` coefficient events per block (blocky
+    /// mosaic/blur). `keep >= 64` is the off case.
+    LoPass { keep: u32 },
+    /// Zero the first `drop` events per block, preserving the positions of the
+    /// rest (edge ghosts). `0` is the off case; the final event always
+    /// survives.
+    HiPass { drop: u32 },
+    /// Add deterministic pseudo-random noise in `[-amount, amount]` to every
+    /// level (hash of frame/MB/block/coefficient — reproducible surgery).
+    /// `0` is the off case.
+    Noise { amount: u32 },
+}
+
+/// Counters reported for a DCT edit pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DctEditStats {
+    pub p_frames: usize,
+    pub edited_frames: usize,
+    /// Coded inter blocks visited.
+    pub visited_blocks: usize,
+    /// Blocks whose event list changed.
+    pub changed_blocks: usize,
+    /// Coefficient events changed, dropped, or truncated.
+    pub changed_coeffs: usize,
+    /// Levels clamped to the ±2047 escape-3 range.
+    pub clamped_levels: usize,
+}
+
+/// splitmix64 finalizer over the coefficient's coordinates — deterministic
+/// noise without any global RNG state.
+fn dct_hash(frame: u64, mb: u64, block: u64, index: u64) -> u64 {
+    let mut x = frame
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (mb << 32)
+        ^ (block << 16)
+        ^ index;
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+    x
+}
+
+/// Replace each event's level with `new_levels[i]`, dropping zeroed events by
+/// merging their zero-runs into the next survivor. Never leaves the block
+/// empty (CBP is frozen). Returns the number of changed/dropped events.
+fn rebuild_block_events(events: &mut Vec<TcoefEvent>, new_levels: &[i16]) -> usize {
+    let mut changed = 0usize;
+    let mut out: Vec<TcoefEvent> = Vec::with_capacity(events.len());
+    let mut carry: u16 = 0;
+    for (event, &new_level) in events.iter().zip(new_levels) {
+        if new_level == 0 {
+            changed += 1;
+            carry += event.run as u16 + 1;
+            continue;
+        }
+        if new_level != event.level || carry != 0 {
+            changed += 1;
+        }
+        out.push(TcoefEvent {
+            // Positions within an 8x8 block bound the merged run to <= 63.
+            run: (event.run as u16 + carry) as u8,
+            level: new_level,
+        });
+        carry = 0;
+    }
+    if out.is_empty() {
+        let last = events.last().copied().unwrap_or(TcoefEvent { run: 0, level: 1 });
+        out.push(TcoefEvent {
+            run: last.run,
+            level: if last.level < 0 { -1 } else { 1 },
+        });
+    }
+    *events = out;
+    changed
+}
+
+/// Apply the operation to one block's events; returns `(changed, clamped)`.
+fn apply_dct_operation(
+    op: &DctOperation,
+    events: &mut Vec<TcoefEvent>,
+    frame: usize,
+    mb_index: usize,
+    block_index: usize,
+    clamped: &mut usize,
+) -> usize {
+    const LEVEL_LIMIT: i32 = 2047;
+    match op {
+        DctOperation::Amp { factor } => {
+            let new_levels: Vec<i16> = events
+                .iter()
+                .map(|event| {
+                    let target = round_half_away(event.level as f64 * factor);
+                    let limited = target.clamp(-LEVEL_LIMIT, LEVEL_LIMIT);
+                    if limited != target {
+                        *clamped += 1;
+                    }
+                    limited as i16
+                })
+                .collect();
+            rebuild_block_events(events, &new_levels)
+        }
+        DctOperation::LoPass { keep } => {
+            let keep = (*keep).max(1) as usize;
+            if events.len() > keep {
+                let dropped = events.len() - keep;
+                events.truncate(keep);
+                dropped
+            } else {
+                0
+            }
+        }
+        DctOperation::HiPass { drop } => {
+            let drop = (*drop as usize).min(events.len() - 1);
+            if drop == 0 {
+                return 0;
+            }
+            let removed: u16 = events[..drop]
+                .iter()
+                .map(|event| event.run as u16 + 1)
+                .sum();
+            events.drain(..drop);
+            events[0].run = (events[0].run as u16 + removed) as u8;
+            drop
+        }
+        DctOperation::Noise { amount } => {
+            if *amount == 0 {
+                return 0;
+            }
+            let span = 2 * *amount as u64 + 1;
+            let new_levels: Vec<i16> = events
+                .iter()
+                .enumerate()
+                .map(|(index, event)| {
+                    let delta = (dct_hash(
+                        frame as u64,
+                        mb_index as u64,
+                        block_index as u64,
+                        index as u64,
+                    ) % span) as i32
+                        - *amount as i32;
+                    let target = event.level as i32 + delta;
+                    let limited = target.clamp(-LEVEL_LIMIT, LEVEL_LIMIT);
+                    if limited != target {
+                        *clamped += 1;
+                    }
+                    limited as i16
+                })
+                .collect();
+            rebuild_block_events(events, &new_levels)
+        }
+    }
+}
+
+/// Apply `op` to every P-VOP's inter-block DCT coefficients in an
+/// FFmpeg-encoded MPEG-4 AVI. Returns the rebuilt AVI and edit stats; identity
+/// parameters return the input verbatim (the exact off case).
+pub fn remix_dct_coefficients(
+    avi_bytes: &[u8],
+    op: &DctOperation,
+) -> Result<(Vec<u8>, DctEditStats), MediaError> {
+    let payloads = avi::video_chunk_payloads(avi_bytes)?;
+    let first = payloads
+        .first()
+        .ok_or_else(|| MediaError::MalformedAvi("AVI contains no video chunks".to_string()))?;
+    let cfg = parse_vol_config(first)?;
+
+    let mut stats = DctEditStats::default();
+    let mut p_frame_ordinal = 0usize;
+
+    let edited = avi::edit_video_chunks(avi_bytes, |_, keyframe, payload| {
+        if keyframe {
+            return Ok(None);
+        }
+        let Some(mut parse) = parse_pvop(payload, &cfg, true)? else {
+            return Ok(None);
+        };
+        let frame = p_frame_ordinal;
+        p_frame_ordinal += 1;
+        stats.p_frames += 1;
+
+        let mut frame_changed = false;
+        for (mb_index, mb) in parse.mbs.iter_mut().enumerate() {
+            if let MbKind::Inter { blocks, .. } = &mut mb.kind {
+                for (block_index, block) in blocks.iter_mut().enumerate() {
+                    let Some(events) = &mut block.events else {
+                        continue;
+                    };
+                    stats.visited_blocks += 1;
+                    let changed = apply_dct_operation(
+                        op,
+                        events,
+                        frame,
+                        mb_index,
+                        block_index,
+                        &mut stats.clamped_levels,
+                    );
+                    if changed > 0 {
+                        stats.changed_blocks += 1;
+                        stats.changed_coeffs += changed;
+                        block.dirty = true;
+                        frame_changed = true;
+                    }
+                }
+            }
+        }
+
+        if !frame_changed {
+            return Ok(None);
+        }
+        stats.edited_frames += 1;
+        Ok(Some(emit_pvop(payload, &parse, &cfg)?))
+    })?;
+
+    if stats.changed_blocks == 0 {
+        return Ok((avi_bytes.to_vec(), stats));
+    }
+    Ok((edited, stats))
+}
+
 /// Prove the parser on a real file: parse and re-emit every P-VOP with no edits
 /// and require the result to be byte-identical to the original chunk. Returns
 /// the number of P-VOPs verified. This is the acceptance gate for the VLC
 /// tables and syntax coverage.
 pub fn verify_roundtrip(avi_bytes: &[u8]) -> Result<usize, MediaError> {
+    verify_roundtrip_inner(avi_bytes, false)
+}
+
+/// As [`verify_roundtrip`], but decode every inter block's DCT coefficients to
+/// events and force them through the canonical re-encoder instead of the span
+/// copy — the acceptance gate proving the TCOEF event codec (tables, escape
+/// selection, tie-breaking) matches the reference encoder bit-for-bit.
+pub fn verify_roundtrip_dct(avi_bytes: &[u8]) -> Result<usize, MediaError> {
+    verify_roundtrip_inner(avi_bytes, true)
+}
+
+fn verify_roundtrip_inner(avi_bytes: &[u8], force_dct: bool) -> Result<usize, MediaError> {
     let payloads = avi::video_chunk_payloads(avi_bytes)?;
     let first = payloads
         .first()
@@ -1620,9 +2115,20 @@ pub fn verify_roundtrip(avi_bytes: &[u8]) -> Result<usize, MediaError> {
 
     let mut verified = 0usize;
     for (index, payload) in payloads.iter().enumerate() {
-        let Some(parse) = parse_pvop(payload, &cfg)? else {
+        let Some(mut parse) = parse_pvop(payload, &cfg, force_dct)? else {
             continue;
         };
+        if force_dct {
+            for mb in &mut parse.mbs {
+                if let MbKind::Inter { blocks, .. } = &mut mb.kind {
+                    for block in blocks {
+                        if block.events.is_some() {
+                            block.dirty = true;
+                        }
+                    }
+                }
+            }
+        }
         let reemitted = emit_pvop(payload, &parse, &cfg)?;
         if reemitted.as_slice() != *payload {
             let diff_at = reemitted
@@ -1762,7 +2268,7 @@ mod tests {
         w.put_vop_stuffing();
         let chunk = w.into_bytes();
 
-        let parse = parse_pvop(&chunk, &cfg)
+        let parse = parse_pvop(&chunk, &cfg, false)
             .expect("parse")
             .expect("is a coded P-VOP");
         assert_eq!(parse.fcode, 1);
@@ -1843,6 +2349,7 @@ mod tests {
             time_increment_bits: cfg.time_increment_bits,
             mb_total: mb_w * cfg.mb_height(),
             state: SliceState::frame_start(),
+            collect_dct: false,
         };
         for mb_index in 0..mb_w * cfg.mb_height() {
             let mb_x = mb_index % mb_w;
@@ -1865,7 +2372,7 @@ mod tests {
                 Ok(MbKind::Copied(span)) => {
                     eprintln!("mb ({mb_x},{mb_y}) copied bits {}..{}", span.start, span.start + span.len)
                 }
-                Ok(MbKind::Inter { four_mv, mvs, head, body }) => eprintln!(
+                Ok(MbKind::Inter { four_mv, mvs, head, body, .. }) => eprintln!(
                     "mb ({mb_x},{mb_y}) inter 4mv={four_mv} mvs={mvs:?} head {}+{} body {}+{}",
                     head.start, head.len, body.start, body.len
                 ),
@@ -1959,6 +2466,30 @@ mod tests {
             assert_ne!(panned, bytes);
             let reverified = verify_roundtrip(&panned)
                 .unwrap_or_else(|err| panic!("edited {name} does not re-parse: {err}"));
+            assert!(reverified >= 60);
+
+            // DCT gate: forcing every inter block through the canonical TCOEF
+            // re-encoder must still be byte-identical to the encoder's output.
+            let dct_verified = verify_roundtrip_dct(&bytes)
+                .unwrap_or_else(|err| panic!("DCT re-encode round-trip failed for {name}: {err}"));
+            assert!(dct_verified >= 60);
+
+            // DCT identity params return the input verbatim.
+            let (unchanged, dct_stats) =
+                remix_dct_coefficients(&bytes, &DctOperation::Amp { factor: 1.0 })
+                    .expect("identity dct remix");
+            assert_eq!(unchanged, bytes, "{name}: amp 1.0 must be the identity");
+            assert_eq!(dct_stats.changed_blocks, 0);
+            assert!(dct_stats.visited_blocks > 0);
+
+            // A real DCT edit re-parses byte-exactly too.
+            let (amped, dct_stats) =
+                remix_dct_coefficients(&bytes, &DctOperation::Amp { factor: 3.0 })
+                    .expect("amp remix");
+            assert!(dct_stats.changed_coeffs > 0, "{name}: amp changed nothing");
+            assert_ne!(amped, bytes);
+            let reverified = verify_roundtrip(&amped)
+                .unwrap_or_else(|err| panic!("DCT-edited {name} does not re-parse: {err}"));
             assert!(reverified >= 60);
         }
 

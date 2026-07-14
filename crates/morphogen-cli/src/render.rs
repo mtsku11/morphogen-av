@@ -1595,6 +1595,14 @@ pub(crate) struct DatamoshBitstreamRequest<'a> {
     /// `mv-sine` only: warp amplitude (half-pels) and period (MBs / P-frames).
     pub(crate) mv_sine_amp: f64,
     pub(crate) mv_sine_period: f64,
+    /// `dct-amp` only: quantized-level multiplier.
+    pub(crate) dct_factor: f64,
+    /// `dct-lopass` only: coefficients kept per block.
+    pub(crate) dct_keep: u32,
+    /// `dct-hipass` only: leading coefficients zeroed per block.
+    pub(crate) dct_drop: u32,
+    /// `dct-noise` only: deterministic level-noise amplitude.
+    pub(crate) dct_noise_amount: u32,
 }
 
 pub(crate) const DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM: &str =
@@ -1613,6 +1621,14 @@ pub(crate) const DATAMOSH_BITSTREAM_MV_SINK_ALGORITHM: &str =
     "datamosh_bitstream_mv_sink_experimental_v1";
 pub(crate) const DATAMOSH_BITSTREAM_MV_SINE_ALGORITHM: &str =
     "datamosh_bitstream_mv_sine_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_DCT_AMP_ALGORITHM: &str =
+    "datamosh_bitstream_dct_amp_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_DCT_LOPASS_ALGORITHM: &str =
+    "datamosh_bitstream_dct_lopass_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_DCT_HIPASS_ALGORITHM: &str =
+    "datamosh_bitstream_dct_hipass_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_DCT_NOISE_ALGORITHM: &str =
+    "datamosh_bitstream_dct_noise_experimental_v1";
 
 #[derive(Serialize)]
 struct DatamoshBitstreamSidecar {
@@ -1634,8 +1650,25 @@ struct DatamoshBitstreamSidecar {
     /// Pure-Rust motion-vector edit parameters + counters (mv-* operations only).
     #[serde(skip_serializing_if = "Option::is_none")]
     mv_edit: Option<MvEditSidecar>,
+    /// Pure-Rust DCT-coefficient edit parameters + counters (dct-* operations only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dct_edit: Option<DctEditSidecar>,
     ffmpeg_version: String,
     note: String,
+}
+
+#[derive(Serialize)]
+struct DctEditSidecar {
+    factor: f64,
+    keep: u32,
+    drop: u32,
+    noise_amount: u32,
+    p_frames: usize,
+    edited_frames: usize,
+    visited_blocks: usize,
+    changed_blocks: usize,
+    changed_coeffs: usize,
+    clamped_levels: usize,
 }
 
 #[derive(Serialize)]
@@ -1667,7 +1700,39 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
     // (Source B) seeds the I-frame and the modulator (`input`, Source A), scaled to
     // the carrier's grid, supplies the P-frame motion.
     let mut mv_stats: Option<morphogen_media::MvEditStats> = None;
+    let mut dct_stats: Option<morphogen_media::DctEditStats> = None;
     let (moshed_bytes, p_frames_available, carrier_label) = match request.operation {
+        CliDatamoshBitstreamOperation::DctAmp
+        | CliDatamoshBitstreamOperation::DctLopass
+        | CliDatamoshBitstreamOperation::DctHipass
+        | CliDatamoshBitstreamOperation::DctNoise => {
+            let encoded = request.output_dir.join("encoded.avi");
+            morphogen_media::encode_datamosh_avi(request.input, &encoded, request.fps)?;
+            let encoded_bytes = fs::read(&encoded)?;
+            let available = morphogen_media::count_p_frames(&encoded_bytes)?;
+            let op = match request.operation {
+                CliDatamoshBitstreamOperation::DctAmp => morphogen_media::DctOperation::Amp {
+                    factor: request.dct_factor,
+                },
+                CliDatamoshBitstreamOperation::DctLopass => {
+                    morphogen_media::DctOperation::LoPass {
+                        keep: request.dct_keep,
+                    }
+                }
+                CliDatamoshBitstreamOperation::DctHipass => {
+                    morphogen_media::DctOperation::HiPass {
+                        drop: request.dct_drop,
+                    }
+                }
+                _ => morphogen_media::DctOperation::Noise {
+                    amount: request.dct_noise_amount,
+                },
+            };
+            let (bytes, stats) = morphogen_media::remix_dct_coefficients(&encoded_bytes, &op)?;
+            dct_stats = Some(stats);
+            let _ = fs::remove_file(&encoded);
+            (bytes, available, None)
+        }
         CliDatamoshBitstreamOperation::MvZero
         | CliDatamoshBitstreamOperation::MvPan
         | CliDatamoshBitstreamOperation::MvScale
@@ -1781,6 +1846,18 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
             changed_mvs: stats.changed_mvs,
             clamped_mvs: stats.clamped_mvs,
         }),
+        dct_edit: dct_stats.map(|stats| DctEditSidecar {
+            factor: request.dct_factor,
+            keep: request.dct_keep,
+            drop: request.dct_drop,
+            noise_amount: request.dct_noise_amount,
+            p_frames: stats.p_frames,
+            edited_frames: stats.edited_frames,
+            visited_blocks: stats.visited_blocks,
+            changed_blocks: stats.changed_blocks,
+            changed_coeffs: stats.changed_coeffs,
+            clamped_levels: stats.clamped_levels,
+        }),
         ffmpeg_version: morphogen_media::ffmpeg_version().unwrap_or_default(),
         note: "Experimental real bitstream datamosh: output is NOT bit-reproducible \
                (depends on the external ffmpeg MPEG-4 codec) and lives outside the \
@@ -1831,6 +1908,22 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
                 request.output_dir.display()
             );
         }
+        CliDatamoshBitstreamOperation::DctAmp
+        | CliDatamoshBitstreamOperation::DctLopass
+        | CliDatamoshBitstreamOperation::DctHipass
+        | CliDatamoshBitstreamOperation::DctNoise => {
+            let stats = dct_stats.unwrap_or_default();
+            println!(
+                "datamosh-bitstream (EXPERIMENTAL, non-deterministic): {} rewrote {} coefficients in {}/{} inter blocks across {} P-frames ({} clamped) -> {}",
+                datamosh_bitstream_operation_name(request.operation),
+                stats.changed_coeffs,
+                stats.changed_blocks,
+                stats.visited_blocks,
+                stats.p_frames,
+                stats.clamped_levels,
+                request.output_dir.display()
+            );
+        }
     }
     Ok(())
 }
@@ -1851,6 +1944,10 @@ pub(crate) fn datamosh_bitstream_algorithm(
         CliDatamoshBitstreamOperation::MvScale => DATAMOSH_BITSTREAM_MV_SCALE_ALGORITHM,
         CliDatamoshBitstreamOperation::MvSink => DATAMOSH_BITSTREAM_MV_SINK_ALGORITHM,
         CliDatamoshBitstreamOperation::MvSine => DATAMOSH_BITSTREAM_MV_SINE_ALGORITHM,
+        CliDatamoshBitstreamOperation::DctAmp => DATAMOSH_BITSTREAM_DCT_AMP_ALGORITHM,
+        CliDatamoshBitstreamOperation::DctLopass => DATAMOSH_BITSTREAM_DCT_LOPASS_ALGORITHM,
+        CliDatamoshBitstreamOperation::DctHipass => DATAMOSH_BITSTREAM_DCT_HIPASS_ALGORITHM,
+        CliDatamoshBitstreamOperation::DctNoise => DATAMOSH_BITSTREAM_DCT_NOISE_ALGORITHM,
     }
 }
 
@@ -1866,6 +1963,10 @@ pub(crate) fn datamosh_bitstream_operation_name(
         CliDatamoshBitstreamOperation::MvScale => "mv_scale",
         CliDatamoshBitstreamOperation::MvSink => "mv_sink",
         CliDatamoshBitstreamOperation::MvSine => "mv_sine",
+        CliDatamoshBitstreamOperation::DctAmp => "dct_amp",
+        CliDatamoshBitstreamOperation::DctLopass => "dct_lopass",
+        CliDatamoshBitstreamOperation::DctHipass => "dct_hipass",
+        CliDatamoshBitstreamOperation::DctNoise => "dct_noise",
     }
 }
 

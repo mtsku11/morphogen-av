@@ -204,7 +204,7 @@ struct BitstreamDatamoshDetailView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .bitstreamDatamosh)
-        .help("Real AVI bitstream surgery: P-frame duplication, keyframe removal, motion transfer, or ffglitch-style motion-vector editing (freeze/pan/scale/sink/sine). Non-deterministic by design.")
+        .help("Real AVI bitstream surgery: P-frame duplication, keyframe removal, motion transfer, or ffglitch-style motion-vector and DCT-coefficient editing. Non-deterministic by design.")
 
       HStack(spacing: EffectDetailLayout.controlRowSpacing) {
         Picker("Operation", selection: $state.bitstreamOperation) {
@@ -286,6 +286,38 @@ struct BitstreamDatamoshDetailView: View {
           }
           .frame(width: 140, alignment: .leading)
           .help("Spatial period in macroblocks (also the temporal period in P-frames).")
+        }
+
+        if state.bitstreamOperation == .dctAmp {
+          Stepper(value: $state.bitstreamDctFactor, in: -16...16, step: 0.5) {
+            Text("Factor \(state.bitstreamDctFactor, specifier: "%.1f")")
+          }
+          .frame(width: 150, alignment: .leading)
+          .help("DCT level multiplier: overdrive above 1 (rainbow ringing), invert below 0. 1.0 is the exact off case.")
+        }
+
+        if state.bitstreamOperation == .dctLopass {
+          Stepper(value: $state.bitstreamDctKeep, in: 1...64, step: 1) {
+            Text("Keep \(state.bitstreamDctKeep)")
+          }
+          .frame(width: 130, alignment: .leading)
+          .help("Coefficients kept per 8x8 block; 1 is the harshest mosaic, 64 is off.")
+        }
+
+        if state.bitstreamOperation == .dctHipass {
+          Stepper(value: $state.bitstreamDctDrop, in: 0...63, step: 1) {
+            Text("Drop \(state.bitstreamDctDrop)")
+          }
+          .frame(width: 130, alignment: .leading)
+          .help("Leading coefficients zeroed per block (edge ghosts); 0 is off.")
+        }
+
+        if state.bitstreamOperation == .dctNoise {
+          Stepper(value: $state.bitstreamDctNoiseAmount, in: 0...256, step: 1) {
+            Text("Amount \(state.bitstreamDctNoiseAmount)")
+          }
+          .frame(width: 150, alignment: .leading)
+          .help("Deterministic level-noise amplitude; 0 is off.")
         }
       }
 

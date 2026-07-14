@@ -459,6 +459,22 @@ pub(crate) enum Commands {
         /// period in P-frames).
         #[arg(long, default_value_t = 6.0)]
         mv_sine_period: f64,
+        /// `dct-amp` only: quantized-level multiplier (amplify > 1, invert < 0).
+        /// `1.0` is the exact off case.
+        #[arg(long, default_value_t = 1.0)]
+        dct_factor: f64,
+        /// `dct-lopass` only: coefficients kept per 8x8 block. `64` is the
+        /// exact off case; `1` keeps only the first coefficient (mosaic).
+        #[arg(long, default_value_t = 64)]
+        dct_keep: u32,
+        /// `dct-hipass` only: leading coefficients zeroed per block (positions
+        /// of the rest are preserved). `0` is the exact off case.
+        #[arg(long, default_value_t = 0)]
+        dct_drop: u32,
+        /// `dct-noise` only: deterministic level-noise amplitude. `0` is the
+        /// exact off case.
+        #[arg(long, default_value_t = 0)]
+        dct_noise_amount: u32,
     },
     /// Render a convolutional AV blend sequence: each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved
@@ -3701,6 +3717,18 @@ pub(crate) enum Commands {
         /// mv-sine only: spatial/temporal period in macroblocks / P-frames.
         #[arg(long, default_value_t = 6.0)]
         mv_sine_period: f64,
+        /// dct-amp only: quantized-level multiplier.
+        #[arg(long, default_value_t = 1.0)]
+        dct_factor: f64,
+        /// dct-lopass only: coefficients kept per block.
+        #[arg(long, default_value_t = 64)]
+        dct_keep: u32,
+        /// dct-hipass only: leading coefficients zeroed per block.
+        #[arg(long, default_value_t = 0)]
+        dct_drop: u32,
+        /// dct-noise only: deterministic level-noise amplitude.
+        #[arg(long, default_value_t = 0)]
+        dct_noise_amount: u32,
         /// Named bitstream preset.
         #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamPreset::Custom)]
         preset: CliDatamoshBitstreamPreset,
@@ -4144,6 +4172,14 @@ pub(crate) enum CliDatamoshBitstreamOperation {
     MvSink,
     /// Sinusoidal vector warp (`--mv-sine-amp`, `--mv-sine-period`).
     MvSine,
+    /// Multiply every inter-block DCT level (`--dct-factor`; rainbow overdrive).
+    DctAmp,
+    /// Keep only the first `--dct-keep` coefficients per block (blocky mosaic).
+    DctLopass,
+    /// Zero the first `--dct-drop` coefficients per block (edge ghosts).
+    DctHipass,
+    /// Deterministic DCT level noise (`--dct-noise-amount`).
+    DctNoise,
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -4167,6 +4203,10 @@ impl From<CliDatamoshBitstreamOperation> for DatamoshBitstreamOperation {
             CliDatamoshBitstreamOperation::MvScale => Self::MvScale,
             CliDatamoshBitstreamOperation::MvSink => Self::MvSink,
             CliDatamoshBitstreamOperation::MvSine => Self::MvSine,
+            CliDatamoshBitstreamOperation::DctAmp => Self::DctAmp,
+            CliDatamoshBitstreamOperation::DctLopass => Self::DctLopass,
+            CliDatamoshBitstreamOperation::DctHipass => Self::DctHipass,
+            CliDatamoshBitstreamOperation::DctNoise => Self::DctNoise,
         }
     }
 }

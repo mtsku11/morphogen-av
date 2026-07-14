@@ -861,6 +861,10 @@ final class AppState: ObservableObject {
   @Published var bitstreamMvScale = 2.0
   @Published var bitstreamMvSineAmp = 8.0
   @Published var bitstreamMvSinePeriod = 6.0
+  @Published var bitstreamDctFactor = 4.0
+  @Published var bitstreamDctKeep = 3
+  @Published var bitstreamDctDrop = 2
+  @Published var bitstreamDctNoiseAmount = 8
   @Published var bitstreamPreset: BitstreamPresetOption = .custom
   @Published var bitstreamSummary = "No bitstream datamosh rendered"
   @Published var showcaseSummary = "No showcase preview rendered"
@@ -4655,6 +4659,10 @@ final class AppState: ObservableObject {
       mvScale: bitstreamMvScale,
       mvSineAmp: bitstreamMvSineAmp,
       mvSinePeriod: bitstreamMvSinePeriod,
+      dctFactor: bitstreamDctFactor,
+      dctKeep: bitstreamDctKeep,
+      dctDrop: bitstreamDctDrop,
+      dctNoiseAmount: bitstreamDctNoiseAmount,
       preset: bitstreamPreset,
       projectURL: projectURL
     )
@@ -5809,6 +5817,10 @@ enum BitstreamOperationOption: String, CaseIterable, Identifiable {
   case mvScale = "MV Scale"
   case mvSink = "MV Sink"
   case mvSine = "MV Sine Warp"
+  case dctAmp = "DCT Overdrive"
+  case dctLopass = "DCT Mosaic"
+  case dctHipass = "DCT Edge Ghost"
+  case dctNoise = "DCT Noise"
 
   var id: String { rawValue }
 
@@ -5830,6 +5842,14 @@ enum BitstreamOperationOption: String, CaseIterable, Identifiable {
       return "mv-sink"
     case .mvSine:
       return "mv-sine"
+    case .dctAmp:
+      return "dct-amp"
+    case .dctLopass:
+      return "dct-lopass"
+    case .dctHipass:
+      return "dct-hipass"
+    case .dctNoise:
+      return "dct-noise"
     }
   }
 
@@ -5838,7 +5858,17 @@ enum BitstreamOperationOption: String, CaseIterable, Identifiable {
     switch self {
     case .mvZero, .mvPan, .mvScale, .mvSink, .mvSine:
       return true
-    case .pframeDuplicate, .removeKeyframe, .motionTransfer:
+    default:
+      return false
+    }
+  }
+
+  /// The pure-Rust DCT-coefficient editing tier.
+  var isDctEdit: Bool {
+    switch self {
+    case .dctAmp, .dctLopass, .dctHipass, .dctNoise:
+      return true
+    default:
       return false
     }
   }
