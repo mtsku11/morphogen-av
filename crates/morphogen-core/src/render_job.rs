@@ -57,6 +57,18 @@ fn default_carrier_keyframes() -> u32 {
     1
 }
 
+fn default_mv_scale() -> f64 {
+    1.0
+}
+
+fn default_mv_sine_amp() -> f64 {
+    8.0
+}
+
+fn default_mv_sine_period() -> f64 {
+    6.0
+}
+
 fn default_block_collage_tile_size() -> u32 {
     96
 }
@@ -1285,6 +1297,24 @@ pub enum RenderJobTask {
         /// motion-transfer only: leading carrier frames kept before modulator motion.
         #[serde(default = "default_carrier_keyframes")]
         carrier_keyframes: u32,
+        /// mv-pan only: constant horizontal offset added to every motion vector
+        /// (half-pel units; 2 = one pixel per frame).
+        #[serde(default)]
+        mv_pan_x: i32,
+        /// mv-pan only: constant vertical offset (half-pel units).
+        #[serde(default)]
+        mv_pan_y: i32,
+        /// mv-scale only: multiplier applied to every motion vector
+        /// (amplify > 1, dampen < 1, invert < 0).
+        #[serde(default = "default_mv_scale")]
+        mv_scale: f64,
+        /// mv-sine only: warp amplitude in half-pels.
+        #[serde(default = "default_mv_sine_amp")]
+        mv_sine_amp: f64,
+        /// mv-sine only: spatial period in macroblocks (also the temporal period
+        /// in P-frames).
+        #[serde(default = "default_mv_sine_period")]
+        mv_sine_period: f64,
         /// Named bitstream preset. Custom keeps the explicit knobs above.
         #[serde(default)]
         preset: DatamoshBitstreamPreset,
@@ -2054,6 +2084,18 @@ pub enum DatamoshBitstreamOperation {
     RemoveKeyframe,
     /// Splice modulator (Source A) P-frame motion onto carrier (Source B) I-frame.
     MotionTransfer,
+    /// Zero every P-frame motion vector (pure-Rust MV editing): motion freezes,
+    /// residuals keep painting.
+    MvZero,
+    /// Add a constant offset to every motion vector — the classic ffglitch pan.
+    MvPan,
+    /// Multiply every motion vector (amplify/dampen/invert).
+    MvScale,
+    /// Replace every motion vector with the running average of all vectors seen
+    /// so far — the ffglitch "average motion" melt.
+    MvSink,
+    /// Position-dependent sinusoidal motion-vector warp.
+    MvSine,
 }
 
 /// Named bitstream datamosh presets — resolve to an operation + knob set at queue time.
@@ -3248,6 +3290,11 @@ mod tests {
             duplicate_count: 12,
             carrier_video: None,
             carrier_keyframes: 1,
+            mv_pan_x: 0,
+            mv_pan_y: 0,
+            mv_scale: 1.0,
+            mv_sine_amp: 8.0,
+            mv_sine_period: 6.0,
             preset: DatamoshBitstreamPreset::Bloom,
         };
         let json = serde_json::to_string(&task).expect("serialize");
@@ -3269,6 +3316,11 @@ mod tests {
             duplicate_count,
             carrier_video,
             carrier_keyframes,
+            mv_pan_x,
+            mv_pan_y,
+            mv_scale,
+            mv_sine_amp,
+            mv_sine_period,
             preset,
             ..
         } = from_minimal
@@ -3280,6 +3332,28 @@ mod tests {
         assert_eq!(duplicate_count, 0);
         assert_eq!(carrier_video, None);
         assert_eq!(carrier_keyframes, 1);
+        assert_eq!(mv_pan_x, 0);
+        assert_eq!(mv_pan_y, 0);
+        assert_eq!(mv_scale, 1.0);
+        assert_eq!(mv_sine_amp, 8.0);
+        assert_eq!(mv_sine_period, 6.0);
         assert_eq!(preset, DatamoshBitstreamPreset::Custom);
+    }
+
+    #[test]
+    fn datamosh_bitstream_mv_operations_serde_snake_case() {
+        for (op, expected) in [
+            (DatamoshBitstreamOperation::MvZero, "\"mv_zero\""),
+            (DatamoshBitstreamOperation::MvPan, "\"mv_pan\""),
+            (DatamoshBitstreamOperation::MvScale, "\"mv_scale\""),
+            (DatamoshBitstreamOperation::MvSink, "\"mv_sink\""),
+            (DatamoshBitstreamOperation::MvSine, "\"mv_sine\""),
+        ] {
+            let json = serde_json::to_string(&op).expect("serialize");
+            assert_eq!(json, expected);
+            let back: DatamoshBitstreamOperation =
+                serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, op);
+        }
     }
 }

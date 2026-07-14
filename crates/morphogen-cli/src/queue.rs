@@ -5894,6 +5894,11 @@ pub(crate) struct QueueAddDatamoshBitstreamRequest<'a> {
     pub(crate) duplicate_count: u32,
     pub(crate) carrier_video: Option<&'a Path>,
     pub(crate) carrier_keyframes: u32,
+    pub(crate) mv_pan_x: i32,
+    pub(crate) mv_pan_y: i32,
+    pub(crate) mv_scale: f64,
+    pub(crate) mv_sine_amp: f64,
+    pub(crate) mv_sine_period: f64,
     pub(crate) preset: DatamoshBitstreamPreset,
     pub(crate) project_path: Option<&'a Path>,
 }
@@ -5946,6 +5951,11 @@ fn cli_bitstream_operation(op: DatamoshBitstreamOperation) -> CliDatamoshBitstre
         }
         DatamoshBitstreamOperation::RemoveKeyframe => CliDatamoshBitstreamOperation::RemoveKeyframe,
         DatamoshBitstreamOperation::MotionTransfer => CliDatamoshBitstreamOperation::MotionTransfer,
+        DatamoshBitstreamOperation::MvZero => CliDatamoshBitstreamOperation::MvZero,
+        DatamoshBitstreamOperation::MvPan => CliDatamoshBitstreamOperation::MvPan,
+        DatamoshBitstreamOperation::MvScale => CliDatamoshBitstreamOperation::MvScale,
+        DatamoshBitstreamOperation::MvSink => CliDatamoshBitstreamOperation::MvSink,
+        DatamoshBitstreamOperation::MvSine => CliDatamoshBitstreamOperation::MvSine,
     }
 }
 
@@ -5962,6 +5972,11 @@ pub(crate) fn queue_add_datamosh_bitstream(
         mut duplicate_count,
         carrier_video,
         mut carrier_keyframes,
+        mv_pan_x,
+        mv_pan_y,
+        mv_scale,
+        mv_sine_amp,
+        mv_sine_period,
         preset,
         project_path,
     } = request;
@@ -6049,6 +6064,11 @@ pub(crate) fn queue_add_datamosh_bitstream(
             duplicate_count,
             carrier_video: carrier_video.map(|p| p.to_string_lossy().to_string()),
             carrier_keyframes,
+            mv_pan_x,
+            mv_pan_y,
+            mv_scale,
+            mv_sine_amp,
+            mv_sine_period,
             preset,
         },
         provenance: Some(provenance),
@@ -6094,6 +6114,11 @@ pub(crate) fn queue_run_datamosh_bitstream(queue_path: &Path) -> Result<(), CliE
         duplicate_count,
         carrier_video,
         carrier_keyframes,
+        mv_pan_x,
+        mv_pan_y,
+        mv_scale,
+        mv_sine_amp,
+        mv_sine_period,
         preset,
     } = queue.jobs[job_index].task.clone()
     else {
@@ -6118,6 +6143,11 @@ pub(crate) fn queue_run_datamosh_bitstream(queue_path: &Path) -> Result<(), CliE
             duplicate_count,
             carrier: carrier_video.as_deref().map(Path::new),
             carrier_keyframes,
+            mv_pan_x,
+            mv_pan_y,
+            mv_scale,
+            mv_sine_amp,
+            mv_sine_period,
         })?;
 
         // Count output frames written by the bitstream handler.

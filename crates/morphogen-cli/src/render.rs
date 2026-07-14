@@ -1587,6 +1587,14 @@ pub(crate) struct DatamoshBitstreamRequest<'a> {
     pub(crate) carrier: Option<&'a Path>,
     /// `motion-transfer` only: leading carrier frames kept before the modulator's motion.
     pub(crate) carrier_keyframes: u32,
+    /// `mv-pan` only: constant MV offset in half-pels.
+    pub(crate) mv_pan_x: i32,
+    pub(crate) mv_pan_y: i32,
+    /// `mv-scale` only: MV multiplier.
+    pub(crate) mv_scale: f64,
+    /// `mv-sine` only: warp amplitude (half-pels) and period (MBs / P-frames).
+    pub(crate) mv_sine_amp: f64,
+    pub(crate) mv_sine_period: f64,
 }
 
 pub(crate) const DATAMOSH_BITSTREAM_PFRAME_DUP_ALGORITHM: &str =
@@ -1595,6 +1603,16 @@ pub(crate) const DATAMOSH_BITSTREAM_REMOVE_KEYFRAME_ALGORITHM: &str =
     "datamosh_bitstream_remove_keyframe_experimental_v1";
 pub(crate) const DATAMOSH_BITSTREAM_MOTION_TRANSFER_ALGORITHM: &str =
     "datamosh_bitstream_motion_transfer_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_MV_ZERO_ALGORITHM: &str =
+    "datamosh_bitstream_mv_zero_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_MV_PAN_ALGORITHM: &str =
+    "datamosh_bitstream_mv_pan_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_MV_SCALE_ALGORITHM: &str =
+    "datamosh_bitstream_mv_scale_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_MV_SINK_ALGORITHM: &str =
+    "datamosh_bitstream_mv_sink_experimental_v1";
+pub(crate) const DATAMOSH_BITSTREAM_MV_SINE_ALGORITHM: &str =
+    "datamosh_bitstream_mv_sine_experimental_v1";
 
 #[derive(Serialize)]
 struct DatamoshBitstreamSidecar {
@@ -1613,8 +1631,25 @@ struct DatamoshBitstreamSidecar {
     /// Leading carrier frames kept before the modulator's motion (`motion-transfer`).
     carrier_keyframes: u32,
     p_frames_available: u32,
+    /// Pure-Rust motion-vector edit parameters + counters (mv-* operations only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mv_edit: Option<MvEditSidecar>,
     ffmpeg_version: String,
     note: String,
+}
+
+#[derive(Serialize)]
+struct MvEditSidecar {
+    pan_x: i32,
+    pan_y: i32,
+    scale: f64,
+    sine_amp: f64,
+    sine_period: f64,
+    p_frames: usize,
+    edited_frames: usize,
+    visited_mvs: usize,
+    changed_mvs: usize,
+    clamped_mvs: usize,
 }
 
 /// EXPERIMENTAL, NON-DETERMINISTIC real bitstream datamosh. Encodes `input` to a
@@ -1631,7 +1666,37 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
     // P-frames the operation had to work with. For motion-transfer the carrier
     // (Source B) seeds the I-frame and the modulator (`input`, Source A), scaled to
     // the carrier's grid, supplies the P-frame motion.
+    let mut mv_stats: Option<morphogen_media::MvEditStats> = None;
     let (moshed_bytes, p_frames_available, carrier_label) = match request.operation {
+        CliDatamoshBitstreamOperation::MvZero
+        | CliDatamoshBitstreamOperation::MvPan
+        | CliDatamoshBitstreamOperation::MvScale
+        | CliDatamoshBitstreamOperation::MvSink
+        | CliDatamoshBitstreamOperation::MvSine => {
+            let encoded = request.output_dir.join("encoded.avi");
+            morphogen_media::encode_datamosh_avi(request.input, &encoded, request.fps)?;
+            let encoded_bytes = fs::read(&encoded)?;
+            let available = morphogen_media::count_p_frames(&encoded_bytes)?;
+            let op = match request.operation {
+                CliDatamoshBitstreamOperation::MvZero => morphogen_media::MvOperation::Zero,
+                CliDatamoshBitstreamOperation::MvPan => morphogen_media::MvOperation::Pan {
+                    dx: request.mv_pan_x,
+                    dy: request.mv_pan_y,
+                },
+                CliDatamoshBitstreamOperation::MvScale => morphogen_media::MvOperation::Scale {
+                    factor: request.mv_scale,
+                },
+                CliDatamoshBitstreamOperation::MvSink => morphogen_media::MvOperation::Sink,
+                _ => morphogen_media::MvOperation::Sine {
+                    amp: request.mv_sine_amp,
+                    period: request.mv_sine_period,
+                },
+            };
+            let (bytes, stats) = morphogen_media::remix_motion_vectors(&encoded_bytes, &op)?;
+            mv_stats = Some(stats);
+            let _ = fs::remove_file(&encoded);
+            (bytes, available, None)
+        }
         CliDatamoshBitstreamOperation::PframeDuplicate
         | CliDatamoshBitstreamOperation::RemoveKeyframe => {
             let encoded = request.output_dir.join("encoded.avi");
@@ -1704,6 +1769,18 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
         duplicate_count: request.duplicate_count,
         carrier_keyframes: request.carrier_keyframes,
         p_frames_available,
+        mv_edit: mv_stats.map(|stats| MvEditSidecar {
+            pan_x: request.mv_pan_x,
+            pan_y: request.mv_pan_y,
+            scale: request.mv_scale,
+            sine_amp: request.mv_sine_amp,
+            sine_period: request.mv_sine_period,
+            p_frames: stats.p_frames,
+            edited_frames: stats.edited_frames,
+            visited_mvs: stats.visited_mvs,
+            changed_mvs: stats.changed_mvs,
+            clamped_mvs: stats.clamped_mvs,
+        }),
         ffmpeg_version: morphogen_media::ffmpeg_version().unwrap_or_default(),
         note: "Experimental real bitstream datamosh: output is NOT bit-reproducible \
                (depends on the external ffmpeg MPEG-4 codec) and lives outside the \
@@ -1738,6 +1815,22 @@ pub(crate) fn datamosh_bitstream(request: DatamoshBitstreamRequest<'_>) -> Resul
                 request.output_dir.display()
             );
         }
+        CliDatamoshBitstreamOperation::MvZero
+        | CliDatamoshBitstreamOperation::MvPan
+        | CliDatamoshBitstreamOperation::MvScale
+        | CliDatamoshBitstreamOperation::MvSink
+        | CliDatamoshBitstreamOperation::MvSine => {
+            let stats = mv_stats.unwrap_or_default();
+            println!(
+                "datamosh-bitstream (EXPERIMENTAL, non-deterministic): {} rewrote {}/{} motion vectors across {} P-frames ({} clamped) -> {}",
+                datamosh_bitstream_operation_name(request.operation),
+                stats.changed_mvs,
+                stats.visited_mvs,
+                stats.p_frames,
+                stats.clamped_mvs,
+                request.output_dir.display()
+            );
+        }
     }
     Ok(())
 }
@@ -1753,6 +1846,11 @@ pub(crate) fn datamosh_bitstream_algorithm(
         CliDatamoshBitstreamOperation::MotionTransfer => {
             DATAMOSH_BITSTREAM_MOTION_TRANSFER_ALGORITHM
         }
+        CliDatamoshBitstreamOperation::MvZero => DATAMOSH_BITSTREAM_MV_ZERO_ALGORITHM,
+        CliDatamoshBitstreamOperation::MvPan => DATAMOSH_BITSTREAM_MV_PAN_ALGORITHM,
+        CliDatamoshBitstreamOperation::MvScale => DATAMOSH_BITSTREAM_MV_SCALE_ALGORITHM,
+        CliDatamoshBitstreamOperation::MvSink => DATAMOSH_BITSTREAM_MV_SINK_ALGORITHM,
+        CliDatamoshBitstreamOperation::MvSine => DATAMOSH_BITSTREAM_MV_SINE_ALGORITHM,
     }
 }
 
@@ -1763,6 +1861,11 @@ pub(crate) fn datamosh_bitstream_operation_name(
         CliDatamoshBitstreamOperation::PframeDuplicate => "pframe_duplicate",
         CliDatamoshBitstreamOperation::RemoveKeyframe => "remove_keyframe",
         CliDatamoshBitstreamOperation::MotionTransfer => "motion_transfer",
+        CliDatamoshBitstreamOperation::MvZero => "mv_zero",
+        CliDatamoshBitstreamOperation::MvPan => "mv_pan",
+        CliDatamoshBitstreamOperation::MvScale => "mv_scale",
+        CliDatamoshBitstreamOperation::MvSink => "mv_sink",
+        CliDatamoshBitstreamOperation::MvSine => "mv_sine",
     }
 }
 

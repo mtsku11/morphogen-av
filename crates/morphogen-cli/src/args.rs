@@ -441,6 +441,24 @@ pub(crate) enum Commands {
         /// modulator's motion takes over. `1` = just the I-frame (pure transfer).
         #[arg(long, default_value_t = 1)]
         carrier_keyframes: u32,
+        /// `mv-pan` only: horizontal motion-vector offset in half-pels (2 = one
+        /// pixel per frame). `0 0` is the exact off case.
+        #[arg(long, default_value_t = 0)]
+        mv_pan_x: i32,
+        /// `mv-pan` only: vertical motion-vector offset in half-pels.
+        #[arg(long, default_value_t = 0)]
+        mv_pan_y: i32,
+        /// `mv-scale` only: motion-vector multiplier (amplify > 1, dampen < 1,
+        /// invert < 0). `1.0` is the exact off case.
+        #[arg(long, default_value_t = 1.0)]
+        mv_scale: f64,
+        /// `mv-sine` only: warp amplitude in half-pels.
+        #[arg(long, default_value_t = 8.0)]
+        mv_sine_amp: f64,
+        /// `mv-sine` only: spatial period in macroblocks (also the temporal
+        /// period in P-frames).
+        #[arg(long, default_value_t = 6.0)]
+        mv_sine_period: f64,
     },
     /// Render a convolutional AV blend sequence: each Source A frame supplies a
     /// normalized KxK luma kernel that Source B's matching frame is convolved
@@ -3668,6 +3686,21 @@ pub(crate) enum Commands {
         carrier_video: Option<PathBuf>,
         #[arg(long, default_value_t = 1)]
         carrier_keyframes: u32,
+        /// mv-pan only: horizontal MV offset in half-pels.
+        #[arg(long, default_value_t = 0)]
+        mv_pan_x: i32,
+        /// mv-pan only: vertical MV offset in half-pels.
+        #[arg(long, default_value_t = 0)]
+        mv_pan_y: i32,
+        /// mv-scale only: motion-vector multiplier.
+        #[arg(long, default_value_t = 1.0)]
+        mv_scale: f64,
+        /// mv-sine only: warp amplitude in half-pels.
+        #[arg(long, default_value_t = 8.0)]
+        mv_sine_amp: f64,
+        /// mv-sine only: spatial/temporal period in macroblocks / P-frames.
+        #[arg(long, default_value_t = 6.0)]
+        mv_sine_period: f64,
         /// Named bitstream preset.
         #[arg(long, value_enum, default_value_t = CliDatamoshBitstreamPreset::Custom)]
         preset: CliDatamoshBitstreamPreset,
@@ -4101,6 +4134,16 @@ pub(crate) enum CliDatamoshBitstreamOperation {
     PframeDuplicate,
     RemoveKeyframe,
     MotionTransfer,
+    /// Zero every P-frame motion vector (pure-Rust MV editing).
+    MvZero,
+    /// Constant motion-vector offset (`--mv-pan-x/--mv-pan-y`).
+    MvPan,
+    /// Multiply every motion vector by `--mv-scale`.
+    MvScale,
+    /// Replace vectors with the running average of all motion so far.
+    MvSink,
+    /// Sinusoidal vector warp (`--mv-sine-amp`, `--mv-sine-period`).
+    MvSine,
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -4119,6 +4162,11 @@ impl From<CliDatamoshBitstreamOperation> for DatamoshBitstreamOperation {
             CliDatamoshBitstreamOperation::PframeDuplicate => Self::PframeDuplicate,
             CliDatamoshBitstreamOperation::RemoveKeyframe => Self::RemoveKeyframe,
             CliDatamoshBitstreamOperation::MotionTransfer => Self::MotionTransfer,
+            CliDatamoshBitstreamOperation::MvZero => Self::MvZero,
+            CliDatamoshBitstreamOperation::MvPan => Self::MvPan,
+            CliDatamoshBitstreamOperation::MvScale => Self::MvScale,
+            CliDatamoshBitstreamOperation::MvSink => Self::MvSink,
+            CliDatamoshBitstreamOperation::MvSine => Self::MvSine,
         }
     }
 }

@@ -64,6 +64,62 @@ fn datamosh_bitstream_help_lists_keyframe_removal_operation() {
 }
 
 #[test]
+fn datamosh_bitstream_help_lists_mv_editing_operations_and_knobs() {
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .args(["datamosh-bitstream", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("mv-zero"))
+        .stdout(predicate::str::contains("mv-pan"))
+        .stdout(predicate::str::contains("mv-scale"))
+        .stdout(predicate::str::contains("mv-sink"))
+        .stdout(predicate::str::contains("mv-sine"))
+        .stdout(predicate::str::contains("--mv-pan-x"))
+        .stdout(predicate::str::contains("--mv-sine-amp"));
+}
+
+#[test]
+fn queue_add_datamosh_bitstream_persists_mv_knobs() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let queue_path = temp_dir.path().join("queue.json");
+    let input = temp_dir.path().join("input.avi");
+    fs::write(&input, b"placeholder").expect("write placeholder input");
+
+    Command::cargo_bin("morphogen")
+        .expect("morphogen binary")
+        .arg("queue-add-datamosh-bitstream")
+        .arg(&queue_path)
+        .arg(&input)
+        .arg(temp_dir.path().join("out"))
+        .args([
+            "--operation",
+            "mv-sine",
+            "--mv-sine-amp",
+            "12.5",
+            "--mv-sine-period",
+            "4",
+            "--mv-pan-x",
+            "6",
+            "--mv-pan-y=-3",
+            "--mv-scale",
+            "2.5",
+        ])
+        .assert()
+        .success();
+
+    let queue_json = fs::read_to_string(&queue_path).expect("read queue");
+    let queue: serde_json::Value = serde_json::from_str(&queue_json).expect("parse queue");
+    let task = &queue["jobs"][0]["task"];
+    assert_eq!(task["operation"], "mv_sine");
+    assert_eq!(task["mv_sine_amp"], 12.5);
+    assert_eq!(task["mv_sine_period"], 4.0);
+    assert_eq!(task["mv_pan_x"], 6);
+    assert_eq!(task["mv_pan_y"], -3);
+    assert_eq!(task["mv_scale"], 2.5);
+}
+
+#[test]
 fn render_rutt_etra_sequence_writes_frames_and_manifest_with_knobs() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let source_dir = temp_dir.path().join("source-frames");
