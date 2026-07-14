@@ -1779,8 +1779,8 @@ mod tests {
         assert_eq!(reemitted, chunk, "identity re-emit must be byte-exact");
     }
 
-    /// Temporary S1 aid: write edited variants of /tmp/fixture-plain.avi for
-    /// manual ffmpeg decode inspection.
+    /// Ignored dev harness: write edited variants of /tmp/fixture-plain.avi
+    /// for manual ffmpeg decode inspection (the PNG-Read look loop).
     #[test]
     #[ignore]
     fn debug_write_edited_variants() {
@@ -1801,8 +1801,10 @@ mod tests {
         }
     }
 
-    /// Temporary S1 debugging aid: trace the macroblock walk of the first
-    /// P-frame in a scratch fixture. Run with `--nocapture`.
+    /// Ignored dev harness: trace the macroblock walk of the first P-frame in
+    /// a scratch fixture (bit positions, MB kinds, MVs, packet boundaries) —
+    /// the tool for diagnosing future syntax-coverage gaps. Run with
+    /// `--nocapture`; point `MORPHOGEN_MPEG4_DEBUG_AVI` at the fixture.
     #[test]
     #[ignore]
     fn debug_trace_first_pframe() {

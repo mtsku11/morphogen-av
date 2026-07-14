@@ -856,6 +856,11 @@ final class AppState: ObservableObject {
   @Published var bitstreamPFrameIndex = 0
   @Published var bitstreamDuplicateCount = 8
   @Published var bitstreamCarrierKeyframes = 1
+  @Published var bitstreamMvPanX = 6
+  @Published var bitstreamMvPanY = 2
+  @Published var bitstreamMvScale = 2.0
+  @Published var bitstreamMvSineAmp = 8.0
+  @Published var bitstreamMvSinePeriod = 6.0
   @Published var bitstreamPreset: BitstreamPresetOption = .custom
   @Published var bitstreamSummary = "No bitstream datamosh rendered"
   @Published var showcaseSummary = "No showcase preview rendered"
@@ -4645,6 +4650,11 @@ final class AppState: ObservableObject {
       duplicateCount: bitstreamDuplicateCount,
       carrierVideoURL: carrierURL,
       carrierKeyframes: bitstreamCarrierKeyframes,
+      mvPanX: bitstreamMvPanX,
+      mvPanY: bitstreamMvPanY,
+      mvScale: bitstreamMvScale,
+      mvSineAmp: bitstreamMvSineAmp,
+      mvSinePeriod: bitstreamMvSinePeriod,
       preset: bitstreamPreset,
       projectURL: projectURL
     )
@@ -5794,6 +5804,11 @@ enum BitstreamOperationOption: String, CaseIterable, Identifiable {
   case pframeDuplicate = "P-Frame Bloom"
   case removeKeyframe = "Void Mosh"
   case motionTransfer = "Motion Transfer"
+  case mvZero = "MV Freeze"
+  case mvPan = "MV Pan"
+  case mvScale = "MV Scale"
+  case mvSink = "MV Sink"
+  case mvSine = "MV Sine Warp"
 
   var id: String { rawValue }
 
@@ -5805,6 +5820,26 @@ enum BitstreamOperationOption: String, CaseIterable, Identifiable {
       return "remove-keyframe"
     case .motionTransfer:
       return "motion-transfer"
+    case .mvZero:
+      return "mv-zero"
+    case .mvPan:
+      return "mv-pan"
+    case .mvScale:
+      return "mv-scale"
+    case .mvSink:
+      return "mv-sink"
+    case .mvSine:
+      return "mv-sine"
+    }
+  }
+
+  /// The pure-Rust motion-vector editing tier (per-vector surgery, not chunk splicing).
+  var isMvEdit: Bool {
+    switch self {
+    case .mvZero, .mvPan, .mvScale, .mvSink, .mvSine:
+      return true
+    case .pframeDuplicate, .removeKeyframe, .motionTransfer:
+      return false
     }
   }
 }

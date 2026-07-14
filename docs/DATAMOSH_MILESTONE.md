@@ -506,7 +506,7 @@ guards this with an `avi_dimensions` equality check).
   carrier transcode's 3.94 — A's motion is more energetic than B's gentle zoom).
   Read-confirmed: B's appearance, A's motion.
 
-## Real bitstream MV remix — pure-Rust MPEG-4 MV editing (IN FLIGHT)
+## Real bitstream MV remix — pure-Rust MPEG-4 MV editing — LANDED 2026-07-14
 
 The previously-deferred "true codec artifact" tier, green-lit 2026-07-13 after the
 user asked for ffglitch-core's effects. FFglitch itself is a **GPL fork of FFmpeg**,
@@ -542,18 +542,29 @@ predictors, clamped to the VOP's `fcode` range):
 - `mv-sine --mv-sine-amp A --mv-sine-period P` — position-dependent sinusoidal
   warp across the macroblock grid.
 
-**Acceptance criteria.**
-1. **Bit-exact round-trip**: parse → re-emit with no edits reproduces every video
-   chunk of a real FFmpeg-encoded fixture **byte-identical** (the ground-truth
-   gate for the VLC tables and syntax coverage; runs in `cargo test` when the
-   fixture can be generated, with pure-Rust synthetic tests alongside).
-2. **Off-vs-on decode**: for each operation, decode off (identity re-emit) vs on
-   with ffmpeg, Read frames, report the `frame-delta.py` numbers.
-3. Identity parameters (pan 0/0, scale 1.0) are the exact off case.
-4. Same carve-out as the rest of the tier: the **surgery is deterministic and
-   unit-tested**; the decoded look depends on the external codec
-   (`deterministic: false` sidecar, no queue-graph/SwiftUI/parity obligations —
-   queue add/run wrappers follow the existing bitstream pattern only).
+**Acceptance criteria — all met.**
+1. **Bit-exact round-trip**: `mpeg4::verify_roundtrip` re-emits every P-VOP of
+   real FFmpeg fixtures byte-identical (plain, `+mv4`, `-mbd rd`; ≥ 60 P-VOPs
+   each), gated in `cargo test` (skips cleanly without ffmpeg) alongside
+   pure-Rust synthetic tests. **Key discovery:** FFmpeg's mpeg4 encoder
+   slice-threads by default on multicore machines, so real files contain
+   **video packets** (resync marker + mb_number + quant + HEC) mid-VOP — the
+   parser/emitter handles them, including the packet-boundary predictor
+   availability rules (`resync_mb_x` / first-slice-line) and regenerated
+   pre-marker stuffing. Edited streams re-parse byte-exactly (self-consistency),
+   and quarter-pel input is rejected with a clear error.
+2. **Off-vs-on decode** (640×360 harp footage, 6 s, 143 P-VOPs, 18 144 MVs):
+   within-sequence `frame-delta.py` off **0.262** → pan(6,2) **1.409**, sine
+   **2.767**, zero **0.182** (motion frozen — *below* off, as it should be),
+   sink **0.243**; same-index cross-delta vs off at frame 144: pan **23.8/255**
+   (scene shredded into diagonal macroblock streaks, subject dissolved), sine
+   **18.7** (painterly wavy warp), sink **6.7** (moving regions rainbow-melt,
+   static field survives), zero **3.6** (ghost freeze). Read-confirmed.
+3. Identity parameters (pan 0/0, scale 1.0) return the input verbatim —
+   sidecar reports `changed_mvs: 0`.
+4. Carve-out honoured: surgery deterministic + unit-tested, decode external
+   (`deterministic: false` sidecar with an `mv_edit` params/counters block);
+   queue add/run persists the knobs with serde defaults.
 
 ## Deferred
 

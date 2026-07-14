@@ -204,7 +204,7 @@ struct BitstreamDatamoshDetailView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: EffectDetailLayout.sectionSpacing) {
       EffectTitleView(listing: .bitstreamDatamosh)
-        .help("Real AVI bitstream surgery: P-frame duplication, keyframe removal, or motion transfer via ffmpeg. Non-deterministic by design.")
+        .help("Real AVI bitstream surgery: P-frame duplication, keyframe removal, motion transfer, or ffglitch-style motion-vector editing (freeze/pan/scale/sink/sine). Non-deterministic by design.")
 
       HStack(spacing: EffectDetailLayout.controlRowSpacing) {
         Picker("Operation", selection: $state.bitstreamOperation) {
@@ -213,7 +213,7 @@ struct BitstreamDatamoshDetailView: View {
           }
         }
         .frame(width: 220)
-        .help("P-Frame Bloom duplicates a P-frame. Void Mosh removes the keyframe. Motion Transfer splices modulator motion onto carrier content.")
+        .help("P-Frame Bloom duplicates a P-frame. Void Mosh removes the keyframe. Motion Transfer splices modulator motion onto carrier content. The MV operations rewrite each P-frame's motion vectors in pure Rust: Freeze zeroes them, Pan drifts them, Scale amplifies/inverts, Sink melts toward the average motion, Sine Warp waves them across the frame.")
 
         Picker("Preset", selection: $state.bitstreamPreset) {
           ForEach(BitstreamPresetOption.allCases) { preset in
@@ -250,6 +250,42 @@ struct BitstreamDatamoshDetailView: View {
           }
           .frame(width: 200, alignment: .leading)
           .help("Leading carrier frames to keep before the modulator's motion takes over.")
+        }
+
+        if state.bitstreamOperation == .mvPan {
+          Stepper(value: $state.bitstreamMvPanX, in: -64...64, step: 1) {
+            Text("Pan X \(state.bitstreamMvPanX)")
+          }
+          .frame(width: 140, alignment: .leading)
+          .help("Horizontal motion-vector offset in half-pels (2 = one pixel per frame). 0/0 is the exact off case.")
+
+          Stepper(value: $state.bitstreamMvPanY, in: -64...64, step: 1) {
+            Text("Pan Y \(state.bitstreamMvPanY)")
+          }
+          .frame(width: 140, alignment: .leading)
+          .help("Vertical motion-vector offset in half-pels.")
+        }
+
+        if state.bitstreamOperation == .mvScale {
+          Stepper(value: $state.bitstreamMvScale, in: -8...8, step: 0.25) {
+            Text("Scale \(state.bitstreamMvScale, specifier: "%.2f")")
+          }
+          .frame(width: 150, alignment: .leading)
+          .help("Motion-vector multiplier: amplify above 1, dampen below 1, invert below 0. 1.0 is the exact off case.")
+        }
+
+        if state.bitstreamOperation == .mvSine {
+          Stepper(value: $state.bitstreamMvSineAmp, in: 0...64, step: 1) {
+            Text("Amp \(state.bitstreamMvSineAmp, specifier: "%.0f")")
+          }
+          .frame(width: 130, alignment: .leading)
+          .help("Warp amplitude in half-pels.")
+
+          Stepper(value: $state.bitstreamMvSinePeriod, in: 1...64, step: 1) {
+            Text("Period \(state.bitstreamMvSinePeriod, specifier: "%.0f")")
+          }
+          .frame(width: 140, alignment: .leading)
+          .help("Spatial period in macroblocks (also the temporal period in P-frames).")
         }
       }
 

@@ -1910,6 +1910,12 @@ enum RustBridgePlaceholder {
       String(request.duplicateCount),
       "--carrier-keyframes",
       String(request.carrierKeyframes),
+      // Equals form so negative values are not mistaken for flags by clap.
+      "--mv-pan-x=\(request.mvPanX)",
+      "--mv-pan-y=\(request.mvPanY)",
+      "--mv-scale=\(cliNumber(request.mvScale))",
+      "--mv-sine-amp=\(cliNumber(request.mvSineAmp))",
+      "--mv-sine-period=\(cliNumber(request.mvSinePeriod))",
       "--preset",
       request.preset.cliValue
     ]
@@ -4224,6 +4230,11 @@ struct BitstreamDatamoshRenderQueueCommandRequest {
   let duplicateCount: Int
   let carrierVideoURL: URL?
   let carrierKeyframes: Int
+  let mvPanX: Int
+  let mvPanY: Int
+  let mvScale: Double
+  let mvSineAmp: Double
+  let mvSinePeriod: Double
   let preset: BitstreamPresetOption
   let projectURL: URL?
 }
